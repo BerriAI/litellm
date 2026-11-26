@@ -18,6 +18,7 @@ const keyStatusDeleted = "deleted"
 type Client struct {
 	APIBase            string
 	APIKey             string
+	Headers            map[string]string
 	httpClient         *http.Client
 	InsecureSkipVerify bool
 }
@@ -442,6 +443,9 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 		return nil, fmt.Errorf("error creating request: %v", err)
 	}
 
+	for name, value := range c.Headers {
+		req.Header.Set(name, value)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.APIKey)
 	req.Header.Set("accept", "application/json")

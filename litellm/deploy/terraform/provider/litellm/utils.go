@@ -108,6 +108,9 @@ func MakeRequest(client *Client, method, endpoint string, body interface{}) (*ht
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	for name, value := range client.Headers {
+		req.Header.Set(name, value)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", client.APIKey)
 

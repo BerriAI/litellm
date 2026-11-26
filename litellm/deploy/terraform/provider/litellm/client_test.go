@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 func TestSendRequestAcceptsFullSuccessRange(t *testing.T) {
@@ -57,6 +59,58 @@ func TestSendRequestAcceptsFullSuccessRange(t *testing.T) {
 			}
 			if result["value"] != tt.wantValue {
 				t.Errorf("result[value] = %v, want %q", result["value"], tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestProviderHeadersAreSentWithoutReplacingTheProvidersOwn(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, Provider().Schema, map[string]interface{}{
+		"api_base": srv.URL,
+		"api_key":  "test-key",
+		"headers": map[string]interface{}{
+			"Proxy-Authorization": "Bearer proxy-token",
+			"x-api-key":           "not-the-key",
+		},
+	})
+	meta, err := providerConfigure(d)
+	if err != nil {
+		t.Fatalf("providerConfigure returned error: %v", err)
+	}
+	client := meta.(*Client)
+
+	requests := map[string]func() error{
+		"sendRequest": func() error {
+			_, err := client.sendRequest("GET", "/whatever", nil)
+			return err
+		},
+		"MakeRequest": func() error {
+			resp, err := MakeRequest(client, "GET", "/whatever", nil)
+			if err == nil {
+				resp.Body.Close()
+			}
+			return err
+		},
+	}
+	for name, send := range requests {
+		t.Run(name, func(t *testing.T) {
+			got = nil
+			if err := send(); err != nil {
+				t.Fatalf("request returned error: %v", err)
+			}
+			if v := got.Get("Proxy-Authorization"); v != "Bearer proxy-token" {
+				t.Errorf("Proxy-Authorization = %q, want %q", v, "Bearer proxy-token")
+			}
+			if v := got.Get("x-api-key"); v != "test-key" {
+				t.Errorf("x-api-key = %q, want the provider's api_key", v)
 			}
 		})
 	}
