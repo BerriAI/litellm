@@ -666,7 +666,8 @@ def test_sampling_flagged_row_refuses_each_sampling_param_without_drop_params(
         model_cost_table.published(), _NO_SAMPLING_MODEL, _converse_row({"supports_sampling_params": False})
     )
     with pytest.raises(
-        litellm.UnsupportedParamsError, match=f"doesn't support {param}: its model map entry sets `supports_sampling_params"
+        litellm.UnsupportedParamsError,
+        match=f"doesn't support {param}: its model map entry sets `supports_sampling_params",
     ):
         _cfg().map_openai_params(
             response_api_optional_params={"temperature": 0.5} if param == "temperature" else {"top_p": 0.5},

@@ -575,6 +575,25 @@ class TestBedrockMantleSamplingParams:
 
         assert mapped == {"reasoning": {"effort": effort}}, mapped
 
+    @pytest.mark.parametrize(
+        "row_key",
+        ["bedrock_mantle/openai.sampling-test-model", "bedrock_mantle/us-east-2/openai.sampling-test-model"],
+        ids=["bare-row", "regional-row"],
+    )
+    def test_a_row_without_the_flag_forwards_both_params(
+        self, local_cost_map: None, monkeypatch: pytest.MonkeyPatch, row_key: str
+    ) -> None:
+        monkeypatch.setitem(
+            model_cost_table.published(), row_key, {"litellm_provider": "bedrock_mantle", "mode": "responses"}
+        )
+        request: Final[ResponsesAPIOptionalRequestParams] = {"temperature": 0.2, "top_p": 0.9}
+
+        mapped: Final = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=request, model="us-east-2/openai.sampling-test-model", drop_params=False
+        )
+
+        assert mapped == request, mapped
+
 
 class TestBedrockMantleResponsesWebSearch:
     """Web Search on Amazon Bedrock is a server-side built-in tool that Mantle runs

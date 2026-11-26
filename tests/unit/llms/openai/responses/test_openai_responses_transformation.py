@@ -5444,9 +5444,6 @@ def test_a_system_first_openai_compatible_deployment_sends_sanitized_tools_besid
     assert (request["instructions"], request["tools"]) == ("Answer in one word.\n\nReply in French.", [lookup_capital])
 
 
-_NO_SAMPLING_ROWS: Final = (
-    pytest.param(OpenAIResponsesAPIConfig, "sampling-test-model", "sampling-test-model", id="openai"),
-)
 _SAMPLED_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {
     "temperature": 0.0,
     "top_p": 0.9,
@@ -5456,21 +5453,19 @@ _SAMPLED_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {
 _NO_SAMPLING: Final = {"supports_sampling_params": False}
 
 
-def _responses_row(row_key: str, flags: Mapping[str, bool]) -> dict[str, object]:
-    return {"litellm_provider": "openai", "mode": "responses", "supports_reasoning": True, **flags}
+def _openai_responses_row(monkeypatch: pytest.MonkeyPatch, flags: Mapping[str, bool]) -> str:
+    model: Final = "sampling-test-model"
+    row: Final = {"litellm_provider": "openai", "mode": "responses", "supports_reasoning": True, **flags}
+    monkeypatch.setitem(model_cost_table.published(), model, row)
+    return model
 
 
-@pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
 def test_a_row_without_sampling_support_drops_temperature_and_top_p_and_keeps_the_rest(
-    local_model_cost_map: None,
-    monkeypatch: pytest.MonkeyPatch,
-    config: type[OpenAIResponsesAPIConfig],
-    model: str,
-    row_key: str,
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(model_cost_table.published(), row_key, _responses_row(row_key, _NO_SAMPLING))
+    model: Final = _openai_responses_row(monkeypatch, _NO_SAMPLING)
 
-    mapped: Final = config().map_openai_params(
+    mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params=copy.deepcopy(_SAMPLED_REQUEST), model=model, drop_params=True
     )
 
@@ -5482,50 +5477,29 @@ def test_a_row_without_sampling_support_drops_temperature_and_top_p_and_keeps_th
     [
         pytest.param({"temperature": 0.5}, "temperature", id="temperature"),
         pytest.param({"top_p": 0.5}, "top_p", id="top_p"),
+        pytest.param({"temperature": 0.5, "reasoning": {"effort": "none"}}, "temperature", id="effort-none"),
     ],
 )
-@pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
 def test_a_row_without_sampling_support_refuses_each_sampling_param_without_drop_params(
     local_model_cost_map: None,
     monkeypatch: pytest.MonkeyPatch,
-    config: type[OpenAIResponsesAPIConfig],
-    model: str,
-    row_key: str,
     request_params: ResponsesAPIOptionalRequestParams,
     sent: str,
 ) -> None:
-    monkeypatch.setitem(model_cost_table.published(), row_key, _responses_row(row_key, _NO_SAMPLING))
+    model: Final = _openai_responses_row(monkeypatch, _NO_SAMPLING)
 
     with pytest.raises(litellm.UnsupportedParamsError, match=f"support {sent}: .*supports_sampling_params: false"):
-        config().map_openai_params(response_api_optional_params=request_params, model=model, drop_params=False)
+        OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=request_params, model=model, drop_params=False
+        )
 
 
-@pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
-def test_a_row_without_sampling_support_refuses_temperature_at_an_effort_none_it_does_not_allow(
-    local_model_cost_map: None,
-    monkeypatch: pytest.MonkeyPatch,
-    config: type[OpenAIResponsesAPIConfig],
-    model: str,
-    row_key: str,
-) -> None:
-    monkeypatch.setitem(model_cost_table.published(), row_key, _responses_row(row_key, _NO_SAMPLING))
-    request: Final[ResponsesAPIOptionalRequestParams] = {"temperature": 0.5, "reasoning": {"effort": "none"}}
-
-    with pytest.raises(litellm.UnsupportedParamsError, match="support temperature: .*supports_sampling_params: false"):
-        config().map_openai_params(response_api_optional_params=request, model=model, drop_params=False)
-
-
-@pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
 def test_a_row_without_sampling_support_drops_default_sampling_values_without_drop_params(
-    local_model_cost_map: None,
-    monkeypatch: pytest.MonkeyPatch,
-    config: type[OpenAIResponsesAPIConfig],
-    model: str,
-    row_key: str,
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(model_cost_table.published(), row_key, _responses_row(row_key, _NO_SAMPLING))
+    model: Final = _openai_responses_row(monkeypatch, _NO_SAMPLING)
 
-    mapped: Final = config().map_openai_params(
+    mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params={"temperature": 1, "top_p": 1, "stream": True}, model=model, drop_params=False
     )
 
@@ -5535,31 +5509,24 @@ def test_a_row_without_sampling_support_drops_default_sampling_values_without_dr
 def test_global_drop_params_drops_sampling_for_a_row_without_sampling_support(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(
-        model_cost_table.published(), "sampling-test-model", _responses_row("sampling-test-model", _NO_SAMPLING)
-    )
+    model: Final = _openai_responses_row(monkeypatch, _NO_SAMPLING)
     monkeypatch.setattr(litellm, "drop_params", True)
 
     mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params={"temperature": 0.0, "top_p": 0.9, "stream": True},
-        model="sampling-test-model",
+        model=model,
         drop_params=False,
     )
 
     assert mapped == {"stream": True}, mapped
 
 
-@pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
 def test_a_row_without_the_sampling_flag_forwards_temperature_and_top_p(
-    local_model_cost_map: None,
-    monkeypatch: pytest.MonkeyPatch,
-    config: type[OpenAIResponsesAPIConfig],
-    model: str,
-    row_key: str,
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(model_cost_table.published(), row_key, _responses_row(row_key, {}))
+    model: Final = _openai_responses_row(monkeypatch, {})
 
-    mapped: Final = config().map_openai_params(
+    mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params=copy.deepcopy(_SAMPLED_REQUEST), model=model, drop_params=True
     )
 
