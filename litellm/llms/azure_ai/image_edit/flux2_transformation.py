@@ -63,12 +63,12 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         """
         Validate Azure AI Foundry environment and set up authentication
         """
