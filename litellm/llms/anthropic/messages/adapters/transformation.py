@@ -31,6 +31,7 @@ from litellm.llms.anthropic.messages.utils import (
     local_model_name,
     maps_bare_output_effort,
     model_excludes_effort,
+    normalize_reasoning_effort_value,
     object_mapping,
     openai_strict_json_schema,
     prompt_cache_key_from_user_id,
@@ -1264,25 +1265,31 @@ class LiteLLMAnthropicMessagesAdapter:
         budget_effort: str | None,
         model: str,
         excludes_effort: Callable[[str], bool],
+        normalize_effort: Callable[[str], str],
         *,
         drop_params: bool,
         report_drops: bool,
     ) -> str | None:
         effort: Final = reasoning_effort_within_thinking_budget(output_effort, budget_effort)
-        if not drop_params or effort is None or effort == budget_effort:
+        if effort is None or effort == budget_effort:
             return effort
         drop_reason: Final = (
-            "no reasoning API defines it"
+            None
+            if not drop_params
+            else "no reasoning API defines it"
             if effort not in KNOWN_REASONING_EFFORTS
             else "its model cost map entry does not list it"
             if excludes_effort(effort)
             else None
         )
-        if drop_reason is None:
-            return effort
-        if report_drops:
+        if drop_reason is not None and report_drops:
             warn_dropped_reasoning("output_config.effort", effort, model, drop_reason, drop_params_gated=True)
-        return budget_effort
+        if drop_reason is not None:
+            return budget_effort
+        normalized_within_budget: Final = reasoning_effort_within_thinking_budget(
+            normalize_effort(effort), budget_effort
+        )
+        return budget_effort if normalized_within_budget == budget_effort else effort
 
     @staticmethod
     def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
@@ -1366,6 +1373,12 @@ class LiteLLMAnthropicMessagesAdapter:
                 model,
                 partial(
                     model_excludes_effort,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    deployment_model_info=deployment_model_info,
+                ),
+                partial(
+                    normalize_reasoning_effort_value,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                     deployment_model_info=deployment_model_info,
