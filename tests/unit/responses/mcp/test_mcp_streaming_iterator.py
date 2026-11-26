@@ -1,4 +1,5 @@
 import json
+import socket
 import sys
 import types
 from contextlib import nullcontext
@@ -109,7 +110,9 @@ def _mock_mcp_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     return call_tool
 
 
-def _make_iterator(initial_chunks, max_agentic_loops: int | str | None = None) -> MCPEnhancedStreamingIterator:
+def _make_iterator(
+    initial_chunks, max_agentic_loops: int | str | None = None, api_base: str | None = None
+) -> MCPEnhancedStreamingIterator:
     return MCPEnhancedStreamingIterator(
         base_iterator=_FakeAsyncStream(initial_chunks),
         mcp_events=[],
@@ -121,6 +124,7 @@ def _make_iterator(initial_chunks, max_agentic_loops: int | str | None = None) -
             "input": "what is berriai/litellm?",
             "tools": [{"type": "mcp"}],
             **({"max_agentic_loops": max_agentic_loops} if max_agentic_loops is not None else {}),
+            **({"api_base": api_base, "api_key": "sk-unused"} if api_base is not None else {}),
         },
     )
 
@@ -355,9 +359,12 @@ async def test_follow_up_call_failure_logs_one_json_record_with_its_traceback(
     multi-line traceback on stderr that a log shipper would split into one error per line."""
     turn_on_json()
     _mock_mcp_environment(monkeypatch)
-    monkeypatch.setattr(responses_main_module, "aresponses", AsyncMock(side_effect=RuntimeError("boom from provider")))
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port: Final = probe.getsockname()[1]
     iterator: Final = _make_iterator(
-        [_output_item_added_chunk(), _completed_chunk([_function_call("call_1", "read_wiki_contents")])]
+        [_output_item_added_chunk(), _completed_chunk([_function_call("call_1", "read_wiki_contents")])],
+        api_base=f"http://127.0.0.1:{closed_port}/v1",
     )
     capfd.readouterr()
 
@@ -365,7 +372,7 @@ async def test_follow_up_call_failure_logs_one_json_record_with_its_traceback(
 
     records: Final = [json.loads(line) for line in capfd.readouterr().err.splitlines() if line.strip()]
     failures: Final = [record for record in records if str(record["message"]).startswith("Error creating follow-up")]
-    assert [str(record["stacktrace"]).endswith("RuntimeError: boom from provider") for record in failures] == [True]
+    assert [str(record["stacktrace"]).startswith("Traceback (most recent call last)") for record in failures] == [True]
 
 
 @pytest.mark.asyncio
