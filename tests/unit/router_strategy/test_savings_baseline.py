@@ -179,6 +179,42 @@ class TestDeploymentsPricedByBaseModel:
         )
         assert resolve_baseline(router, ["big"]).model == "azure/gpt-4.1"
 
+    def test_a_bedrock_profile_base_model_without_prices_is_priced_as_the_served_model(self, monkeypatch):
+        import litellm
+
+        cheap = "anthropic.savings-cheap-served-test"
+        big = "anthropic.savings-big-served-test"
+        profile = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/savings-test"
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                **litellm.model_cost,
+                cheap: {
+                    "litellm_provider": "bedrock",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.01,
+                    "output_cost_per_token": 0.02,
+                },
+                big: {
+                    "litellm_provider": "bedrock",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.03,
+                    "output_cost_per_token": 0.04,
+                },
+            },
+        )
+        router = self._router(
+            {"model_name": "by-arn", "litellm_params": {"model": f"bedrock/{profile}"}},
+            {"model_name": "cheap", "litellm_params": {"model": f"bedrock/converse/{cheap}"}},
+            {
+                "model_name": "big",
+                "litellm_params": {"model": f"bedrock/converse/{big}", "model_id": profile},
+                "model_info": {"base_model": f"bedrock/{profile}"},
+            },
+        )
+        assert resolve_baseline(router, ["cheap", "big"]).model == f"bedrock/converse/{big}"
+
 
 class TestDeploymentPricingOverrides:
     """A deployment may not be charged the public rate for the model it names."""

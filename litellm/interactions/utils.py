@@ -2,8 +2,10 @@
 Utility functions for Interactions API.
 """
 
-from typing import Any, Final, cast
+from collections.abc import Mapping
+from typing import Final, cast
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.types.interactions import InteractionsAPIOptionalRequestParams
 
@@ -63,7 +65,7 @@ class InteractionsAPIRequestUtils:
 
     @staticmethod
     def get_requested_interactions_api_optional_params(
-        params: dict[str, Any],
+        params: dict[str, object],
     ) -> InteractionsAPIOptionalRequestParams:
         """
         Filter parameters to only include valid optional params per OpenAPI spec.
@@ -77,8 +79,9 @@ class InteractionsAPIRequestUtils:
         from litellm.utils import PreProcessNonDefaultParams
 
         custom_llm_provider: Final = params.pop("custom_llm_provider", None)
-        special_params: Final = params.pop("kwargs", {})
+        passed_kwargs: Final = params.pop("kwargs", {})
         additional_drop_params: Final = params.pop("additional_drop_params", None)
+        special_params: Final = require_attributes(passed_kwargs, Mapping[str, object], "items")
 
         non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(
             passed_params=params,

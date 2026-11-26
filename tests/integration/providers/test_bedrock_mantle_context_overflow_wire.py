@@ -460,7 +460,7 @@ def test_messages_stream_overflow_in_response_failed_event_emits_invalid_request
         _only_call(wire)
 
 
-def test_messages_stream_overflow_with_a_retry_budget_returns_400_invalid_request_and_logs_failure(
+def test_messages_stream_overflow_with_a_retry_budget_emits_invalid_request_error_event_and_logs_failure(
     gateway: Gateway,
 ) -> None:
     prompt: Final = f"held frames messages stream {uuid4().hex}"
@@ -470,9 +470,10 @@ def test_messages_stream_overflow_with_a_retry_budget_returns_400_invalid_reques
         response: Final = gateway.request(
             "POST", "/v1/messages", _messages(model, prompt, stream=True), headers={"x-litellm-num-retries": "2"}
         )
-        assert response.status_code == 400, response.text
-        assert response.headers["content-type"].startswith("application/json"), dict(response.headers)
-        error: Final = _error_object(response)
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/event-stream"), dict(response.headers)
+        assert [event["type"] for event in _events(response.text)] == ["message_start", "error"], response.text
+        error: Final = _only_error(response.text)
         assert error["type"] == "invalid_request_error", response.text
         assert _GENERIC in str(error["message"]), response.text
         _only_call(wire)

@@ -77,6 +77,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 optional_params=optional_params,
                 context_management=context_management,
                 drop_params=drops_unsupported_params((litellm_params or {}).get("drop_params")),
+                custom_llm_provider="azure_ai",
+                api_base=api_base,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)

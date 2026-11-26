@@ -15,5 +15,5 @@ class ScalingoApiTokenDetector(RegexBasedDetector):
         return "Scalingo API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [re.compile(r"""\btk-us-[a-zA-Z0-9-_]{48}\b""")]

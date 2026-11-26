@@ -19,7 +19,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes, require_get, subscript
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -91,7 +91,7 @@ class A2AGuardrailHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process A2A input messages by applying guardrails to text content.
 
@@ -161,7 +161,7 @@ class A2AGuardrailHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> object:
         """
         Process A2A output response by applying guardrails to text content.
@@ -256,7 +256,7 @@ class A2AGuardrailHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> list[object]:
         """
         Process A2A streaming output by applying guardrails to accumulated text.
@@ -409,8 +409,9 @@ class A2AGuardrailHandler(BaseTranslation):
                 task_mappings=task_mappings,
             )
 
+        result_fields: Final = require_get(result)
         # Case 2: Nested message
-        message: Final = result.get("message")
+        message: Final = result_fields.get("message")
         if message and isinstance(message, dict) and "parts" in message:
             self._extract_texts_from_parts(
                 parts=message["parts"],
@@ -420,7 +421,7 @@ class A2AGuardrailHandler(BaseTranslation):
             )
 
         # Case 3: Streaming artifact-update (singular artifact)
-        artifact: Final = result.get("artifact")
+        artifact: Final = result_fields.get("artifact")
         if artifact and isinstance(artifact, dict) and "parts" in artifact:
             self._extract_texts_from_parts(
                 parts=artifact["parts"],
@@ -430,7 +431,7 @@ class A2AGuardrailHandler(BaseTranslation):
             )
 
         # Case 4: Task with status message
-        status: Final = result.get("status", {})
+        status: Final = result_fields.get("status", {})
         if isinstance(status, dict):
             status_message: Final = status.get("message")
             if status_message and isinstance(status_message, dict) and "parts" in status_message:
@@ -442,7 +443,7 @@ class A2AGuardrailHandler(BaseTranslation):
                 )
 
         # Case 5: Task with artifacts (plural, array)
-        artifacts: Final = result.get("artifacts", [])
+        artifacts: Final = result_fields.get("artifacts", [])
         if artifacts and isinstance(artifacts, list):
             for artifact_idx, art in enumerate(artifacts):
                 if isinstance(art, dict) and "parts" in art:

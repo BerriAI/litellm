@@ -93,6 +93,8 @@ def isolated(forward: ForwardProxy, tmp_path_factory: pytest.TempPathFactory) ->
             "HTTPS_PROXY": forward.url,
             "NO_PROXY": "127.0.0.1,localhost",
             "PROXY_BATCH_POLLING_ENABLED": "false",
+            # the first Claude call with a beta would otherwise fetch the remote beta map through the forward proxy
+            "LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "True",
         },
         config=_config(directory, shared.upstream_url.rstrip("/")),
         remove_environment=_scrubbed(),

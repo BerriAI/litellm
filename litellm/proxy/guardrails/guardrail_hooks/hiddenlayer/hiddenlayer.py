@@ -193,7 +193,7 @@ def is_saas(host: str) -> bool:
     return False
 
 
-def _get_jwt(auth_url, api_id, api_key, timeout: float = _AUTH_TIMEOUT_SECONDS) -> str:
+def _get_jwt(auth_url: str, api_id: str | None, api_key: str | None, timeout: float = _AUTH_TIMEOUT_SECONDS) -> str:
     token_url: Final = f"{auth_url}/oauth2/token?grant_type=client_credentials"
 
     resp: Final = requests.post(token_url, auth=HTTPBasicAuth(api_id, api_key), timeout=timeout)
@@ -272,7 +272,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -488,7 +488,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:

@@ -127,10 +127,8 @@ class Observation:
     gateway_cpu_coverage: float | None = None
     telemetry_before: GatewayTelemetry | None = None
     telemetry_after: GatewayTelemetry | None = None
-    peak_connections: int | None = None
     ramp: Ramp | None = None
     cpu_series: Series[float] | CpuSeries | None = None
-    connection_series: Series[int] | None = None
     telemetry_series: Series[GatewayTelemetry] | None = None
 
     @property
@@ -258,7 +256,7 @@ class Observation:
     def steps(self) -> tuple[StepReading, ...]:
         """One reading per step of a ramped run: the gateway's added latency over the step's requests, the rate
         at which requests completed inside the step's window, the step's unexpected statuses, and what the pod
-        was doing in that window (CPU per completed request, Redis latency, Postgres connections)."""
+        was doing in that window (CPU per completed request and Redis latency)."""
         ramp: Final = self.ramp
         if ramp is None or not self.records:
             return ()
@@ -290,7 +288,6 @@ class Observation:
         end: Final = start + seconds
         cpu_samples: Final = None if self.cpu_series is None else self.cpu_series.between(start, end)
         cpu: Final = None if cpu_samples is None else sum(cpu_samples)
-        conns: Final = None if self.connection_series is None else self.connection_series.between(start, end)
         before: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(start)
         after: Final = None if self.telemetry_series is None else self.telemetry_series.last_before(end)
         return WindowReadings(
@@ -301,7 +298,6 @@ class Observation:
             redis_latency_mean_seconds=None
             if before is None or after is None
             else after.minus(before).redis_latency.mean,
-            postgres_peak_connections=max(conns, default=None) if conns else None,
         )
 
 
@@ -309,7 +305,6 @@ class WindowReadings(TypedDict):
     cpu_seconds_per_request: ReadOnly[float | None]
     cpu_seconds_per_request_coverage: ReadOnly[float | None]
     redis_latency_mean_seconds: ReadOnly[float | None]
-    postgres_peak_connections: ReadOnly[int | None]
 
 
 def _by_step(ramp: Ramp, pairs: Iterable[tuple[WireRecord, float]]) -> Mapping[int, tuple[float, ...]]:
@@ -436,8 +431,7 @@ def breakdown(
     metric: Metric, percentile_rank: int | None, observation: Observation, exempt_tables: frozenset[str] = frozenset()
 ) -> tuple[Contributor, ...]:
     """The top contributors to one metric, so a spike on the chart names its statement, command, endpoint or
-    worker. Gauges with no slices (`cpu_seconds_per_request`, `prometheus_redis_latency_mean_seconds`,
-    `postgres_peak_connections`) have none."""
+    worker. Gauges with no slices (`cpu_seconds_per_request`, `prometheus_redis_latency_mean_seconds`) have none."""
     if metric in (
         "gateway_added_seconds",
         "client_total_seconds",
@@ -446,7 +440,7 @@ def breakdown(
         "litellm_response_seconds",
     ):
         return _latency_breakdown(metric, 50 if percentile_rank is None else percentile_rank, observation)
-    if metric.startswith("postgres_") and metric != "postgres_peak_connections":
+    if metric.startswith("postgres_"):
         return _statement_breakdown(metric, observation, exempt_tables)
     if metric in {"redis_calls_per_request", "redis_background_calls_per_request"}:
         return _redis_breakdown(metric, observation)
@@ -480,8 +474,6 @@ def observe(
     if metric == "postgres_slowest_statement_seconds":
         slowest: Final = slowest_statement(observation.statements)
         return None if slowest is None else slowest.mean_exec_seconds
-    if metric == "postgres_peak_connections":
-        return None if observation.peak_connections is None else float(observation.peak_connections)
     if metric == "postgres_calls_per_request":
         return observation.count_per_request(calls_in("awaited", observation.statements))
     if metric == "postgres_background_calls_per_request":
@@ -549,6 +541,8 @@ class Row:
 
 REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("unexpected_status_count", None),
+    ("client_total_seconds", 50),
+    ("client_total_seconds", 95),
     ("gateway_added_seconds", 50),
     ("gateway_added_seconds", 99),
     ("litellm_overhead_seconds", 50),
@@ -558,7 +552,6 @@ REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("prometheus_redis_latency_mean_seconds", None),
     ("postgres_active_sessions", None),
     ("postgres_slowest_statement_seconds", None),
-    ("postgres_peak_connections", None),
     ("time_to_first_token_seconds", 50),
     ("time_to_first_token_seconds", 99),
     ("memory_growth_megabytes", None),

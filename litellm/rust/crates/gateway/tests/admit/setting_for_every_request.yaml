@@ -1,0 +1,29 @@
+# A setting that reaches every request is named before anything the request carries.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  litellm_settings:
+    callbacks: [prometheus]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+
+  - name: other route
+    path: /v1/chat/completions
+    expect: python
+    reason: settings
+
+  - name: other caller
+    headers: {authorization: Bearer sk-someone-else}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
