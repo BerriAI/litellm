@@ -2814,7 +2814,9 @@ if MCP_AVAILABLE:
         # Only delete if the stored credential is actually an OAuth2 token.
         # This prevents accidentally deleting a BYOK credential if one exists
         # for the same (user_id, server_id) pair.
-        cred_to_delete: Final = await get_user_oauth_credential(prisma_client, target_user_id, server_id)
+        cred_to_delete: Final = await get_user_oauth_credential(
+            prisma_client, target_user_id, server_id, include_invalidated=True
+        )
         if cred_to_delete is not None:
             try:
                 await delete_user_credential(prisma_client, target_user_id, server_id)

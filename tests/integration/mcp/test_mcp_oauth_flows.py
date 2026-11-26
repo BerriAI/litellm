@@ -2753,6 +2753,30 @@ def test_rejected_access_with_dead_refresh_grant_is_invalidated_and_challenges_f
         assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
 
 
+def test_rejected_access_on_the_aggregate_route_challenges_with_the_aggregate_resource(gateway: Gateway) -> None:
+    with oauth_server() as auth, _live_token_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
+        alias: Final = "deadagg" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        assert _user_credential_row_count(user_id, identity) == 1
+        peer.drain()
+        wire.drain()
+        auth.drain()
+        with auth.lock:
+            auth.revoked.add(_issued_token(issued))
+            auth.refresh_tokens.clear()
+        response: Final = McpCaller(gateway, key, "mcp", alias).rpc(
+            "tools/call", {"name": f"{alias}-add", "arguments": ADD}
+        )
+        assert response.status_code == 401, response.text
+        assert response.headers.get("www-authenticate") == (
+            f'Bearer resource_metadata="{_base(gateway)}/.well-known/oauth-protected-resource"'
+        )
+        assert _user_credential_row_count(user_id, identity) == 1
+        assert tool_calls(peer.drain()) == ()
+        assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
+
+
 def test_expired_access_with_dead_refresh_grant_is_invalidated_and_listing_challenges_for_reauth(
     gateway: Gateway, tmp_path: Path
 ) -> None:

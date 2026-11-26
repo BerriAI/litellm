@@ -5969,6 +5969,54 @@ async def test_store_mcp_oauth_user_credential_invalidates_cached_token():
 
 
 @pytest.mark.asyncio
+async def test_delete_mcp_oauth_user_credential_reads_invalidated_grants_for_revocation():
+    """Revocation must still delete a dead-grant tombstone instead of treating it as already absent."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_oauth_user_credential,
+    )
+    from litellm.proxy.mcp_server import mcp_server_manager as manager_module
+
+    server_id = "srv-inv-dead"
+    user_id = "user-inv-dead"
+    prisma = _make_prisma_client()
+    reader = AsyncMock(return_value={"type": "oauth2", "access_token": "", "refresh_token": "dead-refresh"})
+    delete_mock = AsyncMock(return_value=None)
+    invalidate_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=reader,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            new=delete_mock,
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        result = await delete_mcp_oauth_user_credential(
+            server_id=server_id,
+            user_api_key_dict=_make_user_auth(user_id),
+        )
+
+    reader.assert_awaited_once_with(prisma, user_id, server_id, include_invalidated=True)
+    delete_mock.assert_awaited_once_with(prisma, user_id, server_id)
+    invalidate_mock.assert_awaited_once_with(user_id, server_id)
+    assert result.has_credential is False
+
+
+@pytest.mark.asyncio
 async def test_delete_mcp_oauth_user_credential_invalidates_cached_token():
     """Revoking a stored OAuth credential drops the v2 per-user token cache entry, so the
     revoked token stops flowing upstream immediately instead of until its TTL."""

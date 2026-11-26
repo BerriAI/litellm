@@ -791,6 +791,29 @@ async def test_scope_middleware_preserves_non_http_requests():
 
 
 @pytest.mark.parametrize("path", ["/mcp", "/toolset/demo/mcp"])
+def test_managed_reauth_on_an_aggregate_route_names_the_aggregate_resource(path):
+    from urllib.parse import urlsplit
+
+    from mcp.shared.auth_utils import check_resource_allowed
+
+    error = MCPUpstreamAuthError(
+        401,
+        'Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"',
+        "docs",
+        managed_reauth=True,
+    )
+    response = error.to_http_exception("https://gateway.test", path)
+    challenge = response.headers["www-authenticate"]
+    assert challenge == 'Bearer resource_metadata="https://gateway.test/.well-known/oauth-protected-resource"'
+    metadata_path = urlsplit(challenge.split('resource_metadata="', 1)[1].split('"', 1)[0]).path
+    resource_path = metadata_path.removeprefix("/.well-known/oauth-protected-resource")
+    assert check_resource_allowed(
+        requested_resource=f"https://gateway.test{path}",
+        configured_resource=f"https://gateway.test{resource_path}",
+    ), "the SDK must accept the advertised resource before it can reauthorize"
+
+
+@pytest.mark.parametrize("path", ["/mcp", "/toolset/demo/mcp"])
 def test_managed_step_up_metadata_matches_the_sdk_configured_resource(path):
     from urllib.parse import urlsplit
 
