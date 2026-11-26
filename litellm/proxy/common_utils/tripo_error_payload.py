@@ -94,16 +94,20 @@ def tripo_streaming_rejected_response() -> JSONResponse:
     return tripo_error_response(_STREAMING_REJECTED)
 
 
-def tripo_proxy_exception_response(request: Request, exc: ProxyException) -> JSONResponse | None:
-    if not is_tripo_pass_through_route(get_request_route(request)):
-        return None
-    fault: Final = _fault_for_proxy_exception(exc)
-    if fault is None:
-        return None
+def uses_tripo_error_envelope(request: Request, exc: ProxyException) -> bool:
+    return is_tripo_pass_through_route(get_request_route(request)) and _fault_for_proxy_exception(exc) is not None
+
+
+def tripo_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
     from litellm.proxy.proxy_server import (
         _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a JSONResponse returned instead of a raised error must stamp the OTel server span like the global ProxyException handler does
     )
 
+    fault: Final = _fault_for_proxy_exception(exc)
+    if fault is None:
+        status_code: Final = int(exc.code) if exc.code.isdigit() else status.HTTP_500_INTERNAL_SERVER_ERROR
+        _close_dangling_otel_server_span(request, status_code, exc=exc)
+        return JSONResponse(status_code=status_code, content={"error": exc.to_dict()}, headers=exc.headers)
     _close_dangling_otel_server_span(request, fault.http_status, exc=exc)
     return tripo_error_response(fault, exc.headers)
 

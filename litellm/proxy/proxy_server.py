@@ -641,7 +641,7 @@ from litellm.proxy.common_utils.token_count_log import (
     logged_token_count,
     rejected_token_count,
 )
-from litellm.proxy.common_utils.tripo_error_payload import tripo_proxy_exception_response
+from litellm.proxy.common_utils.tripo_error_payload import tripo_error_json_response, uses_tripo_error_envelope
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     budget_windows_absent_cache_key,
@@ -2392,9 +2392,8 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     headers: Final = exc.headers
     if uses_anthropic_error_envelope(request):
         return anthropic_error_json_response(exc, request)
-    tripo_response: Final = tripo_proxy_exception_response(request, exc)
-    if tripo_response is not None:
-        return tripo_response
+    if uses_tripo_error_envelope(request, exc):
+        return tripo_error_json_response(exc, request)
     error_dict: Final = with_call_id(
         JSON_OBJECT.validate_python(exc.to_dict()),
         error_body_call_id(general_settings_view(), headers.get(LITELLM_CALL_ID_HEADER)),
