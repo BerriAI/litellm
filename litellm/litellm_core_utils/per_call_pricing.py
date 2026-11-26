@@ -3,9 +3,10 @@
 from collections.abc import Mapping
 from typing import Final, Literal
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
 from litellm.types.utils import CustomPricingLiteLLMParams, ModelInfo
 
@@ -24,6 +25,16 @@ def _router_deployment_model_info(kwargs: Mapping[str, object]) -> Mapping[str, 
         if isinstance(model_info, Mapping) and isinstance(model_info.get("id"), str):
             return _STR_MAPPING.validate_python(model_info)
     return None
+
+
+def numeric_prices(prices: Mapping[str, object]) -> Mapping[str, object]:
+    try:
+        CustomPricingLiteLLMParams.model_validate(prices)
+    except ValidationError as e:
+        unusable: Final = frozenset(str(error["loc"][0]) for error in e.errors() if error["loc"])
+        verbose_logger.warning("A2A agent prices %s are not numbers, so they are not billed", sorted(unusable))
+        return {key: value for key, value in prices.items() if key not in unusable}
+    return prices
 
 
 def per_call_model_info(

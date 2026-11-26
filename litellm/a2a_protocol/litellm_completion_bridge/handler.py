@@ -28,7 +28,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.interactions.agents.utils import merge_agent_headers
-from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
+from litellm.litellm_core_utils.per_call_pricing import numeric_prices, per_call_model_info
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import CustomPricingLiteLLMParams, ModelInfo, ModelResponse
 from litellm.utils import Rules, function_setup
@@ -82,7 +82,9 @@ def agent_completion_kwargs(litellm_params: Mapping[str, object]) -> Mapping[str
 def _agent_price_entry(litellm_params: Mapping[str, object]) -> ModelInfo | None:
     custom_llm_provider, _, model = bridge_model_name(litellm_params).partition("/")
     try:
-        entry: Final = per_call_model_info(model, custom_llm_provider, agent_completion_kwargs(litellm_params), "chat")
+        entry: Final = per_call_model_info(
+            model, custom_llm_provider, numeric_prices(agent_completion_kwargs(litellm_params)), "chat"
+        )
     except ValidationError as e:
         verbose_logger.warning("A2A agent %s has a price that is not a number, so its call is not priced: %s", model, e)
         return None

@@ -203,10 +203,17 @@ async def test_priced_agent_call_reports_the_agents_token_price_to_callbacks(
 
 
 @respx.mock
-async def test_agent_with_a_price_that_is_not_a_number_still_returns_its_reply(httpx_transport: None) -> None:
+async def test_agent_with_a_price_that_is_not_a_number_answers_and_bills_its_other_price(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     respx.post(INVOCATIONS_URL).mock(
         return_value=httpx.Response(200, json={"object": "response", "output": [MESSAGE_ITEM]})
     )
+    logged: Final[asyncio.Future[tuple[object, ModelResponse]]] = asyncio.get_running_loop().create_future()
+    capture: Final = _CallCostCapture(logged)
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+
     response: Final = await A2ACompletionBridgeHandler.handle_non_streaming(
         request_id="req-1",
         params=_a2a_params(),
@@ -216,6 +223,12 @@ async def test_agent_with_a_price_that_is_not_a_number_still_returns_its_reply(h
             "api_base": WORKSPACE,
             "api_key": "pat-1",
             "input_cost_per_token": "abc",
+            "output_cost_per_token": 0.0002,
         },
     )
+    cost, logged_response = await asyncio.wait_for(logged, timeout=5)
+
     assert response["result"]["parts"] == [{"kind": "text", "text": "pong"}]
+    completion_tokens: Final = logged_response.model_dump()["usage"]["completion_tokens"]
+    assert completion_tokens > 0
+    assert cost == pytest.approx(completion_tokens * 0.0002)
