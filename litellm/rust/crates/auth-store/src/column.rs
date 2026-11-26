@@ -1,8 +1,7 @@
 //! One database column read as one field of the record the auth cache holds.
 
-use chrono::NaiveDateTime;
-use jiff::Timestamp;
-use litellm_python_compat::{Value, json};
+use chrono::{Datelike, NaiveDateTime};
+use litellm_python_compat::{Value, datetime::IsoDateTime, json};
 use litellm_redis_store::FromValue;
 use litellm_repositories::RawJson;
 
@@ -30,11 +29,15 @@ pub(crate) fn nullable<V: FromValue>(
     }
 }
 
+/// A timestamp column as Python's driver hands it out: an aware UTC `datetime`, or the column the
+/// model refuses for a year a `datetime` cannot hold.
 pub(crate) fn time(
     column: &'static str,
     at: Option<NaiveDateTime>,
-) -> Result<Option<Timestamp>, Error> {
-    at.map(|at| Timestamp::from_microsecond(at.and_utc().timestamp_micros()))
-        .transpose()
-        .map_err(|_| Error::Row { column })
+) -> Result<Option<IsoDateTime>, Error> {
+    at.map(|at| match at.year() {
+        1..=9999 => Ok(IsoDateTime::utc(at.and_utc().timestamp_micros())),
+        _ => Err(Error::Row { column }),
+    })
+    .transpose()
 }

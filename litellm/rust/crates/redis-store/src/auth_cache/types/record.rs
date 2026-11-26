@@ -1,10 +1,6 @@
 use std::collections::HashMap;
 
-use jiff::Timestamp;
-use litellm_python_compat::{
-    Value,
-    datetime::{IsoDateTime, UtcDateTime, fromisoformat},
-};
+use litellm_python_compat::{Value, datetime::IsoDateTime, pydantic::lax_datetime};
 
 use crate::{DecodeError, Number, codec::python_value};
 
@@ -82,32 +78,15 @@ impl Field for f64 {
     }
 }
 
-/// A `datetime` field. Pydantic writes an aware UTC one as `2026-11-19T10:00:00.123000Z`, with
-/// no fraction when it is zero. One written without an offset is read as UTC.
-impl Field for Timestamp {
+/// A `datetime` field, read as pydantic reads one and written as its JSON mode writes it, so a
+/// naive time stays naive and an offset is kept.
+impl Field for IsoDateTime {
     fn read(value: &Value) -> Option<Self> {
-        let Value::Str(text) = value else {
-            return None;
-        };
-        let (IsoDateTime::Aware(microseconds) | IsoDateTime::Naive(microseconds)) =
-            fromisoformat(text)?;
-        Timestamp::from_microsecond(microseconds).ok()
+        lax_datetime(value)
     }
 
     fn write(self) -> Value {
-        let microseconds = self.as_microsecond();
-        let at = UtcDateTime::from_timestamp(
-            microseconds.div_euclid(1_000_000),
-            microseconds.rem_euclid(1_000_000) as u32,
-        );
-        let fraction = match at.microsecond {
-            0 => String::new(),
-            microsecond => format!(".{microsecond:06}"),
-        };
-        Value::Str(format!(
-            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{fraction}Z",
-            at.year, at.month, at.day, at.hour, at.minute, at.second
-        ))
+        Value::Str(self.isoformat())
     }
 }
 

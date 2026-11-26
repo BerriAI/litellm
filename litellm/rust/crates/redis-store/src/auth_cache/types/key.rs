@@ -1,5 +1,4 @@
-use jiff::Timestamp;
-use litellm_python_compat::Value;
+use litellm_python_compat::{Value, datetime::IsoDateTime};
 
 use super::{
     bag::{Bag, Lists},
@@ -36,7 +35,7 @@ record! {
         rpm_limit: Option<i64>,
         tpd_limit: Option<i64>,
         budget_duration: Option<String>,
-        budget_reset_at: Option<Timestamp>,
+        budget_reset_at: Option<IsoDateTime>,
         allowed_cache_controls: Option<Vec<String>> = Some(Vec::new()),
         allowed_routes: Option<Vec<String>> = Some(Vec::new()),
         key_type: Option<String>,
@@ -49,20 +48,20 @@ record! {
         litellm_budget_table: Option<Bag>,
         budget_id: Option<String>,
         org_id: Option<String>,
-        created_at: Option<Timestamp>,
+        created_at: Option<IsoDateTime>,
         created_by: Option<String>,
-        updated_at: Option<Timestamp>,
+        updated_at: Option<IsoDateTime>,
         updated_by: Option<String>,
-        settings_updated_at: Option<Timestamp>,
-        last_active: Option<Timestamp>,
+        settings_updated_at: Option<IsoDateTime>,
+        last_active: Option<IsoDateTime>,
         object_permission_id: Option<String>,
         object_permission: Option<CachedObjectPermission>,
         access_group_ids: Option<Vec<String>>,
         rotation_count: Option<i64> = Some(0),
         auto_rotate: Option<bool> = Some(false),
         rotation_interval: Option<String>,
-        last_rotation_at: Option<Timestamp>,
-        key_rotation_at: Option<Timestamp>,
+        last_rotation_at: Option<IsoDateTime>,
+        key_rotation_at: Option<IsoDateTime>,
         router_settings: Option<Bag>,
         budget_limits: Option<Vec<Bag>>,
         team_spend: Option<f64>,
@@ -129,7 +128,7 @@ record! {
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
-    use litellm_python_compat::{Value, json};
+    use litellm_python_compat::{Value, datetime::IsoDateTime, json};
     use rstest::rstest;
 
     use super::CachedKey;
@@ -202,15 +201,41 @@ mod tests {
     #[rstest]
     #[case::utc_as_pydantic_writes_it(
         r#""2026-11-19T10:00:00.123000Z""#,
-        "2026-11-19T10:00:00.123Z"
+        "2026-11-19T10:00:00.123Z",
+        "2026-11-19T10:00:00.123000Z"
     )]
-    #[case::whole_seconds(r#""2026-11-19T10:00:00Z""#, "2026-11-19T10:00:00Z")]
-    #[case::another_offset(r#""2026-11-19T19:00:00+09:00""#, "2026-11-19T10:00:00Z")]
-    #[case::no_offset_is_utc(r#""2026-11-19T10:00:00.5""#, "2026-11-19T10:00:00.5Z")]
-    fn a_time_python_wrote_is_its_instant(#[case] written: &str, #[case] instant: &str) {
-        let key = key(&format!(r#"{{"created_at": {written}}}"#)).unwrap();
+    #[case::whole_seconds(
+        r#""2026-11-19T10:00:00Z""#,
+        "2026-11-19T10:00:00Z",
+        "2026-11-19T10:00:00Z"
+    )]
+    #[case::another_offset_is_kept(
+        r#""2026-11-19T19:00:00+09:00""#,
+        "2026-11-19T10:00:00Z",
+        "2026-11-19T19:00:00+09:00"
+    )]
+    #[case::no_offset_is_utc_and_stays_naive(
+        r#""2026-11-19T10:00:00.5""#,
+        "2026-11-19T10:00:00.5Z",
+        "2026-11-19T10:00:00.500000"
+    )]
+    fn a_time_python_wrote_is_its_instant_and_is_written_back_as_python_wrote_it(
+        #[case] written: &str,
+        #[case] instant: &str,
+        #[case] rewritten: &str,
+    ) {
+        let at = key(&format!(r#"{{"created_at": {written}}}"#))
+            .unwrap()
+            .created_at
+            .unwrap();
 
-        assert_eq!(key.created_at, Some(instant.parse::<Timestamp>().unwrap()));
+        assert_eq!(
+            (
+                Timestamp::from_microsecond(at.utc_microseconds()).unwrap(),
+                at.isoformat()
+            ),
+            (instant.parse::<Timestamp>().unwrap(), rewritten.to_owned())
+        );
     }
 
     #[rstest]
@@ -222,7 +247,9 @@ mod tests {
         #[case] written: &str,
     ) {
         let key = CachedKey {
-            created_at: Some(instant.parse().unwrap()),
+            created_at: Some(IsoDateTime::utc(
+                instant.parse::<Timestamp>().unwrap().as_microsecond(),
+            )),
             ..key("{}").unwrap()
         };
 

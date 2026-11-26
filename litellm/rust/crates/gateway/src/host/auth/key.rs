@@ -9,7 +9,7 @@ use litellm_gateway_auth_core::{
     KeyHash, StoredKey,
     authn::key::{KeyRecord, Keyed},
 };
-use litellm_python_compat::{Value, json};
+use litellm_python_compat::{Value, datetime::IsoDateTime, json};
 use litellm_redis_store::auth_cache::{Bag, CachedKey, CachedObjectPermission, Lists};
 use serde::Deserialize;
 
@@ -59,7 +59,7 @@ macro_rules! carried_when_held {
     };
 }
 
-carried_when_held!(String, i64, f64, Timestamp, CachedObjectPermission);
+carried_when_held!(String, i64, f64, IsoDateTime, CachedObjectPermission);
 
 impl<T> Carried for Vec<T> {
     fn is_carried(&self) -> bool {

@@ -8,6 +8,7 @@ mod support;
 use std::time::Duration;
 
 use jiff::Timestamp;
+use litellm_python_compat::datetime::IsoDateTime;
 use litellm_redis_client::commands;
 use litellm_redis_store::{
     FromValue, IntoValue,
@@ -71,8 +72,10 @@ const PERMISSION_ENTRY: &str = concat!(
     r#" "search_tools": [], "mcp_tool_search_enabled": null, "skills": [], "apps": null}"#,
 );
 
-fn utc(text: &str) -> Option<Timestamp> {
-    Some(text.parse().unwrap())
+fn utc(text: &str) -> Option<IsoDateTime> {
+    Some(IsoDateTime::utc(
+        text.parse::<Timestamp>().unwrap().as_microsecond(),
+    ))
 }
 
 #[rstest]
