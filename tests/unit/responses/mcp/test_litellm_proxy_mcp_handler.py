@@ -32,6 +32,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import ListedToolsCaller, MCPSe
 from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTableCachedObj
 from litellm.proxy.mcp_server.ui_session_utils import GrantedToolsetIds, granted_toolset_ids
+from litellm.proxy.mcp_server.utils import add_server_prefix_to_name, get_server_prefix
 from litellm.types.mcp_server.mcp_toolset import MCPToolset
 from litellm.litellm_core_utils.core_helpers import budget_reservation_from_metadata
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
@@ -616,35 +617,45 @@ def _logged_attribution_and_reservation(recorder: _SpendLogRecorder) -> list[tup
 async def test_a_tool_calls_spend_log_leaves_the_requests_budget_reservation_to_the_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
+
     recorder: Final = _SpendLogRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
-    monkeypatch.setitem(
-        sys.modules,
-        "litellm.proxy.proxy_server",
-        types.SimpleNamespace(proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()), prisma_client=None),
+    server: Final = MCPServer(
+        server_id="srv-budget-hold",
+        name="report_api",
+        server_name="report_api",
+        url="https://api.example.com",
+        transport=MCPTransport.http,
+        spec_path="https://api.example.com/openapi.json",
     )
-    monkeypatch.setattr(
-        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        types.SimpleNamespace(
-            catalog=types.SimpleNamespace(operation=nullcontext),
-            get_registry=MagicMock(return_value={}),
-            call_tool=AsyncMock(
-                return_value=CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
-            ),
-            get_mcp_server_from_tool_name=MagicMock(return_value=None),
-            get_mcp_server_by_name=MagicMock(return_value=None),
-        ),
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    tool_name: Final = add_server_prefix_to_name("list_reports", get_server_prefix(server))
+    ran: Final = asyncio.Event()
+
+    async def list_reports() -> str:
+        ran.set()
+        return "no reports"
+
+    global_mcp_tool_registry.register_tool(
+        name=tool_name,
+        description="Lists reports",
+        input_schema={"type": "object", "properties": {}},
+        handler=list_reports,
+        server_id=server.server_id,
     )
     caller: Final = _caller_holding_a_budget_reservation("sk-tool-call-budget-hold")
-    tool_name: Final = "deepwiki-read_wiki_structure"
 
     await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
-        tool_server_map={tool_name: "deepwiki"},
+        tool_server_map={tool_name: server.server_name},
         tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
         user_api_key_auth=caller,
         litellm_call_id="budget-hold-owner",
     )
 
+    assert ran.is_set()
     assert _logged_attribution_and_reservation(recorder) == [("u", None)]
     assert caller.budget_reservation == {"reserved_cost": 0.5, "finalized": False}
 
@@ -653,21 +664,8 @@ async def test_a_tool_calls_spend_log_leaves_the_requests_budget_reservation_to_
 async def test_the_mcp_tool_listings_spend_log_leaves_the_requests_budget_reservation_to_the_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from litellm.proxy.mcp_server import mcp_server_manager, operations
-
     recorder: Final = _SpendLogRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
-    monkeypatch.setattr(
-        mcp_server_manager,
-        "global_mcp_server_manager",
-        types.SimpleNamespace(
-            catalog=types.SimpleNamespace(operation=nullcontext),
-            get_registry=MagicMock(return_value={}),
-            get_allowed_mcp_servers=AsyncMock(return_value=[]),
-            get_mcp_servers_from_ids=MagicMock(return_value=[]),
-        ),
-    )
-    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[]))
     caller: Final = _caller_holding_a_budget_reservation("sk-listing-budget-hold")
 
     await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
