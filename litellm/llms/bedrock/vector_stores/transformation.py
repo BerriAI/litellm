@@ -226,14 +226,11 @@ def _result_content(
 
 
 def _filename_from_uri(uri: str) -> str:
-    if uri.startswith("s3://"):
-        bucket, _, key = uri.removeprefix("s3://").partition("/")
-        return key.rstrip("/").split("/")[-1] or bucket or uri
     try:
         parsed_uri: Final = urlparse(uri)
     except ValueError:
         return uri
-    return parsed_uri.path.rstrip("/").split("/")[-1] or parsed_uri.netloc or uri
+    return parsed_uri.path.split("/")[-1] or parsed_uri.netloc
 
 
 def _document_from_location(location: BedrockKBLocation) -> tuple[str, str] | None:
@@ -243,7 +240,6 @@ def _document_from_location(location: BedrockKBLocation) -> tuple[str, str] | No
     location_uris: Final = (
         (location.get("s3Location") or {}).get("uri"),
         (location.get("webLocation") or {}).get("url"),
-        (location.get("oneDriveLocation") or {}).get("url"),
         (location.get("kendraDocumentLocation") or {}).get("uri"),
     )
     document_uri: Final = next((uri for uri in location_uris if uri), None)
