@@ -40,6 +40,8 @@ class DatadogInitParams(StandardCustomLoggerInitParams):
     Params for initializing a DataDog logger on litellm
     """
 
+    datadog_redact_secrets: bool | None = None
+
 
 class DatadogProxyFailureHookJsonMessage(TypedDict, total=False):
     exception: str
