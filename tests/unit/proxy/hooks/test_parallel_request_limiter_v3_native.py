@@ -2004,6 +2004,27 @@ async def test_a_round_ended_before_the_slot_was_reused_keeps_the_slot_like_pyth
 
 
 @pytest.mark.asyncio
+async def test_a_nested_tool_calls_tpm_check_gives_its_hold_back_before_the_tool_runs() -> None:
+    if shutil.which("redis-server") is None:
+        pytest.skip("redis-server is not installed")
+    with _redis_server() as port:
+        side: Final = _side(_clock(port), port=port)
+        remote: Final = side.remote
+        assert remote is not None
+        auth: Final = _auth(tpm_limit=100_000)
+        outer: Final = Request(auth, {**_CHAT, "max_tokens": 20})
+        tool: Final = Request(auth, {**_CHAT, "max_tokens": 500}, call_type="call_mcp_tool", nested=True)
+        tokens: Final = f"{{api_key:{_KEY}}}:tokens"
+        with request_redis_batch_scope(post_call_deadline=3600):
+            context: Final = contextvars.copy_context()
+            side.contexts.update({0: context, 1: context})
+            assert await _run(side, 0, _admit, outer) is None
+            held: Final = remote.get(tokens)
+            assert await _run(side, 1, _admit, tool) is None
+            assert (held is not None, remote.get(tokens)) == (True, held)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("call_id", (7, 2.5, ["call-0"], {"id": "call-0"}, b"call-0"))
 async def test_a_call_id_that_is_not_a_string_is_no_call_id_like_python(call_id: object, backend: int | None) -> None:
     auth: Final = _auth(rpm_limit=5, tpm_limit=4000, max_parallel_requests=2)

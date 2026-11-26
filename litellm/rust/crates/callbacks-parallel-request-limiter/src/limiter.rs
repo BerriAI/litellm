@@ -680,7 +680,7 @@ impl ParallelRequestLimiter {
         refused: bool,
         ctx: Ctx<'_>,
     ) {
-        self.settle_failure(held, FailureFacts::default(), ctx.request)
+        self.settle_failure(held, FailureFacts::default(), None)
             .await;
         if refused {
             self.release_unless_reused(state, facts, ctx).await;

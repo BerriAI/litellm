@@ -20,6 +20,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm._internal_context import reporting_nested_tool_call_failure
@@ -571,7 +572,6 @@ async def test_a_round_logged_before_an_unmapped_tool_call_leaves_the_requests_p
             "litellm_call_id": owner_call_id,
         }
     )
-    first_round_ended_at: Final = datetime.now()
     with monkeypatch.context() as mcp_environment:
         _setup_mcp_call_environment(mcp_environment)
         _setup_proxy_logging(mcp_environment)
@@ -581,39 +581,61 @@ async def test_a_round_logged_before_an_unmapped_tool_call_leaves_the_requests_p
             user_api_key_auth=caller,
             litellm_call_id=owner_call_id,
         )
-    await log_owner_success(first_round_ended_at)
+    await log_owner_success(datetime(2000, 1, 1))
 
     with pytest.raises(HTTPException):
         await pre_call_from_another_request()
 
-    await log_owner_success(datetime.now())
+    await log_owner_success(datetime(2999, 1, 1))
     await pre_call_from_another_request()
 
 
+class _SpendLogRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.metadata: tuple[Mapping[str, object], ...] = ()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.metadata = (*self.metadata, kwargs["litellm_params"]["metadata"])
+
+
+def _caller_holding_a_budget_reservation(key: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key=hash_token(key), user_id="u", budget_reservation={"reserved_cost": 0.5, "finalized": False}
+    )
+
+
+def _logged_attribution_and_reservation(recorder: _SpendLogRecorder) -> list[tuple[object, object]]:
+    return [
+        (metadata.get("user_api_key_user_id"), budget_reservation_from_metadata(metadata))
+        for metadata in recorder.metadata
+    ]
+
+
 @pytest.mark.asyncio
-async def test_a_tool_calls_spend_logging_leaves_the_requests_budget_reservation_to_the_request(
+async def test_a_tool_calls_spend_log_leaves_the_requests_budget_reservation_to_the_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result: Final = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
-    proxy_logging_obj: Final = MagicMock()
-    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=lambda response, **_: response)
+    recorder: Final = _SpendLogRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
     monkeypatch.setitem(
-        sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj)
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        types.SimpleNamespace(proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()), prisma_client=None),
     )
     monkeypatch.setattr(
         "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         types.SimpleNamespace(
             catalog=types.SimpleNamespace(operation=nullcontext),
             get_registry=MagicMock(return_value={}),
-            call_tool=AsyncMock(return_value=result),
+            call_tool=AsyncMock(
+                return_value=CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+            ),
             get_mcp_server_from_tool_name=MagicMock(return_value=None),
             get_mcp_server_by_name=MagicMock(return_value=None),
         ),
     )
-    request_reservation: Final = {"reserved_cost": 0.5, "finalized": False}
-    caller: Final = UserAPIKeyAuth(
-        api_key=hash_token("sk-tool-call-budget-hold"), user_id="u", budget_reservation=request_reservation
-    )
+    caller: Final = _caller_holding_a_budget_reservation("sk-tool-call-budget-hold")
     tool_name: Final = "deepwiki-read_wiki_structure"
 
     await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
@@ -623,59 +645,37 @@ async def test_a_tool_calls_spend_logging_leaves_the_requests_budget_reservation
         litellm_call_id="budget-hold-owner",
     )
 
-    tool_call_metadata: Final = proxy_logging_obj.post_mcp_call_hook.await_args.kwargs["request_data"]["metadata"]
-    assert tool_call_metadata["user_api_key_user_id"] == "u"
-    assert budget_reservation_from_metadata(tool_call_metadata) is None
+    assert _logged_attribution_and_reservation(recorder) == [("u", None)]
     assert caller.budget_reservation == {"reserved_cost": 0.5, "finalized": False}
 
 
 @pytest.mark.asyncio
-async def test_the_mcp_tool_listings_spend_logging_leaves_the_requests_budget_reservation_to_the_request(
+async def test_the_mcp_tool_listings_spend_log_leaves_the_requests_budget_reservation_to_the_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy.mcp_server import mcp_server_manager, operations
 
-    manager: Final = types.SimpleNamespace(
-        catalog=types.SimpleNamespace(operation=nullcontext),
-        get_registry=MagicMock(return_value={}),
-        get_allowed_mcp_servers=AsyncMock(return_value=[]),
-        get_mcp_servers_from_ids=MagicMock(return_value=[]),
+    recorder: Final = _SpendLogRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(
+        mcp_server_manager,
+        "global_mcp_server_manager",
+        types.SimpleNamespace(
+            catalog=types.SimpleNamespace(operation=nullcontext),
+            get_registry=MagicMock(return_value={}),
+            get_allowed_mcp_servers=AsyncMock(return_value=[]),
+            get_mcp_servers_from_ids=MagicMock(return_value=[]),
+        ),
     )
-    logger: Final = MagicMock(model_call_details={})
-    logger.async_success_handler = AsyncMock()
-    setup: Final = MagicMock(return_value=(logger, None))
-    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[]))
-    monkeypatch.setattr(operations, "function_setup", setup)
-    response: Final = ResponsesAPIResponse(
-        id="resp_test",
-        created_at=1234567891,
-        model="test-model",
-        object="response",
-        status="completed",
-        output=[],
-        parallel_tool_calls=False,
-        tool_choice="auto",
-        tools=[],
-    )
-    monkeypatch.setattr(responses_main, "aresponses", AsyncMock(return_value=response))
-    caller: Final = UserAPIKeyAuth(
-        api_key=hash_token("sk-listing-budget-hold"),
-        user_id="u",
-        budget_reservation={"reserved_cost": 0.5, "finalized": False},
-    )
+    caller: Final = _caller_holding_a_budget_reservation("sk-listing-budget-hold")
 
-    await responses_main.aresponses_api_with_mcp(
-        input="hi",
-        model="test-model",
-        tools=[{"type": "mcp", "server_url": "litellm_proxy"}],
+    await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=caller,
+        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy"}],
     )
 
-    logger.async_success_handler.assert_awaited_once()
-    listing_metadata: Final = setup.call_args.kwargs["metadata"]
-    assert listing_metadata["user_api_key_user_id"] == "u"
-    assert budget_reservation_from_metadata(listing_metadata) is None
+    assert _logged_attribution_and_reservation(recorder) == [("u", None)]
     assert caller.budget_reservation == {"reserved_cost": 0.5, "finalized": False}
 
 
