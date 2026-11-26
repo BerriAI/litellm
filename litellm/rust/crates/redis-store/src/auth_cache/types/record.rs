@@ -116,6 +116,22 @@ impl Field for IsoDateTime {
     }
 }
 
+/// A field whose model types it as a `Literal` of strings, one variant per string.
+pub(super) trait Literal: Copy + std::str::FromStr + Into<&'static str> {}
+
+impl<T: Literal> Field for T {
+    fn read(value: &Value) -> Option<Self> {
+        match value {
+            Value::Str(text) => text.parse().ok(),
+            _ => None,
+        }
+    }
+
+    fn write(self) -> Value {
+        Value::from(self.into())
+    }
+}
+
 impl<T: Field> Field for Option<T> {
     fn read(value: &Value) -> Option<Self> {
         match value {

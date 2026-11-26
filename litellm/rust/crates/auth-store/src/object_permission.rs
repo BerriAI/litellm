@@ -1,4 +1,5 @@
-//! An object permission as the auth cache holds it, nested in the key or team that points at it.
+//! An object permission as the auth cache holds it, nested in the key, team or end user that
+//! points at it.
 
 use std::sync::Arc;
 
@@ -50,7 +51,8 @@ impl ObjectPermissions {
 }
 
 /// What `LiteLLM_ObjectPermissionTable.model_dump(mode="json")` holds for `row`, or the column the
-/// model would refuse the row for. The table has no `apps` column, so the model's default stands.
+/// model would refuse the row for. The repository reads leave out the `apps` column, so the model's
+/// default stands for it.
 pub(crate) fn object_permission_entry(
     row: ObjectPermission,
 ) -> Result<ObjectPermissionEntry, Error> {
