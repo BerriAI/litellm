@@ -10370,13 +10370,37 @@ def test_trimming_with_tool_calls():
 
     result = trim_messages(messages=messages, max_tokens=1)
 
-    print(result)
-
-    assert len(result) == num_tool_calls
-    assert result == messages[-num_tool_calls:]
+    assert result == messages[-(num_tool_calls + 1) :], (
+        "the trailing tool replies must keep the assistant message that made the tool calls"
+    )
 
     result = trim_messages(messages=messages, max_tokens=999)
     assert messages == result
+
+
+def test_trimming_drops_a_tool_call_and_its_replies_together() -> None:
+    messages: Final = [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_paris",
+                    "type": "function",
+                    "function": {"name": "get_current_weather", "arguments": '{"location": "Paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_paris", "content": "sunny " * 400},
+        {"role": "user", "content": "Thanks, and tomorrow?"},
+    ]
+
+    trimmed_messages: Final = trim_messages(messages, max_tokens=50, model="gpt-4-0613")
+
+    assert trimmed_messages == [messages[0], messages[3]], (
+        f"the oversized tool turn should be dropped whole, never leaving an orphaned tool reply: {trimmed_messages}"
+    )
 
 
 def test_trimming_should_not_change_original_messages():
