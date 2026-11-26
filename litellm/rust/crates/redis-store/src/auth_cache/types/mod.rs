@@ -8,11 +8,12 @@ mod project;
 mod record;
 mod settings;
 mod team;
+mod team_membership;
 
 pub(super) use self::record::decode;
 pub use self::{
     bag::{Bag, Dict, Ints, Lists},
-    budget::BudgetEntry,
+    budget::{BudgetEntry, BudgetFullEntry},
     budget_limit::BudgetLimitEntry,
     key::KeyEntry,
     member::{MemberEntry, MemberRole},
@@ -21,4 +22,5 @@ pub use self::{
     record::ExcludedIfNone,
     settings::Settings,
     team::{ModelAliases, ModelTableEntry, TeamEntry},
+    team_membership::TeamMembershipEntry,
 };

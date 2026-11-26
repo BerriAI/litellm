@@ -10,8 +10,10 @@ mod member;
 mod object_permission;
 mod project;
 mod team;
+mod team_membership;
 
 pub use error::Error;
 pub use key::KeyDatabase;
 pub use project::ProjectDatabase;
 pub use team::{AliasMatch, TeamDatabase};
+pub use team_membership::TeamMembershipDatabase;

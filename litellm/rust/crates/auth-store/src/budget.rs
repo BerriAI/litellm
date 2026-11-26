@@ -1,13 +1,25 @@
 //! A budget row as the auth cache holds it, nested in the object that names it.
 
 use litellm_python_compat::{json, truthy::truthy};
-use litellm_redis_store::auth_cache::{BudgetEntry, ExcludedIfNone};
+use litellm_redis_store::auth_cache::{BudgetEntry, BudgetFullEntry, ExcludedIfNone};
 use litellm_repositories::{Budget, RawJson};
 
 use crate::{
     Error,
-    column::{nullable, time},
+    column::{instant, nullable, time},
 };
+
+/// What `LiteLLM_BudgetTableFull.model_dump(mode="json")` holds for `budget`: [`budget_entry`]
+/// with the reset and creation times, refused for the same columns.
+pub(crate) fn budget_full_entry(budget: Budget) -> Result<BudgetFullEntry, Error> {
+    let budget_reset_at = time("budget_reset_at", budget.budget_reset_at)?;
+    let created_at = instant("created_at", budget.created_at)?;
+    Ok(BudgetFullEntry {
+        budget: budget_entry(budget)?,
+        budget_reset_at,
+        created_at,
+    })
+}
 
 /// What `LiteLLM_BudgetTable.model_dump(mode="json")` holds for `budget`, or the column the model
 /// would refuse the row for. The model refuses any `budget_limits` Python finds truthy, since only

@@ -38,8 +38,15 @@ Each object has one entry here, in the same form, and a later object adds its ow
 
 - Query: `ProjectDatabase::project`, the project's row with its budget (`find_with_budget`), one query
 - Entry: `ProjectEntry` under `AuthObject::Project`, the `LiteLLM_ProjectTableCachedObj` dump
-- Nested: the budget, as `LiteLLM_BudgetTable` dumps it (`BudgetEntry`). A budget whose `budget_limits` Python finds truthy is refused, as the model's `reject_concurrent_windows` does. An object whose model nests a different budget class, such as a team membership's `LiteLLM_BudgetTableFull`, needs its own record
+- Nested: the budget, as `LiteLLM_BudgetTable` dumps it (`BudgetEntry`). A budget whose `budget_limits` Python finds truthy is refused, as the model's `reject_concurrent_windows` does. An object whose model nests a different budget class, such as a team membership's `LiteLLM_BudgetTableFull`, has its own record
 - Not read: the object permission the project points at, and `last_refreshed_at`, which the host that caches the project stamps
+
+### Team membership
+
+- Query: `TeamMembershipDatabase::team_membership`, the membership's row with its budget (`find_with_budget`), one query
+- Entry: `TeamMembershipEntry` under `AuthObject::TeamMembership` and `AuthObject::TeamMembershipReservation`, the `LiteLLM_TeamMembership` dump. `AuthObject::TeamMembershipReservation` may instead hold `"__no_team_membership__"` (`NO_TEAM_MEMBERSHIP_SENTINEL`), which `_fetch_team_membership_from_db` caches for a user who is not a member, so a typed read of that key reads the sentinel first
+- Nested: the budget, as `LiteLLM_BudgetTableFull` dumps it (`BudgetFullEntry`, the `BudgetEntry` with `budget_reset_at` and `created_at` after it). The model types it `LiteLLM_BudgetTableFull | LiteLLM_BudgetTable`, and pydantic reads every budget row as the full one since none lacks a `created_at`. It is refused for what the project's budget is refused for
+- Not read: the user and the team the membership names
 
 ## The cached shape
 
@@ -52,6 +59,6 @@ Each object has one entry here, in the same form, and a later object adds its ow
 
 ## Other writers
 
-- Python still writes every entry this crate shapes, and pods on an older release fill each from the database themselves, so the entries stay a wire format Python owns. `cache_key_object` writes a key for every key the proxy reads or a management endpoint changes, `get_team_object` shapes a team from the same repository row on its own and caches it through `cache_team_object`, and `get_project_object` does the same for a project, so no host reads a team or a project through this crate yet. All three write the bytes this crate shapes for the same row
+- Python still writes every entry this crate shapes, and pods on an older release fill each from the database themselves, so the entries stay a wire format Python owns. `cache_key_object` writes a key for every key the proxy reads or a management endpoint changes, `get_team_object` shapes a team from the same repository row on its own and caches it through `cache_team_object`, `get_project_object` does the same for a project, and the team member budget check and `get_team_membership` do it for a membership. So no host reads a team, a project or a membership through this crate yet. All of them write the bytes this crate shapes for the same row
 - A writer whose bytes differ from this crate's is listed here with the difference, and is left alone on purpose
-  - The auth prefetch (`auth_object_prefetch.py`) writes `project_id:{id}` from the key owners row instead, with the object permission nested, times without a `Z` and `[]` for a NULL budget `allowed_models`, so its bytes differ from this shape for the same row
+  - The auth prefetch (`auth_object_prefetch.py`) writes `project_id:{id}`, `{team_id}_{user_id}` and `team_membership:{user_id}:{team_id}` from the key owners row instead, with budget times without a `Z` and `[]` for a NULL budget `allowed_models`, and the project's object permission nested, so its bytes differ from this shape for the same row
