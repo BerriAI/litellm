@@ -638,17 +638,52 @@ impl ParallelRequestLimiter {
         if let Some(abort) = self.first_pass(state, facts, ctx).await? {
             return Ok(Some(abort));
         }
-        if facts.phase == Phase::FirstPass
-            || facts.nested_tool_call
-            || !state.stash().first_pass_admitted
-        {
+        if facts.phase == Phase::FirstPass || !state.stash().first_pass_admitted {
             return Ok(None);
         }
+        if !facts.nested_tool_call {
+            return self.reserve(state, facts, ctx).await;
+        }
+        let held = LimiterState::default();
+        held.stash().owned = true;
+        let reserved = self.reserve(&held, facts, ctx).await;
+        self.give_back_tool_call_reservation(
+            state,
+            facts,
+            &held,
+            matches!(reserved, Ok(Some(_))),
+            ctx,
+        )
+        .await;
+        reserved
+    }
+
+    async fn reserve(
+        &self,
+        state: &LimiterState,
+        facts: &PreCallFacts,
+        ctx: Ctx<'_>,
+    ) -> Result<Option<Abort>, Unverifiable> {
         if let Some(abort) = self.reserve_tokens(state, facts, ctx).await? {
             return Ok(Some(abort));
         }
         self.reserve_io(state, facts, self.reservation_amount(facts), ctx)
             .await
+    }
+
+    pub(crate) async fn give_back_tool_call_reservation(
+        &self,
+        state: &LimiterState,
+        facts: &PreCallFacts,
+        held: &LimiterState,
+        refused: bool,
+        ctx: Ctx<'_>,
+    ) {
+        self.settle_failure(held, FailureFacts::default(), ctx.request)
+            .await;
+        if refused {
+            self.release_unless_reused(state, facts, ctx).await;
+        }
     }
 
     fn reserves_tokens(&self, facts: &PreCallFacts) -> bool {
@@ -1777,7 +1812,8 @@ impl ParallelRequestLimiter {
         match input.hook {
             Hook::PreCall => {
                 let inputs: PreCallInputs = port_inputs(input.hook, inputs)?;
-                let facts = match self.pre_call_facts(state, input, inputs)? {
+                let held = LimiterState::default();
+                let facts = match self.pre_call_facts(state, &held, input, inputs)? {
                     Ok(Some(facts)) => facts,
                     Ok(None) => return Ok(None),
                     Err(raised) => {
@@ -1808,7 +1844,7 @@ impl ParallelRequestLimiter {
                         .and_then(|limits| limits.estimated_output_tokens.as_ref()),
                 };
                 Ok(
-                    Box::pin(self.pre_call_hosted(state, facts, ctx, reservation))
+                    Box::pin(self.pre_call_hosted(state, &held, facts, ctx, reservation))
                         .await?
                         .map(Verdict::Abort),
                 )
@@ -1844,6 +1880,7 @@ impl ParallelRequestLimiter {
     fn pre_call_facts(
         &self,
         state: &LimiterState,
+        held: &LimiterState,
         input: &HookInput,
         inputs: PreCallInputs,
     ) -> Result<Result<Option<PreCallFacts>, Abort>, CallbackError> {
@@ -1943,8 +1980,12 @@ impl ParallelRequestLimiter {
                 built.cached_counting_scopes,
             )
         };
-        if !facts.nested_tool_call {
-            let mut stash = state.stash();
+        {
+            let mut stash = if facts.nested_tool_call {
+                held.stash()
+            } else {
+                state.stash()
+            };
             stash.cap = cap;
             stash.cached_counting_scopes = cached_counting_scopes;
             stash.pre_call = Some(facts.clone());

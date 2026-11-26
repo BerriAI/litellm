@@ -909,11 +909,13 @@ class LiteLLM_Proxy_MCP_Handler:
 
         from litellm._uuid import uuid
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import mark_parallel_slot_reused_by_tool_calls
         from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
         from litellm.proxy.proxy_server import proxy_logging_obj
 
+        mark_parallel_slot_reused_by_tool_calls()
         tool_results: Final[list[MCPToolResult]] = []
         tool_call_id: str | None = None
         rules_obj: Final = Rules()
@@ -991,7 +993,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
                     LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
                         data=logging_request_data,
-                        user_api_key_dict=typed_user_api_key_auth,
+                        user_api_key_dict=typed_user_api_key_auth.model_copy(update={"budget_reservation": None}),
                         _metadata_variable_name="metadata",
                     )
                     user_identifier = getattr(typed_user_api_key_auth, "end_user_id", None) or getattr(

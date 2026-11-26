@@ -237,16 +237,21 @@ async fn a_reservation_is_settled_to_actual_usage_and_refunded_on_failure() {
 }
 
 #[rstest]
+#[case::fits(300, false)]
+#[case::over_the_limit(500, true)]
 #[tokio::test]
-async fn nested_tool_calls_leave_the_requests_reservation_to_settle_at_its_end() {
+async fn nested_tool_calls_are_checked_against_tpm_and_leave_the_requests_reservation_to_settle_at_its_end(
+    #[case] tool_call_tokens: i64,
+    #[case] refused: bool,
+) {
     let (limiter, store, _) = limiter(true);
     let tpm = descriptors(
-        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 10000}}]),
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
     );
     let state = LimiterState::default();
     assert_eq!(
         limiter
-            .pre_call(&state, facts(tpm.clone(), Some(52)), None)
+            .pre_call(&state, facts(tpm.clone(), Some(600)), None)
             .await,
         None
     );
@@ -254,13 +259,16 @@ async fn nested_tool_calls_leave_the_requests_reservation_to_settle_at_its_end()
         let tool_call = PreCallFacts {
             call_id: None,
             nested_tool_call: true,
-            ..facts(tpm.clone(), Some(1026))
+            ..facts(tpm.clone(), Some(tool_call_tokens))
         };
-        assert_eq!(limiter.pre_call(&state, tool_call, None).await, None);
+        assert_eq!(
+            limiter.pre_call(&state, tool_call, None).await.is_some(),
+            refused
+        );
     }
     assert_eq!(
         count(&store, "api_key", "k", Kind::Tokens),
-        Some(Local::Number(Number::Int(52)))
+        Some(Local::Number(Number::Int(600)))
     );
     limiter
         .settle_success(

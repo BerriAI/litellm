@@ -1,10 +1,12 @@
 import asyncio
+import contextvars
 import importlib
 import sys
 import types
 from types import MappingProxyType
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
+from datetime import datetime
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,18 +32,20 @@ from litellm.proxy._types import UI_TEAM_ID, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTableCachedObj
 from litellm.proxy.mcp_server.ui_session_utils import GrantedToolsetIds, granted_toolset_ids
 from litellm.types.mcp_server.mcp_toolset import MCPToolset
-from litellm.proxy.utils import ProxyLogging
+from litellm.litellm_core_utils.core_helpers import budget_reservation_from_metadata
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.responses import main as responses_main
 from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from tests._support.rust_parallel_request_limiter import PROXY_MaxParallelRequestsHandler_v3
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.responses.main import OutputFunctionToolCall
-from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, ModelResponse
 
 
 class _DummyMCPResult:
@@ -534,6 +538,95 @@ async def test_execute_tool_calls_reports_an_unmapped_tool_failure_inside_the_ne
     post_call_failure_hook.assert_awaited_once()
     reported_inside_a_nested_tool_call.assert_called_once_with(True)
     assert reporting_nested_tool_call_failure() is False
+
+
+@pytest.mark.asyncio
+async def test_a_round_logged_before_an_unmapped_tool_call_leaves_the_requests_parallel_slot_held(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(local_cache))
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-unmapped-tool-slot"), max_parallel_requests=1)
+    owner_call_id: Final = "unmapped-tool-slot-owner"
+
+    async def pre_call(data: dict[str, object]) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=caller, cache=local_cache, data=data, call_type=CallTypes.acompletion.value
+        )
+
+    async def pre_call_from_another_request() -> None:
+        await contextvars.Context().run(
+            asyncio.create_task, pre_call({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "next"}]})
+        )
+
+    async def log_owner_success(end_time: datetime) -> None:
+        await limiter.async_log_success_event(
+            kwargs={"litellm_call_id": owner_call_id}, response_obj=None, start_time=None, end_time=end_time
+        )
+
+    await pre_call(
+        {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "weather in Paris"}],
+            "litellm_call_id": owner_call_id,
+        }
+    )
+    first_round_ended_at: Final = datetime.now()
+    with monkeypatch.context() as mcp_environment:
+        _setup_mcp_call_environment(mcp_environment)
+        _setup_proxy_logging(mcp_environment)
+        await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+            tool_server_map={},
+            tool_calls=[{"id": "call-unmapped", "function": {"name": "get_weather", "arguments": "{}"}}],
+            user_api_key_auth=caller,
+            litellm_call_id=owner_call_id,
+        )
+    await log_owner_success(first_round_ended_at)
+
+    with pytest.raises(HTTPException):
+        await pre_call_from_another_request()
+
+    await log_owner_success(datetime.now())
+    await pre_call_from_another_request()
+
+
+@pytest.mark.asyncio
+async def test_a_tool_calls_spend_logging_leaves_the_requests_budget_reservation_to_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result: Final = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=lambda response, **_: response)
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj)
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        types.SimpleNamespace(
+            catalog=types.SimpleNamespace(operation=nullcontext),
+            get_registry=MagicMock(return_value={}),
+            call_tool=AsyncMock(return_value=result),
+            get_mcp_server_from_tool_name=MagicMock(return_value=None),
+            get_mcp_server_by_name=MagicMock(return_value=None),
+        ),
+    )
+    request_reservation: Final = {"reserved_cost": 0.5, "finalized": False}
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-tool-call-budget-hold"), user_id="u", budget_reservation=request_reservation
+    )
+    tool_name: Final = "deepwiki-read_wiki_structure"
+
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=caller,
+        litellm_call_id="budget-hold-owner",
+    )
+
+    tool_call_metadata: Final = proxy_logging_obj.post_mcp_call_hook.await_args.kwargs["request_data"]["metadata"]
+    assert tool_call_metadata["user_api_key_user_id"] == "u"
+    assert budget_reservation_from_metadata(tool_call_metadata) is None
+    assert caller.budget_reservation == {"reserved_cost": 0.5, "finalized": False}
 
 
 @pytest.mark.asyncio

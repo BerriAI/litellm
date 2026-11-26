@@ -2713,7 +2713,7 @@ async def test_a_pre_call_after_a_failure_leaves_the_success_charging_project_io
         (("tool-model-over-io-limit", "success"), 100_000, (20, 7, 0, 0)),
     ],
 )
-async def test_a_nested_mcp_pre_call_takes_no_project_io_hold_of_its_own_v3(
+async def test_a_nested_mcp_pre_call_is_checked_against_project_io_without_a_hold_of_its_own_v3(
     steps: tuple[str, ...], key_tpm_limit: int | None, expected_counters: tuple[int, int, int, int]
 ) -> None:
     api_key: Final = hash_token("sk-nested-mcp-hold-flags")
@@ -2771,6 +2771,10 @@ async def test_a_nested_mcp_pre_call_takes_no_project_io_hold_of_its_own_v3(
                     start_time=now,
                     end_time=now,
                 )
+            case "tool-model-over-io-limit":
+                with pytest.raises(HTTPException) as refused:
+                    await mcp_pre_call(data={**request, "model": step})
+                assert refused.value.status_code == 429
             case _:
                 await mcp_pre_call(data={**request, "model": step})
 

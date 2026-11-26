@@ -889,6 +889,12 @@ def claim_request_stash_for_data(data: Mapping[str, object]) -> RequestRateLimit
     return stash
 
 
+def mark_parallel_slot_reused_by_tool_calls() -> None:
+    stash: Final = get_request_stash()
+    if stash is not None:
+        stash.parallel_slot_reused_at = datetime.now()  # noqa: DTZ005  # naive like the logged end_time it is compared with
+
+
 def _ended_before_slot_reuse(ended_at: datetime | None, reused_at: datetime | None) -> bool:
     if ended_at is None or reused_at is None or (ended_at.tzinfo is None) != (reused_at.tzinfo is None):
         return False
