@@ -10794,7 +10794,13 @@ def test_litellm_api_base(monkeypatch, provider, route):
         mock_response.headers = {"Content-Type": "application/json"}
         mock_response.json.return_value = {
             "candidates": [
-                {"content": {"parts": [{"text": "test response"}], "role": "model"}, "finishReason": "STOP"}
+                {
+                    "content": {
+                        "parts": [{"text": "test response"}, {"inlineData": {"mimeType": "image/png", "data": "dGVzdA=="}}],
+                        "role": "model",
+                    },
+                    "finishReason": "STOP",
+                }
             ],
             "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
             "embedding": {"values": [0.1, 0.2]},

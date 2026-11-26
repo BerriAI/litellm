@@ -1,10 +1,13 @@
 import asyncio
 import importlib
-from typing import List
+from types import SimpleNamespace
+from typing import Final, List
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 import litellm
+from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -270,3 +273,39 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
+
+
+def _answered_with(status_code: int) -> httpx.Response:
+    return httpx.Response(status_code, request=httpx.Request("POST", "https://google.invalid"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception", "alerted"),
+    (
+        pytest.param(
+            ImageRefusalError(
+                message="refused", model="m", llm_provider="gemini", response=_answered_with(400),
+                provider_specific_fields={},
+            ),
+            False,
+            id="refusal",
+        ),
+        pytest.param(
+            UnservedImageError(message="no image", model="m", llm_provider="gemini", response=_answered_with(422)),
+            False,
+            id="no_image",
+        ),
+        pytest.param(litellm.Timeout(message="timed out", model="m", llm_provider="gemini"), True, id="timeout"),
+    ),
+)
+async def test_an_image_answer_without_an_image_sends_no_llm_exception_alert(
+    exception: Exception, alerted: bool
+) -> None:
+    from litellm.router_utils.handle_error import send_llm_exception_alert
+
+    router: Final = SimpleNamespace(slack_alerting_logger=AsyncMock())
+
+    await send_llm_exception_alert(router, {"model": "image-group", "prompt": "draw a tree"}, "traceback", exception)
+
+    assert router.slack_alerting_logger.send_alert.called is alerted

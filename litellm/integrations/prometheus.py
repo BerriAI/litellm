@@ -22,6 +22,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     AUTH_OBJECTS_TARGET,
+    IMAGE_CALL_TYPES,
     PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
     PROXY_LLM_PROVIDER_FALLBACK,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -50,6 +51,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
@@ -2891,6 +2893,7 @@ class PrometheusLogger(CustomLogger):
             api_provider: Final = self._extract_api_provider_from_request_data(
                 request_data
             ) or self._extract_api_provider_from_exception(original_exception)
+            answered_without_an_image: Final = isinstance(original_exception, IMAGE_ANSWER_ERRORS)
             enum_values: Final = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -2916,6 +2919,10 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
+                custom_metadata_labels=_custom_labels_of_an_answer_without_an_image(
+                    request_data.get("standard_logging_object"),
+                    answered_without_an_image and not _opted_out_of_logging(request_data),
+                ),
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
             PrometheusLogger._inc_labeled_counter(
@@ -2932,9 +2939,46 @@ class PrometheusLogger(CustomLogger):
                 enum_values,
                 label_context=_label_ctx,
             )
+            self._increment_billed_image_failure_metrics(request_data, enum_values, answered_without_an_image)
 
         except Exception as e:
             verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
+
+    def _increment_billed_image_failure_metrics(
+        self, request_data: Mapping[str, object], enum_values: UserAPIKeyLabelValues, answered_without_an_image: bool
+    ) -> None:
+        usage: Final = request_data.get("combined_usage_object")
+        response_cost: Final = request_data.get("response_cost")
+        if _opted_out_of_logging(request_data):
+            return
+        if request_data.get("call_type") not in IMAGE_CALL_TYPES or not isinstance(usage, litellm.Usage):
+            return
+        if not isinstance(response_cost, (int, float)) or response_cost <= 0:
+            return
+        logged: Final = _logged_fields(request_data.get("standard_logging_object"))
+        billed_model: Final = logged.get("model")
+        provider: Final = logged.get("custom_llm_provider")
+        billed_group: Final = logged.get("model_group")
+        billed_values: Final = replace(
+            enum_values,
+            model=billed_model.removeprefix(f"{provider}/" if isinstance(provider, str) else "")
+            if isinstance(billed_model, str)
+            else None,
+            requested_model=billed_group
+            if answered_without_an_image and isinstance(billed_group, str)
+            else enum_values.requested_model,
+        )
+        label_context: Final = PrometheusLabelFactoryContext(billed_values)
+
+        def count_billed(counter: object, metric_name: DEFINED_PROMETHEUS_METRICS, amount: float) -> None:
+            PrometheusLogger._inc_labeled_counter(
+                self, counter, metric_name, billed_values, label_context=label_context, amount=amount
+            )
+
+        count_billed(self.litellm_spend_metric, "litellm_spend_metric", float(response_cost))
+        count_billed(self.litellm_tokens_metric, "litellm_total_tokens_metric", float(usage.total_tokens))
+        count_billed(self.litellm_input_tokens_metric, "litellm_input_tokens_metric", float(usage.prompt_tokens))
+        count_billed(self.litellm_output_tokens_metric, "litellm_output_tokens_metric", float(usage.completion_tokens))
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
@@ -3140,6 +3184,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 label_model_group = _bounded_requested_model_label(model_group, router_originated=True)
 
+            refused_prompt: Final = isinstance(exception, IMAGE_ANSWER_ERRORS)
             enum_values: Final = UserAPIKeyLabelValues(
                 litellm_model_name=label_litellm_model_name,
                 model_id=label_model_id,
@@ -3157,6 +3202,9 @@ class PrometheusLogger(CustomLogger):
                 tags=standard_logging_payload.get("request_tags", []),
                 client_ip=client_ip,
                 user_agent=user_agent,
+                custom_metadata_labels=_custom_labels_of_an_answer_without_an_image(
+                    standard_logging_payload, refused_prompt
+                ),
             )
 
             """
@@ -3165,14 +3213,23 @@ class PrometheusLogger(CustomLogger):
             """
             # Only mark a deployment outage when one was actually picked.
             if deployment_selected:
-                self.set_deployment_partial_outage(
+                self._set_deployment_state_after_failure(
+                    refused_prompt=refused_prompt,
                     litellm_model_name=litellm_model_name or "",
                     model_id=model_id,
                     api_base=api_base,
                     api_provider=llm_provider or "",
                 )
             _deployment_label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
-            if exception is not None:
+            if refused_prompt:
+                PrometheusLogger._inc_labeled_counter(
+                    self,
+                    self.litellm_deployment_success_responses,
+                    "litellm_deployment_success_responses",
+                    enum_values,
+                    label_context=_deployment_label_ctx,
+                )
+            elif exception is not None:
                 PrometheusLogger._inc_labeled_counter(
                     self,
                     self.litellm_deployment_failure_responses,
@@ -3799,11 +3856,25 @@ class PrometheusLogger(CustomLogger):
     def set_deployment_healthy(
         self,
         litellm_model_name: str,
-        model_id: str,
-        api_base: str,
+        model_id: str | None,
+        api_base: str | None,
         api_provider: str,
     ):
         self.set_litellm_deployment_state(0, litellm_model_name, model_id, api_base, api_provider)
+
+    def _set_deployment_state_after_failure(
+        self,
+        *,
+        refused_prompt: bool,
+        litellm_model_name: str,
+        model_id: str | None,
+        api_base: str | None,
+        api_provider: str,
+    ) -> None:
+        set_state: Final = self.set_deployment_healthy if refused_prompt else self.set_deployment_partial_outage
+        set_state(
+            litellm_model_name=litellm_model_name, model_id=model_id, api_base=api_base, api_provider=api_provider
+        )
 
     def set_deployment_partial_outage(
         self,
@@ -4971,6 +5042,22 @@ def get_custom_labels_from_metadata(metadata: dict) -> dict[str, str]:
             result[original_key.replace(".", "_")] = value
 
     return result
+
+
+def _opted_out_of_logging(request_data: Mapping[str, object]) -> bool:
+    return request_data.get("no-log") is True and not litellm.global_disable_no_log_param
+
+
+def _custom_labels_of_an_answer_without_an_image(
+    standard_logging_payload: object, answered_without_an_image: bool
+) -> Mapping[str, str]:
+    if not answered_without_an_image or not isinstance(standard_logging_payload, dict):
+        return {}
+    return get_custom_labels_from_metadata(
+        metadata=_get_combined_custom_metadata_from_standard_logging_payload(
+            standard_logging_payload=standard_logging_payload
+        )
+    )
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(

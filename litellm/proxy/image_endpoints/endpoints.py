@@ -1,6 +1,7 @@
 import asyncio
 import io
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Final, get_type_hints
@@ -8,6 +9,7 @@ from typing import Annotated, Final, get_type_hints
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -19,6 +21,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     log_llm_api_exception,
     resolve_litellm_call_id,
+    response_cost_with_failed_attempts,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
@@ -27,15 +30,29 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
-    litellm_call_id_headers,
+    failed_call_headers,
     openai_error_param,
     openai_error_type,
 )
+from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _with_image_logging_setup(request_fields: Mapping[str, object]) -> Mapping[str, object]:
+    logging_obj, setup_fields = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
+        is_async_call=True,
+        **request_fields,
+    )
+    return {**setup_fields, "litellm_logging_obj": logging_obj}
+
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
@@ -151,6 +168,9 @@ async def image_generation(
             data["prompt"] = get_str_from_messages(messages)
         data.pop("messages", None)
 
+        if "prompt" in data:
+            data = {**_with_image_logging_setup(data)}  # rebind-ok: the hooks and except block read data
+
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
             data=data,
@@ -173,7 +193,9 @@ async def image_generation(
         model_id: Final = hidden_params.get("model_id", None) or ""
         cache_key: Final = hidden_params.get("cache_key", None) or ""
         api_base: Final = hidden_params.get("api_base", None) or ""
-        response_cost: Final = hidden_params.get("response_cost", None) or ""
+        response_cost: Final = response_cost_with_failed_attempts(
+            hidden_params.get("response_cost"), data.get("litellm_logging_obj")
+        )
         response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
 
         fastapi_response.headers.update(
@@ -207,12 +229,15 @@ async def image_generation(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         log_llm_api_exception(e, litellm_call_id)
+        failure_headers: Final = failed_call_headers(
+            litellm_call_id, failure_row_response_cost(_REQUEST_FIELDS.validate_python(data))
+        )
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
                 type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
                 param=openai_error_param(e),
-                headers=litellm_call_id_headers(litellm_call_id),
+                headers=failure_headers,
                 code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
@@ -221,7 +246,7 @@ async def image_generation(
                 message=getattr(e, "message", error_msg),
                 type=openai_error_type(e, error_status_code(e, 500)),
                 param=openai_error_param(e),
-                headers=litellm_call_id_headers(litellm_call_id),
+                headers=failure_headers,
                 openai_code=getattr(e, "code", None),
                 code=error_status_code(e, 500),
             )

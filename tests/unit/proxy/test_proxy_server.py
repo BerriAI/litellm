@@ -1092,6 +1092,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
+            litellm_logging_obj=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()

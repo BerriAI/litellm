@@ -12,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, vertex_top_level_request_fields
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
@@ -247,13 +248,18 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         usage_metadata: Final = _JSON_DICT.validate_python(response_json.get("usageMetadata") or {})
         traffic_type: Final = usage_metadata.get("trafficType") if usage_metadata else None
-        return ImageResponse(
+        model_response: Final = ImageResponse(
             data=data_list,
             usage=transform_gemini_image_usage(usage_metadata) if usage_metadata else None,
             hidden_params={"provider_specific_fields": {"traffic_type": traffic_type}}
             if isinstance(traffic_type, str) and traffic_type
             else {},
         )
+        if not data_list:
+            raise empty_image_response_error(
+                response_json, model, "vertex_ai", raw_response, model_response, logging_obj
+            )
+        return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[HttpxPartType]:
         images: Final[list[FileTypes]] = image if isinstance(image, list) else [image]
