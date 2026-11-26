@@ -956,3 +956,27 @@ def test_image_edit_logs_no_call_id_when_the_caller_passes_one_that_is_not_a_str
     )
 
     assert logging_obj.model_call_details["litellm_params"]["litellm_call_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_azure_image_generation_sends_the_request_when_the_token_provider_is_not_callable() -> None:
+    expected_body: Final = json.loads(
+        (Path(__file__).parent / "request_payloads" / "azure_gpt_image_1.json").read_text()
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+        side_effect=Exception("stop at the provider request"),
+    ) as provider_post:
+        with pytest.raises(litellm.APIConnectionError, match="stop at the provider request"):
+            await litellm.aimage_generation(
+                model="azure/gpt-image-1",
+                prompt="test prompt",
+                api_base="https://example.azure.com",
+                api_key="test-key",
+                api_version="2025-04-01-preview",
+                azure_ad_token_provider="not-callable",
+            )
+
+    assert provider_post.call_args.kwargs["json"] == expected_body

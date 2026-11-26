@@ -201,7 +201,7 @@ def _user_api_key_auth_of(value: object) -> "UserAPIKeyAuth | None":
         return None
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
-    return require_attributes(value, UserAPIKeyAuth, "api_key")
+    return value if has_attributes(value, UserAPIKeyAuth, "api_key") else None
 
 
 def _optional_int(value: object) -> int | None:

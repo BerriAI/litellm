@@ -149,7 +149,7 @@ def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: Ma
 
 ##### Image Generation #######################
 def _token_provider_of(value: object) -> Callable[..., object] | None:
-    return None if value is None else callable_of(value)
+    return value if callable(value) else None
 
 
 def _openai_client_of(value: object) -> openai.OpenAI | openai.AsyncOpenAI | None:
