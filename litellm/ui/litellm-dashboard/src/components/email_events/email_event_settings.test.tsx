@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import EmailEventSettings from "./email_event_settings";
@@ -129,6 +129,26 @@ describe("EmailEventSettings", () => {
       expect(getEmailEventSettings).not.toHaveBeenCalled();
     });
   });
+  it.each([
+    ["ops@example.com", "ops@example.com"],
+    ["", null],
+  ])("saves a replacement or clears the reminder recipient (%s)", async (address, recipient) => {
+    const user = userEvent.setup();
+    const settings = [{ event: "Model Deprecations", enabled: true }];
+    getEmailEventSettings.mockResolvedValue({ settings, model_deprecation_email_recipient: "old@example.com" });
+    renderWithProviders(<EmailEventSettings accessToken="test-access" />);
+
+    const field = await screen.findByRole("textbox", { name: "Reminder recipient (optional)" });
+    expect(field).toHaveValue("old@example.com");
+    fireEvent.change(field, { target: { value: address } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(updateEmailEventSettings).toHaveBeenCalledWith("test-access", {
+      settings,
+      model_deprecation_email_recipient: recipient,
+    });
+  });
+
   it("should show model deprecation reminders off and save explicit opt-in", async () => {
     const user = userEvent.setup();
     getEmailEventSettings.mockResolvedValue({ settings: [{ event: "Model Deprecations", enabled: false }] });

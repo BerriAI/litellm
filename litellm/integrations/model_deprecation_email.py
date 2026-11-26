@@ -14,7 +14,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import AliasPath, BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import AliasPath, BaseModel, ConfigDict, EmailStr, Field, TypeAdapter
 
 from litellm.integrations.email_templates.model_deprecation_email import (
     render_model_deprecation_email,
@@ -30,6 +30,7 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.types.integrations.model_deprecation_email import (
     MODEL_DEPRECATION_EMAIL_EVENT,
+    MODEL_DEPRECATION_EMAIL_RECIPIENT,
     DeprecationEmailMilestone,
     ModelDeprecationEmail,
 )
@@ -46,13 +47,14 @@ _RECEIPT_PREFIX: Final = "model_deprecation_email:"
 _PAGE_SIZE: Final = 100
 
 
-class _OptIn(BaseModel):
+class _EmailSettings(BaseModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
     enabled: bool = Field(
         False,
         strict=True,
         validation_alias=AliasPath("email_settings", MODEL_DEPRECATION_EMAIL_EVENT),
     )
+    recipient: EmailStr | None = Field(None, validation_alias=MODEL_DEPRECATION_EMAIL_RECIPIENT)
 
 
 class _RequestCount(BaseModel):
@@ -138,7 +140,9 @@ class ModelDeprecationEmailSender:
         self.prisma: Final = prisma_client
         self.config: Final = ConfigRepository(prisma_client, use_writer=True)
 
-    async def _impacts(self, model: str, start: date, end: date) -> Mapping[str, _Impact]:
+    async def _impacts(
+        self, model: str, start: date, end: date, *, recipient: str | None = None
+    ) -> Mapping[str, _Impact]:
         impacts: Final[dict[str, _Impact]] = {}  # mutable-ok: combines per-recipient counts across bounded usage pages
         offset: int = 0  # rebind-ok: each page advances the stable key grouping cursor
         while True:
@@ -165,7 +169,7 @@ class ModelDeprecationEmailSender:
             ids = frozenset(key.user_id for key in keys if key.user_id) | frozenset(
                 chain.from_iterable(_admin_ids(team) for team in teams)
             )
-            users = await UserRepository(self.prisma).find_many_in("user_id", ids)
+            users = () if recipient else await UserRepository(self.prisma).find_many_in("user_id", ids)
             addresses = {
                 user.user_id: user.user_email.strip() for user in users if user.user_email and user.user_email.strip()
             }
@@ -174,7 +178,7 @@ class ModelDeprecationEmailSender:
                 team = team_by_id.get(key.team_id) if key.team_id else None
                 if key.token is None:
                     continue
-                recipients = _recipient_emails(key.user_id, team, addresses)
+                recipients = (recipient,) if recipient else _recipient_emails(key.user_id, team, addresses)
                 for address in recipients:
                     previous = impacts.get(address, _Impact())
                     names: frozenset[str] = frozenset((team.team_alias or team.team_id,)) if team else frozenset()
@@ -220,7 +224,8 @@ class ModelDeprecationEmailSender:
             return 0
         current: Final = now or datetime.now(timezone.utc)
         settings: Final = await self.config.get_param("general_settings")
-        if not _OptIn.model_validate(settings.param_value if settings else {}).enabled:
+        email_settings: Final = _EmailSettings.model_validate(settings.param_value if settings else {})
+        if not email_settings.enabled:
             return 0
         base_url: Final = os.getenv("PROXY_BASE_URL", "")
         if not base_url:
@@ -238,7 +243,12 @@ class ModelDeprecationEmailSender:
             if identity in seen:
                 continue
             seen.add(identity)
-            impacts = await self._impacts(name, start, current.date())
+            impacts = await self._impacts(
+                name,
+                start,
+                current.date(),
+                recipient=str(email_settings.recipient) if email_settings.recipient else None,
+            )
             for address, impact in sorted(impacts.items()):
                 email = ModelDeprecationEmail(
                     model=model,

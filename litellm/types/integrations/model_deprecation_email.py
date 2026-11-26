@@ -8,6 +8,7 @@ from typing import Final
 from litellm.types.proxy.model_deprecation import ModelDeprecationInfo
 
 MODEL_DEPRECATION_EMAIL_EVENT: Final = "Model Deprecations"
+MODEL_DEPRECATION_EMAIL_RECIPIENT: Final = "model_deprecation_email_recipient"
 
 
 class DeprecationEmailMilestone(IntEnum):

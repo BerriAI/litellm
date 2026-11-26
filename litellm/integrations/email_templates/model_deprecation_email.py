@@ -87,7 +87,7 @@ def render_model_deprecation_email(email: ModelDeprecationEmail, *, base_url: st
     subject: Final = f"[LiteLLM] Model being deprecated by {provider_name} {timing}: {email.usage_model}"
     deadline: Final = email.model.deprecation_date.strftime("%d %b %Y")
     announcement: Final = f"{provider_name} is deprecating this model on {deadline} (UTC)."
-    preheader: Final = f"{announcement} Review the model change and migrate your affected keys."
+    preheader: Final = f"{announcement} Review the model change and migrate affected keys."
     query: Final = urlencode(
         {
             "tab": "models",
@@ -151,14 +151,14 @@ def render_model_deprecation_email(email: ModelDeprecationEmail, *, base_url: st
 {after}
 </td></tr></table>
 <p style="margin:10px 0 24px;font-size:12px;line-height:20px;color:#526079;">Recommendation source: {escape(source)}<br>{source_link}</p>
-<h2 style="margin:0 0 12px;font-size:17px;font-weight:600;color:#17213b;">Your affected usage</h2>
+<h2 style="margin:0 0 12px;font-size:17px;font-weight:600;color:#17213b;">Affected usage</h2>
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-top:1px solid #e2e6ee;border-bottom:1px solid #e2e6ee;">
 <tr><td width="50%" style="padding:14px 0;"><div style="font:24px 'Courier New',monospace;color:#17213b;">{email.key_count:,}</div><div style="margin-top:5px;font-size:12px;color:#526079;">Affected keys</div></td>
 <td width="50%" style="padding:14px 0 14px 20px;border-left:1px solid #e2e6ee;"><div style="font:24px 'Courier New',monospace;color:#17213b;">{email.requests:,}</div><div style="margin-top:5px;font-size:12px;color:#526079;">Requests &middot; last 30 days</div></td></tr></table>
-<p style="margin:10px 0 24px;font-size:12px;line-height:20px;color:#526079;">{escape(team_names + more_teams)}<br>Your keys and teams you administer.</p>
+<p style="margin:10px 0 24px;font-size:12px;line-height:20px;color:#526079;">{escape(team_names + more_teams)}</p>
 <h2 style="margin:0 0 10px;font-size:17px;font-weight:600;color:#17213b;">What to do</h2>
 <ol style="margin:0 0 24px;padding-left:20px;font-size:13px;line-height:22px;color:#526079;">
-<li style="padding:0 0 8px 4px;">Review the affected keys in your usage dashboard.</li>
+<li style="padding:0 0 8px 4px;">Review the affected keys in the gateway usage dashboard.</li>
 <li style="padding:0 0 8px 4px;">{escape(test_step)}</li>
 <li style="padding-left:4px;">{escape(switch_step)}</li></ol>
 <table role="presentation" cellspacing="0" cellpadding="0"><tr><td bgcolor="#263cdb" style="border-radius:4px;mso-padding-alt:14px 20px;">
@@ -172,9 +172,9 @@ Your gateway admin enabled these emails. Reminder schedule: 30 days and 1 day be
         f"BEFORE - MODEL TO REPLACE\n{email.usage_model}\n\n"
         f"AFTER - RECOMMENDED MODEL\n{replacement or 'No recommended model listed. Choose a supported replacement.'}\n"
         f"Recommendation source: {source}\nProvider notice: {notice or 'Not provided'}\n\n"
-        f"YOUR AFFECTED USAGE\n{email.key_count} keys | {email.requests} requests in the last 30 days\n"
-        f"{team_names}{more_teams}\nYour keys and teams you administer.\n\n"
-        f"WHAT TO DO\n1. Review the affected keys in your usage dashboard.\n2. {test_step}\n3. {switch_step}\n\n"
+        f"AFFECTED USAGE\n{email.key_count} keys | {email.requests} requests in the last 30 days\n"
+        f"{team_names}{more_teams}\n\n"
+        f"WHAT TO DO\n1. Review the affected keys in the gateway usage dashboard.\n2. {test_step}\n3. {switch_step}\n\n"
         f"Review affected usage: {review_url}\n\n"
         "Your gateway admin enabled these emails. Reminder schedule: 30 days and 1 day before deprecation."
     )

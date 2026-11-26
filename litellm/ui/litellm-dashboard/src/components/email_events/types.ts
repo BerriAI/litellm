@@ -7,8 +7,10 @@ export interface EmailEventSetting {
 
 export interface EmailEventSettingsUpdateRequest {
   settings: EmailEventSetting[];
+  model_deprecation_email_recipient?: string | null;
 }
 
 export interface EmailEventSettingsResponse {
   settings: EmailEventSetting[];
+  model_deprecation_email_recipient?: string | null;
 }

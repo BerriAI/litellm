@@ -18,6 +18,7 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.repositories.config_repository import ConfigParam
 from litellm.types.integrations.model_deprecation_email import (
+    MODEL_DEPRECATION_EMAIL_RECIPIENT,
     DeprecationEmailMilestone,
     ModelDeprecationEmail,
 )
@@ -170,9 +171,16 @@ async def test_should_dedupe_model_aliases_and_skip_models_with_no_observed_owne
 
 
 @pytest.mark.asyncio
-async def test_should_scope_usage_to_current_owners_and_admins_excluding_former_admins_across_pages(
-    monkeypatch,
-):
+@pytest.mark.parametrize(
+    ("recipient", "expected"),
+    [
+        (None, {"alice@example.com": "2 keys | 30 requests", "bob@example.com": "2 keys | 40 requests"}),
+        ("migration@example.com", {"migration@example.com": "3 keys | 60 requests"}),
+    ],
+)
+async def test_should_send_owner_scoped_or_gateway_wide_reminders(
+    monkeypatch: pytest.MonkeyPatch, recipient: str | None, expected: dict[str, str]
+) -> None:
     instance = module.ModelDeprecationEmailSender(MagicMock())
     monkeypatch.setattr(module, "_PAGE_SIZE", 2)
     grouped = AsyncMock(
@@ -219,13 +227,21 @@ async def test_should_scope_usage_to_current_owners_and_admins_excluding_former_
         return [LiteLLM_UserTable(user_id=user_id, user_email=f"{user_id}@example.com") for user_id in values]
 
     monkeypatch.setattr(module.UserRepository, "find_many_in", user_rows)
-    impacts = await instance._impacts("gemini/gemini-2.5-pro", date(2026, 10, 3), NOW.date())
-    assert set(impacts) == {"alice@example.com", "bob@example.com"}
-    assert impacts["alice@example.com"].requests == 30
-    assert impacts["alice@example.com"].key_count == 2
-    assert impacts["bob@example.com"].requests == 40
-    assert impacts["bob@example.com"].key_count == 2
-    assert impacts["bob@example.com"].teams == frozenset({"Research"})
+    instance.config = MemoryConfig()
+    instance.config.rows["general_settings"][MODEL_DEPRECATION_EMAIL_RECIPIENT] = recipient
+    schedule(monkeypatch, [info()])
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example")
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@example.com")
+    send: Final = AsyncMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.utils.send_email", send)
+
+    assert await instance.run(MagicMock(), now=NOW) == len(expected)
+    delivered: Final = {call.kwargs["receiver_email"]: call.kwargs["text"] for call in send.await_args_list}
+    assert set(delivered) == set(expected)
+    for address, message in expected.items():
+        assert f"{message} in the last 30 days" in delivered[address]
+        assert "Research" in delivered[address]
     assert grouped.await_args_list[0].kwargs["where"] == {
         "model": "gemini/gemini-2.5-pro",
         "date": {"gte": "2026-10-03", "lte": "2026-11-01"},

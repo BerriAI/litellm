@@ -1,6 +1,6 @@
 import enum
 
-from pydantic import Field
+from pydantic import ConfigDict, EmailStr, Field
 
 from litellm.proxy._types import WebhookEvent
 from litellm.types.integrations.key_expiring_email import VIRTUAL_KEY_EXPIRING_EMAIL_EVENT
@@ -51,11 +51,20 @@ class EmailEventSettings(LiteLLMBaseModel):
 
 
 class EmailEventSettingsUpdateRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     settings: list[EmailEventSettings]
+    model_deprecation_email_recipient: EmailStr | None = Field(
+        None,
+        description="Send model deprecation reminders to this address. Send null to restore owner and team admin delivery.",
+    )
 
 
 class EmailEventSettingsResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     settings: list[EmailEventSettings]
+    model_deprecation_email_recipient: EmailStr | None = None
 
 
 class DefaultEmailSettings(LiteLLMBaseModel):

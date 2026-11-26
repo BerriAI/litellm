@@ -5121,7 +5121,7 @@ export interface paths {
         put?: never;
         /**
          * Reset Event Settings
-         * @description Reset all email event settings to default (new user invitations on, virtual key creation off)
+         * @description Restore the default email events. Proxy admins also clear the model deprecation recipient override.
          */
         post: operations["reset_event_settings_email_event_settings_reset_post"];
         delete?: never;
@@ -35627,11 +35627,18 @@ export interface components {
         };
         /** EmailEventSettingsResponse */
         EmailEventSettingsResponse: {
+            /** Model Deprecation Email Recipient */
+            model_deprecation_email_recipient?: string | null;
             /** Settings */
             settings: components["schemas"]["EmailEventSettings"][];
         };
         /** EmailEventSettingsUpdateRequest */
         EmailEventSettingsUpdateRequest: {
+            /**
+             * Model Deprecation Email Recipient
+             * @description Send model deprecation reminders to this address. Send null to restore owner and team admin delivery.
+             */
+            model_deprecation_email_recipient?: string | null;
             /** Settings */
             settings: components["schemas"]["EmailEventSettings"][];
         };

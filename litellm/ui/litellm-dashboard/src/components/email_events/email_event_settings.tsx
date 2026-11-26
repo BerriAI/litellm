@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,6 +19,10 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
   const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [eventSettings, setEventSettings] = useState<EmailEventSetting[]>([]);
+  const [savedRecipient, setSavedRecipient] = useState("");
+  const [recipient, setRecipient] = useState("");
+  const recipientId = useId();
+  const recipientInput = useRef<HTMLInputElement>(null);
 
   // Fetch email event settings on component mount
   useEffect(() => {
@@ -31,6 +36,8 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
     try {
       const response = await getEmailEventSettings(accessToken);
       setEventSettings(response.settings);
+      setSavedRecipient(response.model_deprecation_email_recipient ?? "");
+      setRecipient(response.model_deprecation_email_recipient ?? "");
     } catch (error) {
       console.error("Failed to fetch email event settings:", error);
       toast.fromError(error);
@@ -50,7 +57,15 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
     if (!accessToken) return;
 
     try {
-      await updateEmailEventSettings(accessToken, { settings: eventSettings });
+      const address = recipient.trim();
+      const changed = address !== savedRecipient;
+      if (changed && !recipientInput.current?.reportValidity()) return;
+
+      await updateEmailEventSettings(accessToken, {
+        settings: eventSettings,
+        ...(changed ? { model_deprecation_email_recipient: address || null } : {}),
+      });
+      if (changed) setSavedRecipient(address);
       toast.success(t("loggingAndAlerts.emailEvents.toasts.saved"));
     } catch (error) {
       console.error("Failed to update email event settings:", error);
@@ -123,6 +138,24 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
                 <div className="ml-3">
                   <p className="text-sm">{setting.event}</p>
                   <div className="block text-sm text-muted-foreground">{getEventDescription(setting.event)}</div>
+                  {setting.event === "Model Deprecations" && (
+                    <div className="mt-3 max-w-sm space-y-1">
+                      <label className="text-sm font-medium" htmlFor={recipientId}>
+                        {t("loggingAndAlerts.emailEvents.deprecationRecipient.label")}
+                      </label>
+                      <Input
+                        id={recipientId}
+                        ref={recipientInput}
+                        type="email"
+                        value={recipient}
+                        onChange={(event) => setRecipient(event.target.value)}
+                        aria-describedby={`${recipientId}-hint`}
+                      />
+                      <p id={`${recipientId}-hint`} className="text-sm text-muted-foreground">
+                        {t("loggingAndAlerts.emailEvents.deprecationRecipient.hint")}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

@@ -6503,7 +6503,7 @@
         },
         "reminders": {
           "title": "Know what gets sent",
-          "description": "Model deprecations notify affected key owners and team admins 30 days and 1 day before retirement. Performance alerts send gateway admins one daily summary when there are new findings, with up to five alerts and a link to the rest."
+          "description": "Model deprecation reminders go out 30 days and 1 day before retirement. Set an optional recipient in Email events. Performance alerts send gateway admins one daily summary when there are new findings, with up to five alerts and a link to the rest."
         }
       },
       "summary": "Get model retirement reminders and daily performance summaries by email.",
@@ -7247,8 +7247,12 @@
     "emailEvents": {
       "title": "Email Notifications",
       "description": "Select which events should trigger email notifications.",
+      "deprecationRecipient": {
+        "label": "Reminder recipient (optional)",
+        "hint": "Send all model deprecation reminders to this address. Leave blank to notify affected key owners and team admins."
+      },
       "descriptions": {
-        "modelDeprecations": "Email affected key owners and team admins 30 days and 1 day before model deprecation. Uses requests from the last 30 days. Off by default.",
+        "modelDeprecations": "Send reminders 30 days and 1 day before model deprecation. Uses requests from the last 30 days. Off by default.",
         "performanceAlerts": "Email gateway admins a daily summary when there are new performance alerts. Shows up to five alerts with a link to see all.",
         "virtualKeyCreated": "An email will be sent to the user when a new Virtual Key is created with their user ID",
         "newUserInvitation": "An email will be sent to the email address of the user when a new user is created",

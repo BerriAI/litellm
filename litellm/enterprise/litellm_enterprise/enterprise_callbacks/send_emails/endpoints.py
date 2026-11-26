@@ -3,10 +3,10 @@ Endpoints for managing email alerts on litellm
 """
 
 import json
-from typing import Dict, Final, cast
+from collections.abc import Mapping
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import JsonValue
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     DefaultEmailSettings,
     EmailEvent,
@@ -14,109 +14,79 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEventSettingsResponse,
     EmailEventSettingsUpdateRequest,
 )
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
+from litellm.types.integrations.model_deprecation_email import MODEL_DEPRECATION_EMAIL_RECIPIENT
 
 router = APIRouter()
 
 
+_GENERAL_SETTINGS: Final = "general_settings"
+_CONFIG_VALUES: Final = TypeAdapter(dict[str, JsonValue])
+_EMAIL_SETTINGS: Final = TypeAdapter(dict[str, bool])
+
+
+def _general_settings(value: object) -> dict[str, JsonValue]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        return _CONFIG_VALUES.validate_json(value)
+    return _CONFIG_VALUES.validate_python(value)
+
+
+def _event_flags(general_settings: Mapping[str, JsonValue]) -> dict[str, bool]:
+    stored: Final = _EMAIL_SETTINGS.validate_python(general_settings.get("email_settings") or {})
+    return {**DefaultEmailSettings.get_defaults(), **stored}
+
+
+async def _read_general_settings(prisma_client: PrismaClient) -> dict[str, JsonValue]:
+    record: Final = await ConfigRepository(prisma_client, use_writer=True).get_param(_GENERAL_SETTINGS)
+    return _general_settings(record.param_value if record else None)
+
+
 async def get_email_settings(prisma_client: PrismaClient) -> dict[str, bool]:
-    return await _get_email_settings(prisma_client)
-
-
-async def _get_email_settings(prisma_client) -> Dict[str, bool]:
-    """Helper function to get email settings from general_settings in db"""
     try:
-        # Get general settings from db
-        general_settings_entry = await prisma_client.db.litellm_config.find_unique(
-            where={"param_name": "general_settings"}
-        )
-
-        # Initialize with default email settings
-        settings_dict = DefaultEmailSettings.get_defaults()
-
-        if (
-            general_settings_entry is not None
-            and general_settings_entry.param_value is not None
-        ):
-            # Get general settings value
-            general_settings: Final = (
-                cast(Dict[str, object], json.loads(general_settings_entry.param_value))
-                if isinstance(general_settings_entry.param_value, str)
-                else cast(Dict[str, object], general_settings_entry.param_value)
-            )
-
-            # Extract email_settings from general settings if it exists
-            if general_settings and "email_settings" in general_settings:
-                email_settings: Final = cast(Dict[str, bool], general_settings["email_settings"])
-                # Update settings_dict with values from general_settings
-                for event_name, enabled in email_settings.items():
-                    settings_dict[event_name] = enabled
-
-        return settings_dict
-    except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error getting email settings from general_settings: {str(e)}"
-        )
-        # Return default settings in case of error
+        return _event_flags(await _read_general_settings(prisma_client))
+    except Exception:
+        verbose_proxy_logger.exception("Error reading email event settings")
         return DefaultEmailSettings.get_defaults()
 
 
-async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
-    """Helper function to save email settings to general_settings in db"""
+async def _save_email_settings(
+    prisma_client: PrismaClient,
+    settings: Mapping[str, bool],
+    *,
+    merge: bool = False,
+    recipient_change: Mapping[str, JsonValue] | None = None,
+) -> None:
     from litellm.proxy.proxy_server import proxy_config
 
-    proxy_config.reject_config_owned_writes(
-        section_name="general_settings", changed_keys={"email_settings": cast(JsonValue, settings)}
-    )
-    try:
-        verbose_proxy_logger.debug(
-            f"Saving email settings to general_settings: {settings}"
-        )
-
-        # Get current general settings
-        general_settings_entry = await prisma_client.db.litellm_config.find_unique(
-            where={"param_name": "general_settings"}
-        )
-
-        # Initialize general settings dict
-        general_settings: Final = (
-            (
-                cast(Dict[str, object], json.loads(general_settings_entry.param_value))
-                if isinstance(general_settings_entry.param_value, str)
-                else cast(Dict[str, object], dict(general_settings_entry.param_value))
-            )
-            if general_settings_entry is not None and general_settings_entry.param_value is not None
-            else {}
-        )
-
-        # Update email_settings in general_settings
-        general_settings["email_settings"] = settings
-
-        # Convert to JSON for storage
-        json_settings = json.dumps(general_settings, default=str)
-
-        # Save updated general settings
+    async with prisma_client.tx() as transaction:
+        await transaction.query_raw(CONFIG_PARAM_LOCK_SQL, _GENERAL_SETTINGS)
+        table: Final = transaction.litellm_config
+        entry: Final = await table.find_unique(where={"param_name": _GENERAL_SETTINGS})
+        current: Final = _general_settings(entry.param_value if entry else None)
+        flags: Final = {**_event_flags(current), **settings} if merge else dict(settings)
+        changes: Final[dict[str, JsonValue]] = {
+            "email_settings": {event: enabled for event, enabled in flags.items()},
+            **(recipient_change or {}),
+        }
+        proxy_config.reject_config_owned_writes(section_name=_GENERAL_SETTINGS, changed_keys=changes)
+        serialized: Final = json.dumps({**current, **changes})
         async with db_span("save_email_settings", "LiteLLM_Config"):
-            await prisma_client.db.litellm_config.upsert(
-                where={"param_name": "general_settings"},
+            await table.upsert(
+                where={"param_name": _GENERAL_SETTINGS},
                 data={
-                    "create": {
-                        "param_name": "general_settings",
-                        "param_value": json_settings,
-                    },
-                    "update": {"param_value": json_settings},
+                    "create": {"param_name": _GENERAL_SETTINGS, "param_value": serialized},
+                    "update": {"param_value": serialized},
                 },
             )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error saving email settings to general_settings: {str(e)}",
-        )
 
 
 @router.get(
@@ -137,18 +107,14 @@ async def get_email_event_settings(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Get existing settings
-        settings_dict = await _get_email_settings(prisma_client)
-
-        # Create a response with all events (enabled or disabled)
-        response_settings: list[EmailEventSettings] = []
-        for event in EmailEvent:
-            enabled = settings_dict.get(event.value, False)
-            response_settings.append(EmailEventSettings(event=event, enabled=enabled))
-
-        return EmailEventSettingsResponse(settings=response_settings)
+        general_settings: Final = await _read_general_settings(prisma_client)
+        flags: Final = _event_flags(general_settings)
+        return EmailEventSettingsResponse(
+            settings=[EmailEventSettings(event=event, enabled=flags[event.value]) for event in EmailEvent],
+            model_deprecation_email_recipient=general_settings.get(MODEL_DEPRECATION_EMAIL_RECIPIENT),
+        )
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting email settings: {str(e)}")
+        verbose_proxy_logger.exception(f"Error getting email settings: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -170,21 +136,25 @@ async def update_event_settings(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Get existing settings
-        settings_dict = await _get_email_settings(prisma_client)
+        changes_recipient: Final = MODEL_DEPRECATION_EMAIL_RECIPIENT in request.model_fields_set
+        if changes_recipient and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(status_code=403, detail="Only proxy admins can change the model deprecation recipient")
 
-        # Update with new settings
-        for setting in request.settings:
-            settings_dict[setting.event.value] = setting.enabled
-
-        # Save updated settings
-        await _save_email_settings(prisma_client, settings_dict)
+        recipient: Final = request.model_deprecation_email_recipient
+        await _save_email_settings(
+            prisma_client,
+            {setting.event.value: setting.enabled for setting in request.settings},
+            merge=True,
+            recipient_change={MODEL_DEPRECATION_EMAIL_RECIPIENT: str(recipient) if recipient else None}
+            if changes_recipient
+            else None,
+        )
 
         return {"message": "Email event settings updated successfully"}
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error updating email settings: {str(e)}")
+        verbose_proxy_logger.exception(f"Error updating email settings: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -196,24 +166,24 @@ async def update_event_settings(
 async def reset_event_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """
-    Reset all email event settings to default (new user invitations on, virtual key creation off)
-    """
+    """Restore the default email events. Proxy admins also clear the model deprecation recipient override."""
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Reset to default settings using the Pydantic model
-        default_settings = DefaultEmailSettings.get_defaults()
-
-        # Save default settings
-        await _save_email_settings(prisma_client, default_settings)
+        await _save_email_settings(
+            prisma_client,
+            DefaultEmailSettings.get_defaults(),
+            recipient_change={MODEL_DEPRECATION_EMAIL_RECIPIENT: None}
+            if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            else None,
+        )
 
         return {"message": "Email event settings reset to defaults"}
     except HTTPException:
         raise
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error resetting email settings: {str(e)}")
+        verbose_proxy_logger.exception(f"Error resetting email settings: {e!s}")
         raise HTTPException(status_code=500, detail=str(e))
