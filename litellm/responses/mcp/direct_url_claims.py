@@ -14,7 +14,11 @@ from litellm.constants import MAX_GATEWAY_DIRECT_MCP_SERVERS
 from litellm.exceptions import APIError, BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import GatewayTool, GatewayTools
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
-from litellm.litellm_core_utils.tool_fields import hosted_mcp_approval_error, hosted_mcp_registered_credentials_error
+from litellm.litellm_core_utils.tool_fields import (
+    hosted_mcp_approval_error,
+    hosted_mcp_registered_credentials_error,
+    hosted_mcp_shared_server_error,
+)
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.proxy.mcp_server.utils import add_server_prefix_to_name
 from litellm.responses.mcp.tool_precheck import LITELLM_PROXY_MCP_SERVER_URL, proxy_path_mcp_name
@@ -261,8 +265,8 @@ def _registered_matches(url: str, servers: Collection[MCPServer]) -> tuple[MCPSe
 
 
 def _url_host(url: str | None) -> str | None:
-    normalized: Final = None if url is None else normalized_mcp_url(url)
-    return None if normalized is None else urlsplit(normalized).hostname
+    host: Final = None if url is None else urlsplit(url.strip()).hostname
+    return None if host is None else host.rstrip(".")
 
 
 def _registered_hosts(servers: Collection[MCPServer]) -> frozenset[str]:
@@ -399,6 +403,32 @@ def _raise_if_registered_claims_send_credentials(
     )
 
 
+def _shared_server_ids(claims: Sequence[_Claim]) -> frozenset[str]:
+    ids: Final = tuple(claim.server.server_id for claim in claims if isinstance(claim, _RegisteredClaim))
+    return frozenset(server_id for index, server_id in enumerate(ids) if server_id in ids[:index])
+
+
+def _shares_a_server(claim: _Claim, shared: frozenset[str]) -> bool:
+    return isinstance(claim, _RegisteredClaim) and claim.server.server_id in shared
+
+
+def _raise_if_registered_claims_share_a_server(
+    claims: Sequence[_Claim], shared: frozenset[str], drop_params: object, model: str, route: str
+) -> None:
+    sharing: Final = tuple(
+        claim for claim in claims if isinstance(claim, _RegisteredClaim) and claim.server.server_id in shared
+    )
+    if not sharing or drops_unsupported_params(drop_params):
+        return
+    server: Final = sharing[0].server
+    raise hosted_mcp_shared_server_error(
+        tuple(claim.label for claim in sharing if claim.server.server_id == server.server_id),
+        gateway_name(server),
+        model=model,
+        route=route,
+    )
+
+
 def _raise_if_too_many_direct_servers(direct: Sequence[DirectMCPServer], model: str) -> None:
     if len(direct) <= MAX_GATEWAY_DIRECT_MCP_SERVERS:
         return
@@ -422,7 +452,8 @@ def plan_hosted_mcp_claims(
     route: str,
 ) -> HostedMCPClaims | None:
     """Claim each hosted MCP tool whose URL a registered server serves or whose host the admin allowlisted. A claimed
-    tool that needs approval answers 400, or under drop_params is left for the hosted MCP strip to drop. None when
+    tool that needs approval answers 400, or under drop_params is left for the hosted MCP strip to drop, and so do two
+    tools that point at one registered server, since the gateway lists its tools once. None when
     nothing is claimed, so the request keeps its current path. Once anything is claimed, two hosted MCP tools sharing a
     server_label answer 400, as OpenAI does, and so do more than `MAX_GATEWAY_DIRECT_MCP_SERVERS` direct servers. A
     registered match sent with `authorization` or headers its server would not get answers 400, or under drop_params
@@ -437,7 +468,10 @@ def plan_hosted_mcp_claims(
             model=model,
             route=route,
         )
-    runnable: Final = tuple(claim if _runs_without_approval(claim) else _Unclaimed(claim.tool) for claim in claims)
+    approved: Final = tuple(claim if _runs_without_approval(claim) else _Unclaimed(claim.tool) for claim in claims)
+    shared: Final = _shared_server_ids(approved)
+    _raise_if_registered_claims_share_a_server(approved, shared, drop_params, model, route)
+    runnable: Final = tuple(_Unclaimed(claim.tool) if _shares_a_server(claim, shared) else claim for claim in approved)
     if all(isinstance(claim, _Unclaimed) for claim in runnable):
         return None
     _raise_if_server_labels_repeat(tools, model)

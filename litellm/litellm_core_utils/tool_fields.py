@@ -427,6 +427,20 @@ def hosted_mcp_registered_credentials_error(
     )
 
 
+def hosted_mcp_shared_server_error(
+    server_labels: Sequence[str], server_name: str, model: str, route: str
+) -> UnsupportedParamsError:
+    named_tools: Final = ", ".join(f"`{label}`" for label in server_labels)
+    return _unrunnable_mcp_error(
+        f"The hosted MCP tools {named_tools} point at the same server `{server_name}` registered on the LiteLLM MCP "
+        "gateway, which lists a server's tools once, under one server_label and one `allowed_tools`. "
+        "Send one hosted MCP tool for that server. "
+        + _drop_params_hint("hosted MCP tools that share a registered server"),
+        model=model,
+        route=route,
+    )
+
+
 _GATEWAY_REMEDY: Final = (
     'register it on the LiteLLM MCP gateway and send `server_url: "litellm_proxy/mcp/<server name>"`'
 )

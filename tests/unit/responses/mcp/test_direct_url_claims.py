@@ -192,6 +192,46 @@ def test_a_url_on_a_registered_servers_host_never_bypasses_that_server(server_ur
 
 
 @pytest.mark.parametrize(
+    "registered_url",
+    ["https://user:secret@mcp.example.com/mcp", "https://token@MCP.example.com./mcp"],
+    ids=["user-and-password", "token-only"],
+)
+def test_a_url_on_the_host_of_a_registered_server_with_credentials_in_its_url_never_bypasses_that_server(
+    registered_url: str,
+):
+    registered: Final = MCPServer(
+        server_id="srv-example", name="example", server_name="example", url=registered_url, transport=MCPTransport.http
+    )
+
+    assert (
+        _plan([_mcp_tool("https://mcp.example.com/mcp")], servers=(registered,), allowed_hosts=("mcp.example.com",))
+        is None
+    )
+
+
+def test_two_tools_pointing_at_one_registered_server_answer_400_or_are_left_for_the_drop_beside_other_claims():
+    sharing: Final = [
+        _mcp_tool("https://mcp.deepwiki.com/mcp", {"allowed_tools": ["read_wiki_structure"]}),
+        _mcp_tool("https://MCP.deepwiki.com/mcp/", {"server_label": "wiki-all"}),
+    ]
+    direct: Final = _mcp_tool("https://mcp.example.com/mcp", {"server_label": "example"})
+
+    with pytest.raises(UnsupportedParamsError) as refused:
+        _plan([*sharing, direct], allowed_hosts=("mcp.example.com",))
+
+    assert refused.value.status_code == 400
+    assert "`wiki`, `wiki-all`" in refused.value.message
+    assert "`deepwiki`" in refused.value.message
+    assert _plan(sharing, drop_params=True) is None
+    dropped: Final = _plan([*sharing, direct], allowed_hosts=("mcp.example.com",), drop_params=True)
+    assert dropped is not None
+    assert [dict(tool) for tool in dropped.tools] == sharing
+    assert [server.server_label for server in dropped.direct] == ["example"]
+    assert dict(dropped.registered_allowed_tools) == {}
+    assert dict(dropped.server_labels) == {}
+
+
+@pytest.mark.parametrize(
     ("allowed_host", "server_url", "claimed"),
     [
         ("mcp.example.com", "https://mcp.example.com/mcp", True),
