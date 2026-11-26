@@ -19,6 +19,7 @@ import datetime
 import json
 import os
 import re
+import threading
 import time
 import traceback
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -28,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar
 _T = TypeVar("_T")
 MAX_REDACTION_STRING_LENGTH: Final = 50_000
 _UNTERMINATED_PEM_RE: Final = re.compile(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*", re.IGNORECASE)
-_REDACTION_EXECUTOR: Final = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_REDACTION_EXECUTOR: Final = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="DatadogRedactor")
 REDACTION_WORK_BUDGET_SECONDS: Final = 0.5
 
 import httpx
@@ -254,7 +255,19 @@ class DataDogLogger(
         Scrub a string leaf using key-aware structured redaction.
         Masks oversized strings (> 50,000 chars) and unterminated sensitive blocks (e.g. PEM private keys)
         to prevent cleartext leakage when delimiters are missing or truncated.
+        Runs within an interruptible, fail-closed work budget to prevent blocking the event loop.
         """
+        try:
+            if threading.current_thread().name.startswith("DatadogRedactor"):
+                return cls._do_redact_structured_leaf(key, value)
+            future = _REDACTION_EXECUTOR.submit(cls._do_redact_structured_leaf, key, value)
+            return future.result(timeout=REDACTION_WORK_BUDGET_SECONDS)
+        except Exception as e:
+            verbose_logger.exception("Datadog: Error or timeout redacting secret in payload leaf: %s", e)
+            return "REDACTED"
+
+    @classmethod
+    def _do_redact_structured_leaf(cls, key: str | None, value: str) -> str:
         try:
             if len(value) > MAX_REDACTION_STRING_LENGTH:
                 return "REDACTED"
@@ -265,7 +278,7 @@ class DataDogLogger(
                     parsed = json.loads(value)
                     from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 
-                    redacted_struct = safe_json_structure(parsed, value_transform=cls._redact_structured_leaf)
+                    redacted_struct = safe_json_structure(parsed, value_transform=cls._do_redact_structured_leaf)
                     return json.dumps(redacted_struct)
                 except Exception:
                     pass
@@ -298,7 +311,7 @@ class DataDogLogger(
     def _do_redact_payload_secrets(cls, payload: _T) -> _T:
         from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 
-        return safe_json_structure(payload, value_transform=cls._redact_structured_leaf)  # type: ignore[return-value]
+        return safe_json_structure(payload, value_transform=cls._do_redact_structured_leaf)  # type: ignore[return-value]
 
     def _configure_dd_agent(
         self,

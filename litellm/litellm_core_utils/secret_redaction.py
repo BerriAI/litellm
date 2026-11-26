@@ -130,8 +130,8 @@ _TOKEN_SHAPES: Final = (
 # Tokens start at a word boundary or right after a JSON escape like "\n", since tool output is often serialized JSON
 _TOKEN_START: Final = r"(?:(?<!\w)|(?<=\\[nrt])|(?<=\\u[0-9A-Fa-f]{4}))"
 _TOKEN_PEM_PRIVATE_KEY_BLOCK: Final = (
-    r"-----BEGIN(?:[A-Z ]|-(?!----))*?PRIVATE KEY-----"
-    r"(?:[^-]|-(?!----))*?-----END(?:[A-Z ]|-(?!----))*?PRIVATE KEY-----"
+    r"-----BEGIN[A-Z ]*PRIVATE KEY-----"
+    r"(?:[^-]|-(?!----))*?-----END[A-Z ]*PRIVATE KEY-----"
 )
 _NON_JWT_TOKEN_RE: Final = re.compile(
     f"{_TOKEN_PEM_PRIVATE_KEY_BLOCK}|{_TOKEN_START}(?:{'|'.join(_TOKEN_SHAPES[:-1])})"
