@@ -27,7 +27,7 @@ from litellm.constants import (
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     REDACTED_BY_LITELLM,
 )
-from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger, _NamedTraceRoots
+from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.langfuse.trace_id import resolve_trace_id
 from litellm.integrations.langfuse.langfuse_otel_attributes import LangfuseLLMObsOTELAttributes
 from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
@@ -550,13 +550,13 @@ class TestLangfuseOtelIntegration:
             # Endpoint assertion removed as side effect is gone
 
 
-def _exported_auth_headers(exporter):
+def _auth_headers_exported_by(tracer: trace.Tracer, provider: TracerProvider):
     import requests_mock
-    from opentelemetry.sdk.trace.export import SpanExportResult
 
     with requests_mock.Mocker() as collector:
         collector.post(requests_mock.ANY, status_code=200)
-        assert exporter.export(()) is SpanExportResult.SUCCESS
+        tracer.start_span("litellm_request").end()
+        assert provider.force_flush()
     return [
         (
             request.url,
@@ -647,11 +647,6 @@ class TestLangfuseOtelKeyDynamicConfig:
     def test_key_dynamic_params_create_otlp_exporter_without_global_env(self):
         """Without global LANGFUSE_* env vars, a request carrying key-scoped Langfuse
         credentials must get a tracer exporting via OTLP HTTP to that key's host."""
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-            OTLPSpanExporter,
-        )
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
         with self._clean_env():
             logger = LangfuseOtelLogger()
             assert logger.OTEL_EXPORTER == "console"
@@ -662,17 +657,8 @@ class TestLangfuseOtelKeyDynamicConfig:
         assert len(logger._tracer_provider_cache) == 1
 
         provider = next(iter(logger._tracer_provider_cache.values())).provider
-        span_processors = provider._active_span_processor._span_processors
-        assert len(span_processors) == 1
-        assert isinstance(span_processors[0], _NamedTraceRoots)
-        assert isinstance(span_processors[0].inner, BatchSpanProcessor)
-
-        exporter = span_processors[0].inner.span_exporter
-        assert isinstance(exporter, OTLPSpanExporter)
-        import base64
-
         expected_auth = base64.b64encode(b"key_public:key_secret").decode()
-        assert _exported_auth_headers(exporter) == [
+        assert _auth_headers_exported_by(tracer, provider) == [
             (
                 "https://langfuse.example.com/api/public/otel/v1/traces",
                 {"Authorization": f"Basic {expected_auth}", "x-langfuse-ingestion-version": "4"},
@@ -774,12 +760,6 @@ class TestLangfuseOtelKeyDynamicConfig:
         """The span-processor debug logs must receive a redacted header value, so the
         key-scoped Langfuse secret never enters a log record regardless of downstream
         handler configuration, while the exporter still gets the real header."""
-        import base64
-
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-            OTLPSpanExporter,
-        )
-
         from litellm.integrations import opentelemetry as otel_module
 
         secret = base64.b64encode(b"key_public:key_secret").decode()
@@ -792,7 +772,9 @@ class TestLangfuseOtelKeyDynamicConfig:
         with self._clean_env():
             logger = LangfuseOtelLogger()
             with patch.object(otel_module.verbose_logger, "debug", side_effect=_spy):
-                logger.get_tracer_to_use_for_request({"standard_callback_dynamic_params": self._dynamic_params()})
+                tracer = logger.get_tracer_to_use_for_request(
+                    {"standard_callback_dynamic_params": self._dynamic_params()}
+                )
 
         logged = "\n".join(recorded_arguments)
         assert "initializing span processor" in logged
@@ -800,11 +782,7 @@ class TestLangfuseOtelKeyDynamicConfig:
         assert f"Basic {secret}" not in logged
 
         provider = next(iter(logger._tracer_provider_cache.values())).provider
-        processor = provider._active_span_processor._span_processors[0]
-        assert isinstance(processor, _NamedTraceRoots)
-        exporter = processor.inner.span_exporter
-        assert isinstance(exporter, OTLPSpanExporter)
-        assert _exported_auth_headers(exporter) == [
+        assert _auth_headers_exported_by(tracer, provider) == [
             (
                 "https://langfuse.example.com/api/public/otel/v1/traces",
                 {"Authorization": f"Basic {secret}", "x-langfuse-ingestion-version": "4"},

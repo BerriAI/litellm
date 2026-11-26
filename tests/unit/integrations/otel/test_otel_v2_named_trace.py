@@ -6,11 +6,13 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from hashlib import sha256
 from typing import Final
 
 import pytest
+import time_machine
 
 fastapi: Final = pytest.importorskip("fastapi")
 pytest.importorskip("opentelemetry.instrumentation.fastapi")
@@ -397,39 +399,48 @@ def test_requests_naming_no_trace_each_get_their_own(proxy, request_kwargs):
     assert UUID_HEX not in server
 
 
-async def _queued_route(request: fastapi.Request):
-    await asyncio.sleep(QUEUED_SECONDS)
-    received_at: Final = _ensure_litellm_received_at_on_request_state(request)
-    handled_at: Final = time.time()
-    return fastapi.Response(
-        content=await request.body(),
-        headers={"x-received-at": f"{received_at.timestamp()}", "x-handled-at": f"{handled_at}"},
-    )
+QUEUED: Final = timedelta(milliseconds=200)
+UPLOAD: Final = timedelta(milliseconds=300)
 
 
-QUEUED_SECONDS: Final = 0.2
+def _queued_route(clock: time_machine.Coordinates):
+    async def route(request: fastapi.Request):
+        clock.shift(QUEUED)
+        received_at: Final = _ensure_litellm_received_at_on_request_state(request)
+        return fastapi.Response(
+            content=await request.body(),
+            headers={"x-received-at": received_at.isoformat(), "x-handled-at": datetime.now(timezone.utc).isoformat()},
+        )
+
+    return route
+
+
+def _as_datetime(epoch_ns: int) -> datetime:
+    return datetime.fromtimestamp(0, timezone.utc) + timedelta(microseconds=epoch_ns // 1000)
 
 
 def test_a_request_counts_the_time_spent_reading_its_body_but_not_the_time_it_waited_before_the_route(monkeypatch):
-    rig: Final = _instrumented(monkeypatch, route=_queued_route)
-    client, exporter = rig.client, rig.langfuse
     payload: Final = b'{"litellm_metadata": {"trace_id": "%s"}}' % UUID.encode()
-    upload_seconds: Final = 0.2
 
-    def slow_upload():
-        yield payload[:10]
-        time.sleep(upload_seconds)
-        yield payload[10:]
+    with time_machine.travel("2026-07-15T10:17:00Z", tick=False) as clock:
+        rig: Final = _instrumented(monkeypatch, route=_queued_route(clock))
 
-    response: Final = client.post(PATHS[1], content=slow_upload(), headers={"content-type": "application/json"})
+        def slow_upload():
+            yield payload[:10]
+            clock.shift(UPLOAD)
+            yield payload[10:]
 
-    (server,) = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER]
-    received_at: Final = float(response.headers["x-received-at"])
+        response: Final = rig.client.post(
+            PATHS[1], content=slow_upload(), headers={"content-type": "application/json"}
+        )
+
+    (server,) = [span for span in rig.langfuse.get_finished_spans() if span.kind is SpanKind.SERVER]
+    received_at: Final = datetime.fromisoformat(response.headers["x-received-at"])
     assert response.content == payload
     assert f"{server.context.trace_id:032x}" == UUID_HEX
-    assert server.end_time - server.start_time >= (upload_seconds + QUEUED_SECONDS) * 1e9
-    assert float(response.headers["x-handled-at"]) - received_at >= upload_seconds
-    assert received_at * 1e9 - server.start_time >= QUEUED_SECONDS * 1e9
+    assert _as_datetime(server.end_time) - _as_datetime(server.start_time) == UPLOAD + QUEUED
+    assert datetime.fromisoformat(response.headers["x-handled-at"]) - received_at == UPLOAD
+    assert received_at - _as_datetime(server.start_time) == QUEUED
 
 
 @pytest.mark.parametrize(
