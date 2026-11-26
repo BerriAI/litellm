@@ -80,8 +80,8 @@ def _is_trusted_dir(path: Path) -> bool:
         info: Final = os.lstat(path)
     except OSError:
         return False
-    owned: Final = not hasattr(os, "getuid") or info.st_uid == os.getuid()
-    return stat.S_ISDIR(info.st_mode) and owned and info.st_mode & 0o022 == 0
+    posix_safe: Final = not hasattr(os, "getuid") or (info.st_uid == os.getuid() and info.st_mode & 0o022 == 0)
+    return stat.S_ISDIR(info.st_mode) and posix_safe
 
 
 def _render_key(source: Path, server_root_path: str) -> str:
