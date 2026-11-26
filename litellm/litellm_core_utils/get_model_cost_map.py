@@ -392,6 +392,9 @@ def _retry_remote_fetch_in_background(
     url: str, timeout: int, max_attempts: int, first_failure: NativeFetchFailed
 ) -> None:
     try:
+        _litellm_import_complete.wait()
+        if sys.is_finalizing():
+            return
         fetched: Final = cost_map_source(url, use_http_settings=False).fetch_blocking(
             fetch_policy(timeout, max_attempts), first_failure
         )
@@ -402,7 +405,6 @@ def _retry_remote_fetch_in_background(
                 max_attempts,
             )
             return
-        _litellm_import_complete.wait()
         installed: Final = model_cost_inputs.install(fetched.body, fetched.etag)
         if isinstance(installed, NativeRejected):
             _warn_rejected(installed, url)

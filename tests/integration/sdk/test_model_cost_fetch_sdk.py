@@ -272,6 +272,23 @@ assert "lit-env-url-model" in litellm.model_cost
     assert server.targets == ["/cost.json"]
 
 
+def test_importing_litellm_exits_cleanly_when_the_remote_cost_map_fetch_fails():
+    script: Final = """
+import litellm
+"""
+    environment: Final = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"}
+    }
+    with _serving(_Reply(status=503, body=b"busy")) as server:
+        result: Final = run_child_interpreter(
+            script, env={**environment, "LITELLM_MODEL_COST_MAP_URL": server.url}, timeout=120
+        )
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="fork is the default start method only on Linux")
 def test_importing_litellm_with_a_remote_source_leaves_the_process_free_to_fork():
     script: Final = """
