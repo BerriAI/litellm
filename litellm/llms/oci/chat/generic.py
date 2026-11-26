@@ -366,8 +366,42 @@ def handle_generic_response(
     return model_response
 
 
-def handle_generic_stream_chunk(dict_chunk: Mapping) -> ModelResponseStream:
-    """Parse a single GENERIC SSE chunk into a LiteLLM ModelResponseStream."""
+class OCIStreamToolCalls:
+    """Numbers the tool calls of one GENERIC stream the way OpenAI does.
+
+    OCI sends one tool-call entry per chunk and nothing that says which call
+    it belongs to: the first chunk of a call carries its ``id`` and ``name``,
+    the chunks after it carry argument fragments only. OpenAI-style consumers
+    merge deltas by ``index``, so every call needs its own, held across
+    chunks, and a fragment has to go out with the index of the call it
+    continues and no ``id`` of its own.
+    """
+
+    def __init__(self) -> None:
+        self._count = 0
+        self._current_id: str | None = None
+
+    def place(self, tool_call: OCIToolCall) -> tuple[int, str | None]:
+        """Return ``(index, id)`` for one entry; ``id`` is ``None`` on a continuation."""
+        continues: Final = self._count > 0 and (
+            tool_call.id == self._current_id if tool_call.id else not tool_call.name
+        )
+        if continues:
+            return self._count - 1, None
+        index: Final = self._count
+        self._count += 1
+        self._current_id = tool_call.id or synthesize_oci_tool_call_id(index, tool_call.name, tool_call.arguments)
+        return index, self._current_id
+
+
+def handle_generic_stream_chunk(
+    dict_chunk: Mapping, tool_calls_in_stream: OCIStreamToolCalls | None = None
+) -> ModelResponseStream:
+    """Parse a single GENERIC SSE chunk into a LiteLLM ModelResponseStream.
+
+    ``tool_calls_in_stream`` is the stream's ``OCIStreamToolCalls``; without
+    it the chunk is numbered on its own, as if it were the whole stream.
+    """
     # OCI streams tool calls progressively — early chunks may omit required fields.
     if dict_chunk.get("message") and dict_chunk["message"].get("toolCalls"):
         for tool_call in dict_chunk["message"]["toolCalls"]:
@@ -415,17 +449,22 @@ def handle_generic_stream_chunk(dict_chunk: Mapping) -> ModelResponseStream:
     # GENERIC and Cohere chunks.
     tool_calls: list[dict[str, object]] | None = None
     if typed_chunk.message and typed_chunk.message.toolCalls:
-        tool_calls = [
-            {
-                "id": tc.id or synthesize_oci_tool_call_id(i, tc.name, tc.arguments),
-                "type": "function",
-                "function": {
-                    "name": tc.name,
-                    "arguments": tc.arguments,
-                },
-            }
-            for i, tc in enumerate(typed_chunk.message.toolCalls)
-        ]
+        placing: Final = tool_calls_in_stream if tool_calls_in_stream is not None else OCIStreamToolCalls()
+        tool_calls = []
+        for tc in typed_chunk.message.toolCalls:
+            index, call_id = placing.place(tc)
+            tool_calls.append(
+                {
+                    "index": index,
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        # A continuation carries no name: OpenAI sends it once.
+                        "name": tc.name if call_id is not None else None,
+                        "arguments": tc.arguments,
+                    },
+                }
+            )
 
     finish_reason: Final[str | None] = normalize_oci_finish_reason(typed_chunk.finishReason)
 
