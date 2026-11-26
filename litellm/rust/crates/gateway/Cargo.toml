@@ -42,6 +42,9 @@ litellm-db-resolve.workspace = true
 litellm-repositories.workspace = true
 litellm-auth-store.workspace = true
 litellm-error.workspace = true
+litellm-auth = { workspace = true, features = ["aws", "gcp"] }
+litellm-auth-aws.workspace = true
+litellm-auth-gcp.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-redis-client.workspace = true
 litellm-redis-store.workspace = true
