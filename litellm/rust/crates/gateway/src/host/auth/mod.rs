@@ -36,7 +36,6 @@ use serde_json::Value;
 
 pub use key::Key;
 pub use store::AuthStore;
-pub(crate) use store::KEY_TTL;
 
 /// The rows the native host hands the core: a key's, and none of the objects it does not read
 /// yet. `Infallible` is a row this host does not read, so no identity that needs one exists. The
@@ -955,5 +954,111 @@ mod tests {
             (from_redis, read(59).await, read(61).await),
             (true, true, false)
         );
+    }
+
+    /// The clock a test moves, at the seconds it was last set to.
+    fn frozen() -> (
+        litellm_redis_store::Clock,
+        Arc<std::sync::atomic::AtomicU64>,
+    ) {
+        let elapsed = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let read = elapsed.clone();
+        let now =
+            Arc::new(move || Duration::from_secs(read.load(std::sync::atomic::Ordering::SeqCst)));
+        (now, elapsed)
+    }
+
+    /// One gateway pod with no coordination Redis, its auth cache built as `AppState` builds it for
+    /// `general_settings`, over the database `held`, on the clock `now`.
+    fn pod_on_clock(
+        general_settings: &str,
+        held: &Held,
+        now: litellm_redis_store::Clock,
+    ) -> Auth<NativeRows> {
+        let config = config(&format!("  master_key: {MASTER_KEY}\n{general_settings}"));
+        let cache = crate::state::auth_cache(&config, &crate::RedisClients::default(), now);
+        auth(
+            &config,
+            Some(Arc::new(AuthStore::new(Arc::new(cache), held.database()))),
+        )
+    }
+
+    #[rstest]
+    #[case::unset("", 59, 61)]
+    #[case::configured("  user_api_key_cache_ttl: 600\n", 599, 601)]
+    #[case::configured_as_text("  user_api_key_cache_ttl: \"30\"\n", 29, 31)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_is_read_from_the_database_again_once_the_cache_ttl_passes(
+        #[case] general_settings: &str,
+        #[case] still_cached: u64,
+        #[case] expired: u64,
+    ) {
+        let held = holding(json!({})).await;
+        let (now, elapsed) = frozen();
+        let gateway = pod_on_clock(general_settings, &held, now);
+        let read_at = async |seconds: u64| {
+            elapsed.store(seconds, std::sync::atomic::Ordering::SeqCst);
+            assert!(bearing(&gateway, VIRTUAL_KEY).await.is_ok());
+            held.key_reads()
+        };
+
+        let reads = (
+            read_at(0).await,
+            read_at(still_cached).await,
+            read_at(expired).await,
+        );
+
+        assert_eq!(reads, (1, 1, 2));
+    }
+
+    #[rstest]
+    #[case::unset("", 1..=60)]
+    #[case::configured("  user_api_key_cache_ttl: 600\n", 541..=600)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_shared_cache_keeps_a_key_for_the_cache_ttl(
+        #[case] general_settings: &str,
+        #[case] expected: std::ops::RangeInclusive<i64>,
+    ) {
+        let redis = RedisServer::start().await.unwrap();
+        let held = holding(json!({})).await;
+        let config = Config::from_yaml(&format!(
+            "general_settings:\n  master_key: {MASTER_KEY}\n  coordination_redis:\n    host: 127.0.0.1\n    port: {}\n{general_settings}litellm_settings:\n  enable_redis_auth_cache: true\n",
+            redis.port()
+        ))
+        .unwrap();
+
+        let authenticated = bearing(&pod_for(&config, &held).await, VIRTUAL_KEY).await;
+
+        let seconds = seconds_cached(&redis).await;
+        assert!(authenticated.is_ok());
+        assert!(expected.contains(&seconds), "{seconds}");
+    }
+
+    #[rstest]
+    #[case::full_at_two("  user_api_key_cache_max_size: 2\n", (3, 4))]
+    #[case::unset("", (3, 3))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_full_cache_evicts_the_key_soonest_to_expire(
+        #[case] general_settings: &str,
+        #[case] expected: (usize, usize),
+    ) {
+        let held = Held::start().await;
+        held.key("sk-first", json!({})).await;
+        held.key("sk-second", json!({})).await;
+        held.key("sk-third", json!({})).await;
+        let (now, elapsed) = frozen();
+        let gateway = pod_on_clock(general_settings, &held, now);
+        let read_at = async |token: &str, seconds: u64| {
+            elapsed.store(seconds, std::sync::atomic::Ordering::SeqCst);
+            assert!(bearing(&gateway, token).await.is_ok());
+            held.key_reads()
+        };
+        read_at("sk-first", 0).await;
+        read_at("sk-second", 1).await;
+        read_at("sk-third", 2).await;
+
+        let reads = (read_at("sk-third", 2).await, read_at("sk-first", 2).await);
+
+        assert_eq!(reads, expected);
     }
 }

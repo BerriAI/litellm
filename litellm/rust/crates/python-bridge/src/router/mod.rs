@@ -1365,7 +1365,7 @@ fn tokens_key(window: UsageWindow) -> String {
 /// and `"tracks_usage": bool`) or `{"ok": False, "kind": str, "status": int | None,
 /// "retry_after": float | None, "num_retries": int | None, "detail": str | None,
 /// "outside_deployment": bool, "caller_scoped": bool, "status_absent": bool,
-/// "uncounted_request": bool}`.
+/// "uncounted_request": bool, "answered_tokens": int}`.
 pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u64, AttemptError>> {
     fn item<'py, T: FromPyObjectOwned<'py>>(
         outcome: &Bound<'py, PyDict>,
@@ -1404,6 +1404,7 @@ pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u6
     failure.outside_deployment = item::<bool>(outcome, "outside_deployment")?.unwrap_or(false);
     failure.status_absent = item::<bool>(outcome, "status_absent")?.unwrap_or(false);
     failure.uncounted_request = item::<bool>(outcome, "uncounted_request")?.unwrap_or(false);
+    failure.answered_tokens = item::<u32>(outcome, "answered_tokens")?.unwrap_or(0);
     failure.caller_scoped = item::<bool>(outcome, "caller_scoped")?.unwrap_or(false);
     failure.classes = item::<Vec<String>>(outcome, "classes")?
         .unwrap_or_default()

@@ -563,3 +563,76 @@ async def test_proxy_failure_metrics_never_label_a_401_with_the_key_hash(
         for name in _FAILURE_HOOK_METRICS
     } == {name: [expected] for name in _FAILURE_HOOK_METRICS}
     _clear_prometheus_registry()
+
+
+_COOLDOWN_LABELS: Final = {
+    "litellm_model_name": "gpt-4o-mini",
+    "model_id": "model-123",
+    "api_base": "https://api.openai.com",
+    "api_provider": "openai",
+    "exception_status": "429",
+}
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        pytest.param({}, _COOLDOWN_LABELS, id="no-custom-labels"),
+        pytest.param(
+            {"custom_prometheus_metadata_labels": ["metadata.department"]},
+            {**_COOLDOWN_LABELS, "metadata_department": "None"},
+            id="metadata",
+        ),
+        pytest.param(
+            {"custom_prometheus_tags": ["prod"]}, {**_COOLDOWN_LABELS, "tag_prod": "false"}, id="tags"
+        ),
+        pytest.param(
+            {"custom_prometheus_metadata_labels": ["metadata.department"], "custom_prometheus_tags": ["prod"]},
+            {**_COOLDOWN_LABELS, "metadata_department": "None", "tag_prod": "false"},
+            id="metadata-and-tags",
+        ),
+        pytest.param(
+            {"custom_prometheus_metadata_labels": ["metadata.department"], "prometheus_exclude_labels": ["api_base"]},
+            {
+                "litellm_model_name": "gpt-4o-mini",
+                "model_id": "model-123",
+                "api_provider": "openai",
+                "exception_status": "429",
+                "metadata_department": "None",
+            },
+            id="exclude-filter",
+        ),
+        pytest.param(
+            {
+                "custom_prometheus_metadata_labels": ["metadata.department"],
+                "prometheus_metrics_config": [
+                    {
+                        "group": "cooldown",
+                        "metrics": ["litellm_deployment_cooled_down"],
+                        "include_labels": ["model_id", "exception_status"],
+                    }
+                ],
+            },
+            {"model_id": "model-123", "exception_status": "429"},
+            id="include-filter",
+        ),
+    ],
+)
+def test_deployment_cooled_down_emits_every_declared_label(
+    monkeypatch: pytest.MonkeyPatch, settings: Mapping[str, object], expected: Mapping[str, str]
+):
+    for name in ("custom_prometheus_metadata_labels", "custom_prometheus_tags"):
+        monkeypatch.setattr(litellm, name, [])
+    for name in ("prometheus_exclude_labels", "prometheus_metrics_config"):
+        monkeypatch.setattr(litellm, name, None)
+    for name, value in settings.items():
+        monkeypatch.setattr(litellm, name, value)
+    _clear_prometheus_registry()
+    try:
+        PrometheusLogger().increment_deployment_cooled_down(**_COOLDOWN_LABELS)
+
+        labels: Final = _only_sample_labels("litellm_deployment_cooled_down_total")
+    finally:
+        _clear_prometheus_registry()
+
+    assert labels == expected

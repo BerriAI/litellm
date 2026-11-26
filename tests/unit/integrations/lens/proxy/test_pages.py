@@ -1,11 +1,16 @@
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import httpx
+import jwt
 import pytest
+import time_machine
 from fastapi import HTTPException
 from starlette.requests import Request
+from starlette.types import Message
 
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.integrations.lens.proxy.buffering import BufferBudget
 from litellm.integrations.lens.proxy.model_gateway import GatewaySetupRequest
 from litellm.integrations.lens.proxy.pages import (
@@ -19,16 +24,78 @@ from litellm.integrations.lens.proxy.pages import (
 )
 from litellm.integrations.lens.remote import LensConnection
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyException, UserAPIKeyAuth, hash_token
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
+from tests.unit.proxy._prisma import prisma_with_empty_config
+from tests.unit.proxy.rust_auth_stores import FakeKeyStore, RustAuthStores, install_rust_auth_stores
 
 SECRET: Final = "gateway-delegated-identity-fixture-32"
 UNSUPPORTED: Final = "The connected Lens does not serve a UI this gateway can show. Update Lens to use it here"
 
 LENS: Final = LensConnection("http://lens.test", SECRET)
+SESSION_NOW: Final = datetime(2026, 11, 25, 12, tzinfo=timezone.utc)
+SESSION_EXPIRY: Final = SESSION_NOW + timedelta(hours=1)
+SESSION_KEY: Final = "sk-dashboard-session-fixture"
+
+
+def _dashboard_token(*, user_id: str, key: str) -> str:
+    return jwt.encode(
+        {"user_id": user_id, "key": key, "login_method": "sso", "exp": int(SESSION_EXPIRY.timestamp())},
+        SECRET,
+        algorithm="HS256",
+    )
+
+
+@pytest.fixture
+def session_role() -> LitellmUserRoles:
+    return LitellmUserRoles.INTERNAL_USER
+
+
+@pytest.fixture
+def dashboard_auth(monkeypatch: pytest.MonkeyPatch, session_role: LitellmUserRoles) -> Iterator[None]:
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            key=FakeKeyStore(
+                rows={
+                    hash_token(key): {
+                        "token": hash_token(key),
+                        "user_id": user_id,
+                        "team_id": UI_SESSION_TOKEN_TEAM_ID,
+                        "expires": expiry,
+                    }
+                    for key, user_id, expiry in (
+                        (SESSION_KEY, "alice", SESSION_EXPIRY),
+                        ("sk-other-account", "bob", SESSION_EXPIRY),
+                        ("sk-expired-session", "alice", SESSION_NOW - timedelta(seconds=1)),
+                    )
+                }
+            )
+        ),
+    )
+    cache: Final = UserApiKeyCache()
+    for user_id in ("alice", "bob"):
+        cache.set_cache(
+            AuthObject.user(user_id),
+            LiteLLM_UserTable(user_id=user_id, user_role=session_role.value),
+            model_type=LiteLLM_UserTable,
+        )
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
+    monkeypatch.setattr(proxy_server, "master_key", SECRET)
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "X-Dashboard-Key"})
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    with time_machine.travel(SESSION_NOW, tick=False):
+        yield
 
 
 @pytest.mark.asyncio
-async def test_ui_files_come_from_the_connected_lens_and_only_the_dashboard_may_frame_them() -> None:
+@pytest.mark.parametrize("auth_capability", (None, "bearer-v1"), ids=("legacy-ui", "bearer-ui"))
+async def test_ui_files_come_from_the_connected_lens_and_only_the_dashboard_may_frame_them(
+    auth_capability: str | None,
+) -> None:
     def transport(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == "http://lens.test/ui/_next/static/app%20v2.js"
         assert request.headers["x-lens-ui-mount"] == "/team-a/lens/ui"
@@ -44,6 +111,7 @@ async def test_ui_files_come_from_the_connected_lens_and_only_the_dashboard_may_
                 "x-internal": "private",
                 "content-security-policy": "script-src 'self'; frame-ancestors 'none'; connect-src 'self'",
                 "x-lens-ui-mount": "/team-a/lens/ui",
+                **({"X-Lens-UI-Auth": auth_capability} if auth_capability is not None else {}),
             },
         )
 
@@ -57,6 +125,7 @@ async def test_ui_files_come_from_the_connected_lens_and_only_the_dashboard_may_
         "x-content-type-options": "nosniff",
         "x-frame-options": "SAMEORIGIN",
         "content-security-policy": "script-src 'self'; connect-src 'self'; frame-ancestors 'self'",
+        **({"x-lens-ui-auth": auth_capability} if auth_capability is not None else {}),
     }
 
 
@@ -158,17 +227,21 @@ async def test_ui_from_a_lens_that_does_not_mount_it_here_reads_as_older(named: 
     assert (error.value.status_code, error.value.detail) == (404, UNSUPPORTED)
 
 
-def _request(method: str, headers: Mapping[str, str], scheme: str = "http") -> Request:
+def _request(method: str, headers: Mapping[str, str], scheme: str = "http", *, path: str = "/lens/datasets") -> Request:
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
     return Request(
         {
             "type": "http",
             "scheme": scheme,
             "server": ("gateway.test", 443 if scheme == "https" else 80),
             "method": method,
-            "path": "/lens/datasets",
+            "path": path,
             "query_string": b"",
             "headers": [(name.encode(), value.encode()) for name, value in headers.items()],
-        }
+        },
+        receive,
     )
 
 
@@ -294,6 +367,75 @@ async def test_a_key_is_used_instead_of_the_dashboard_login_when_one_is_sent() -
         key=keyed,
     )
     assert auth.user_id == "owner-of-Bearer sk-cli"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("dashboard_auth")
+@pytest.mark.parametrize("session_role", tuple(LitellmUserRoles), ids=str)
+@pytest.mark.parametrize(("method", "path"), (("GET", "/lens/auth/session"), ("POST", "/lens/datasets")))
+async def test_every_dashboard_role_can_use_its_existing_bearer_for_hosted_lens_routes(
+    session_role: LitellmUserRoles, method: str, path: str
+) -> None:
+    auth: Final = await page_auth(_request(method, {"authorization": f"Bearer {SESSION_KEY}"}, path=path))
+    assert (auth.user_id, auth.user_role) == ("alice", session_role)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("dashboard_auth")
+@pytest.mark.parametrize("header", ("authorization", "x-dashboard-key"))
+@pytest.mark.parametrize(
+    "cookie_token",
+    (
+        pytest.param(None, id="missing-cookie"),
+        pytest.param(_dashboard_token(user_id="bob", key="sk-other-account"), id="different-account-cookie"),
+        pytest.param(_dashboard_token(user_id="bob", key="sk-revoked-session"), id="revoked-cookie"),
+    ),
+)
+@pytest.mark.parametrize(("method", "path"), (("GET", "/lens/auth/session"), ("POST", "/lens/datasets")))
+async def test_the_dashboard_bearer_wins_over_a_missing_different_or_revoked_cookie(
+    header: str, cookie_token: str | None, method: str, path: str
+) -> None:
+    request: Final = _request(
+        method,
+        {
+            header: f"Bearer {SESSION_KEY}",
+            "sec-fetch-site": "same-origin",
+            **({"cookie": f"token={cookie_token}"} if cookie_token is not None else {}),
+        },
+        path=path,
+    )
+    auth: Final = await page_auth(request)
+    assert auth.user_id == "alice"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("dashboard_auth")
+@pytest.mark.parametrize("header", ("authorization", "x-dashboard-key"))
+@pytest.mark.parametrize("bearer", ("sk-revoked-session", "sk-expired-session"))
+@pytest.mark.parametrize(("method", "path"), (("GET", "/lens/auth/session"), ("POST", "/lens/datasets")))
+async def test_a_revoked_or_expired_bearer_cannot_fall_back_to_a_valid_browser_cookie(
+    header: str, bearer: str, method: str, path: str
+) -> None:
+    cookie_token: Final = _dashboard_token(user_id="bob", key="sk-other-account")
+    with pytest.raises(ProxyException) as error:
+        await page_auth(
+            _request(
+                method,
+                {header: f"Bearer {bearer}", "cookie": f"token={cookie_token}", "sec-fetch-site": "same-origin"},
+                path=path,
+            )
+        )
+    assert error.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("dashboard_auth")
+async def test_a_cached_dashboard_bearer_cannot_outlive_its_session_key() -> None:
+    headers: Final = {"authorization": f"Bearer {SESSION_KEY}"}
+    assert (await page_auth(_request("GET", headers, path="/lens/auth/session"))).user_id == "alice"
+    with time_machine.travel(SESSION_EXPIRY + timedelta(seconds=1), tick=False), pytest.raises(ProxyException) as error:
+        await page_auth(_request("GET", headers, path="/lens/auth/session"))
+    assert error.value.code == "401"
 
 
 @pytest.mark.asyncio

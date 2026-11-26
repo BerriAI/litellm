@@ -776,6 +776,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (  # noqa: F401, RUF1
     _OPTIONAL_PromptInjectionDetection,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF100  # legacy module exports
+    HealthProbeFailureBiller,
     ProxyDBLogger,
     _ProxyDBLogger,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     run_spend_event,
@@ -1009,6 +1010,7 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
+    max_request_size_bytes,
 )
 from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
@@ -2370,7 +2372,14 @@ from litellm.integrations.otel.mount import (
     trace_response_headers,
 )
 
-instrument_fastapi_app(app)
+
+def _max_request_body_bytes(scope: Scope) -> int | None:
+    return max_request_size_bytes(
+        scope, configured_max_request_size_mb() if premium_user is True else None, _ROUTE_MAX_REQUEST_SIZE_MB
+    )
+
+
+instrument_fastapi_app(app, max_request_body_bytes=_max_request_body_bytes)
 
 vertex_live_passthrough_vertex_base: Final = VertexBase()
 
@@ -3548,6 +3557,7 @@ def cost_tracking():
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
+        litellm.logging_callback_manager.add_litellm_async_failure_callback(HealthProbeFailureBiller())
         if _register_rust_spend_loggers():
             litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
             return
@@ -8702,12 +8712,13 @@ class ProxyConfig:
         )
         applied: Final = {**decrypted, **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()}}
         os.environ.update(applied)
+        previous_keys: Final = self._db_environment_keys
         if revision is None or revision == applied_revision:
             self._db_environment_keys = self._db_environment_keys | frozenset(applied)
         else:
             stored: Final = frozenset(key for key, stored_value in row.items() if stored_value is not None)
             still_stored: Final = stored | frozenset(key.upper() for key in stored)
-            removed: Final = self._db_environment_keys - still_stored
+            removed: Final = previous_keys - still_stored
             _restore_environment(removed - _SSO_ENVIRONMENT_VARIABLES, environment_before_db)
             self._sso_environment_removals = (
                 self._sso_environment_removals | (removed & _SSO_ENVIRONMENT_VARIABLES)
@@ -8715,6 +8726,30 @@ class ProxyConfig:
             self._db_environment_keys = (self._db_environment_keys & still_stored) | frozenset(applied)
             self._db_environment_revision = revision
         self.environment_variables.apply_db_row("environment_variables", _as_settings_mapping(applied))
+        self._apply_otel_background_service_spans(applied, previous_keys - self._db_environment_keys)
+
+    @staticmethod
+    def _apply_otel_background_service_spans(environment: Mapping[str, str], removed: frozenset[str]) -> None:
+        if open_telemetry_logger is None:
+            return
+        from litellm.integrations.otel.logger import OpenTelemetryV2
+        from litellm.integrations.otel.model.config import (
+            EMIT_BACKGROUND_SERVICE_SPANS_ENV,
+            background_service_spans_from_yaml,
+            parse_background_service_spans_setting,
+        )
+
+        if not isinstance(open_telemetry_logger, OpenTelemetryV2):
+            return
+        yaml_setting: Final = background_service_spans_from_yaml((litellm.callback_settings or {}).get("otel"))
+        if yaml_setting is None and EMIT_BACKGROUND_SERVICE_SPANS_ENV in removed:
+            restored: Final = parse_background_service_spans_setting(os.getenv(EMIT_BACKGROUND_SERVICE_SPANS_ENV))
+            open_telemetry_logger.restore_background_service_spans_setting(restored)
+        open_telemetry_logger.background_service_spans_db_override = (
+            None
+            if yaml_setting is not None
+            else parse_background_service_spans_setting(environment.get(EMIT_BACKGROUND_SERVICE_SPANS_ENV))
+        )
 
     def _restore_sso_environment_removals(self, sso_table_keys: frozenset[str]) -> None:
         _restore_environment(
@@ -21525,6 +21560,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "mcp_prefer_client_id_metadata_document": "Boolean",
         "always_include_stream_usage": "Boolean",
         "forward_client_headers_to_llm_api": "Boolean",
+        "customer_budget_response_headers": "Boolean",
         "mcp_required_fields": "List",
         "mcp_disabled_capabilities": "List",
         "cancel_on_disconnect": "Boolean",

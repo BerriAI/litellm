@@ -12,7 +12,7 @@ import base64
 import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import partial, reduce
 from typing import TYPE_CHECKING, Final, Protocol, TypeVar, cast
 
@@ -30,6 +30,7 @@ from litellm._internal_context import service_target, set_request_parent_otel_sp
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
+    BODY_READ_AHEAD_NS,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
@@ -1658,7 +1659,8 @@ def pass_through_key(
 def _ensure_litellm_received_at_on_request_state(request: Request) -> datetime:
     """Idempotently stamp ``request.state.litellm_received_at`` with the moment
     litellm's own code started handling this request -- the first line of
-    ``user_api_key_auth``, before any auth/pre-call work runs. This is the
+    ``user_api_key_auth``, before any auth/pre-call work runs, less the time
+    OTel V2 spent reading the body ahead of it. This is the
     basis for the request-latency Prometheus metrics (see
     ``litellm/integrations/prometheus.py``), and unlike the OTEL SERVER span
     below, it is set unconditionally so those metrics don't depend on OTEL
@@ -1667,7 +1669,10 @@ def _ensure_litellm_received_at_on_request_state(request: Request) -> datetime:
     existing_received_at: Final[datetime | None] = getattr(request.state, "litellm_received_at", None)
     if existing_received_at is not None:
         return existing_received_at
-    received_at: Final = datetime.now(timezone.utc)
+    read_ahead_ns: Final[object] = getattr(request.state, BODY_READ_AHEAD_NS, 0)
+    received_at: Final = datetime.now(timezone.utc) - timedelta(
+        microseconds=read_ahead_ns / 1000 if isinstance(read_ahead_ns, int) else 0
+    )
     try:
         request.state.litellm_received_at = received_at
     except Exception:
@@ -2056,14 +2061,7 @@ async def user_api_key_auth_builder(
     )
 
     parent_otel_span: Span | None = None
-    # Prefer the receive-instant stamped by the early helper in
-    # user_api_key_auth (before body parse) — overwriting it would shorten
-    # the preprocessing-duration measurement by the body-parse window.
-    start_time: Final = getattr(request.state, "litellm_received_at", None) or datetime.now(timezone.utc)
-    try:
-        request.state.litellm_received_at = start_time
-    except Exception:
-        pass
+    start_time: Final = _ensure_litellm_received_at_on_request_state(request)
     route: Final[str] = get_request_route(request=request)
     denied_key: UserAPIKeyAuth | None = None  # rebind-ok: the key a denied request had resolved, for the failure log
 
@@ -3488,6 +3486,31 @@ def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Reque
         verbose_proxy_logger.debug("OTel V2: tenant destination resolution failed: %s", exc)
 
 
+def _seed_request_user_id(
+    user_api_key_dict: UserAPIKeyAuth, request_data: Mapping[str, object], request: Request
+) -> None:
+    """Name the caller for the spans a backend that drops an unlabeled span receives.
+
+    Called inside the ``auth`` phase span so that span carries the id too. Best-effort:
+    trace labels must never fail auth.
+    """
+    try:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.integrations.otel.model.metadata import request_user_id
+        from litellm.integrations.otel.plumbing.context import inbound_user_id, set_request_user_id
+
+        if is_otel_v2_enabled():
+            headers: Final = cast(  # cast-ok: the helper returns an unparameterized dict
+                Mapping[str, object], safe_get_request_headers(request)
+            )
+            end_user_id: Final = user_api_key_dict.end_user_id or get_end_user_id_from_request_body(
+                request_data, headers
+            )
+            set_request_user_id(request_user_id(end_user_id, request_data, inbound_user_id()))
+    except Exception as exc:  # noqa: BLE001  # telemetry labels are best-effort and must never break authentication
+        verbose_proxy_logger.debug("OTel V2: request user id resolution failed: %s", exc)
+
+
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
@@ -3553,6 +3576,11 @@ async def user_api_key_auth(
         request_auth.budget_reservation = None
         request_auth.agent_caller = agent_caller_from_headers(safe_get_request_headers(request), request_auth)
         _seed_request_destinations(request_auth, request)
+        _seed_request_user_id(
+            request_auth,
+            cast(Mapping[str, object], request_data),  # cast-ok: request bodies are dynamically typed
+            request,
+        )
 
         # A body that never parsed is authenticated (so the trace carries identity
         # and this ``auth`` span) but not authorized: there is no model to check it
