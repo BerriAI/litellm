@@ -75,7 +75,9 @@ class PerUserOAuthBearerAuth(httpx2.Auth):
             case Ok(fresh):
                 self._access_token = SecretStr(fresh.access_token)
                 fresh_name, fresh_value = self._carrier.header(fresh.access_token)
-                request.headers[fresh_name] = fresh_value  # rebind-ok: httpx auth owns mutation of the retried request headers
+                request.headers[fresh_name] = (
+                    fresh_value  # rebind-ok: httpx auth owns mutation of the retried request headers
+                )
                 yield request
 
     def sync_auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:
