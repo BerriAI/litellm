@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
 
@@ -2671,7 +2672,12 @@ class _OpencodeService:
         return subprocess.CompletedProcess(args, self.returncode, None, None)
 
 
-def _launch_recording_order(command, run):
+_SYNCED_CONFIG = MappingProxyType({"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'})
+
+
+def _launch_recording_order(
+    command, run, fingerprint_path, *, base_url="http://localhost:4000", key="sk-current", synced=_SYNCED_CONFIG
+):
     events = []
 
     def recording_run(args, **kwargs):
@@ -2679,25 +2685,31 @@ def _launch_recording_order(command, run):
         return run(args, **kwargs)
 
     run_agent(
-        "http://localhost:4000",
-        "sk-current",
+        base_url,
+        key,
         command,
         base_env={"OPENAI_API_KEY": "sk-stale"},
         which=lambda name: f"/usr/local/bin/{name}",
         verify=lambda *a: None,
-        sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
+        sync_models=lambda *a: dict(synced),
         warn=lambda message: None,
         launcher=lambda p, a, e: events.append(("launch", tuple(a), dict(e))),
         preparers={},
         run=recording_run,
+        opencode_fingerprint_path=fingerprint_path,
     )
     return events
 
 
 class TestOpencodeServiceRestart:
+    @pytest.fixture
+    def fingerprint(self, tmp_path):
+        path = tmp_path / "state" / "opencode_service_fingerprint"
+        return path, lambda: path
+
     @pytest.mark.parametrize("user_args", [["run", "x"], ["service", "stop"], []], ids=["run", "service_stop", "tui"])
-    def test_the_background_server_restarts_with_the_launch_env_before_opencode_opens(self, user_args):
-        events = _launch_recording_order(["opencode", *user_args], _OpencodeService())
+    def test_the_background_server_restarts_with_the_launch_env_before_opencode_opens(self, user_args, fingerprint):
+        events = _launch_recording_order(["opencode", *user_args], _OpencodeService(), fingerprint[1])
         (restart_kind, restart_args, restart_env), (launch_kind, launch_args, launch_env) = events
         assert (restart_kind, restart_args) == ("run", ("/usr/local/bin/opencode", "service", "restart"))
         assert (launch_kind, launch_args) == ("launch", ("opencode", *user_args))
@@ -2705,8 +2717,35 @@ class TestOpencodeServiceRestart:
         assert launch_env["OPENAI_API_KEY"] == "sk-current"
         assert launch_env["OPENCODE_CONFIG_CONTENT"] == '{"provider":{}}'
 
+    def test_a_launch_with_the_same_server_env_does_not_restart_it_again(self, fingerprint):
+        path, path_of = fingerprint
+        run = _OpencodeService()
+        _launch_recording_order(["opencode"], run, path_of)
+        events = _launch_recording_order(["opencode", "run", "x"], run, path_of)
+        assert len(run.calls) == 1
+        assert [kind for kind, *_ in events] == ["launch"]
+        assert "sk-current" not in path.read_text()
+
     @pytest.mark.parametrize(
-        "run",
+        "changed",
+        [
+            {"key": "sk-renewed"},
+            {"base_url": "http://other-proxy:4000"},
+            {"synced": {"OPENCODE_CONFIG_CONTENT": '{"provider":{"litellm":{}}}'}},
+            {"synced": {"OPENCODE_CONFIG_CONTENT": ""}},
+        ],
+        ids=["key", "base_url", "model_list", "model_list_empty_vs_missing"],
+    )
+    def test_a_changed_key_proxy_or_model_list_restarts_it(self, changed, fingerprint):
+        run = _OpencodeService()
+        first = {"synced": {}} if changed.get("synced") == {"OPENCODE_CONFIG_CONTENT": ""} else {}
+        _launch_recording_order(["opencode"], run, fingerprint[1], **first)
+        events = _launch_recording_order(["opencode"], run, fingerprint[1], **changed)
+        assert len(run.calls) == 2
+        assert events[0][2] == events[1][2]
+
+    @pytest.mark.parametrize(
+        "failing",
         [
             _OpencodeService(returncode=1),
             _OpencodeService(raises=OSError("not executable")),
@@ -2714,16 +2753,33 @@ class TestOpencodeServiceRestart:
         ],
         ids=["no_service_command", "cannot_run", "times_out"],
     )
-    def test_a_failed_restart_still_launches_unchanged(self, run):
-        events = _launch_recording_order(["opencode", "run", "x"], run)
+    def test_a_failed_restart_still_launches_and_is_retried_next_time(self, failing, fingerprint):
+        events = _launch_recording_order(["opencode", "run", "x"], failing, fingerprint[1])
         assert events[-1][:2] == ("launch", ("opencode", "run", "x"))
+        retry = _OpencodeService()
+        _launch_recording_order(["opencode", "run", "x"], retry, fingerprint[1])
+        assert retry.calls == [("/usr/local/bin/opencode", "service", "restart")]
+
+    def test_an_unusable_fingerprint_file_still_launches(self, tmp_path):
+        (tmp_path / "not-a-dir").write_text("")
+        unusable = (
+            lambda: tmp_path,
+            lambda: tmp_path / "not-a-dir" / "opencode_service_fingerprint",
+            lambda: (_ for _ in ()).throw(RuntimeError("no home directory")),
+        )
+        for path_of in unusable:
+            run = _OpencodeService()
+            events = _launch_recording_order(["opencode", "run", "x"], run, path_of)
+            assert len(run.calls) == 1
+            assert events[-1][:2] == ("launch", ("opencode", "run", "x"))
 
     @pytest.mark.parametrize("agent", ["claude", "codex", "pi"])
-    def test_other_agents_never_restart_it(self, agent):
+    def test_other_agents_never_restart_it(self, agent, fingerprint):
         run = _OpencodeService()
-        events = _launch_recording_order([agent], run)
+        events = _launch_recording_order([agent], run, fingerprint[1])
         assert run.calls == []
         assert [kind for kind, *_ in events] == ["launch"]
+        assert not fingerprint[0].exists()
 
 
 _WINDOWS_CLAUDE_EXE = "C:\\Program Files\\Claude\\claude.exe"
