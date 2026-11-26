@@ -657,6 +657,89 @@ mod tests {
         state.close().await;
     }
 
+    /// A config file with nothing stored in a database beside it.
+    fn unstored(config: Config) -> Loaded {
+        Loaded {
+            config,
+            stored: StoredConfig::Unused,
+            source: None,
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Front {
+        Nothing,
+        Python,
+    }
+
+    /// What the client gets for `request`, with `general` added to the config's
+    /// `general_settings`, through `alone` with nothing in front, and through what
+    /// `in_front_of_python` hands `gateway-forward` in front of Python, where a request `admitted`
+    /// refuses is Python's.
+    async fn answered(front: Front, general: &str, request: Request) -> Option<StatusCode> {
+        litellm_gateway::install_crypto_provider();
+        let config = Config::from_yaml(&format!(
+            "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\n      api_base: http://127.0.0.1:9\ngeneral_settings:\n  master_key: gateway-key\n{general}"
+        ))
+        .unwrap();
+        let environment = Environment::default();
+        let NativeState {
+            config,
+            state,
+            admit,
+            ..
+        } = native_state(Some(unstored(config)), &environment)
+            .await
+            .unwrap();
+        let live = Arc::new(Live::new(served(
+            state.clone(),
+            admit,
+            &config,
+            &environment,
+            &InFlight::new(),
+        )));
+        let status = match front {
+            Front::Nothing => Some(
+                tower::ServiceExt::oneshot(alone(live), request)
+                    .await
+                    .unwrap()
+                    .status(),
+            ),
+            Front::Python => match live.clone().admitted(request).await {
+                Ok(request) => Some(
+                    tower::ServiceExt::oneshot(live.native(), request)
+                        .await
+                        .unwrap()
+                        .status(),
+                ),
+                Err(_) => None,
+            },
+        };
+        state.close().await;
+        status
+    }
+
+    fn sent() -> Request {
+        Request::post("/v1/messages")
+            .header("authorization", "Bearer gateway-key")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                r#"{"model":"claude","max_tokens":8,"messages":[]}"#,
+            ))
+            .unwrap()
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_native_app_answers_the_proxys_403_for_a_route_the_allowlist_leaves_out(
+        #[values(Front::Nothing, Front::Python)] front: Front,
+    ) {
+        assert_eq!(
+            answered(front, "  allowed_routes: [/health]\n", sent()).await,
+            Some(StatusCode::FORBIDDEN)
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn without_a_config_python_answers_every_request() {
