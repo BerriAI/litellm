@@ -435,11 +435,7 @@ class LiteLLM_Proxy_MCP_Handler:
             return tuple(server for server in servers if server is not None)
 
         def server_names(servers: Sequence[MCPServer]) -> Sequence[str]:
-            names: Final = (
-                getattr(server, "server_name", None) or getattr(server, "alias", None) or getattr(server, "name", None)
-                for server in servers
-            )
-            return tuple(dict.fromkeys(name for name in names if isinstance(name, str)))
+            return tuple(dict.fromkeys(server.server_name or server.alias or server.name for server in servers))
 
         async def list_scope(
             auth: "UserAPIKeyAuth | None", server_filter: Sequence[str] | None
