@@ -10,7 +10,7 @@ use litellm_callbacks::{
     MetadataKind, ModelInfo, Moment, Outcome, PatchOp, Scalar, SpendLogId, Usage, UsageRecord,
 };
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::{Caller, StoredKey};
+use litellm_gateway_auth_core::{Credential, StoredKey};
 use litellm_gateway_inference::{
     CallType,
     record::{CallState, Charged, Ended, HeadSent, unix},
@@ -49,16 +49,16 @@ pub enum Unwritable {
 /// owner, and the master key by Python's alias for it and the proxy admin. Native keys name no
 /// team, organization, project or end user.
 pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
-    match &**identity {
-        Caller::MasterKey => Charged {
+    match &identity.credential {
+        Credential::MasterKey => Charged {
             key_hash: Some(MASTER_KEY_ALIAS.to_owned()),
             key_alias: None,
             user_id: Some(PROXY_ADMIN_NAME.to_owned()),
         },
-        Caller::Key(key) => Charged {
+        Credential::Key { key } => Charged {
             key_hash: identity.hash().map(ToString::to_string),
-            key_alias: key.key.alias().map(str::to_owned),
-            user_id: key.key.record().user_id.clone(),
+            key_alias: key.alias().map(str::to_owned),
+            user_id: key.record().user_id.clone(),
         },
     }
 }
