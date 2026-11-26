@@ -2,6 +2,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import tempfile
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -61,10 +62,26 @@ def _files_in(source: Path, current_root: str, files: Sequence[str]) -> Iterator
 
 
 def _source_files(source: Path) -> tuple[Path, ...]:
+    resolved_source: Final = source.resolve()
     walked: Final = chain.from_iterable(
         _files_in(source, current_root, files) for current_root, _, files in os.walk(source, followlinks=True)
     )
-    return tuple(sorted(path for path in walked if path.parts[0] != RENDERED_UI_DIRNAME))
+    return tuple(
+        sorted(
+            path
+            for path in walked
+            if path.parts[0] != RENDERED_UI_DIRNAME and (source / path).resolve().is_relative_to(resolved_source)
+        )
+    )
+
+
+def _is_trusted_dir(path: Path) -> bool:
+    try:
+        info: Final = os.lstat(path)
+    except OSError:
+        return False
+    owned: Final = not hasattr(os, "getuid") or info.st_uid == os.getuid()
+    return stat.S_ISDIR(info.st_mode) and owned and info.st_mode & 0o022 == 0
 
 
 def _render_key(source: Path, server_root_path: str) -> str:
@@ -102,13 +119,18 @@ def _write_rendered_tree(source: Path, destination: Path, server_root_path: str)
         _copy_rendered_file(source / relative, destination / relative, server_root_path)
 
 
-def _render_into_parent(source: Path, server_root_path: str, key: str, parent: Path) -> UIRenderResult:
-    output_root: Final = parent / RENDERED_UI_DIRNAME
+def _render_into_source(source: Path, server_root_path: str, key: str) -> UIRenderResult:
+    output_root: Final = source / RENDERED_UI_DIRNAME
     target: Final = output_root / key
+    untrusted_root: Final = RenderUnavailable(
+        (f"{output_root}: not a directory owned by the current user without group/world write",)
+    )
     try:
-        if target.is_dir():
-            return RenderedUI(target)
-        output_root.mkdir(parents=True, exist_ok=True)
+        output_root.mkdir(mode=0o755, exist_ok=True)
+        if not _is_trusted_dir(output_root):
+            return untrusted_root
+        if target.exists() or target.is_symlink():
+            return RenderedUI(target) if _is_trusted_dir(target) else untrusted_root
         staging: Final = Path(tempfile.mkdtemp(prefix=f".{key}-", dir=output_root))
     except OSError as error:
         return RenderUnavailable((f"{output_root}: {error}",))
@@ -119,7 +141,7 @@ def _render_into_parent(source: Path, server_root_path: str, key: str, parent: P
         restructure_ui_html_files(staging)
         os.rename(staging, target)
     except OSError as error:
-        if target.is_dir():
+        if _is_trusted_dir(target):
             return RenderedUI(target)
         return RenderUnavailable((f"{output_root}: {error}",))
     finally:
@@ -127,29 +149,11 @@ def _render_into_parent(source: Path, server_root_path: str, key: str, parent: P
     return RenderedUI(target)
 
 
-def _render_into_first_usable_parent(
-    source: Path, server_root_path: str, key: str, output_parents: tuple[Path, ...]
-) -> UIRenderResult:
-    if not output_parents:
-        return RenderUnavailable(())
-    first: Final = _render_into_parent(source, server_root_path, key, output_parents[0])
-    match first:
-        case RenderedUI():
-            return first
-        case RenderUnavailable(errors=first_errors):
-            rest: Final = _render_into_first_usable_parent(source, server_root_path, key, output_parents[1:])
-            match rest:
-                case RenderedUI():
-                    return rest
-                case RenderUnavailable(errors=rest_errors):
-                    return RenderUnavailable(first_errors + rest_errors)
-
-
-def render_ui_for_root_path(source: Path, server_root_path: str, output_parents: tuple[Path, ...]) -> UIRenderResult:
+def render_ui_for_root_path(source: Path, server_root_path: str) -> UIRenderResult:
     if server_root_path in ("", "/"):
         return RenderedUI(source)
     try:
         key: Final = _render_key(source, server_root_path)
     except OSError as error:
         return RenderUnavailable((f"{source}: {error}",))
-    return _render_into_first_usable_parent(source, server_root_path, key, output_parents)
+    return _render_into_source(source, server_root_path, key)

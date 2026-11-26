@@ -1,3 +1,5 @@
+import os
+import shutil
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -46,7 +48,9 @@ def _build_source(root: Path) -> Path:
 
 def _snapshot(directory: Path) -> dict[str, bytes]:
     return {
-        path.relative_to(directory).as_posix(): path.read_bytes() for path in directory.rglob("*") if path.is_file()
+        path.relative_to(directory).as_posix(): path.read_bytes()
+        for path in directory.rglob("*")
+        if path.is_file() and RENDERED_UI_DIRNAME not in path.relative_to(directory).parts
     }
 
 
@@ -95,14 +99,12 @@ def test_ui_extensionless_route_requires_restructure(tmp_path: Path):
 
 def test_concurrent_workers_render_the_same_complete_directory(tmp_path: Path):
     source: Final = _build_source(tmp_path)
-    parent: Final = tmp_path / "parent"
-    parent.mkdir()
     worker_count: Final = 16
     barrier: Final = threading.Barrier(worker_count)
 
     def worker() -> tuple[UIRenderResult, dict[str, bytes]]:
         barrier.wait()
-        result: Final = render_ui_for_root_path(source, "/foo/litellm", (parent,))
+        result: Final = render_ui_for_root_path(source, "/foo/litellm")
         return result, _snapshot(_rendered_directory(result))
 
     with ThreadPoolExecutor(max_workers=worker_count) as pool:
@@ -118,16 +120,15 @@ def test_concurrent_workers_render_the_same_complete_directory(tmp_path: Path):
         "fonts/a.woff2": WOFF2_BYTES,
     }
     assert all(snapshot == expected_render for _, snapshot in outcomes)
-    assert [path.name for path in (parent / RENDERED_UI_DIRNAME).iterdir()] == [next(iter(directories)).name]
+    assert [path.name for path in (source / RENDERED_UI_DIRNAME).iterdir()] == [next(iter(directories)).name]
 
 
 def test_root_path_ending_in_litellm_is_not_prefixed_twice(tmp_path: Path):
     source: Final = _build_source(tmp_path)
-    parent: Final = tmp_path / "parent"
     source_before: Final = _snapshot(source)
 
-    first: Final = _rendered_directory(render_ui_for_root_path(source, "/foo/litellm", (parent,)))
-    second: Final = _rendered_directory(render_ui_for_root_path(source, "/foo/litellm", (parent,)))
+    first: Final = _rendered_directory(render_ui_for_root_path(source, "/foo/litellm"))
+    second: Final = _rendered_directory(render_ui_for_root_path(source, "/foo/litellm"))
 
     app_js: Final = (first / "_next" / "static" / "chunks" / "app.js").read_text()
     assert first == second
@@ -137,10 +138,9 @@ def test_root_path_ending_in_litellm_is_not_prefixed_twice(tmp_path: Path):
 
 def test_changing_root_path_renders_from_the_untouched_source(tmp_path: Path):
     source: Final = _build_source(tmp_path)
-    parent: Final = tmp_path / "parent"
 
-    dir_a: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (parent,)))
-    dir_b: Final = _rendered_directory(render_ui_for_root_path(source, "/b", (parent,)))
+    dir_a: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
+    dir_b: Final = _rendered_directory(render_ui_for_root_path(source, "/b"))
 
     index_b: Final = (dir_b / "index.html").read_text()
     assert dir_a != dir_b
@@ -153,45 +153,20 @@ def test_changing_root_path_renders_from_the_untouched_source(tmp_path: Path):
 @pytest.mark.parametrize("root_path", ["", "/"])
 def test_empty_or_slash_root_path_serves_source_without_writing(tmp_path: Path, root_path: str):
     source: Final = _build_source(tmp_path)
-    parent: Final = tmp_path / "parent"
-    parent.mkdir()
+    source_before: Final = _snapshot(source)
 
-    result: Final = render_ui_for_root_path(source, root_path, (parent,))
+    result: Final = render_ui_for_root_path(source, root_path)
 
     assert result == RenderedUI(source)
-    assert list(parent.iterdir()) == []
+    assert _snapshot(source) == source_before
+    assert not (source / RENDERED_UI_DIRNAME).exists()
 
 
-def test_falls_back_to_next_parent_when_first_is_unusable(tmp_path: Path):
-    source: Final = _build_source(tmp_path)
-    unusable: Final = tmp_path / "not-a-directory"
-    unusable.write_text("file")
-    usable: Final = tmp_path / "usable"
-
-    directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (unusable, usable)))
-
-    assert directory.parent == usable / RENDERED_UI_DIRNAME
-    assert "/a/_next" in (directory / "index.html").read_text()
-
-
-def test_reports_one_error_per_parent_when_none_is_usable(tmp_path: Path):
-    source: Final = _build_source(tmp_path)
-    first: Final = tmp_path / "first"
-    second: Final = tmp_path / "second"
-    first.write_text("file")
-    second.write_text("file")
-
-    result: Final = render_ui_for_root_path(source, "/a", (first, second))
-
-    assert isinstance(result, RenderUnavailable)
-    assert len(result.errors) == 2
-    assert result.errors[0].startswith(str(first / RENDERED_UI_DIRNAME))
-    assert result.errors[1].startswith(str(second / RENDERED_UI_DIRNAME))
 
 
 def test_rendered_directory_serves_extensionless_routes(tmp_path: Path):
     source: Final = _build_source(tmp_path)
-    directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (tmp_path / "parent",)))
+    directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
     fastapi_app: Final = FastAPI()
     fastapi_app.mount("/ui", StaticFiles(directory=str(directory), html=True), name="ui")
     client: Final = TestClient(fastapi_app)
@@ -205,34 +180,20 @@ def test_rendered_directory_serves_extensionless_routes(tmp_path: Path):
 
 def test_changed_source_file_renders_into_a_new_directory(tmp_path: Path):
     source: Final = _build_source(tmp_path)
-    parent: Final = tmp_path / "parent"
-    before: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (parent,)))
+    before: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
 
     _write(source / "_next" / "static" / "chunks" / "app.js", f'{APP_JS};z="{ASSET_PLACEHOLDER}/new"')
-    after: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (parent,)))
+    after: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
 
     assert before != after
     assert 'z="/a/new"' in (after / "_next" / "static" / "chunks" / "app.js").read_text()
     assert 'z="/a/new"' not in (before / "_next" / "static" / "chunks" / "app.js").read_text()
 
 
-def test_renders_inside_source_when_no_other_parent_is_usable(tmp_path: Path):
-    source: Final = _build_source(tmp_path)
-    regular_file: Final = tmp_path / "file"
-    regular_file.write_text("file")
-
-    first: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (regular_file, source)))
-    second: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (regular_file, source)))
-
-    assert first == second
-    assert first.parent == source / RENDERED_UI_DIRNAME
-    assert "/a/_next" in (first / "index.html").read_text()
-    assert not (first / RENDERED_UI_DIRNAME).exists()
-
 
 def test_restructure_leaves_in_source_render_untouched(tmp_path: Path):
     source: Final = _build_source(tmp_path)
-    rendered: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (source,)))
+    rendered: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
     before: Final = _snapshot(rendered)
 
     restructure_ui_html_files(source)
@@ -244,11 +205,11 @@ def test_restructure_leaves_in_source_render_untouched(tmp_path: Path):
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need elevated privileges on Windows")
 def test_symlinked_directory_is_rendered_with_its_content(tmp_path: Path):
     source: Final = _build_source(tmp_path)
-    real_next: Final = tmp_path / "real_next"
+    real_next: Final = source / "real_next"
     _write(real_next / "chunk.js", f'x="{ASSET_PLACEHOLDER}/y"')
     (source / "linked").symlink_to(real_next, target_is_directory=True)
 
-    directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (tmp_path / "parent",)))
+    directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
 
     assert (directory / "linked" / "chunk.js").read_text() == 'x="/a/y"'
 
@@ -257,7 +218,7 @@ def test_binary_files_are_copied_verbatim_while_text_is_substituted(tmp_path: Pa
     source: Final = _build_source(tmp_path)
     _write(source / "img.PNG", FAVICON_BYTES)
 
-    directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (tmp_path / "parent",)))
+    directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
 
     assert (directory / "img.PNG").read_bytes() == FAVICON_BYTES
     assert (directory / "fonts" / "a.woff2").read_bytes() == WOFF2_BYTES
@@ -266,8 +227,72 @@ def test_binary_files_are_copied_verbatim_while_text_is_substituted(tmp_path: Pa
 
 def test_vanishing_source_file_during_key_computation_is_reported_unavailable(tmp_path: Path):
     source: Final = _build_source(tmp_path)
-    (source / "dangling.js").symlink_to(tmp_path / "missing")
+    (source / "dangling.js").symlink_to(source / "missing")
 
-    result: Final = render_ui_for_root_path(source, "/a", (tmp_path / "parent",))
+    result: Final = render_ui_for_root_path(source, "/a")
 
     assert isinstance(result, RenderUnavailable)
+
+
+def test_render_lives_inside_the_source_directory_and_is_reused(tmp_path: Path):
+    source: Final = _build_source(tmp_path)
+
+    first: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
+    second: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
+
+    assert first == second
+    assert first.parent == source / RENDERED_UI_DIRNAME
+    assert not (first / RENDERED_UI_DIRNAME).exists()
+    assert {path.name for path in tmp_path.iterdir()} == {"out"}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need elevated privileges on Windows")
+def test_symlinks_pointing_outside_the_source_are_not_published(tmp_path: Path):
+    source: Final = _build_source(tmp_path)
+    private: Final = tmp_path / "private"
+    _write(private / "secret.txt", "secret")
+    _write(tmp_path / "outside.txt", "outside")
+    (source / "linked").symlink_to(private, target_is_directory=True)
+    (source / "leak.txt").symlink_to(tmp_path / "outside.txt")
+
+    directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a"))
+
+    assert set(_snapshot(directory)) == {
+        "index.html",
+        "login/index.html",
+        "_next/static/chunks/app.js",
+        "favicon.ico",
+        "fonts/a.woff2",
+    }
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need elevated privileges on Windows")
+def test_symlink_planted_at_the_render_target_is_not_served(tmp_path: Path):
+    source: Final = _build_source(tmp_path)
+    key: Final = _rendered_directory(render_ui_for_root_path(source, "/a")).name
+    shutil.rmtree(source / RENDERED_UI_DIRNAME)
+    attacker: Final = tmp_path / "attacker"
+    _write(attacker / "index.html", "attacker")
+    (source / RENDERED_UI_DIRNAME).mkdir(mode=0o755)
+    (source / RENDERED_UI_DIRNAME / key).symlink_to(attacker, target_is_directory=True)
+
+    result: Final = render_ui_for_root_path(source, "/a")
+
+    assert isinstance(result, RenderUnavailable)
+    assert (attacker / "index.html").read_text() == "attacker"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="permission bits are not enforced on Windows or for root",
+)
+def test_group_or_world_writable_render_root_is_refused(tmp_path: Path):
+    source: Final = _build_source(tmp_path)
+    output_root: Final = source / RENDERED_UI_DIRNAME
+    output_root.mkdir()
+    output_root.chmod(0o777)
+
+    result: Final = render_ui_for_root_path(source, "/a")
+
+    assert isinstance(result, RenderUnavailable)
+    assert list(output_root.iterdir()) == []

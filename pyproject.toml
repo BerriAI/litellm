@@ -377,7 +377,6 @@ exclude = [
     "litellm/scripts/**",
     "litellm/runtime",
     "litellm/runtime/**",
-    "litellm/proxy/_experimental/.litellm-ui-rendered/**",
     "litellm/proxy/_experimental/out/.litellm-ui-rendered/**",
     "litellm/schema.prisma",
     "litellm/enterprise",
