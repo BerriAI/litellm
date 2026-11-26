@@ -250,6 +250,15 @@ async def test_authorization_code_store_unavailable_is_retryable():
         async def fetch(self, user_id: str, server_id: str):
             raise TokenStoreUnavailable("down")
 
+        async def peek(self, user_id: str, server_id: str):
+            raise TokenStoreUnavailable("down")
+
+        async def invalidate(self, user_id: str, server_id: str):
+            return None
+
+        async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+            return Error(CredError.of_upstream_unavailable("down"))
+
     result = await UpstreamCredentialProvider(oauth_token_store=_Unavailable()).resolve_credentials(
         Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
     )
@@ -321,6 +330,12 @@ async def test_has_user_token_defers_an_unknown_refresh_outcome_to_egress():
 
         async def peek(self, user_id: str, server_id: str):
             raise TokenStoreUnavailable("down")
+
+        async def invalidate(self, user_id: str, server_id: str):
+            return None
+
+        async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+            return Error(CredError.of_upstream_unavailable("down"))
 
     provider = UpstreamCredentialProvider(oauth_token_store=_Unavailable())
     spec = _spec(AuthorizationCodeConfig())

@@ -150,7 +150,7 @@ from litellm.proxy.mcp_server.outbound_credentials.adapter import (
 )
 from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import PER_USER_OAUTH_RECOVERY_EXTENSION
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
-    InvalidatableOAuthTokenStore,
+    ReactiveOAuthTokenStore,
 )
 from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
@@ -2222,7 +2222,7 @@ class MCPServerManager:
     def __init__(
         self,
         cred_provider: UpstreamCredentialProvider | None = None,
-        per_user_oauth_token_store: InvalidatableOAuthTokenStore | None = None,
+        per_user_oauth_token_store: ReactiveOAuthTokenStore | None = None,
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,

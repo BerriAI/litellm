@@ -303,7 +303,9 @@ class RefreshingTokenStore:
         self._refresher = refresher
         self._expiry_skew_seconds = expiry_skew_seconds
         self._clock = clock
-        self._coordinator: RefreshCoordinator[Result[OAuthToken, CredError]] = coordinator or InProcessRefreshCoordinator()
+        self._coordinator: RefreshCoordinator[Result[OAuthToken, CredError]] = (
+            coordinator or InProcessRefreshCoordinator()
+        )
 
     def _is_expired(self, token: OAuthToken) -> bool:
         return token.expires_at is not None and self._clock() >= token.expires_at - self._expiry_skew_seconds
