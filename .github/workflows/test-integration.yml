@@ -27,7 +27,7 @@ on:
           - browser
         default: all
       workers:
-        description: Workers per group, blank keeps each group's default
+        description: Workers per shard, blank keeps each group's default
         type: string
         default: ""
 
@@ -39,19 +39,48 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  integration:
-    name: integration ${{ matrix.suite }}
+  plan:
+    name: integration plan
     if: github.event_name != 'pull_request' || github.event.label.name == 'run-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      include: ${{ steps.plan.outputs.include }}
+    steps:
+      - id: plan
+        env:
+          SUITE: ${{ inputs.suite || 'all' }}
+          WORKERS: ${{ inputs.workers }}
+          INTEGRATION_GROUPS: >-
+            {"providers": {"shards": 20, "workers": 2}, "extensions": {"shards": 11, "workers": 4},
+            "accounting": {"shards": 7, "workers": 2}, "management": {"shards": 14, "workers": 2},
+            "management-replica": {"shards": 14, "workers": 2}, "database": {"shards": 3, "workers": 2},
+            "database-replica": {"shards": 3, "workers": 2}, "mcp": {"shards": 3, "workers": 2},
+            "security": {"shards": 3, "workers": 2}, "cost": {"shards": 2, "workers": 4},
+            "sdk": {"shards": 2, "workers": 1}, "browser": {"shards": 1, "workers": 1}}
+        run: |
+          include="$(jq -c --arg suite "$SUITE" --arg workers "$WORKERS" '[to_entries[]
+            | select($suite == "all" or .key == $suite)
+            | {suite: .key, shards: .value.shards, shard: range(.value.shards),
+               workers: (if $workers == "" then .value.workers else $workers end | tostring)}]' <<< "$INTEGRATION_GROUPS")"
+          test "$include" != "[]"
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+
+  integration:
+    name: integration ${{ matrix.suite }} shard ${{ matrix.shard }}
+    needs: plan
     environment: integration-license
-    runs-on: ${{ fromJSON('{"providers":"ubuntu-latest-64-cores","extensions":"ubuntu-latest-64-cores","accounting":"ubuntu-latest-32-cores","management":"ubuntu-latest-32-cores","management-replica":"ubuntu-latest-32-cores"}')[matrix.suite] || 'ubuntu-latest-16-cores' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON((inputs.suite || 'all') == 'all' && '["providers","extensions","accounting","management","management-replica","database","database-replica","mcp","security","cost","sdk","browser"]' || format('["{0}"]', inputs.suite)) }}
+        include: ${{ fromJSON(needs.plan.outputs.include) }}
     env:
       UV_PYTHON: "3.12"
-      INTEGRATION_WORKERS: ${{ inputs.workers || fromJSON('{"providers":"32","extensions":"48","accounting":"16","management":"16","management-replica":"16","cost":"16","mcp":"8","security":"8","database":"4","database-replica":"4"}')[matrix.suite] || '' }}
+      INTEGRATION_WORKERS: ${{ matrix.workers }}
+      INTEGRATION_CASE_SHARDS: ${{ matrix.shards }}
+      INTEGRATION_CASE_SHARD_INDEX: ${{ matrix.shard }}
     services:
       postgres:
         image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
@@ -180,16 +209,6 @@ jobs:
             *) bash .github/scripts/ci/run_integration.sh "$SUITE" ;;
           esac
 
-      - name: Verify every case ran exactly once
-        if: ${{ !cancelled() && matrix.suite != 'browser' }}
-        timeout-minutes: 2
-        run: |
-          record="$(find test-results -mindepth 2 -maxdepth 2 -name execution.json -print -quit)"
-          test -n "$record"
-          mkdir -p "$RUNNER_TEMP/shards/0"
-          cp "$record" "$RUNNER_TEMP/shards/0/execution.json"
-          .venv/bin/python -m tests.integration._support.sharding "$RUNNER_TEMP/shards" --shards 1
-
       - name: Report MCP coverage
         if: ${{ !cancelled() && matrix.suite == 'mcp' }}
         timeout-minutes: 5
@@ -215,6 +234,77 @@ jobs:
         timeout-minutes: 10
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: integration-${{ matrix.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-${{ matrix.suite }}-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
+          retention-days: 14
+
+  census:
+    name: integration census
+    needs: [plan, integration]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        timeout-minutes: 3
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Download shard results
+        timeout-minutes: 10
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: integration-*-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/results
+
+      - name: Verify every case ran exactly once across each group's shards
+        env:
+          INCLUDE: ${{ needs.plan.outputs.include }}
+          RESULTS: ${{ runner.temp }}/results
+          CENSUS: ${{ runner.temp }}/census
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          status=0
+          while read -r suite shard; do
+            latest="$(find "$RESULTS" -mindepth 1 -maxdepth 1 -name "integration-$suite-$shard-$RUN_ID-*" | sort -V | tail -n 1)"
+            mkdir -p "$CENSUS/$suite/$shard"
+            cp "$latest/integration-$suite/execution.json" "$CENSUS/$suite/$shard/" || status=1
+          done < <(jq -r '.[] | select(.suite != "browser") | "\(.suite) \(.shard)"' <<< "$INCLUDE")
+          while read -r suite shards; do
+            uv run --no-project --python 3.12 --with pydantic==2.13.4 \
+              python -m tests.integration._support.sharding "$CENSUS/$suite" --shards "$shards" || status=1
+          done < <(jq -r '[.[] | select(.suite != "browser")] | unique_by(.suite)[] | "\(.suite) \(.shards)"' <<< "$INCLUDE")
+          exit "$status"
+
+      - name: Combine MCP coverage
+        id: mcp-coverage
+        if: ${{ !cancelled() && contains(needs.plan.outputs.include, '"mcp"') }}
+        timeout-minutes: 5
+        env:
+          RESULTS: ${{ runner.temp }}/results
+          RUN_ID: ${{ github.run_id }}
+          COVERAGE_FILE: ${{ github.workspace }}/mcp-coverage/data
+        run: |
+          mkdir -p mcp-coverage
+          for shard_data in "$RESULTS"/integration-mcp-*-"$RUN_ID"-*/integration-mcp/coverage/data; do
+            cp "$shard_data" "mcp-coverage/data.$(basename "$(dirname "$(dirname "$(dirname "$shard_data")")")")"
+          done
+          coverage=(uv run --no-project --python 3.12 --with coverage==7.14.0 python -m coverage)
+          "${coverage[@]}" combine --rcfile=tests/integration/mcp_coverage.toml mcp-coverage
+          "${coverage[@]}" report --rcfile=tests/integration/mcp_coverage.toml > mcp-coverage/coverage.txt
+          "${coverage[@]}" html --rcfile=tests/integration/mcp_coverage.toml -d mcp-coverage/html
+          tail -n 1 mcp-coverage/coverage.txt
+
+      - name: Upload MCP coverage
+        if: ${{ !cancelled() && steps.mcp-coverage.outcome == 'success' }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: integration-mcp-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: mcp-coverage/
           retention-days: 14

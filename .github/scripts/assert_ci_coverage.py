@@ -573,6 +573,17 @@ def _matrix_suites(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _planned_suites(include: object, jobs: Mapping[str, object]) -> tuple[str, ...]:
+    planners: Final = re.findall(r"needs\.([\w-]+)\.outputs", include) if isinstance(include, str) else ()
+    return tuple(
+        suite
+        for planner in planners
+        for scalar in _scalars(jobs.get(planner, {}), planner)
+        if scalar.key == "INTEGRATION_GROUPS"
+        for suite in json.loads(scalar.value)
+    )
+
+
 def _tokens_outside_owner(relative_path: str, workflow_tokens: Mapping[str, frozenset[str]]) -> frozenset[str]:
     return frozenset[str]().union(
         *(tokens for workflow, tokens in workflow_tokens.items() if not _owns(workflow, relative_path))
@@ -611,6 +622,7 @@ def _integration_ownership(
         for body in integration_jobs.values()
         if any(".github/scripts/ci/run_integration.sh" in scalar.value for scalar in _scalars(body, "integration"))
         for suite in _matrix_suites(body.get("strategy", {}).get("matrix", {}).get("suite", ()))
+        + _planned_suites(body.get("strategy", {}).get("matrix", {}).get("include"), integration_jobs)
     )
     required: Final = (frozenset({"browser"}) if browser_paths else frozenset()) | frozenset(
         group

@@ -9,6 +9,7 @@ the question neither covers: whether the job that globs a file then deselects it
 """
 
 import importlib.util
+import json
 import shutil
 import subprocess
 import sys
@@ -129,6 +130,41 @@ def _write_integration_tree(root: Path, github_path: str) -> None:
 )
 def test_integration_matrix_accounts_for_default_suites(matrix: object, expected: tuple[str, ...]) -> None:
     assert coverage._matrix_suites(matrix) == expected
+
+
+@pytest.mark.parametrize(
+    ("planned", "expected"),
+    (
+        ({"management": {"shards": 3, "workers": 2}}, []),
+        (
+            {"database": {"shards": 1, "workers": 2}},
+            [("management", "canonical integration group is not scheduled by GitHub Actions")],
+        ),
+    ),
+)
+def test_a_planned_shard_matrix_schedules_the_groups_its_plan_names(
+    tmp_path: Path, planned: dict[str, dict[str, int]], expected: list[tuple[str, str]]
+) -> None:
+    _write_integration_tree(tmp_path, "tests/integration/database/image/test_github_contract.py")
+    (tmp_path / ".github/workflows/image-scan.yml").write_text(
+        yaml.safe_dump({"jobs": {"scan": {"steps": [{"run": "pytest tests/integration/database/image/"}]}}})
+    )
+    (tmp_path / ".github/workflows/test-integration.yml").write_text(
+        yaml.safe_dump(
+            {
+                "jobs": {
+                    "plan": {"steps": [{"id": "plan", "env": {"INTEGRATION_GROUPS": json.dumps(planned)}}]},
+                    "integration": {
+                        "needs": "plan",
+                        "strategy": {"matrix": {"include": "${{ fromJSON(needs.plan.outputs.include) }}"}},
+                        "steps": [{"run": "bash .github/scripts/ci/run_integration.sh $SUITE"}],
+                    },
+                }
+            }
+        )
+    )
+    _, findings = coverage._integration_ownership(tmp_path)
+    assert [(finding.subject, finding.detail) for finding in findings] == expected
 
 
 @pytest.mark.parametrize(
