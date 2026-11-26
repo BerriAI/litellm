@@ -52,12 +52,12 @@ jobs:
           SUITE: ${{ inputs.suite || 'all' }}
           WORKERS: ${{ inputs.workers }}
           INTEGRATION_GROUPS: >-
-            {"providers": {"shards": 20, "workers": 2}, "extensions": {"shards": 11, "workers": 4},
-            "accounting": {"shards": 7, "workers": 2}, "management": {"shards": 14, "workers": 2},
-            "management-replica": {"shards": 14, "workers": 2}, "database": {"shards": 3, "workers": 2},
-            "database-replica": {"shards": 3, "workers": 2}, "mcp": {"shards": 3, "workers": 2},
-            "security": {"shards": 3, "workers": 2}, "cost": {"shards": 2, "workers": 4},
-            "sdk": {"shards": 2, "workers": 1}, "browser": {"shards": 1, "workers": 1}}
+            {"providers": {"shards": 7, "workers": 4}, "extensions": {"shards": 9, "workers": 4},
+            "accounting": {"shards": 3, "workers": 4}, "management": {"shards": 5, "workers": 4},
+            "management-replica": {"shards": 5, "workers": 4}, "database": {"shards": 1, "workers": 4},
+            "database-replica": {"shards": 1, "workers": 4}, "mcp": {"shards": 1, "workers": 4},
+            "security": {"shards": 1, "workers": 4}, "cost": {"shards": 1, "workers": 4},
+            "sdk": {"shards": 1, "workers": 1}, "browser": {"shards": 1, "workers": 1}}
         run: |
           include="$(jq -c --arg suite "$SUITE" --arg workers "$WORKERS" '[to_entries[]
             | select($suite == "all" or .key == $suite)
