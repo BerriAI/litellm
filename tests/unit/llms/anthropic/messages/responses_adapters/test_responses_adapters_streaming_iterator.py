@@ -1338,6 +1338,12 @@ class _ToolCallProviderStream(httpx.AsyncByteStream):
         yield _RESPONSE_COMPLETED
 
 
+def _delta(chunk: Mapping[str, object], key: str) -> object:
+    delta: Final = chunk["delta"]
+    assert isinstance(delta, Mapping)
+    return delta[key]
+
+
 def _streamed_tool_uses(provider_stream: _ToolCallProviderStream) -> tuple[tuple[str, str, str | None], ...]:
     async def _run() -> list[Mapping[str, object]]:
         upstream: Final = ResponsesAPIStreamingIterator(
@@ -1510,3 +1516,124 @@ def test_a_disconnect_after_done_only_tool_calls_bills_the_arguments_the_client_
 
     assert billed_for_deltas
     assert billed_for_done_only == billed_for_deltas
+
+
+def test_an_mcp_call_streams_as_its_tool_use_and_result_blocks_before_the_answer() -> None:
+    call: Final = {
+        "type": "mcp_call",
+        "id": "mcp_0abc",
+        "server_label": "docs",
+        "name": "read_wiki_structure",
+        "arguments": '{"repoName": "BerriAI/litellm"}',
+        "output": "1 Overview",
+        "error": None,
+    }
+
+    chunks: Final = _process_all(
+        [
+            {"type": "response.output_item.added", "item": {**call, "arguments": "", "output": None}},
+            {"type": "response.mcp_call_arguments.delta", "item_id": "mcp_0abc", "delta": '{"repoName"'},
+            {"type": "response.output_item.done", "item": call},
+            {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+            {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Overview"},
+            {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+        ]
+    )
+
+    assert chunks == [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "mcp_tool_use",
+                "id": "mcp_0abc",
+                "name": "read_wiki_structure",
+                "server_name": "docs",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"repoName": "BerriAI/litellm"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcp_0abc",
+                "is_error": False,
+                "content": [{"type": "text", "text": "1 Overview"}],
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Overview"}},
+        {"type": "content_block_stop", "index": 2},
+    ]
+
+
+class TestClientToolSearchStream:
+    @staticmethod
+    def _search_turn() -> list[object]:
+        done_item: Final = {
+            "type": "tool_search_call",
+            "id": "tsc_1",
+            "call_id": "call_search",
+            "execution": "client",
+            "arguments": {"query": "weather forecast"},
+            "status": "completed",
+        }
+        return [
+            {"type": "response.created"},
+            {
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "call_id": "call_search",
+                    "execution": "client",
+                    "arguments": {},
+                    "status": "in_progress",
+                },
+            },
+            {"type": "response.output_item.done", "item": done_item},
+            {"type": "response.completed", "response": SimpleNamespace(output=[done_item], status="completed")},
+        ]
+
+    @staticmethod
+    def _drain(events: list[object], tool_search_name: str | None) -> list[Mapping[str, object]]:
+        async def _gen() -> AsyncIterator[object]:
+            for event in events:
+                yield event
+
+        async def _run() -> list[Mapping[str, object]]:
+            wrapper: Final = AnthropicResponsesStreamWrapper(
+                responses_stream=_gen(), model="m", tool_search_name=tool_search_name
+            )
+            return [chunk async for chunk in wrapper]
+
+        return asyncio.run(_run())
+
+    def test_search_call_streams_as_one_search_tool_use_and_stops_for_the_tool(self):
+        chunks: Final = self._drain(self._search_turn(), "ToolSearch")
+
+        assert [c["content_block"] for c in chunks if c["type"] == "content_block_start"] == [
+            {"type": "tool_use", "id": "call_search", "name": "ToolSearch", "input": {}}
+        ]
+        streamed_input: Final = "".join(
+            str(_delta(c, "partial_json"))
+            for c in chunks
+            if c["type"] == "content_block_delta" and _delta(c, "type") == "input_json_delta"
+        )
+        assert json.loads(streamed_input) == {"query": "weather forecast"}
+        assert [c["type"] for c in chunks if c["type"] == "content_block_stop"] == ["content_block_stop"]
+        assert [_delta(c, "stop_reason") for c in chunks if c["type"] == "message_delta"] == ["tool_use"]
+
+    def test_search_call_is_not_a_tool_use_without_a_client_search_tool(self):
+        chunks: Final = self._drain(self._search_turn(), None)
+
+        assert not [c for c in chunks if c["type"] == "content_block_start"]
+        assert [_delta(c, "stop_reason") for c in chunks if c["type"] == "message_delta"] == ["end_turn"]

@@ -88,7 +88,7 @@ def _exception_event_error(
 
 
 class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 

@@ -1,3 +1,4 @@
+from asyncio import to_thread
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import ClassVar, Final
 
@@ -29,11 +30,12 @@ from litellm.llms.anthropic.messages.api_versions import (
     sampling_params_to_drop,
     serves_anthropic_api_versions,
 )
-from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
+from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_texts
 from litellm.llms.anthropic.messages.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
+from litellm.llms.base_llm.auth.provider_oauth import oauth_credential_free_headers, provider_oauth_token
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -75,6 +77,7 @@ _CALLER_CREDENTIAL_HEADERS: Final = frozenset({"x-api-key", "authorization"})
 _MESSAGE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_OAUTH_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 class _AnthropicMessagesResponseFields(TypedDict, total=False, extra_items=object):
@@ -251,13 +254,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return system_param
         elif isinstance(system_param, list):
             # Filter list of system content blocks
-            filtered_list: Final = []
+            filtered_list: Final[list[object]] = []
             for content_block in system_param:
                 if isinstance(content_block, dict):
                     text = content_block.get("text", "")
                     content_type = content_block.get("type", "")
                     # Skip text blocks that start with billing header
-                    if content_type == "text" and text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX):
+                    if (
+                        content_type == "text"
+                        and isinstance(text, str)
+                        and text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
+                    ):
                         continue
                     filtered_list.append(content_block)
                 else:
@@ -372,27 +379,34 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers: dict,
         model: str,
         messages: Sequence[object],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
-        # Check for Anthropic OAuth token in Authorization header
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
-
-        if not _carries_caller_credential(headers):
-            self._apply_env_auth_header(
-                headers,
-                self._require_auth_header(
-                    AnthropicModelInfo.get_auth_header(api_key, api_base=api_base),
-                    model=model,
-                ),
-            )
-        return self.finalize_messages_headers(headers, optional_params, messages), api_base
+        provider_token: Final = self._provider_oauth_token(
+            _OAUTH_MAPPING.validate_python(litellm_params), api_base, model
+        )
+        if provider_token is None:
+            oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+            if not _carries_caller_credential(oauth_headers):
+                self._apply_env_auth_header(
+                    oauth_headers,
+                    self._require_auth_header(
+                        AnthropicModelInfo.get_auth_header(oauth_api_key, api_base=api_base),
+                        model=model,
+                    ),
+                )
+        else:
+            oauth_headers = {  # rebind-ok: both branches provide headers for the existing finalizer
+                **oauth_credential_free_headers(_OAUTH_MAPPING.validate_python(headers)),
+                "authorization": f"Bearer {provider_token}",
+            }
+        return self.finalize_messages_headers(oauth_headers, optional_params, messages), api_base
 
     async def avalidate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        headers: dict[str, object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
         messages: Sequence[object],
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
@@ -413,17 +427,33 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 api_key=api_key,
                 api_base=api_base,
             )
-        oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
-
-        if not _carries_caller_credential(oauth_headers):
-            self._apply_env_auth_header(
-                oauth_headers,
-                self._require_auth_header(
-                    await AnthropicModelInfo.aget_auth_header(oauth_api_key, api_base=api_base),
-                    model=model,
-                ),
-            )
+        params: Final = _OAUTH_MAPPING.validate_python(litellm_params)
+        provider_token: Final = (
+            await to_thread(self._provider_oauth_token, params, api_base, model)
+            if params.get("oauth_client_credentials") is True
+            else None
+        )
+        if provider_token is None:
+            oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+            if not _carries_caller_credential(oauth_headers):
+                self._apply_env_auth_header(
+                    oauth_headers,
+                    self._require_auth_header(
+                        await AnthropicModelInfo.aget_auth_header(oauth_api_key, api_base=api_base),
+                        model=model,
+                    ),
+                )
+        else:
+            oauth_headers = {  # rebind-ok: both branches provide headers for the existing finalizer
+                **oauth_credential_free_headers(_OAUTH_MAPPING.validate_python(headers)),
+                "authorization": f"Bearer {provider_token}",
+            }
         return self.finalize_messages_headers(oauth_headers, optional_params, messages), api_base
+
+    def _provider_oauth_token(self, params: Mapping[str, object], api_base: str | None, model: str) -> str | None:
+        if self._resolved_provider != "anthropic":
+            return None
+        return provider_oauth_token(params, api_base=api_base, provider=self._resolved_provider, model=model)
 
     def _require_auth_header(self, auth_header: Mapping[str, str] | None, model: str) -> Mapping[str, str]:
         if auth_header is None:
@@ -681,7 +711,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         No transformation is needed for Anthropic messages
 
@@ -795,7 +825,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not _has_advisor and not continues_message_thread(
             anthropic_messages_optional_request_params.get("thread")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the request params arrive as a bare dict
         ):
-            messages = strip_advisor_blocks_from_messages(messages)
+            messages = strip_advisor_blocks_from_messages(
+                messages, drop_params=getattr(litellm_params, "drop_params", None)
+            )
 
         gated: Final = (
             strip_beta_gated_native_request(
@@ -812,13 +844,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
             messages=strip_unsignable_thinking_blocks_for_claude(
                 strip_encrypted_reasoning_blocks_from_anthropic_messages(
-                    drop_non_string_tool_result_texts(
+                    drop_non_string_texts(
                         _MESSAGES_ADAPTER.validate_python(gated.messages) if gated.messages_stripped else messages,
                         getattr(litellm_params, "drop_params", None),
                     )
                 ),
                 model=model,
                 base_model=base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=self._resolved_provider,
+                api_base=getattr(litellm_params, "api_base", None),
             ),
             max_tokens=max_tokens,
             model=model,

@@ -8,8 +8,25 @@ Has 4 methods:
     - async_get_cache
 """
 
+import time
 from abc import ABC, abstractmethod
 from typing import Final
+
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
+
+def response_cache_entry_is_fresh(entry: object, max_age: float | None = None) -> bool:
+    fields: Final = as_str_mapping(entry)
+    if fields is None or "timestamp" not in fields:
+        return True
+    timestamp: Final = fields["timestamp"]
+    if not isinstance(timestamp, (int, float)):
+        return False
+    age: Final = time.time() - timestamp
+    stored_ttl: Final = fields.get("response_cache_ttl")
+    if isinstance(stored_ttl, int) and age >= stored_ttl:
+        return False
+    return not (max_age is not None and age > max_age)
 
 
 class BaseCache(ABC):
@@ -32,22 +49,22 @@ class BaseCache(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, object]], **kwargs) -> None:
+    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, object]], **kwargs: object) -> None:
         pass
 
-    def get_cache(self, key, **kwargs) -> object:
+    def get_cache(self, key, **kwargs: object) -> object:
         raise NotImplementedError
 
     async def async_get_cache(self, key, **kwargs) -> object:
         raise NotImplementedError
 
-    async def batch_cache_write(self, key, value: object, **kwargs) -> None:
+    async def batch_cache_write(self, key, value: object, **kwargs: object) -> None:
         raise NotImplementedError
 
     async def disconnect(self) -> None:
         raise NotImplementedError
 
-    async def test_connection(self) -> dict:
+    async def test_connection(self) -> dict[str, str]:
         """
         Test the cache connection.
 

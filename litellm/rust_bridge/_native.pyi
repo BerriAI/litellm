@@ -60,21 +60,26 @@ def drain_post_call_redis_batches() -> Future[None]: ...
 @final
 class NativeCostMapSource:
     def __new__(cls, url: str, *, use_http_settings: bool) -> NativeCostMapSource: ...
-    def fetch(self, policy: NativeFetchPolicy) -> Future[NativeFetched | NativeFetchFailed]: ...
-    def fetch_blocking(
-        self, policy: NativeFetchPolicy, resume_from: NativeFetchFailed | None = None
-    ) -> NativeFetched | NativeFetchFailed: ...
+    @staticmethod
+    def remote(
+        url: str, *, local_only: bool, offline: bool, use_http_settings: bool
+    ) -> NativeCostMapSource | None: ...
+    @property
+    def shown_url(self) -> str: ...
+    def fetch_blocking(self, policy: NativeFetchPolicy) -> NativeFetched | NativeFetchFailed: ...
 
 @final
 class NativeFetchPolicy:
     def __new__(
         cls,
         *,
-        max_attempts: int,
-        max_wait_seconds: float,
-        timeout_seconds: float,
-        min_delay_seconds: float,
+        max_attempts: int | None = None,
+        max_wait_seconds: float | None = None,
+        timeout_seconds: float | None = None,
+        min_delay_seconds: float | None = None,
     ) -> NativeFetchPolicy: ...
+    @property
+    def max_attempts(self) -> int: ...
 
 @final
 class NativeFetched:
@@ -115,6 +120,25 @@ class NativeRejected:
     def reason(self) -> str: ...
     @property
     def integrity(self) -> bool: ...
+
+@final
+class CostMapRefreshed: ...
+
+@final
+class CostMapKept:
+    @property
+    def detail(self) -> str: ...
+    @property
+    def reason(self) -> str: ...
+    @property
+    def fallback_reason(self) -> str: ...
+    @property
+    def retryable(self) -> bool: ...
+
+@final
+class CostMapRefreshStop:
+    def __new__(cls) -> CostMapRefreshStop: ...
+    def stop(self) -> None: ...
 
 @final
 class NativeProvenance:
@@ -252,9 +276,22 @@ class NativeRateCard:
 @final
 class NativeModelCostMap:
     @staticmethod
-    def bundled(min_model_count: int, max_shrink_ratio: float) -> NativeModelCostMap: ...
+    def bundled(
+        min_model_count: int | None = None, max_shrink_ratio: float | None = None
+    ) -> NativeModelCostMap: ...
+    @property
+    def min_model_count(self) -> int: ...
+    @property
+    def max_shrink_ratio(self) -> float: ...
     def install(self, body: bytes, etag: str | None = None) -> NativeInstalled | NativeRejected: ...
     def install_bundled(self) -> NativeInstalled: ...
+    def refresh_blocking(
+        self, source: NativeCostMapSource, policy: NativeFetchPolicy, stop: CostMapRefreshStop
+    ) -> CostMapRefreshed | CostMapKept | None: ...
+    def refresh(
+        self, source: NativeCostMapSource, policy: NativeFetchPolicy
+    ) -> Future[CostMapRefreshed | CostMapKept]: ...
+    def install_refreshed(self, refreshed: CostMapRefreshed) -> NativeInstalled: ...
     @staticmethod
     def finalize(body: bytes) -> NativeInstalled | NativeRejected: ...
     def register(
@@ -1967,6 +2004,8 @@ def auth_route_matches_wildcard(route: str, pattern: str) -> bool: ...
 def auth_managed_route(route: str) -> Literal["discovery", "realtime", "live", "model", "tool", "other"]: ...
 def auth_managed_agent_route_allowed(route: str, method: str | None = None) -> bool: ...
 def auth_route_matches_prefix(route: str, allowed_route: str) -> bool: ...
+def classify_billable_route(path: str, method: str) -> tuple[Literal["llm", "mcp", "a2a"], str] | None: ...
+def billable_route_passthrough_prefixes() -> list[str]: ...
 def auth_route_matches_denied(route: str, denied_route: str) -> bool: ...
 def auth_first_denied_route(forwarded_routes: Sequence[str], denied_sources: Sequence[object]) -> str | None: ...
 def auth_jwt_team_routes_grant(route: str, team_allowed_routes: object) -> bool: ...
@@ -2251,6 +2290,19 @@ class RustKeyRepository:
     def find(self, token: str, *, use_writer: bool = False) -> Future[object]: ...
 
 @final
+class RustKeyOwnersRepository:
+    def __new__(cls, database: NativeDatabase) -> RustKeyOwnersRepository: ...
+    def find(
+        self,
+        *,
+        user_id: str | None,
+        team_id: str | None,
+        membership_user_id: str | None,
+        organization_id: str | None,
+        project_id: str | None,
+    ) -> Future[str]: ...
+
+@final
 class RustJwtKeyMappingRepository:
     def __new__(cls, database: NativeDatabase) -> RustJwtKeyMappingRepository: ...
     def mapped_token(
@@ -2403,6 +2455,15 @@ class RustSpendLog:
         token_redactor: NativeTokenRedactor,
     ) -> RustSpendLog: ...
     def callback(self) -> RustHandle: ...
+    def start(
+        self,
+        hook: str,
+        fields: Mapping[str, object],
+        call: Mapping[str, object] | None,
+        host: object,
+        request: NativeRequestRedis | None,
+        /,
+    ) -> Execution: ...
 
 @final
 class NativeTokenRedactor:
@@ -2537,6 +2598,15 @@ class NativeModelCapacity:
         connection: NativeModelCapacityState | None,
         key: Mapping[str, object],
         model: str,
+        facts: Mapping[str, object],
+        request: NativeRequestRedis | None = None,
+    ) -> Future[dict[str, object]]: ...
+    def charge_turn(
+        self,
+        connection: NativeModelCapacityState | None,
+        key: Mapping[str, object],
+        model: str,
+        usage: tuple[int, int, int, int],
         facts: Mapping[str, object],
         request: NativeRequestRedis | None = None,
     ) -> Future[dict[str, object]]: ...
@@ -2749,6 +2819,7 @@ __all__ = [
     "RustJwtKeyMappingRepository",
     "RustJwtMapping",
     "RustKeyContext",
+    "RustKeyOwnersRepository",
     "RustKeyRepository",
     "RustMappedClaims",
     "RustModelAccessGroupRepository",
@@ -2784,9 +2855,11 @@ __all__ = [
     "auth_route_matches_denied",
     "auth_route_matches_prefix",
     "auth_route_matches_wildcard",
+    "billable_route_passthrough_prefixes",
     "billable_service_tier",
     "budget_check_decision",
     "bundled_model_cost_map",
+    "classify_billable_route",
     "completion",
     "drain_post_call_redis_batches",
     "embedding",
@@ -3366,7 +3439,7 @@ class RouterCoreHandle:
     def routing_context(self, model: str, routing_strategy: str | None = None) -> tuple[str, str, str | None]: ...
     def retire(self) -> None: ...
     # A stream that failed before content: what may still take over it, and the retry budget for
-    # a failure of `kind`: {"can_retry", "can_fall_back", "refusal_fallback": bool,
+    # a failure of `kind`: {"can_retry", "can_fall_back", "refusal_fallback", "context_window_fallback": bool,
     # "retry_budget": int | None, "policy_applies": bool}.
     def stream_policy(
         self, request: _Document, origin: _Document, kind: str | None = None
@@ -3513,15 +3586,26 @@ class NativeParallelRequestLimiter:
         /,
         request: NativeRequestRedis | None = None,
         turn: bool = False,
+        provider_billed: bool = False,
     ) -> Future[None]: ...
     def log_post_call_failure(
-        self, state: NativeParallelRequestLimiterState, request_data: Mapping[str, object], rate_limit_type: str
+        self,
+        state: NativeParallelRequestLimiterState,
+        request_data: Mapping[str, object],
+        rate_limit_type: str,
+        provider_billed: bool = False,
     ) -> Future[None]: ...
     def reservation_aware(
         self,
         operations: Sequence[tuple[str, str, str, int | float, int | None, str | None, str | None]],
     ) -> Future[None]: ...
     def release_on_disconnect(self, state: NativeParallelRequestLimiterState) -> Future[None]: ...
+    def leave_reservation_to_socket_close(self, state: NativeParallelRequestLimiterState) -> None: ...
+    def close_socket(
+        self,
+        state: NativeParallelRequestLimiterState,
+        close: Literal["refused_at_open", "relay_failed", "turns_finished", "turn_unfinished", "settled_by_its_log"],
+    ) -> Future[None]: ...
     def scoped(
         self,
         inputs: Mapping[str, object],

@@ -147,6 +147,14 @@ pub(crate) fn normalize_tool_input_schema_types_for_bedrock_invoke(
         .for_each(normalize_json_schema_custom_types_to_object);
 }
 
+fn is_custom_tool(tool: &Map<String, Value>) -> bool {
+    match tool.get("type") {
+        None | Some(Value::Null) => true,
+        Some(Value::String(tool_type)) => tool_type == "custom",
+        Some(_) => false,
+    }
+}
+
 /// Port of Python's `ensure_bedrock_anthropic_messages_tool_names`.
 pub(crate) fn ensure_bedrock_anthropic_messages_tool_names(request_body: &mut Map<String, Value>) {
     let Some(tools) = tools_mut(request_body) else {
@@ -156,6 +164,9 @@ pub(crate) fn ensure_bedrock_anthropic_messages_tool_names(request_body: &mut Ma
         let Value::Object(tool) = tool else {
             continue;
         };
+        if !is_custom_tool(tool) {
+            continue;
+        }
         let unnamed = match tool.get("name") {
             None | Some(Value::Null) => true,
             Some(Value::String(name)) => name.trim().is_empty(),

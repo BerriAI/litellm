@@ -141,11 +141,12 @@ class JinaAIRerankConfig(BaseRerankConfig):
             id=_STR.validate_python(_json_response.get("id") or str(uuid.uuid4())),
             results=transformed_results,
             meta=rerank_meta,
+            usage=usage if "usage" in _json_response else None,
         )  # Return response
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,

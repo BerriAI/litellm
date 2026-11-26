@@ -268,6 +268,37 @@ def test_completion_cost_uses_flex_context_input_and_output_rates(
     assert cost == pytest.approx(prompt_tokens * input_rate + 10 * output_rate)
 
 
+def test_completion_cost_bills_flex_image_output_tokens_at_the_flex_image_rate(local_model_cost_map: None) -> None:
+    model: Final = "gemini-synthetic-flex-image-output"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "gemini",
+                "mode": "image_generation",
+                "input_cost_per_token": 6e-06,
+                "output_cost_per_token": 10e-06,
+                "output_cost_per_image_token": 40e-06,
+                "input_cost_per_token_flex": 3e-06,
+                "output_cost_per_token_flex": 5e-06,
+                "output_cost_per_image_token_flex": 20e-06,
+            }
+        }
+    )
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=13,
+            completion_tokens=1299,
+            total_tokens=1312,
+            completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=9, image_tokens=1290),
+        ),
+    )
+    cost: Final = litellm.completion_cost(
+        completion_response=response, model=model, custom_llm_provider="gemini", service_tier="flex"
+    )
+    assert cost == pytest.approx(13 * 3e-06 + 9 * 5e-06 + 1290 * 20e-06)
+
+
 @pytest.mark.parametrize(
     ("audio_fields", "audio_rate"),
     (

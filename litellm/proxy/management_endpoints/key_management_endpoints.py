@@ -1130,16 +1130,37 @@ def _configured_default_allowed_routes() -> tuple[str, ...] | None:
     return string_routes if len(string_routes) == len(routes) else None
 
 
+_TEAM_SERVICE_ACCOUNT_DEFAULT_EXTRA_ROUTES: Final = frozenset(
+    {
+        "/key/spend/report",
+        "/key/info",
+        "/key/health",
+        "/model/info",
+        "/v1/model/info",
+        "/v2/model/info",
+        "/model_group/info",
+    }
+)
+
+
 def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[str, ...] | None:
     configured_routes: Final = _configured_default_allowed_routes()
-    if configured_routes is None or _creates_team_service_account(request):
+    if configured_routes is None:
         return None
     if "key_type" not in request.model_fields_set or request.key_type is None:
-        return None if key_routes else configured_routes
+        return None if key_routes or _creates_team_service_account(request) else configured_routes
     match request.key_type:
         case LiteLLMKeyType.LLM_API:
             llm_api_routes: Final = _KEY_TYPE_PRESET_ROUTES[LiteLLMKeyType.LLM_API]
-            return configured_routes if all(route in configured_routes for route in llm_api_routes) else None
+            if not all(route in configured_routes for route in llm_api_routes):
+                return None
+            if _creates_team_service_account(request):
+                return tuple(
+                    route
+                    for route in configured_routes
+                    if route in llm_api_routes or route in _TEAM_SERVICE_ACCOUNT_DEFAULT_EXTRA_ROUTES
+                )
+            return configured_routes
         case _:
             return None
 
@@ -1194,7 +1215,7 @@ def _validate_caller_can_change_key_ownership(
 
 
 def _check_allowed_routes_caller_permission(
-    allowed_routes: list | None,
+    allowed_routes: Sequence[object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     allowed_routes_was_provided: bool = False,
@@ -3638,7 +3659,7 @@ async def _process_single_key_update(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     llm_router: Router | None,
-    user_custom_key_update: Callable | None = None,
+    user_custom_key_update: Callable[..., Awaitable[Mapping[str, object]]] | None = None,
     existing_key_row: LiteLLM_VerificationToken | None = None,
     user_custom_key_policy: Callable[..., Awaitable[Mapping[str, object]]] | None = None,
 ) -> dict[str, object]:
@@ -5628,8 +5649,8 @@ async def generate_key_helper_fn(
     request_type: Literal["user", "key"],  # identifies if this request is from /user/new or /key/generate
     duration: str | None = None,
     models: list = [],
-    aliases: dict = {},
-    config: dict = {},
+    aliases: Mapping[str, object] = {},
+    config: Mapping[str, object] = {},
     spend: float = 0.0,
     key_max_budget: float | None = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: str | None = None,
@@ -5648,24 +5669,24 @@ async def generate_key_helper_fn(
     user_email: str | None = None,
     user_role: str | None = None,
     max_parallel_requests: int | None = None,
-    metadata: dict | None = {},
+    metadata: Mapping[str, object] | None = {},
     tpm_limit: int | None = None,
     rpm_limit: int | None = None,
     tpd_limit: int | None = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
-    update_key_values: dict | None = None,
+    update_key_values: Mapping[str, object] | None = None,
     key_alias: str | None = None,
     allowed_cache_controls: list | None = [],
-    permissions: dict | None = {},
-    model_max_budget: dict | None = {},
-    budget_fallbacks: dict | None = None,
-    model_rpm_limit: dict | None = None,
-    model_tpm_limit: dict | None = None,
-    mcp_rpm_limit: dict | None = None,
-    tag_rpm_limit: dict | None = None,
-    guardrails: list | None = None,
-    policies: list | None = None,
-    prompts: list | None = None,
+    permissions: Mapping[str, object] | None = {},
+    model_max_budget: dict[str, object] | None = {},
+    budget_fallbacks: Mapping[str, object] | None = None,
+    model_rpm_limit: Mapping[str, object] | None = None,
+    model_tpm_limit: Mapping[str, object] | None = None,
+    mcp_rpm_limit: Mapping[str, int] | None = None,
+    tag_rpm_limit: Mapping[str, int] | None = None,
+    guardrails: Sequence[str] | None = None,
+    policies: Sequence[str] | None = None,
+    prompts: Sequence[str] | None = None,
     teams: list | None = None,
     organization_id: str | None = None,
     project_id: str | None = None,
@@ -6074,7 +6095,7 @@ async def delete_verification_tokens(
     user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
-) -> tuple[dict | None, list[LiteLLM_VerificationToken]]:
+) -> tuple[dict[str, object] | None, list[LiteLLM_VerificationToken]]:
     """
     Helper that deletes the list of tokens from the database
 
@@ -6095,7 +6116,7 @@ async def delete_verification_tokens(
     """
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
 
-    failed_tokens: list = []
+    failed_tokens: list[object] = []
     try:
         if prisma_client:
             hashed_tokens: Final[list[str]] = [hash_token_if_needed(token=key) for key in tokens]
@@ -6303,7 +6324,7 @@ async def delete_key_aliases(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
-) -> tuple[dict | None, list[LiteLLM_VerificationToken]]:
+) -> tuple[dict[str, object] | None, list[LiteLLM_VerificationToken]]:
     _keys_being_deleted: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_many(
         where={"key_alias": {"in": key_aliases}}
     )
@@ -6342,8 +6363,10 @@ async def reencrypt_credentials_for_aes_migration(
 
     encryption_key: Final = os.environ.get(SALT_KEY_ENV_VAR, new_master_key)
     try:
-        models: list | None = cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
-            "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
+        models: list[object] | None = (
+            cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
+                "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
+            )
         )
     except Exception:
         models = None
@@ -8748,19 +8771,18 @@ async def _can_user_query_key_info(
     Helper to check if the user has access to the key's info
     """
     if (
-        (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-        )
-        or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
-        or (key_info.user_id and key_info.user_id == user_api_key_dict.user_id)
-        or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
-            user_api_key_dict=user_api_key_dict,
-            existing_key_row=key_info,
-        )
-    ):
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ) or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key):
         return True
-    return False
+    if user_api_key_dict.is_team_service_account:
+        return False
+    if key_info.user_id and key_info.user_id == user_api_key_dict.user_id:
+        return True
+    return await TeamMemberPermissionChecks.user_belongs_to_keys_team(
+        user_api_key_dict=user_api_key_dict,
+        existing_key_row=key_info,
+    )
 
 
 async def test_key_logging(

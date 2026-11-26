@@ -4,6 +4,7 @@ from typing import Final
 from urllib.parse import urlparse
 
 from litellm.anthropic_beta_headers_manager import is_foundry_api_base
+from litellm.constants import DROP_UNSUPPORTED_PARAMS_HINT
 from litellm.exceptions import UnsupportedParamsError
 
 _ANTHROPIC_API_HOST: Final = "api.anthropic.com"
@@ -47,7 +48,7 @@ def sampling_params_to_drop(
     return UnsupportedParamsError(
         message=(
             f"{model} does not support {first}={params[first]}. anthropic-version {api_version} removed "
-            "temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+            f"temperature, top_p and top_k. {DROP_UNSUPPORTED_PARAMS_HINT}"
         ),
         llm_provider=provider,
         model=model,

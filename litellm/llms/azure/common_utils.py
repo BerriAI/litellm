@@ -18,6 +18,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.litellm_core_utils.core_helpers import str_param
 from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
@@ -313,6 +314,34 @@ def cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
     return _cached_azure_ad_token_refresh_provider(scope)
 
 
+def _param_or_env_set(
+    litellm_params: Mapping[str, object], environ: Mapping[str, str], param_key: str, env_var_key: str
+) -> bool:
+    param_value: Final = litellm_params.get(param_key)
+    return bool(param_value if param_value is not None else environ.get(env_var_key))
+
+
+def uses_azure_entra_id_auth(
+    litellm_params: Mapping[str, object], environ: Mapping[str, str], token_refresh_enabled: bool
+) -> bool:
+    client_id_set: Final = _param_or_env_set(litellm_params, environ, "client_id", "AZURE_CLIENT_ID")
+    return (
+        litellm_params.get("azure_ad_token_provider") is not None
+        or bool(litellm_params.get("azure_ad_token"))
+        or (
+            client_id_set
+            and _param_or_env_set(litellm_params, environ, "tenant_id", "AZURE_TENANT_ID")
+            and _param_or_env_set(litellm_params, environ, "client_secret", "AZURE_CLIENT_SECRET")
+        )
+        or (
+            client_id_set
+            and _param_or_env_set(litellm_params, environ, "azure_username", "AZURE_USERNAME")
+            and _param_or_env_set(litellm_params, environ, "azure_password", "AZURE_PASSWORD")
+        )
+        or token_refresh_enabled
+    )
+
+
 def _async_azure_ad_token_provider(
     provider: Callable[[], str | Awaitable[str]],
 ) -> Callable[[], Awaitable[str]]:
@@ -596,18 +625,15 @@ def get_azure_ad_token(
     # Extract parameters
     # Use `or` instead of default parameter to handle cases where key exists but value is None
     azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
-    azure_ad_token = litellm_params.get("azure_ad_token") or get_secret_str("AZURE_AD_TOKEN")
-    tenant_id: Final = litellm_params.get("tenant_id") or os.getenv("AZURE_TENANT_ID")
-    client_id: Final = litellm_params.get("client_id") or os.getenv("AZURE_CLIENT_ID")
-    client_secret: Final = litellm_params.get("client_secret") or os.getenv("AZURE_CLIENT_SECRET")
-    azure_username: Final = litellm_params.get("azure_username") or os.getenv("AZURE_USERNAME")
-    azure_password: Final = litellm_params.get("azure_password") or os.getenv("AZURE_PASSWORD")
-    scope = litellm_params.get("azure_scope") or os.getenv(
+    azure_ad_token = str_param(litellm_params, "azure_ad_token") or get_secret_str("AZURE_AD_TOKEN")
+    tenant_id: Final = str_param(litellm_params, "tenant_id") or os.getenv("AZURE_TENANT_ID")
+    client_id: Final = str_param(litellm_params, "client_id") or os.getenv("AZURE_CLIENT_ID")
+    client_secret: Final = str_param(litellm_params, "client_secret") or os.getenv("AZURE_CLIENT_SECRET")
+    azure_username: Final = str_param(litellm_params, "azure_username") or os.getenv("AZURE_USERNAME")
+    azure_password: Final = str_param(litellm_params, "azure_password") or os.getenv("AZURE_PASSWORD")
+    scope = str_param(litellm_params, "azure_scope") or os.getenv(
         "AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"
     )
-    if scope is None:
-        scope = "https://cognitiveservices.azure.com/.default"
-
     # Try to get token provider from Entra ID
     if azure_ad_token_provider is None and tenant_id and client_id and client_secret:
         verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
@@ -753,7 +779,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_base: str | None,
         api_version: str | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         _is_async: bool = False,
         model: str | None = None,
     ) -> AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None:

@@ -256,7 +256,7 @@ def redact_vertex_ai_metadata_from_logged_object(obj: object) -> None:
             hidden_params.pop(field, None)
 
 
-def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> None:
+def redact_vertex_ai_metadata_from_litellm_params(model_call_details: Mapping[str, object]) -> None:
     """
     success_handler() merges response._hidden_params into
     litellm_params.metadata['hidden_params'] before redaction runs, so the Vertex
@@ -296,7 +296,7 @@ def vertex_request_labels_from_litellm_params(
 
 
 def pop_vertex_caller_labels(
-    optional_params: dict | None,
+    optional_params: dict[str, object] | None,
     litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """
@@ -310,8 +310,8 @@ def pop_vertex_caller_labels(
 
 
 def pop_vertex_request_labels(
-    optional_params: dict | None,
-    litellm_params: dict | None,
+    optional_params: dict[str, object] | None,
+    litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """
     The caller's labels from ``pop_vertex_caller_labels``, plus the proxy identity
@@ -1417,7 +1417,7 @@ def filter_schema_fields(
     if not isinstance(schema_dict, dict):
         return schema_dict
 
-    result: Final = {}
+    result: Final[dict[str, object]] = {}
     schema_dict = _filter_anyof_fields(schema_dict)
     for key, value in schema_dict.items():
         if key not in valid_fields:
@@ -1747,14 +1747,14 @@ class VertexAIModelInfo(BaseLLMModelInfo):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         raise NotImplementedError("Vertex AI models are not supported yet")
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
@@ -2014,7 +2014,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 VertexGeminiCountContextError,
                 count_context_error_response,
                 gemini_count_contents,
-                malformed_tool_result_text_count_error,
+                malformed_messages_error,
                 provider_error_response,
                 unconvertible_messages_error,
                 vertex_gemini_count_context,
@@ -2037,7 +2037,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 return count_context_error_response(count_context, request_model, model_to_use)
             blocks_error: Final = unconvertible_messages_error(
                 request_view.messages, messages_format
-            ) or malformed_tool_result_text_count_error(messages, messages_format, resolved_deployment)
+            ) or malformed_messages_error(messages, messages_format, resolved_deployment)
             if blocks_error is not None:
                 return count_context_error_response(blocks_error, request_model, model_to_use)
 

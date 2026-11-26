@@ -3628,6 +3628,7 @@
       "customCallbackApi": "Custom Callback API Logging Integration",
       "galileo": "Galileo AI Observability Integration",
       "datadog": "Datadog Logging Integration",
+      "mixpanel": "Mixpanel Agent Intelligence OpenTelemetry Integration. Setup: https://docs.mixpanel.com/docs/agent-intelligence",
       "newrelic": "New Relic Logging Integration",
       "lago": "Lago Billing Logging Integration",
       "langfuse": "Langfuse v2 Logging Integration",
@@ -9343,7 +9344,7 @@
   },
   "shared": {
     "semanticCaching": {
-      "title": "Semantic cache",
+      "title": "Response cache",
       "mode": "Cache mode",
       "inherit": "Inherit",
       "enabled": "Enabled",

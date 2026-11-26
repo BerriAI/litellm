@@ -5,7 +5,8 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -326,6 +327,26 @@ def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl) -
 _mcp_server_admission_memo: Final[ContextVar[dict[str, asyncio.Task[ProxyRateLimitError | None]] | None]] = ContextVar(
     "mcp_server_admission_memo", default=None
 )
+
+
+_mcp_listing_credential_scope: Final[ContextVar[tuple[MCPServer, ...]]] = ContextVar(
+    "mcp_listing_credential_scope", default=()
+)
+
+
+@contextmanager
+def shared_mcp_listing(servers: Sequence[MCPServer]) -> Generator[None]:
+    """Treat every listing made inside the block as one discovery over ``servers``: each server's rate
+    limit is charged once, and the caller's request-wide Authorization is withheld as if all of them
+    were listed together."""
+    credential_scope: Final = _mcp_listing_credential_scope.set((*_mcp_listing_credential_scope.get(), *servers))
+    admission: Final = _mcp_server_admission_memo.set({}) if _mcp_server_admission_memo.get() is None else None
+    try:
+        yield
+    finally:
+        if admission is not None:
+            _mcp_server_admission_memo.reset(admission)
+        _mcp_listing_credential_scope.reset(credential_scope)
 
 
 async def _enforce_mcp_server_rate_limit(
@@ -1093,7 +1114,7 @@ def _prepare_mcp_server_headers(
     # the extra_headers copy loop below honor it — otherwise a server that lists Authorization in
     # extra_headers would re-copy the withheld bearer from raw_headers and replay it anyway.
     withhold_forwarded_authorization: Final = is_client_forwarded_mode and caller_authorization_fans_out(
-        server, scope_servers
+        server, None if scope_servers is None else (*scope_servers, *_mcp_listing_credential_scope.get())
     )
     if server.auth_type == MCPAuth.oauth2:
         # For OAuth2 M2M servers, upstream Authorization must come from
@@ -1576,7 +1597,7 @@ async def _get_prompts_from_mcp_servers(
     )
 
     # Get prompts from each allowed server
-    all_prompts: Final = []
+    all_prompts: Final[list[Prompt]] = []
     for server in allowed_mcp_servers:
         if server is None:
             continue

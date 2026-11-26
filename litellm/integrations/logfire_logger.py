@@ -63,10 +63,10 @@ class LogfireLogger:
 
     async def _async_log_event(
         self,
-        kwargs,
-        response_obj,
-        start_time,
-        end_time,
+        kwargs: object,
+        response_obj: object,
+        start_time: object,
+        end_time: object,
         print_verbose: Callable[[str], object],
         level: LogfireLevel,
     ):

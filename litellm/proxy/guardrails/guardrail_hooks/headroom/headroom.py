@@ -946,7 +946,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         tools: dict,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         response: object,
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None,
         anthropic_messages_optional_request_params: dict,

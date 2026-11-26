@@ -204,6 +204,51 @@ async def test_async_stream_read_timeout_surfaces_as_a_408_timeout_the_router_ca
     assert isinstance(raised.value.original_exception, litellm.Timeout)
 
 
+_ANSWER_CHUNK: Final = {"id": "chatcmpl-drop", "choices": [{"index": 0, "delta": {"content": "Hello there"}}]}
+_FINISH_CHUNK: Final = {"id": "chatcmpl-drop", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+
+
+class _DropsAfterChunks(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[dict[str, object], ...], drop: httpx.TransportError) -> None:
+        self._chunks = chunks
+        self._drop = drop
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield f"data: {json.dumps(chunk)}\n\n".encode()
+        raise self._drop
+
+
+async def _stream_that_drops(chunks: tuple[dict[str, object], ...], drop: httpx.TransportError):
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(200, stream=_DropsAfterChunks(chunks, drop)))
+    return await _complete(AsyncHTTPHandler(transport=transport), acompletion=True, stream=True, timeout=8.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drop",
+    [httpx.ReadError("Response payload is not completed"), httpx.RemoteProtocolError("incomplete chunked read")],
+    ids=["read_error", "remote_protocol_error"],
+)
+async def test_async_stream_dropped_after_its_finish_ends_with_the_finish(drop: httpx.TransportError) -> None:
+    stream: Final = await _stream_that_drops((_ANSWER_CHUNK, _FINISH_CHUNK), drop)
+
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in stream]
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "Hello there"
+    assert {chunk.choices[0].finish_reason for chunk in chunks if chunk.choices} - {None} == {"stop"}
+
+
+@pytest.mark.asyncio
+async def test_async_stream_dropped_before_its_finish_still_fails_over() -> None:
+    stream: Final = await _stream_that_drops((_ANSWER_CHUNK,), httpx.ReadError("Response payload is not completed"))
+
+    with pytest.raises(MidStreamFallbackError) as raised:
+        [chunk async for chunk in stream]
+
+    assert raised.value.generated_content == "Hello there"
+
+
 def _read_timeout(request: httpx.Request) -> httpx.Response:
     raise httpx.ReadTimeout("Read timed out", request=request)
 

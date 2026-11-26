@@ -358,7 +358,7 @@ class CyberArkSecretManager(BaseSecretManager):
         new_secret_value: str,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return await super().async_rotate_secret(
             current_secret_name,
             new_secret_name,

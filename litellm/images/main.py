@@ -231,7 +231,7 @@ def image_generation(
     custom_llm_provider: str | None = None,
     *,
     aimg_generation: Literal[True],
-    **kwargs,
+    **kwargs: object,
 ) -> Coroutine[object, object, ImageResponse | AsyncImageStream]:
     ...
 
@@ -255,7 +255,7 @@ def image_generation(
     custom_llm_provider: str | None = None,
     *,
     aimg_generation: Literal[False] = False,
-    **kwargs,
+    **kwargs: object,
 ) -> ImageResponse: 
     ...
 
@@ -493,6 +493,7 @@ def image_generation(
             litellm.LlmProviders.QWENCLOUD,
             litellm.LlmProviders.QWEN_AI_PLATFORM,
             litellm.LlmProviders.EDENAI,
+            litellm.LlmProviders.MINIMAX,
         ) or (custom_llm_provider == litellm.LlmProviders.TENCENT and image_generation_config is not None):
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
@@ -699,7 +700,7 @@ def image_generation(
 
 
 @client
-async def aimage_variation(*args, **kwargs) -> ImageResponse:
+async def aimage_variation(*args: object, **kwargs) -> ImageResponse:
     """
     Asynchronously calls the `image_variation` function with the given arguments and keyword arguments.
 
@@ -859,6 +860,7 @@ def image_variation(
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[object, ...]](tuple[object, ...])
+_PASSTHROUGH_EDIT_PROVIDERS: Final = frozenset({litellm.LlmProviders.TENCENT.value, litellm.LlmProviders.MINIMAX.value})
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
@@ -870,7 +872,7 @@ def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
         return ()
 
 
-def _tokenhub_passthrough_edit_params(
+def _passthrough_edit_params(
     non_default_params: Mapping[str, object],
     extra_body: Mapping[str, object] | None,
     mapped_params: Collection[str],
@@ -878,9 +880,10 @@ def _tokenhub_passthrough_edit_params(
 ) -> Mapping[str, object]:
     dropped: Final = frozenset(additional_drop_params or ())
     unmapped_excluded: Final = _DROP_PARAM_KWARGS | _IMAGE_EDIT_OPENAI_PARAMS | frozenset(mapped_params) | dropped
+    body_fields: Final = {} if "extra_body" in dropped else (extra_body or {})
     return {
         **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
-        **{key: value for key, value in (extra_body or {}).items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
+        **{key: value for key, value in body_fields.items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
     }
 
 
@@ -911,6 +914,7 @@ def image_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    markup: FileTypes | list[FileTypes] | None = None,  # mutable-ok: a tuple is one upload, a list is several
     **kwargs,
 ) -> ImageResponse | ImageStream | Coroutine[object, object, ImageResponse | AsyncImageStream]:
     """
@@ -959,11 +963,11 @@ def image_edit(
             extra_headers = dict(merged_extra_headers)
 
         # get llm provider logic
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model or "",
             custom_llm_provider=custom_llm_provider,
         )
+        litellm_params: Final = GenericLiteLLMParams(**kwargs, custom_llm_provider=custom_llm_provider)
 
         # Check for custom provider
         if custom_llm_provider in litellm._custom_providers:
@@ -976,6 +980,7 @@ def image_edit(
             custom_optional_params: Final = _custom_handler_edit_params(
                 _OBJECT_DICT_ADAPTER.validate_python(kwargs),
                 {
+                    "markup": markup,
                     "mask": mask,
                     "n": n,
                     "quality": quality,
@@ -1088,19 +1093,21 @@ def image_edit(
             dropped_form_field_roots: Final[frozenset[str]] = (
                 unsupported_edit_params if should_drop_params else frozenset()
             )
+            caller_fields: Final = {
+                key: value
+                for key, value in kept_params.items()
+                if key not in dropped_edit_params and key.split("[", 1)[0] not in dropped_form_field_roots
+            }
+            extra_body_fields: Final = (
+                {key: value for key, value in extra_body.items() if key not in dropped_form_params}
+                if isinstance(extra_body, dict)
+                else None
+            )
+            json_fields: Final = {**caller_fields, **(extra_body_fields or {})}
             image_edit_request_params.update(
-                flatten_form_field_values(
-                    {
-                        key: value
-                        for key, value in kept_params.items()
-                        if key not in dropped_edit_params and key.split("[", 1)[0] not in dropped_form_field_roots
-                    },
-                    (
-                        {key: value for key, value in extra_body.items() if key not in dropped_form_params}
-                        if isinstance(extra_body, dict)
-                        else None
-                    ),
-                )
+                json_fields
+                if image_edit_provider_config.uses_json_body(images, {**image_edit_request_params, **json_fields})
+                else flatten_form_field_values(caller_fields, extra_body_fields)
             )
 
         # Pre Call logging
@@ -1181,13 +1188,13 @@ def image_edit(
             image_edit_optional_request_params={
                 **image_edit_request_params,
                 **(
-                    _tokenhub_passthrough_edit_params(
-                        non_default_params,
+                    _passthrough_edit_params(
+                        kept_params,
                         extra_body if isinstance(extra_body, dict) else None,
                         provider_supported_params,
                         additional_drop_params,
                     )
-                    if custom_llm_provider == litellm.LlmProviders.TENCENT.value
+                    if custom_llm_provider in _PASSTHROUGH_EDIT_PROVIDERS
                     else {}
                 ),
             },
@@ -1230,7 +1237,8 @@ async def aimage_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    markup: FileTypes | list[FileTypes] | None = None,  # mutable-ok: a tuple is one upload, a list is several
+    **kwargs: object,
 ) -> ImageResponse | AsyncImageStream | ImageStream:
     """
     Asynchronously calls the `image_edit` function with the given arguments and keyword arguments.
@@ -1260,6 +1268,7 @@ async def aimage_edit(
             image=images,
             prompt=prompt,
             mask=mask,
+            markup=markup,
             model=model,
             n=n,
             quality=quality,

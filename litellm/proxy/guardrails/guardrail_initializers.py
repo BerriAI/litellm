@@ -1,5 +1,5 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
-from typing import Final
+from typing import Final, TypeAlias
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -121,9 +121,21 @@ def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
     return bool(hooks) and all(hook in _MCP_EVENT_HOOKS for hook in hooks)
 
 
-def _presidio_output_mode(mode: str | list[str] | Mode, *, include_mcp: bool) -> str | list[str] | Mode:
+def _is_logging_only_mode(mode: str | list[str] | Mode) -> bool:
+    hooks: Final = configured_event_hooks(mode)
+    return bool(hooks) and all(hook == GuardrailEventHooks.logging_only.value for hook in hooks)
+
+
+_EventMode: TypeAlias = str | list[str] | Mode
+
+
+def _presidio_output_mode(mode: _EventMode, *, include_mcp: bool, masks_the_log: bool = False) -> _EventMode:
     def output_hooks(hooks: str | list[str]) -> list[str]:
-        if not hooks or (not include_mcp and _is_mcp_only_mode(hooks)):
+        if not hooks:
+            return []
+        if _is_logging_only_mode(hooks):
+            return [GuardrailEventHooks.logging_only.value] if masks_the_log else []
+        if not include_mcp and _is_mcp_only_mode(hooks):
             return []
         return [GuardrailEventHooks.post_call.value]
 
@@ -192,7 +204,9 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     mask_output_callback: Final = (
         _make_presidio_callback(
             apply_to_output=True,
-            event_hook=_presidio_output_mode(litellm_params.mode, include_mcp=explicit_filter_scope is not None),
+            event_hook=_presidio_output_mode(
+                litellm_params.mode, include_mcp=explicit_filter_scope is not None, masks_the_log=not run_input
+            ),
             output_parse_pii=False,
             mask_response_content=True,
         )
@@ -271,7 +285,7 @@ def initialize_lasso(
     return _lasso_callback
 
 
-def initialize_panw_prisma_airs(litellm_params, guardrail):
+def initialize_panw_prisma_airs(litellm_params, guardrail: Guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
         PanwPrismaAirsHandler,
     )

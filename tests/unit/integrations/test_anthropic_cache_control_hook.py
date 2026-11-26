@@ -930,7 +930,7 @@ def test_gemini_cache_control_injection_points_detected():
     assert is_cached_message(messages[1]) is False
 
     # Verify separate_cached_messages correctly separates them
-    cached, non_cached = separate_cached_messages(messages)
+    cached, non_cached = separate_cached_messages(messages, lambda _: True)
     assert len(cached) == 1
     assert cached[0]["role"] == "system"
     assert len(non_cached) == 1
@@ -977,7 +977,7 @@ def test_gemini_cache_control_injection_list_content_detected():
     assert is_cached_message(messages[1]) is False
 
     # Verify separate_cached_messages correctly separates them
-    cached, non_cached = separate_cached_messages(messages)
+    cached, non_cached = separate_cached_messages(messages, lambda _: True)
     assert len(cached) == 1
     assert len(non_cached) == 1
 
@@ -1667,6 +1667,34 @@ def test_cache_control_hook_counts_pydantic_message_tool_call_marks():
     message: Final = Message(role="assistant", content=None, tool_calls=[tool_call])
 
     assert AnthropicCacheControlHook.count_request_cache_breakpoints(cast(list[AllMessageValues], [message])) == 1
+
+
+def test_cache_control_injection_preserves_pydantic_tool_call_marks():
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_lookup",
+        type="function",
+        function={"name": "lookup", "arguments": "{}"},
+        cache_control={"type": "ephemeral"},
+    )
+    assistant: Final = Message(role="assistant", content=None, tool_calls=[tool_call])
+    messages: Final = [
+        {"role": "user", "content": "Look up a value."},
+        assistant,
+        {"role": "tool", "tool_call_id": tool_call.id, "content": "42"},
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-sonnet-5-5",
+        messages=cast(list[AllMessageValues], messages),
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "user"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _count_cache_control(processed) == 1
+    assert _count_tool_call_cache_controls(processed[1]) == 1
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(processed) == 2
 
 
 def test_injection_skips_assistant_whose_tool_call_carries_a_longer_ttl_mark():
