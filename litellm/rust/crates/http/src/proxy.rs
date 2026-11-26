@@ -1,5 +1,5 @@
 use hyper_util::client::proxy::matcher::Matcher;
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use veil::Redact;
 
 #[derive(Clone, Redact, Default, PartialEq, Eq, Hash)]

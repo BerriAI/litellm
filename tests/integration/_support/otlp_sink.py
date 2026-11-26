@@ -31,10 +31,9 @@ from urllib.parse import urlparse
 import httpx
 import psutil
 import yaml
-from pydantic import JsonValue, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
-
 from integration._support.ports import allocate_port
+from pydantic import JsonValue, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 INTERNAL_MARKERS: Final = ("gen_ai.operation.name", "mcp.method.name", "litellm.guardrail_name")
 
@@ -47,6 +46,8 @@ class Span(TypedDict):
     name: ReadOnly[str]
     attributes: ReadOnly[Mapping[str, JsonValue]]
     resource: ReadOnly[Mapping[str, JsonValue]]
+    status_code: ReadOnly[NotRequired[int]]
+    start_time_unix_nano: ReadOnly[NotRequired[int]]
 
 
 class _SpanListing(TypedDict):
@@ -88,6 +89,8 @@ def _proto_spans(body: bytes) -> list[Span]:
             span_id=span.span_id.hex(),
             parent_span_id=span.parent_span_id.hex(),
             kind=span.kind,
+            status_code=span.status.code,
+            start_time_unix_nano=span.start_time_unix_nano,
             name=span.name,
             attributes={attribute.key: scalar(attribute.value) for attribute in span.attributes},
             resource={attribute.key: scalar(attribute.value) for attribute in resource.resource.attributes},
@@ -119,6 +122,8 @@ def _json_spans(body: bytes) -> list[Span]:
             span_id=str(span.get("spanId", "")),
             parent_span_id=str(span.get("parentSpanId", "")),
             kind=int(span.get("kind", 0)),
+            status_code=int(span.get("status", {}).get("code", 0)),
+            start_time_unix_nano=int(span.get("startTimeUnixNano", 0)),
             name=str(span.get("name", "")),
             attributes={attribute["key"]: scalar(attribute.get("value")) for attribute in span.get("attributes", [])},
             resource={
@@ -250,7 +255,13 @@ class _ConnectHandler(_Handler):
         type(self)(wrapped, self.client_address, self.server)
 
 
-_MITM_HOSTS: Final = ("otlp.nr-data.net", "otlp.eu01.nr-data.net")
+_MITM_HOSTS: Final = (
+    "otlp.nr-data.net",
+    "otlp.eu01.nr-data.net",
+    "ingestion-us.mixpanel.com",
+    "ingestion-eu.mixpanel.com",
+    "ingestion-in.mixpanel.com",
+)
 
 
 def _mitm_context(directory: Path) -> ssl.SSLContext:

@@ -14,7 +14,7 @@ class VertexAIGPTOSSTransformation(OpenAIGPTConfig):
     def __init__(self):
         super().__init__()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_gpt_series_params = super().get_supported_openai_params(model=model)
         gpt_oss_only_params: Final = ["reasoning_effort"]
         base_gpt_series_params.extend(gpt_oss_only_params)

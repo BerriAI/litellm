@@ -327,3 +327,112 @@ tests:
     asserts:
       - notExists:
           path: spec.template.metadata.annotations
+
+  - it: migrates the control plane without data plane database settings or credentials
+    set:
+      migrationJob.mode: control-plane
+      migrationJob.controlPlane.databaseSecret.name: cp-migrations
+      database.writer.host: ""
+      database.writer.dbname: ""
+      redis.host: data-plane-redis
+      migrationJob.extraEnv:
+        - name: SSL_CERT_FILE
+          value: /certs/postgres-ca.pem
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].command
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: [proxy, --control-plane, --skip_server_startup]
+      - equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: CONTROL_PLANE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cp-migrations
+                  key: database-url
+            - name: SSL_CERT_FILE
+              value: /certs/postgres-ca.pem
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+
+  - it: runs control plane migrations as an Argo CD hook with a custom Secret key
+    set:
+      migrationJob.mode: control-plane
+      migrationJob.controlPlane.databaseSecret.name: cp-migrations
+      migrationJob.controlPlane.databaseSecret.key: direct-url
+      migrationJob.hooks.helm.enabled: false
+      migrationJob.hooks.argocd.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/hook"]
+          value: PreSync
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/hook-delete-policy"]
+          value: BeforeHookCreation,HookSucceeded
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+      - notExists:
+          path: spec.ttlSecondsAfterFinished
+      - equal:
+          path: spec.template.spec.containers[0].env[0].valueFrom.secretKeyRef
+          value:
+            name: cp-migrations
+            key: direct-url
+
+  - it: preserves an explicit command and args in control plane mode
+    set:
+      migrationJob.mode: control-plane
+      migrationJob.controlPlane.databaseSecret.name: cp-migrations
+      migrationJob.command: [sh]
+      migrationJob.args: [-c, echo migrating]
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [sh]
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: [-c, echo migrating]
+
+  - it: clears the control plane arguments when only a command override is set
+    set:
+      migrationJob.mode: control-plane
+      migrationJob.controlPlane.databaseSecret.name: cp-migrations
+      migrationJob.command: [sh]
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: []
+
+  - it: rejects an unsupported migration mode
+    set:
+      migrationJob.mode: invalid
+    asserts:
+      - failedTemplate:
+          errorMessage: 'migrationJob.mode must be data-plane or control-plane (got "invalid")'
+
+  - it: requires the control plane database Secret name
+    set:
+      migrationJob.mode: control-plane
+    asserts:
+      - failedTemplate:
+          errorMessage: migrationJob.controlPlane.databaseSecret.name is required in control-plane mode
+
+  - it: rejects an empty control plane database Secret key
+    set:
+      migrationJob.mode: control-plane
+      migrationJob.controlPlane.databaseSecret.name: cp-migrations
+      migrationJob.controlPlane.databaseSecret.key: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: migrationJob.controlPlane.databaseSecret.key is required in control-plane mode
+
+  - it: requires no control plane Secret when the migration Job is disabled
+    set:
+      migrationJob.enabled: false
+      migrationJob.mode: control-plane
+    asserts:
+      - hasDocuments:
+          count: 0

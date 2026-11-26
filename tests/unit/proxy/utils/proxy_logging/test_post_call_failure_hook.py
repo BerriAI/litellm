@@ -16,7 +16,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
 from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP, REJECTED_BEFORE_REQUEST_SETUP_KEY, ProxyLogging
@@ -28,6 +28,17 @@ def _clear_caps_cache():
     ProxyLogging._callback_capabilities_cache.clear()
     yield
     ProxyLogging._callback_capabilities_cache.clear()
+
+
+def _reply_block(*, log_as_failure: bool) -> ModifyResponseException:
+    """A guardrail's block of the prompt, answered as a 200 reply: the LLM was never called."""
+    return ModifyResponseException(
+        message="blocked by guardrail",
+        model="internal-model",
+        request_data={},
+        guardrail_name="deny-list",
+        log_as_failure=log_as_failure,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +74,27 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
             original_exception=GuardrailRaisedException(guardrail_name="g", message="blocked"),
             route="/chat/completions",
         ),
+        "presidio_block_on_llm_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="g"),
+            route="/v1/messages",
+        ),
+        "presidio_block_of_a_refused_stream": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="g"),
+            route="/v1/messages",
+            stream_refused=True,
+        ),
+        "reply_block_on_llm_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=_reply_block(log_as_failure=False),
+            route="/chat/completions",
+        ),
+        "reply_block_asking_to_be_logged_on_llm_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=_reply_block(log_as_failure=True),
+            route="/chat/completions",
+        ),
+        "reply_block_asking_to_be_logged_on_non_llm_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=_reply_block(log_as_failure=True),
+            route="/random/path",
+        ),
     }
     assert snapshot == {
         "no_route": False,
@@ -71,6 +103,11 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
         "auth_short_circuit": True,
         "auth_short_circuit_on_queued_route": True,
         "guardrail_raised_on_llm_route": True,
+        "presidio_block_on_llm_route": False,
+        "presidio_block_of_a_refused_stream": True,
+        "reply_block_on_llm_route": False,
+        "reply_block_asking_to_be_logged_on_llm_route": True,
+        "reply_block_asking_to_be_logged_on_non_llm_route": False,
     }
 
 
@@ -125,6 +162,43 @@ def test_is_proxy_only_llm_api_missing_exception_raises(proxy_logging):
 # ---------------------------------------------------------------------------
 # post_call_failure_hook
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("log_as_failure", "reply_logs_success", "failure_events"),
+    [(True, False, 1), (False, False, 0), (True, True, 0)],
+    ids=["asks-to-be-logged", "does-not-ask", "its-reply-stream-logs-a-success"],
+)
+async def test_a_reply_style_block_of_the_prompt_reaches_the_failure_callbacks_once_and_only_when_it_asks(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    log_as_failure: bool,
+    reply_logs_success: bool,
+    failure_events: int,
+) -> None:
+    recorded: Final[list[dict[str, object]]] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={"model": "internal-model", "messages": [{"role": "user", "content": "hi"}]},
+        original_exception=_reply_block(log_as_failure=log_as_failure),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        route="/chat/completions",
+        reply_logs_success=reply_logs_success,
+    )
+
+    assert len(recorded) == failure_events
+    assert all(isinstance(kwargs["exception"], ModifyResponseException) for kwargs in recorded)
 
 
 @pytest.mark.asyncio
@@ -1227,3 +1301,120 @@ async def test_auth_failure_on_a_responses_body_with_a_json_string_metadata_is_l
 
     assert len(recorded) == 1
     assert recorded[0]["standard_logging_object"]["metadata"]["user_api_key_alias"] == "checkout-key"
+
+
+def _gemini_image_refusal() -> Exception:
+    import httpx
+
+    from litellm.llms.gemini.empty_image_response import ImageRefusalError
+
+    return ImageRefusalError(
+        message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+        model="gemini-3.1-flash-image",
+        llm_provider="gemini",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://gemini.invalid")),
+        provider_specific_fields={"finish_reason": "IMAGE_SAFETY"},
+        billed_answer=None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "logged_deployment"),
+    (
+        pytest.param(_gemini_image_refusal(), ("dep-refused-backup", "refused-backup"), id="fallback-refusal"),
+        pytest.param(
+            litellm.InternalServerError(message="down", llm_provider="gemini", model="gemini-3.1-flash-image"),
+            ("dep-outage", "outage"),
+            id="fallback-500",
+        ),
+    ),
+)
+async def test_a_fallback_refusal_the_client_gets_is_logged_on_the_fallback_deployment(
+    proxy_logging, make_user_api_key_auth, monkeypatch, failure, logged_deployment
+):
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy import proxy_server
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_post_call_failure_hook(
+            self, request_data, original_exception, user_api_key_dict, traceback_str=None
+        ):
+            recorded.append(dict(request_data))
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": group,
+                    "litellm_params": {"model": model, "api_key": "test-key"},
+                    "model_info": {"id": deployment_id},
+                }
+                for group, model, deployment_id in (
+                    ("outage", "gemini/gemini-nano-banana-2.1", "dep-outage"),
+                    ("refused-backup", "gemini/gemini-3.1-flash-image", "dep-refused-backup"),
+                )
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+    logging_obj = Logging(
+        model="outage",
+        messages=[],
+        stream=False,
+        call_type="aimage_generation",
+        start_time=datetime.now(),
+        litellm_call_id="call-fallback-refusal",
+        function_id="fn-fallback-refusal",
+    )
+    logging_obj.update_environment_variables(
+        model="outage",
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(
+            metadata={
+                "model_info": {"id": "dep-refused-backup"},
+                "client_seen_attempt": {
+                    "model_group": "refused-backup",
+                    "deployment_id": "dep-refused-backup",
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "base_model": None,
+                    "exception_type": type(failure).__name__,
+                    "exception_string": str(failure),
+                    "attempted_retries": 0,
+                },
+            }
+        ),
+    )
+    logging_obj.model_call_details["standard_logging_object"] = {
+        "id": "call-fallback-refusal",
+        "model_id": "dep-outage",
+        "model_group": "outage",
+        "model": "gemini/gemini-nano-banana-2.1",
+        "custom_llm_provider": "gemini",
+    }
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "outage",
+            "prompt": "a red dot",
+            "metadata": {"model_info": {"id": "dep-outage"}},
+            "litellm_logging_obj": logging_obj,
+        },
+        original_exception=failure,
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/images/generations"),
+        route="/v1/images/generations",
+    )
+
+    (seen,) = recorded
+    assert (
+        seen["standard_logging_object"]["model_id"],
+        seen["standard_logging_object"]["model_group"],
+        seen["metadata"]["model_info"]["id"],
+    ) == (*logged_deployment, logged_deployment[0])

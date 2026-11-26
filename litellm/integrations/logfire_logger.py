@@ -3,7 +3,7 @@
 
 import os
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import Enum
 from typing import Final, NamedTuple
 
@@ -11,6 +11,7 @@ from typing_extensions import LiteralString
 
 from litellm._logging import print_verbose, verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 
 
@@ -39,7 +40,7 @@ class LogfireLogger:
             print_verbose(f"Got exception on init logfire client {e}")
             raise e
 
-    def _get_span_config(self, payload) -> SpanConfig:
+    def _get_span_config(self, payload: Mapping[str, object]) -> SpanConfig:
         if payload["call_type"] == "completion" or payload["call_type"] == "acompletion":
             return SpanConfig(
                 message_template="Chat Completion with {request_data[model]!r}",
@@ -63,11 +64,11 @@ class LogfireLogger:
 
     async def _async_log_event(
         self,
-        kwargs,
-        response_obj,
-        start_time,
-        end_time,
-        print_verbose,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+        print_verbose: Callable[[str], object],
         level: LogfireLevel,
     ):
         self.log_event(
@@ -81,10 +82,10 @@ class LogfireLogger:
 
     def log_event(
         self,
-        kwargs,
+        kwargs: Mapping[str, object],
         start_time,
         end_time,
-        print_verbose,
+        print_verbose: Callable[[str], object],
         level: LogfireLevel,
         response_obj,
     ):
@@ -95,7 +96,7 @@ class LogfireLogger:
 
             if not response_obj:
                 response_obj = {}
-            litellm_params: Final = kwargs.get("litellm_params", {})
+            litellm_params: Final = require_get(kwargs.get("litellm_params", {}))
             metadata: Final = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
             messages: Final = kwargs.get("messages")
             optional_params: Final = kwargs.get("optional_params", {})

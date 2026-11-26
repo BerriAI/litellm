@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # moved UserAPIKeyAuth fields and the Span alias are typed Any
@@ -24,11 +25,12 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.router import AllowedModelRegion
+from litellm.types.semantic_cache import SemanticCacheParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span: TypeAlias = _Span | Any
+    Span: TypeAlias = _Span
 else:
     Span: TypeAlias = Any
 
@@ -236,8 +238,10 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # upstream token rather than a LiteLLM credential, so egress forwards it. Stripped from validated
     # input like the markers above: a forged value would forward a LiteLLM credential upstream.
     mcp_forwards_caller_authorization: bool = Field(default=False, exclude=True)
+    mcp_authorization_is_admission_credential: bool = Field(default=False, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
+    impersonated_by: str | None = Field(default=None, exclude=True)
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
@@ -265,6 +269,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             "narrow the agent's access."
         ),
     )
+    customer_hierarchy_started_at: datetime | None = Field(default=None, exclude=True)
     budget_reservation: dict[str, object] | None = Field(default=None, exclude=True)
     budget_plan: BudgetPlan | None = Field(default=None, exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
@@ -273,6 +278,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     committed_budget_spend: CommittedBudgetSpend | None = Field(default=None, exclude=True, repr=False)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
+    user_semantic_cache_params: SemanticCacheParams | None = Field(default=None, exclude=True)
     user: object | None = None  # Expanded user object when expand=user is used
     created_by_user: object | None = None  # Expanded created_by user when expand=user is used
     end_user_object_permission: LiteLLM_ObjectPermissionTable | None = None
@@ -285,6 +291,9 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    def apply_user_semantic_cache_params(self, params: SemanticCacheParams | None) -> None:
+        self.user_semantic_cache_params = params
+
     @model_validator(mode="before")
     @classmethod
     def check_api_key(cls, values: object) -> object:
@@ -296,13 +305,16 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
         values.pop("mcp_admitted_user_subject", None)
         values.pop("requires_fresh_policy", None)
+        values.pop("customer_hierarchy_started_at", None)
         values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_ids", None)
         values.pop("mcp_forwards_caller_authorization", None)
+        values.pop("mcp_authorization_is_admission_credential", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("authenticated_by_custom_auth", None)
+        values.pop("impersonated_by", None)
         values.pop("agent_caller", None)
         values.pop("managed_agent_context", None)
         values.pop("managed_agent_policy", None)

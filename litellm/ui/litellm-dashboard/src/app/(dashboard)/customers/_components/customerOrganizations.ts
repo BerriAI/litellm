@@ -3,16 +3,22 @@ import { apiClient } from "@/components/networking";
 import type { DailyActivityAggregatedResponse } from "@/components/UsagePage/dailyActivityApi";
 import type { components } from "@/lib/http/schema";
 import i18n from "@/i18n/i18n";
-import { customerBudgetPeriod, customerBudgetStatus, customerBudgetUsage } from "./customerBudgetUsage";
+import {
+  customerBudgetLimit,
+  customerBudgetPeriod,
+  customerBudgetStatus,
+  customerBudgetUsage,
+} from "./customerBudgetUsage";
 import { mergeCustomerActivityPages } from "./customerUsageData";
 import { customerUsageTotals } from "./customerUsageTotals";
+import type { CustomerUsageEntity } from "./customerUsageApi";
 
 export type CustomerOrganization = components["schemas"]["Organization"];
 type OrganizationList = components["schemas"]["ListResponse_Organization_"];
 type Activity = ReturnType<typeof mergeCustomerActivityPages>;
 
 export const CUSTOMER_ORGANIZATION_TABLE = {
-  sortFields: ["created_at", "customer", "spend", "share", "status"],
+  sortFields: ["created_at", "customer", "spend", "budget", "share", "status"],
   defaultSort: { id: "created_at", desc: true },
   defaultPageSize: 25,
   filterColumns: [],
@@ -82,8 +88,8 @@ export async function customerOrganizationsUsageCall({
 export const customerOrganizationRows = (organizations: readonly CustomerOrganization[], monthlyUsage: Activity) => {
   const totals = customerUsageTotals(monthlyUsage.results);
   return organizations.map((organization) => {
-    const monthlySpend = totals[organization.customer_org_id]?.spend ?? 0;
-    const budgetEntity = {
+    const monthlySpend = totals.get(organization.customer_org_id)?.spend ?? 0;
+    const budgetEntity: CustomerUsageEntity = {
       id: organization.customer_org_id,
       label: organization.alias || organization.customer_org_id,
       spend: organization.spend,
@@ -92,13 +98,17 @@ export const customerOrganizationRows = (organizations: readonly CustomerOrganiz
       budgetLimits: organization.budget?.budget_limits ?? [],
       budgetResetAt: organization.budget_reset_at ?? null,
       budgetUsage: organization.budget_usage,
+      rateLimits: organization.budget ?? undefined,
     };
     const budgets = customerBudgetUsage(budgetEntity);
     const monthlyBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "monthly");
     return {
       organization,
+      entity: budgetEntity,
       monthlySpend,
+      totalMonthlySpend: monthlyUsage.metadata.total_spend,
       monthlyBudgets,
+      budgetLimit: customerBudgetLimit(budgetEntity),
       displaySpend: monthlyBudgets.length > 0 ? monthlyBudgets[0].spend : monthlySpend,
       share: monthlyUsage.metadata.total_spend > 0 ? monthlySpend / monthlyUsage.metadata.total_spend : 0,
       status: customerBudgetStatus(budgets),
@@ -107,6 +117,17 @@ export const customerOrganizationRows = (organizations: readonly CustomerOrganiz
 };
 
 export type CustomerOrganizationRow = ReturnType<typeof customerOrganizationRows>[number];
+
+export function customerOrganizationBudgetSource(
+  organization: CustomerOrganization,
+  groups?: readonly components["schemas"]["OrganizationBudget"][],
+): { kind: "group"; name: string | null } | { kind: "custom" } | null {
+  if (!organization.budget_id) return organization.budget ? { kind: "custom" } : null;
+  const group = groups?.find((entry) => entry.budget_id === organization.budget_id);
+  const shared = organization.budget_is_shared ?? (groups ? Boolean(group) : null);
+  if (shared) return { kind: "group", name: group?.name ?? null };
+  return shared === false ? { kind: "custom" } : null;
+}
 
 const STATUS_ORDER = {
   "customerPortal.analytics.noLimit": 0,
@@ -123,6 +144,8 @@ const sortValue = (row: CustomerOrganizationRow, field: string): string | number
       return row.displaySpend;
     case "share":
       return row.share;
+    case "budget":
+      return row.budgetLimit;
     case "status":
       return STATUS_ORDER[row.status];
     default:
@@ -152,7 +175,9 @@ export function sortCustomerOrganizations(
       const comparison = typeof a === "string" && typeof b === "string" ? a.localeCompare(b) : Number(a) - Number(b);
       return (
         comparison * (active.desc ? -1 : 1) ||
-        left.organization.customer_org_id.localeCompare(right.organization.customer_org_id)
+        (active.id === "budget"
+          ? 0
+          : left.organization.customer_org_id.localeCompare(right.organization.customer_org_id))
       );
     });
 }

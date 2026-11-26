@@ -63,6 +63,10 @@ pub enum Error {
         "invalid OCR outputContentFormat, expected text or markdown. To drop unsupported params, set `litellm.drop_params = True`."
     )]
     OutputContentFormat,
+    #[error(
+        "unsupported OCR param {param}: {reason}. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    UnsupportedParam { param: String, reason: &'static str },
     #[error("OCR model cannot be a dot segment")]
     DotModel,
     #[error("OCR response exceeds the size limit of {limit} bytes")]
@@ -126,6 +130,8 @@ pub enum Error {
 pub enum PagesFault {
     #[error("page index is out of range")]
     OutOfRange,
+    #[error("page numbers start at 1")]
+    BelowFirstPage,
     #[error("negative page index")]
     Negative,
     #[error("expected only integers or only strings")]
@@ -205,6 +211,7 @@ impl Error {
             | Self::Pages(_)
             | Self::Features
             | Self::OutputContentFormat
+            | Self::UnsupportedParam { .. }
             | Self::DotModel
             | Self::TooLarge { .. }
             | Self::ResponseField { .. }
@@ -248,6 +255,7 @@ impl Error {
             | Self::Pages(_)
             | Self::Features
             | Self::OutputContentFormat
+            | Self::UnsupportedParam { .. }
             | Self::DotModel
             | Self::TooLarge { .. }
             | Self::ResponseField { .. }
@@ -282,6 +290,10 @@ impl Error {
         self.is_request().then_some(400)
     }
 
+    pub fn is_unreachable_document(&self) -> bool {
+        matches!(self, Self::DocumentDownload(error) if error.is_unreachable_media())
+    }
+
     pub fn is_request(&self) -> bool {
         match self {
             Self::EmptyFile
@@ -298,13 +310,15 @@ impl Error {
             | Self::Pages(_)
             | Self::Features
             | Self::OutputContentFormat
+            | Self::UnsupportedParam { .. }
             | Self::DotModel
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }
             | Self::Params(_)
             | Self::Headers(_) => true,
             Self::Auth(error) => error.is_request(),
-            Self::Http(error) | Self::DocumentDownload(error) => error.is_request(),
+            Self::Http(error) => error.is_request(),
+            Self::DocumentDownload(error) => error.is_request() || error.is_unreachable_media(),
             Self::Provider { .. }
             | Self::FileRead { .. }
             | Self::DocumentTask(_)
@@ -335,7 +349,7 @@ impl Error {
             | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout => true,
-            Self::Http(error) | Self::DocumentDownload(error) => error.is_response(),
+            Self::Http(error) => error.is_response(),
             Self::Provider { .. }
             | Self::EmptyFile
             | Self::FileRead { .. }
@@ -353,6 +367,7 @@ impl Error {
             | Self::Pages(_)
             | Self::Features
             | Self::OutputContentFormat
+            | Self::UnsupportedParam { .. }
             | Self::DotModel
             | Self::InvalidProvider(_)
             | Self::InvalidModel { .. }
@@ -362,7 +377,8 @@ impl Error {
             | Self::HostCall
             | Self::Auth(_)
             | Self::Params(_)
-            | Self::Headers(_) => false,
+            | Self::Headers(_)
+            | Self::DocumentDownload(_) => false,
         }
     }
 }

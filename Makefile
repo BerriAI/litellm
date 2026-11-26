@@ -4,7 +4,7 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc test-unit-proxy-root \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	test-rust-extension rust-sqlx-prepare \
+	test-rust-extension rust-sqlx-prepare lint-rust-clippy \
 	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-type-discipline \
 	lint-ruff-strict lint-gate lint-test-quality lint-openapi-docs \
@@ -54,7 +54,8 @@ help:
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
-	@echo "  make rust-sqlx-prepare  - Refresh litellm/rust/crates/db/.sqlx against a migrated Postgres container"
+	@echo "  make rust-sqlx-prepare  - Refresh litellm/rust/crates/repositories/.sqlx against a migrated Postgres container"
+	@echo "  make lint-rust-clippy   - Run clippy on the Rust workspace the way CI does (tests may spawn bare tasks)"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -281,6 +282,11 @@ check-inner: bootstrap
 pre-commit:
 	@echo "make pre-commit is a legacy alias; use make check" >&2
 	@$(MAKE) check
+
+# Mirrors the rust-lint job in .github/workflows/test-rust.yml
+lint-rust-clippy:
+	cd litellm/rust && cargo clippy --workspace --lib --bins --examples --locked -- -D warnings
+	cd litellm/rust && cargo clippy --workspace --tests --benches --locked -- -D warnings -A clippy::disallowed_methods
 
 # Testing targets
 test-rust-extension:

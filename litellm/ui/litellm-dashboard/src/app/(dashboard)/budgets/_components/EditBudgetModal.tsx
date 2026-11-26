@@ -3,16 +3,18 @@ import { useTranslation } from "react-i18next";
 import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetFormPayload, COMBINED_BUDGET_DURATION } from "./budgetLimits";
+import { budgetFormWindows } from "@/lib/forms/budgetWindows";
 import { BudgetFormFields, type BudgetFormValues, useBudgetForm } from "./BudgetFormFields";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const toFormValues = (budget: budgetItem) => {
-  const monthly = budget.budget_limits?.find((limit) => limit.budget_duration === "1mo");
-  const annual = budget.budget_limits?.find((limit) => limit.budget_duration === "12mo");
+  const windows = budgetFormWindows(budget.budget_limits);
+  const monthly = windows.find((limit) => limit.budget_duration === "1mo");
+  const annual = windows.find((limit) => limit.budget_duration === "12mo");
   const combined = monthly != null && annual != null;
-  const window = monthly ?? annual;
+  const window = monthly ?? annual ?? windows[0];
   const windowDuration = window?.budget_duration === "1mo" ? "30d" : window?.budget_duration;
   const mixed = window != null && budget.max_budget != null;
   return {

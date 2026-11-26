@@ -118,3 +118,13 @@ describe("transitionClassifierType", () => {
     expect(result.tiers.SIMPLE).toEqual(["efficient"]);
   });
 });
+
+it("clears the conversation limit when leaving heuristic-first", () => {
+  const initial = {
+    ...standard,
+    classifier_type: "heuristic_first" as const,
+    heuristic_first_max_context_tokens: 8000,
+  };
+  expect(transitionClassifierType(initial, "heuristic_first").heuristic_first_max_context_tokens).toBe(8000);
+  expect(transitionClassifierType(initial, "llm").heuristic_first_max_context_tokens).toBeUndefined();
+});

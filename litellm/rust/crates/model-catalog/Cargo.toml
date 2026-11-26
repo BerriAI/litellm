@@ -9,9 +9,11 @@ repository.workspace = true
 schema = ["dep:schemars", "litellm-cost/schema"]
 
 [dependencies]
+litellm-auth-aws.workspace = true
 litellm-cost = { workspace = true, features = ["serde"] }
 litellm-error.workspace = true
-litellm-tracing.workspace = true
+litellm-python-compat.workspace = true
+tracing.workspace = true
 
 encoding_rs = "0.8.35"
 fancy-regex.workspace = true
@@ -26,6 +28,9 @@ sha1.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 time.workspace = true
+
+[build-dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }
 
 [dev-dependencies]
 jsonschema = { version = "0.55.1", default-features = false }

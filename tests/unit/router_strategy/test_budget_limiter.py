@@ -6,18 +6,24 @@ anthropic_messages, embedding and rerank surfaces leave it unset, which used to 
 the callback raise before any spend was recorded, so those budgets never moved.
 """
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from functools import partial
+from types import MappingProxyType
 from typing import Final
 
+import httpx
 import litellm
 import pytest
+import respx
 
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
-from litellm.types.utils import BudgetConfig
+from litellm.types.utils import BudgetConfig, ModelResponse, Usage
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 import sys, os, asyncio, time, random
 
@@ -123,9 +129,166 @@ async def test_budget_of_other_provider_is_untouched(disable_budget_sync):
 
 
 @pytest.mark.asyncio
+async def test_a_failure_the_provider_billed_counts_toward_the_provider_budget(disable_budget_sync: None):
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}},
+    )
+
+    await limiter.async_log_failure_event(
+        kwargs=_success_kwargs(
+            provider_in_litellm_params=None, provider_in_payload="openai", call_type="anthropic_messages"
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await limiter.dual_cache.async_get_cache("provider_spend:openai:1d") == 0.25
+
+
+_EARLIER_ATTEMPT: Final = (Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.5)
+_SERVED: Final = ModelResponse(model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+
+
+def _openai_attempt(
+    limiter: RouterBudgetLimiting, *, stream: bool, call_id: str, request_params: Mapping[str, object] = MappingProxyType({})
+) -> LitellmLogging:
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=stream,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id=call_id,
+        function_id=call_id,
+        dynamic_async_success_callbacks=[limiter],
+        dynamic_async_failure_callbacks=[limiter],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini",
+        user="",
+        optional_params=dict(request_params),
+        litellm_params={"metadata": {}},
+        custom_llm_provider="openai",
+    )
+    return logging_obj
+
+
+async def _provider_spend(limiter: RouterBudgetLimiting) -> object:
+    return await limiter.dual_cache.async_get_cache("provider_spend:openai:1d")
+
+
+@pytest.mark.asyncio
+async def test_a_retry_counts_the_follow_up_its_failure_already_billed_once(disable_budget_sync: None):
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(), provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}}
+    )
+    logging_obj: Final = _openai_attempt(limiter, stream=False, call_id="retried-follow-up")
+    now: Final = datetime.now()
+
+    logging_obj.record_served_rounds_for_failure((_EARLIER_ATTEMPT,))
+    await logging_obj.async_failure_handler(Exception("the agentic follow-up failed"), "", now, now)
+    after_failure: Final = await _provider_spend(limiter)
+    logging_obj.carry_failed_attempt_usage()
+    await logging_obj.async_success_handler(_SERVED, now, now)
+
+    assert after_failure == pytest.approx(_EARLIER_ATTEMPT[1])
+    assert await _provider_spend(limiter) == pytest.approx(
+        _EARLIER_ATTEMPT[1] + litellm.completion_cost(_SERVED, model="gpt-4o-mini")
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_request_param_cannot_mark_a_success_as_already_counted(disable_budget_sync: None):
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(), provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}}
+    )
+    logging_obj: Final = _openai_attempt(
+        limiter,
+        stream=False,
+        call_id="forged-already-counted",
+        request_params={"failure_logged_cost_billed_on_success": 1_000_000.0},
+    )
+    now: Final = datetime.now()
+
+    await logging_obj.async_success_handler(_SERVED, now, now)
+
+    assert await _provider_spend(limiter) == pytest.approx(litellm.completion_cost(_SERVED, model="gpt-4o-mini"))
+
+
+@pytest.mark.asyncio
+async def test_a_retry_counts_a_follow_up_whose_failure_the_budget_never_saw(disable_budget_sync: None):
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(), provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}}
+    )
+    logging_obj: Final = _openai_attempt(limiter, stream=False, call_id="twice-failed-follow-up")
+    second_attempt: Final = (Usage(prompt_tokens=400, completion_tokens=200, total_tokens=600), 0.2)
+    now: Final = datetime.now()
+
+    for attempt in (_EARLIER_ATTEMPT, second_attempt):
+        logging_obj.record_served_rounds_for_failure((attempt,))
+        await logging_obj.async_failure_handler(Exception("the agentic follow-up failed"), "", now, now)
+        logging_obj.carry_failed_attempt_usage()
+    after_failures: Final = await _provider_spend(limiter)
+    await logging_obj.async_success_handler(_SERVED, now, now)
+
+    assert after_failures == pytest.approx(_EARLIER_ATTEMPT[1])
+    assert await _provider_spend(limiter) == pytest.approx(
+        _EARLIER_ATTEMPT[1] + second_attempt[1] + litellm.completion_cost(_SERVED, model="gpt-4o-mini")
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_counts_the_cut_streams_billed_partial_once(disable_budget_sync: None):
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(), provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}}
+    )
+    cut_stream: Final = _openai_attempt(limiter, stream=True, call_id="cut-stream")
+    continuation: Final = _openai_attempt(limiter, stream=True, call_id="continuation")
+    now: Final = datetime.now()
+
+    cut_stream.record_partial_usage_for_failure(*_EARLIER_ATTEMPT)
+    await cut_stream.async_failure_handler(Exception("overloaded"), "", now, now)
+    after_failure: Final = await _provider_spend(limiter)
+    continuation.record_continued_partial(*_EARLIER_ATTEMPT, response_id="chatcmpl-cut-stream")
+    await continuation.async_success_handler(_SERVED, now, now)
+
+    assert after_failure == pytest.approx(_EARLIER_ATTEMPT[1])
+    assert await _provider_spend(limiter) == pytest.approx(
+        _EARLIER_ATTEMPT[1] + litellm.completion_cost(_SERVED, model="gpt-4o-mini")
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failure_the_provider_never_billed_leaves_the_provider_budget_alone(disable_budget_sync: None):
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}},
+    )
+
+    await limiter.async_log_failure_event(
+        kwargs=_success_kwargs(
+            provider_in_litellm_params=None,
+            provider_in_payload="openai",
+            call_type="anthropic_messages",
+            response_cost=0.0,
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await limiter.dual_cache.async_get_cache("provider_spend:openai:1d") is None
+    assert await limiter.dual_cache.async_get_cache("provider_budget_start_time:openai") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shadowed", [False, True])
 async def test_tag_spend_is_incremented_for_request_metadata(
     disable_budget_sync: None,
     monkeypatch: pytest.MonkeyPatch,
+    shadowed: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "tag_budget_config", {"release": {"budget_limit": 5.0, "time_period": "1h"}})
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
@@ -136,7 +299,8 @@ async def test_tag_spend_is_incremented_for_request_metadata(
             provider_in_payload=None,
             response_cost=0.73,
         ),
-        "metadata": {"tags": ["release"]},
+        "metadata": {"tags": ["release"], "inherited_tags": []},
+        **({"litellm_metadata": {"user_api_key_user_id": "auth-user"}} if shadowed else {}),
     }
 
     await _log_success(limiter, kwargs)
@@ -503,7 +667,6 @@ async def test_batch_polls_charge_each_router_budget_once(monkeypatch, call_type
     assert tuple([await cache.async_get_cache(key) for key in keys]) == (1.0, 1.0, 1.0)
 
 
-
 @pytest.mark.asyncio
 async def test_a_batch_retrieve_before_its_cost_is_final_charges_no_router_budget_even_for_its_guardrail():
     from litellm.types.utils import LiteLLMBatch
@@ -627,6 +790,7 @@ async def test_every_video_poll_pays_its_guardrail_and_only_the_finished_poll_pa
     keys: Final = ("provider_spend:openai:1d", "deployment_spend:deployment-1:1d")
     assert tuple([await cache.async_get_cache(key) for key in keys]) == pytest.approx((0.29, 0.29))
 
+
 @pytest.mark.asyncio
 async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirmation():
     from fakeredis import FakeServer, FakeRedis as FakeSyncRedis
@@ -666,3 +830,145 @@ async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirma
     await second._push_in_memory_increments_to_redis()
     assert float(await client.get("provider_spend:openai:1d")) == 0.5
     await client.aclose()
+
+
+_IMAGE_USAGE: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
+_SERVED_IMAGE: Final = {
+    "candidates": [{"finishReason": "STOP", "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
+    "usageMetadata": _IMAGE_USAGE,
+}
+_BILLED_REFUSAL: Final = {
+    "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}],
+    "usageMetadata": _IMAGE_USAGE,
+}
+
+
+class _ServedImageCost(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cost: float | None = None
+        self.logged: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.cost = kwargs["standard_logging_object"]["response_cost"]
+        self.logged.set()
+
+
+_IMAGE_GROUPS: Final = ("primary", "backup", "last")
+
+
+def _upstream_answer(answer: Mapping[str, object], request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=answer)
+
+
+async def _billed_image_request(
+    router: Router,
+    served: _ServedImageCost,
+    call_id: str,
+    answers: tuple[Mapping[str, object], ...],
+    request_fields: Mapping[str, object] = MappingProxyType({}),
+) -> float | None:
+    served.logged.clear()
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="a single small red dot",
+        litellm_call_id=call_id,
+        **request_fields,
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        for group, answer in zip(_IMAGE_GROUPS, answers, strict=False):
+            upstream.post(url__startswith=f"https://{group}.invalid/").mock(side_effect=partial(_upstream_answer, answer))
+        try:
+            await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+        except litellm.ContentPolicyViolationError:
+            return None
+        await asyncio.wait_for(served.logged.wait(), 10)
+    return served.cost
+
+
+def _budgeted_image_router(monkeypatch, deployments: int = 2) -> tuple[Router, _ServedImageCost, RouterBudgetLimiting]:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    groups: Final = _IMAGE_GROUPS[:deployments]
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.invalid/v1",
+                },
+            }
+            for group in groups
+        ],
+        fallbacks=[{groups[0]: list(groups[1:])}],
+        num_retries=0,
+        provider_budget_config={"gemini": {"budget_limit": 100, "time_period": "1d"}},
+    )
+    served: Final = _ServedImageCost()
+    litellm.logging_callback_manager.add_litellm_callback(served)
+    limiter: Final = router.get_router_deployment_budget_limiter()
+    assert limiter is not None
+    return router, served, limiter
+
+
+@pytest.mark.asyncio
+async def test_billed_image_refusals_count_toward_router_budgets_once_each(disable_budget_sync, monkeypatch):
+    router, served, limiter = _budgeted_image_router(monkeypatch)
+
+    served_alone: Final = await _billed_image_request(router, served, "served", (_SERVED_IMAGE, _SERVED_IMAGE))
+    through_fallback: Final = await _billed_image_request(router, served, "fallback", (_BILLED_REFUSAL, _SERVED_IMAGE))
+    refused_twice: Final = await _billed_image_request(router, served, "refused", (_BILLED_REFUSAL, _BILLED_REFUSAL))
+
+    assert served_alone is not None and through_fallback is not None and refused_twice is None
+    refusal: Final = through_fallback - served_alone
+    assert refusal > 0
+    assert await limiter._get_current_provider_spend("gemini") == pytest.approx(
+        served_alone + through_fallback + 2 * refusal
+    )
+
+
+@pytest.mark.asyncio
+async def test_each_refusal_before_a_served_fallback_counts_once_toward_router_budgets(disable_budget_sync, monkeypatch):
+    router, served, limiter = _budgeted_image_router(monkeypatch, deployments=3)
+
+    served_alone: Final = await _billed_image_request(router, served, "served", (_SERVED_IMAGE,) * 3)
+    after_one_refusal: Final = await _billed_image_request(
+        router, served, "one-refusal", (_BILLED_REFUSAL, _SERVED_IMAGE, _SERVED_IMAGE)
+    )
+    after_two_refusals: Final = await _billed_image_request(
+        router, served, "two-refusals", (_BILLED_REFUSAL, _BILLED_REFUSAL, _SERVED_IMAGE)
+    )
+
+    assert served_alone is not None and after_one_refusal is not None and after_two_refusals is not None
+    refusal: Final = after_one_refusal - served_alone
+    assert refusal > 0
+    assert after_two_refusals == pytest.approx(served_alone + 2 * refusal)
+    assert await limiter._get_current_provider_spend("gemini") == pytest.approx(
+        served_alone + after_one_refusal + after_two_refusals
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("billed_attempts", ([["usage", 1000.0]], "junk"))
+async def test_a_request_cannot_change_its_router_budget_charge_by_naming_a_billing_field(
+    disable_budget_sync, monkeypatch, billed_attempts
+):
+    router, served, limiter = _budgeted_image_router(monkeypatch)
+
+    await _billed_image_request(router, served, "honest", (_SERVED_IMAGE, _SERVED_IMAGE))
+    honest: Final = await limiter._get_current_provider_spend("gemini")
+    await _billed_image_request(
+        router,
+        served,
+        "spoofed",
+        (_SERVED_IMAGE, _SERVED_IMAGE),
+        request_fields={"failed_attempts_billed_on_success": billed_attempts},
+    )
+
+    assert honest is not None and honest > 0
+    assert await limiter._get_current_provider_spend("gemini") == pytest.approx(2 * honest)

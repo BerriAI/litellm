@@ -5,6 +5,7 @@ import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Member } from "@/components/networking";
+import { availableRoleDisplayLabel } from "@/utils/roles";
 import {
   DataTable,
   DataTableFilterDrawer,
@@ -183,7 +184,7 @@ const buildColumns = ({
     cell: ({ row }) => (
       <span className="inline-flex items-center gap-2">
         {isAdminRole(row.original.role) ? <Crown className="size-3.5" /> : <User className="size-3.5" />}
-        <span className="capitalize">{row.original.role || "-"}</span>
+        <span className="capitalize">{availableRoleDisplayLabel(row.original.role) || "-"}</span>
       </span>
     ),
   },
@@ -271,7 +272,7 @@ export default function MemberTable({
   const columns = buildColumns(columnDeps);
   const roleFilterItems = [
     { value: ALL_ROLES, label: t("memberTable.filters.allRoles") },
-    ...memberRoleOptions(members).map((role) => ({ value: role, label: role })),
+    ...memberRoleOptions(members).map((role) => ({ value: role, label: availableRoleDisplayLabel(role) })),
   ];
 
   const isNarrowed = globalFilter !== "" || columnFilters.length > 0;
@@ -310,6 +311,7 @@ export default function MemberTable({
               searchPlaceholder={t("memberTable.searchPlaceholder")}
               onOpenFilters={() => setFiltersOpen(true)}
               showViewOptions={false}
+              formatFilterValue={(_, value) => availableRoleDisplayLabel(String(value))}
             />
             <DataTableFilterDrawer
               table={table}

@@ -6,7 +6,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { isUserTeamAdminForAnyTeam } from "@/utils/roles";
-import { menuGroups, visibleMenuGroups, type MenuVisibilityContext } from "@/components/leftnav";
+import { menuGroups, visibleMenuGroups, type MenuVisibilityContext } from "@/components/LeftNav";
 
 export const useVisibleMenuGroups = () => {
   const { userId, userRole, isViewOnly } = useAuthorized();
@@ -23,7 +23,6 @@ export const useVisibleMenuGroups = () => {
       isOrgAdmin,
       isTeamAdmin,
       enabledPagesInternalUsers: values?.enabled_ui_pages_internal_users ?? null,
-      enableProjectsUI: Boolean(values?.enable_projects_ui),
       disableAgentsForInternalUsers: Boolean(values?.disable_agents_for_internal_users),
       allowAgentsForTeamAdmins: Boolean(values?.allow_agents_for_team_admins),
       disableVectorStoresForInternalUsers: Boolean(values?.disable_vector_stores_for_internal_users),

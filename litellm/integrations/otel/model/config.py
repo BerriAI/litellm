@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from enum import Enum
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import Annotated, Final
 
 from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
@@ -16,6 +16,7 @@ from litellm.integrations.otel.model.baggage import (
     DEFAULT_BAGGAGE_TEAM_METADATA_KEYS,
 )
 from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
+from litellm.integrations.otel.model.utils import as_str_mapping
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import (
     CAPTURE_MESSAGE_CONTENT_VALUES,
@@ -26,6 +27,25 @@ from litellm.types.utils import (
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
 OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
+EMIT_BACKGROUND_SERVICE_SPANS_ENV: Final = "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS"
+DEFAULT_EMIT_BACKGROUND_SERVICE_SPANS: Final = True
+_BOOLEAN_SETTING: Final = TypeAdapter(bool)
+
+
+def parse_background_service_spans_setting(value: object) -> bool | None:
+    try:
+        return _BOOLEAN_SETTING.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def background_service_spans_from_yaml(settings: object) -> bool | None:
+    otel_settings: Final = as_str_mapping(settings)
+    if otel_settings is None:
+        return None
+    return parse_background_service_spans_setting(
+        otel_settings.get("emit_background_service_spans", otel_settings.get(EMIT_BACKGROUND_SERVICE_SPANS_ENV))
+    )
 
 
 class ExporterOwner(str, Enum):
@@ -45,6 +65,7 @@ class ExporterOwner(str, Enum):
     AGENTOPS = "agentops"
     NEWRELIC = "newrelic"
     SIGNOZ = "signoz"
+    MIXPANEL = "mixpanel"
 
 
 class _OTelV2Flag(BaseSettings):
@@ -85,6 +106,7 @@ class ExporterSpec(LiteLLMBaseModel):
             "``endpoint`` is a base URL the signal path is appended to."
         ),
     )
+    logs_endpoint: str | None = None
     headers: str | None = None
     owner: ExporterOwner | None = Field(
         default=None,
@@ -192,6 +214,10 @@ class OpenTelemetryV2Config(BaseSettings):
             "used verbatim instead of ``endpoint`` + ``/v1/traces``."
         ),
     )
+    logs_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OTEL_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"),
+    )
     headers: str | None = Field(
         default=None,
         validation_alias=AliasChoices("OTEL_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS"),
@@ -212,13 +238,19 @@ class OpenTelemetryV2Config(BaseSettings):
         validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
     )
     legacy_compat: bool = Field(default=True, validation_alias=AliasChoices("LITELLM_OTEL_LEGACY_COMPAT"))
+    emit_background_service_spans: bool = Field(
+        default=DEFAULT_EMIT_BACKGROUND_SERVICE_SPANS,
+        validation_alias=AliasChoices("emit_background_service_spans", EMIT_BACKGROUND_SERVICE_SPANS_ENV),
+        description="Emit service spans that have no valid ambient or explicit parent.",
+    )
     langfuse_span_scope: OtelSpanScope = Field(
         default="full",
         validation_alias=AliasChoices("langfuse_span_scope", "LITELLM_OTEL_LANGFUSE_SPAN_SCOPE"),
         description=(
             "``llm_only`` keeps just the model-call spans on the operator's own Langfuse "
             "exporter (the spec whose owner is ``langfuse_otel``). Other exporters and "
-            "key/team destinations are not affected."
+            "key/team destinations are not affected. Destinations default to "
+            "``langfuse_destination_span_scope`` instead."
         ),
     )
     excluded_services: Annotated[frozenset[str], NoDecode] = Field(
@@ -317,9 +349,7 @@ class OpenTelemetryV2Config(BaseSettings):
     @field_validator("langfuse_span_scope", mode="before")
     @classmethod
     def _normalize_langfuse_span_scope(cls, value: object) -> object:
-        if isinstance(value, str):
-            return value.strip().lower()
-        return value
+        return _normalized_span_scope(value)
 
     @field_validator(
         "baggage_promoted_keys",
@@ -350,7 +380,7 @@ class OpenTelemetryV2Config(BaseSettings):
     @model_validator(mode="after")
     def _normalize(self) -> "OpenTelemetryV2Config":
         # An endpoint with the default exporter kind implies OTLP/HTTP.
-        if (self.endpoint or self.traces_endpoint) and self.exporter == "console":
+        if self.exporter == "console" and any((self.endpoint, self.traces_endpoint, self.logs_endpoint)):
             self.exporter = "otlp_http"
         # When no explicit destinations are given, fold the single-destination
         # shorthand into one spec so the provider always has a destination. A spec
@@ -362,9 +392,12 @@ class OpenTelemetryV2Config(BaseSettings):
                     kind=self.exporter,
                     endpoint=self.endpoint,
                     traces_endpoint=self.traces_endpoint,
+                    logs_endpoint=self.logs_endpoint,
                     headers=self.headers,
                 )
-                if not self.model_fields_set.isdisjoint(("exporter", "endpoint", "headers"))
+                if not self.model_fields_set.isdisjoint(
+                    ("exporter", "endpoint", "traces_endpoint", "logs_endpoint", "headers")
+                )
                 else ExporterSpec()
             ]
         # Ensure ``genai`` is always present and first.
@@ -415,6 +448,44 @@ class _CaptureMessageContentSettings(BaseSettings):
 def capture_message_content_from_env() -> str:
     """The global capture mode, read without building a settings model that rereads every other env var"""
     return _CaptureMessageContentSettings().capture_message_content
+
+
+def _normalized_span_scope(value: object) -> object:
+    return value.strip().lower() if isinstance(value, str) else value
+
+
+class _LangfuseDestinationSpanScopeSettings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+
+    langfuse_destination_span_scope: OtelSpanScope = Field(
+        default="full",
+        validation_alias=AliasChoices("LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE"),
+    )
+
+    @field_validator("langfuse_destination_span_scope", mode="before")
+    @classmethod
+    def _normalize_scope(cls, value: object) -> object:
+        return _normalized_span_scope(value)
+
+
+def langfuse_destination_span_scope(configured: object = None) -> OtelSpanScope:
+    return _cached_langfuse_destination_span_scope(None if configured is None else str(configured))
+
+
+@cache
+def _cached_langfuse_destination_span_scope(configured: str | None) -> OtelSpanScope:
+    try:
+        return _LangfuseDestinationSpanScopeSettings.model_validate(
+            {"LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE": configured} if configured is not None else {}
+        ).langfuse_destination_span_scope
+    except ValidationError as error:
+        verbose_logger.warning(
+            "Invalid LITELLM_OTEL_LANGFUSE_DESTINATION_SPAN_SCOPE or "
+            "callback_settings.otel.langfuse_destination_span_scope. "
+            "Allowed values are 'full' and 'llm_only'. Falling back to 'full'. %s",
+            error,
+        )
+        return "full"
 
 
 _EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAdapter(str | tuple[object, ...])

@@ -1,4 +1,25 @@
+locals {
+  create_master_key_secret = var.litellm_master_key_secret_id == null
+  master_key_secret_id     = local.create_master_key_secret ? google_secret_manager_secret.master_key[0].id : var.litellm_master_key_secret_id
+}
+
+moved {
+  from = random_password.master_key
+  to   = random_password.master_key[0]
+}
+
+moved {
+  from = google_secret_manager_secret.master_key
+  to   = google_secret_manager_secret.master_key[0]
+}
+
+moved {
+  from = google_secret_manager_secret_version.master_key
+  to   = google_secret_manager_secret_version.master_key[0]
+}
+
 resource "random_password" "master_key" {
+  count       = local.create_master_key_secret ? 1 : 0
   length      = 48
   special     = false
   min_lower   = 4
@@ -9,6 +30,7 @@ resource "random_password" "master_key" {
 # LITELLM_MASTER_KEY (sk-…) lives in Secret Manager. The Cloud Run service
 # account gets accessor permission on it (see iam.tf).
 resource "google_secret_manager_secret" "master_key" {
+  count     = local.create_master_key_secret ? 1 : 0
   secret_id = "${local.name}-master-key"
   labels    = local.labels
   replication {
@@ -17,10 +39,11 @@ resource "google_secret_manager_secret" "master_key" {
 }
 
 resource "google_secret_manager_secret_version" "master_key" {
-  secret = google_secret_manager_secret.master_key.id
+  count  = local.create_master_key_secret ? 1 : 0
+  secret = google_secret_manager_secret.master_key[0].id
   # When the operator passes litellm_master_key, use it verbatim. Otherwise
   # fall back to the auto-generated `sk-…` value (trial / OSS path).
-  secret_data = coalesce(var.litellm_master_key, "sk-${random_password.master_key.result}")
+  secret_data = coalesce(var.litellm_master_key, "sk-${random_password.master_key[0].result}")
 }
 
 # LITELLM_LICENSE — only created when the operator supplies one. The runtime

@@ -5,9 +5,9 @@ Helper functions for health check calls.
 import base64
 import itertools
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 from pydantic import TypeAdapter
 
@@ -19,6 +19,8 @@ from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import ImageResponse
+
+_ImageAnswer = TypeVar("_ImageAnswer")
 
 
 # Minimal image for health checks - base64 encoded 512x512 blue circle on a white background PNG
@@ -45,6 +47,10 @@ def native_health_check_mode(
         from litellm.llms.soniox.common_utils import soniox_health_check_mode
 
         return soniox_health_check_mode(model)
+    if custom_llm_provider == "elevenlabs":
+        from litellm.llms.elevenlabs.common_utils import elevenlabs_health_check_mode
+
+        return elevenlabs_health_check_mode(model)
     if custom_llm_provider != "bedrock_mantle":
         return None
     from litellm.llms.bedrock_mantle.common_utils import mantle_health_check_mode
@@ -158,9 +164,9 @@ class HealthCheckHelpers:
     async def ahealth_check_wildcard_models(
         model: str,
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         litellm_logging_obj: "Logging",
-    ) -> dict:
+    ) -> dict[str, object]:
         from litellm import acompletion
 
         probe_models: Final = wildcard_health_check_models(wildcard=model, custom_llm_provider=custom_llm_provider)
@@ -178,8 +184,8 @@ class HealthCheckHelpers:
 
     @staticmethod
     def update_model_params_with_health_check_tracking_information(
-        model_params: dict,
-    ) -> dict:
+        model_params: dict[str, object],
+    ) -> dict[str, object]:
         """
         Updates the health check model params with tracking information.
 
@@ -222,9 +228,9 @@ class HealthCheckHelpers:
     @staticmethod
     async def _batch_health_check(
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         filtered_model_params: dict,
-    ) -> dict:
+    ) -> object:
         """
         Health check for batch mode.
 
@@ -250,11 +256,25 @@ class HealthCheckHelpers:
         return await litellm.alist_batches(**{**filtered_model_params, "custom_llm_provider": custom_llm_provider})
 
     @staticmethod
-    async def _image_edit_health_check(edit_request: Callable[[], Awaitable["ImageResponse"]]) -> "ImageResponse":
+    async def _image_generation_health_check(
+        image_request: Callable[[], Awaitable[_ImageAnswer]],
+    ) -> "_ImageAnswer | ImageResponse":
+        import litellm
+        from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
+
+        try:
+            return await image_request()
+        except (ImageRefusalError, UnservedImageError):
+            return litellm.ImageResponse()
+
+    @staticmethod
+    async def _image_edit_health_check(
+        edit_request: Callable[[], Awaitable[_ImageAnswer]],
+    ) -> "_ImageAnswer | ImageResponse":
         import litellm
 
         try:
-            return await edit_request()
+            return await HealthCheckHelpers._image_generation_health_check(edit_request)
         except litellm.BadRequestError as e:
             if isinstance(e, litellm.ContentPolicyViolationError) or "moderation_blocked" in str(e):
                 return litellm.ImageResponse()
@@ -266,7 +286,7 @@ class HealthCheckHelpers:
         custom_llm_provider: str,
         model_params: dict,
         prompt: str | None = None,
-        input: list | None = None,
+        input: Sequence[object] | None = None,
     ) -> dict[
         Literal[
             "chat",
@@ -286,7 +306,7 @@ class HealthCheckHelpers:
             "decisions",
             "extraction",
         ],
-        Callable,
+        Callable[[], Awaitable[object]],
     ]:
         """
         Returns a dictionary of mode handlers for health check calls.
@@ -328,8 +348,9 @@ class HealthCheckHelpers:
             ),
             "audio_speech": lambda: litellm.aspeech(
                 **{
+                    "voice": "alloy",
                     **_filter_model_params(model_params=model_params),
-                    **({"voice": "alloy"} if "voice" not in _filter_model_params(model_params=model_params) else {}),
+                    "stream": False,
                 },
                 input=prompt or "test",
             ),
@@ -337,9 +358,11 @@ class HealthCheckHelpers:
                 **_filter_model_params(model_params=model_params),
                 file=get_audio_file_for_health_check(),
             ),
-            "image_generation": lambda: litellm.aimage_generation(
-                **_filter_model_params(model_params=model_params),
-                prompt=prompt,
+            "image_generation": lambda: HealthCheckHelpers._image_generation_health_check(
+                image_request=lambda: litellm.aimage_generation(
+                    **_filter_model_params(model_params=model_params),
+                    prompt=prompt,
+                ),
             ),
             "image_edit": lambda: HealthCheckHelpers._image_edit_health_check(
                 edit_request=lambda: litellm.aimage_edit(

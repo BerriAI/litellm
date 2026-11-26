@@ -20,7 +20,7 @@ async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16)
         .expect(1)
         .mount(&server)
         .await;
-    let environment: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> =
+    let environment: Arc<dyn litellm_env::Lookup + Send + Sync> =
         Arc::new(|name: &str| match name {
             "VERTEX_AI_API_KEY" => Some("token".into()),
             "KEY" => Some("environment".into()),

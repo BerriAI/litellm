@@ -1247,11 +1247,6 @@
       "count": 1
     }
   },
-  "src/components/Settings/AdminSettings/UISettings/PageVisibilitySettings.tsx": {
-    "react-hooks/set-state-in-render": {
-      "count": 1
-    }
-  },
   "src/components/Settings/AdminSettings/UISettings/UISettings.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -1603,11 +1598,6 @@
     }
   },
   "src/components/key_value_input.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/leftnav.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }

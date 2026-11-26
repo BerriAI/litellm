@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ParseKeys } from "i18next";
 import type { ChatMessage } from "@/components/chat/types";
@@ -109,7 +110,7 @@ export function useLiteAdmin(session: LiteAdminSession) {
     if (active.current || !text.trim()) return;
     const turn: ActiveTurn = { controller: new AbortController(), outcome: "none" };
     active.current = turn;
-    const message: ChatMessage = { id: crypto.randomUUID(), role: "user", content: text.trim(), timestamp: Date.now() };
+    const message: ChatMessage = { id: uuidv4(), role: "user", content: text.trim(), timestamp: Date.now() };
     const history = entries.flatMap<Pick<ChatMessage, "role" | "content">>((entry) => {
       if (entry.kind === "message") return [entry.message];
       if (entry.kind !== "action" || entry.status === "review" || entry.status === "applying") return [];
@@ -135,7 +136,7 @@ export function useLiteAdmin(session: LiteAdminSession) {
         assertCurrent,
         onMessage: (content) => {
           assertCurrent();
-          const reply: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content, timestamp: Date.now() };
+          const reply: ChatMessage = { id: uuidv4(), role: "assistant", content, timestamp: Date.now() };
           const chart = turn.chart;
           turn.chart = undefined;
           setEntries((current) => [
@@ -176,7 +177,7 @@ export function useLiteAdmin(session: LiteAdminSession) {
         const context = turn.outcome === "completed" ? `${i18n.t("aria.session.completedChangesShown")} ` : "";
         setEntries((current) => [
           ...current,
-          { kind: "error", id: crypto.randomUUID(), text: context + extractProxyErrorMessage(error) },
+          { kind: "error", id: uuidv4(), text: context + extractProxyErrorMessage(error) },
         ]);
       }
     } finally {

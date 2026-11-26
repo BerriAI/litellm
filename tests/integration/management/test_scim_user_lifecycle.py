@@ -13,6 +13,7 @@ SCIM_HEADERS: Final = {"Content-Type": "application/scim+json"}
 SCIM_CORE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:User"
 SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 SCIM_LIST_RESPONSE_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+SCIM_ERROR_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:Error"
 SCIM_PATCH_OP_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 
 
@@ -269,7 +270,10 @@ def test_okta_create_provisions_the_user_into_its_group_and_rejects_a_duplicate(
         duplicate: Final = _scim_request(gateway, "POST", "/scim/v2/Users", requested)
         assert duplicate.status_code == 409, duplicate.text
         assert object_value(duplicate.json()) == {
-            "detail": {"error": f"User already exists with username: {user_name}"}
+            "schemas": [SCIM_ERROR_SCHEMA],
+            "status": "409",
+            "detail": f"User already exists with username: {user_name}",
+            "scimType": "uniqueness",
         }, duplicate.text
         assert read_rows(
             'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s',
@@ -540,6 +544,51 @@ def test_a_group_with_no_team_does_not_hold_back_a_deactivation(gateway: Gateway
         assert deactivated_user.active is False, deactivated_by_put.text
         assert deactivated_user.groups == [], deactivated_by_put.text
         assert not _has_team_member(gateway, team, user_name), _team_members(gateway, team)
+
+
+def test_patch_remove_on_groups_with_no_value_removes_the_user_from_every_team(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        teams: Final = (scenario.team(models=[model]), scenario.team(models=[model]))
+        user_name: Final = f"scim-remove-groups-{uuid.uuid4().hex}@example.com"
+        created: Final = _scim_request(
+            gateway,
+            "POST",
+            "/scim/v2/Users",
+            {
+                "schemas": [SCIM_CORE_USER_SCHEMA],
+                "userName": user_name,
+                "emails": [{"value": user_name, "primary": True}],
+                "groups": [{"value": team} for team in teams],
+            },
+        )
+        scenario.cleanups.callback(_delete_user_if_present, gateway, user_name)
+        assert created.status_code == 201, created.text
+        key: Final = _key_with_cleanup(scenario, user_id=user_name, team_id=teams[0], models=[model])
+        _assert_serving(gateway, model, key)
+
+        removed: Final = _scim_request(
+            gateway,
+            "PATCH",
+            f"/scim/v2/Users/{user_name}",
+            {
+                "schemas": [SCIM_PATCH_OP_SCHEMA],
+                "Operations": [{"op": "remove", "path": "groups"}],
+            },
+        )
+
+        assert removed.status_code == 200, removed.text
+        assert not ScimUserResponse.model_validate(removed.json()).groups, removed.text
+        readback: Final = _scim_request(gateway, "GET", f"/scim/v2/Users/{user_name}")
+        assert not ScimUserResponse.model_validate(readback.json()).groups, readback.text
+        assert not any(_has_team_member(gateway, team, user_name) for team in teams)
+        refused: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "SCIM removed every group"}]},
+            key=key,
+        )
+        assert refused.status_code == 401, refused.text
 
 
 def test_scim_create_persists_external_id_as_the_sso_user_id(gateway: Gateway) -> None:

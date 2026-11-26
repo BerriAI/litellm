@@ -1,12 +1,12 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 import httpx
 from pydantic import TypeAdapter
@@ -16,10 +16,22 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
+from litellm.exceptions import (
+    RateLimitErrorCategory,
+    RateLimitType,
+    RequestOverDeploymentTpmError,
+    SyncRequestOverDeploymentTpmError,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
+from litellm.llms.gemini.empty_image_response import (
+    billed_deployment_tokens,
+    is_answer_without_an_image,
+    tokens_of_image_answers_billed_on_failure,
+)
 from litellm.redis.stores.router_usage import (
     ROUTER_USAGE_TARGET,
     CounterIncrement,
@@ -52,7 +64,44 @@ class _SuccessKwargs(TypedDict, total=False):
 _SUCCESS_KWARGS_ADAPTER: Final = TypeAdapter(_SuccessKwargs)
 
 
+class _SuccessEventKwargs(TypedDict, total=False):
+    """The logging call details a success callback reads."""
+
+    call_type: ReadOnly[object]
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
+
+
 _active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
+
+
+RoutableGroup: TypeAlias = Callable[[], Sequence[Mapping[str, object]]]
+
+
+def no_routable_group() -> Sequence[Mapping[str, object]]:
+    return ()
+
+
+def _tpm_number(value: object) -> float | None:
+    match value:
+        case int() | float():
+            return value
+        case str():
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        case _:
+            return None
+
+
+def _deployment_tpm_limit(deployment: object) -> float:
+    fields: Final = as_str_mapping(deployment) or {}
+    candidates: Final = (
+        fields.get("tpm"),
+        (as_str_mapping(fields.get("litellm_params")) or {}).get("tpm"),
+        (as_str_mapping(fields.get("model_info")) or {}).get("tpm"),
+    )
+    return next((limit for limit in map(_tpm_number, candidates) if limit is not None), float("inf"))
 
 
 @dataclass(frozen=True)
@@ -106,8 +155,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     logged_failure: int = 0
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(self, usage: RouterUsage, routing_args: dict = {}):
-        self.routing_args = RoutingArgs(**routing_args)
+    def __init__(self, usage: RouterUsage, routing_args: Mapping[str, object] = {}):
+        self.routing_args = RoutingArgs.model_validate(routing_args)
         BaseRoutingStrategy.__init__(
             self,
             usage=usage,
@@ -116,7 +165,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def pre_call_check(self, deployment: dict) -> dict | None:
+    def pre_call_check(self, deployment: dict) -> dict[str, object] | None:
         """
         Pre-call check + update model rpm
 
@@ -192,7 +241,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict | None:
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict[str, object] | None:
         """
         Pre-call check + update model rpm
         - Used inside semaphore
@@ -267,7 +316,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: _SuccessEventKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -286,6 +337,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 id = str(id)
 
             total_tokens: Final = standard_logging_object.get("total_tokens")
+            own_tokens: Final = max(0, total_tokens - tokens_of_image_answers_billed_on_failure(kwargs))
 
             # ------------
             # Setup values
@@ -296,7 +348,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             ## TPM
             self.usage.increment_sync(
                 UsageCounter.for_deployment(f"{id}", f"{model}", "tpm", current_minute),
-                total_tokens,
+                own_tokens,
                 self.routing_args.ttl,
             )
             ### TESTING ###
@@ -308,7 +360,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(
+        self, kwargs: _SuccessEventKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -322,8 +376,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             model: Final = standard_logging_object["hidden_params"]["litellm_model_name"]
             model_id: Final = standard_logging_object.get("model_id")
             total_tokens: Final = standard_logging_object.get("total_tokens")
-            if model_group is None or not isinstance(model_id, (str, int)) or not isinstance(total_tokens, int):
+            if model_group is None or not isinstance(model_id, (str, int)):
                 return
+            own_tokens: Final = max(0, total_tokens - tokens_of_image_answers_billed_on_failure(kwargs))
             counted_tokens: Final = get_counted_usage_tokens(
                 _SUCCESS_KWARGS_ADAPTER.validate_python(kwargs).get("litellm_params") or {},
                 USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
@@ -331,7 +386,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             await self.async_increment_tpm(
                 deployment_id=str(model_id),
                 deployment_name=model if isinstance(model, str) else None,
-                tokens=total_tokens if counted_tokens is None else max(0, total_tokens - counted_tokens),
+                tokens=own_tokens if counted_tokens is None else max(0, own_tokens - counted_tokens),
             )
 
             ### TESTING ###
@@ -342,6 +397,34 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::async_log_success_event(): Exception occured - %s", e
             )
 
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return is_answer_without_an_image(exception)
+
+    @with_service_target(ROUTER_USAGE_TARGET)
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        billed: Final = billed_deployment_tokens(kwargs)
+        if billed is None:
+            return
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")
+        self.usage.increment_sync(
+            UsageCounter.for_deployment(billed.deployment_id, billed.deployment_name, "tpm", current_minute),
+            billed.tokens,
+            self.routing_args.ttl,
+        )
+
+    @with_service_target(ROUTER_USAGE_TARGET)
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        billed: Final = billed_deployment_tokens(kwargs)
+        if billed is None:
+            return
+        await self.async_increment_tpm(
+            deployment_id=billed.deployment_id, deployment_name=billed.deployment_name, tokens=billed.tokens
+        )
+
     @with_service_target(ROUTER_USAGE_TARGET)
     async def async_increment_tpm(self, *, deployment_id: str, deployment_name: str | None, tokens: int) -> None:
         current_minute: Final = get_utc_datetime().strftime("%H-%M")
@@ -351,7 +434,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     def _return_potential_deployments(
         self,
         healthy_deployments: list[dict],
-        all_deployments: dict,
+        all_deployments: dict[str, float | None],
         input_tokens: int,
         rpm_dict: dict,
     ):
@@ -369,15 +452,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             elif item_tpm is None:
                 continue  # skip if unhealthy deployment
 
-            _deployment_tpm = None
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("litellm_params", {}).get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = _deployment.get("model_info", {}).get("tpm")
-            if _deployment_tpm is None:
-                _deployment_tpm = float("inf")
+            _deployment_tpm = _deployment_tpm_limit(_deployment)
 
             _deployment_rpm = None
             if _deployment_rpm is None:
@@ -411,7 +486,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         rpm_values: Sequence[float | None] | None,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
-    ) -> dict | None:
+        routable_group: RoutableGroup = no_routable_group,
+        refusal: type[RequestOverDeploymentTpmError] = RequestOverDeploymentTpmError,
+    ) -> dict[str, object] | None:
         """
         Common checks for get available deployment, across sync + async implementations
         """
@@ -460,8 +537,25 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
 
         if len(potential_deployments) > 0:
             return random.choice(potential_deployments)
-        else:
+
+        largest_healthy_tpm_limit: Final = max(map(_deployment_tpm_limit, healthy_deployments), default=float("inf"))
+        if input_tokens <= largest_healthy_tpm_limit:
             return None
+        largest_tpm_limit: Final = max((largest_healthy_tpm_limit, *map(_deployment_tpm_limit, routable_group())))
+        if input_tokens <= largest_tpm_limit:
+            return None
+        raise refusal(
+            message=(
+                f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. "
+                f"This request alone is estimated at {input_tokens} input tokens, over the largest tpm limit "
+                f"of {largest_tpm_limit} in this model group, so retrying cannot help. "
+                "Send a smaller request or raise the deployment's tpm"
+            ),
+            llm_provider="",
+            model=model_group,
+            category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+            rate_limit_type=RateLimitType.TOKENS,
+        )
 
     def usage_counters(
         self, healthy_deployments: Sequence[object]
@@ -491,6 +585,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
+        routable_group: RoutableGroup = no_routable_group,
     ):
         """
         Async implementation of get deployments.
@@ -531,6 +626,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             rpm_values=rpm_values,
             messages=messages,
             input=input,
+            routable_group=routable_group,
         )
 
         try:
@@ -599,6 +695,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         parent_otel_span: Span | None = None,
+        routable_group: RoutableGroup = no_routable_group,
     ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
@@ -623,6 +720,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             rpm_values=rpm_values,
             messages=messages,
             input=input,
+            routable_group=routable_group,
+            refusal=SyncRequestOverDeploymentTpmError,
         )
 
         try:
