@@ -28,6 +28,7 @@ from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
     PROXY_MaxBudgetPerSessionHandler,
 )
@@ -161,10 +162,8 @@ async def test_a_failure_the_provider_billed_uses_up_the_session_budget():
     handler = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
     session_metadata: Final = {"session_id": "session-refused-stream", "agent_id": "agent-budget-123"}
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
-        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=1.0)
+    global_agent_registry.register_agent(_make_mock_agent(max_budget_per_session=1.0))
+    try:
         await handler.async_log_failure_event(
             {"call_type": "anthropic_messages", "response_cost": 1.5, "litellm_params": {"metadata": session_metadata}},
             None,
@@ -178,6 +177,8 @@ async def test_a_failure_the_provider_billed_uses_up_the_session_budget():
                 data={"metadata": {"session_id": "session-refused-stream"}},
                 call_type="",
             )
+    finally:
+        global_agent_registry.deregister_agent(agent_name="budget-agent")
 
     assert exc_info.value.status_code == 429
 
