@@ -2771,7 +2771,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         from litellm.llms.anthropic.messages.native.utils import renames_tool_use_ids_up_front
 
         drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
-        api_base: Final = litellm_params.get("api_base")
+        api_base: Final = litellm_params.get("api_base") or litellm.api_base
         rewrites_tool_use_ids: Final = renames_tool_use_ids_up_front(
             model, self._resolved_provider, api_base if isinstance(api_base, str) else None
         )
