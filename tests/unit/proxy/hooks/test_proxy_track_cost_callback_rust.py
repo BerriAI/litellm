@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm._internal_context import nested_tool_call_failure
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.integrations.custom_logger_v2.rust import RustLogger
@@ -171,6 +172,21 @@ async def test_a_failure_writes_the_released_reservation_back(proxy: Proxy) -> N
     await bill_failure_in_rust(auth, ValueError("refused"), {"model": "gpt-4o", "metadata": {}})
 
     assert auth.budget_reservation is not None
+    assert auth.budget_reservation.get("finalized") is True
+
+
+@pytest.mark.asyncio
+async def test_a_failed_tool_call_inside_the_request_keeps_the_requests_reservation_held(proxy: Proxy) -> None:
+    auth: Final = _auth(budget_reservation={"reserved_cost": 0.5, "entries": []})
+
+    with nested_tool_call_failure():
+        await bill_failure_in_rust(
+            auth, ValueError("tool failed"), {"model": "MCP: add", "call_type": "call_mcp_tool", "metadata": {}}
+        )
+    assert auth.budget_reservation is not None
+    assert auth.budget_reservation.get("finalized") is None
+
+    await bill_failure_in_rust(auth, ValueError("request failed"), {"model": "gpt-4o", "metadata": {}})
     assert auth.budget_reservation.get("finalized") is True
 
 

@@ -296,6 +296,8 @@ nothing here imports outside it:
   `config.yaml` — the latter reach the config through the logger's constructor
   kwargs. `baggage_team_metadata_keys` is empty by default, so none of a team's
   free-form metadata is promoted until each sub-key is explicitly allowlisted.
+  To suppress service spans with no request parent, set `LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS=false`
+  or `emit_background_service_spans: false` under `callback_settings.otel`.
   `excluded_services` withholds datastore spans from key/team `callback_vars`
   destinations while the operator's own exporters keep them: set
   `LITELLM_OTEL_EXCLUDED_SERVICES` (comma-separated) or `excluded_services`

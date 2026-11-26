@@ -319,11 +319,20 @@ async fn routed(config: &str, model: &str) -> axum::response::Response {
     app(config).await.oneshot(asking(&body)).await.unwrap()
 }
 
+/// The headers that tell what the router did for a call.
+const ROUTING_HEADERS: [&str; 5] = [
+    "x-litellm-model-id",
+    "x-litellm-model-group",
+    "x-litellm-attempted-retries",
+    "x-litellm-attempted-fallbacks",
+    "x-litellm-max-retries",
+];
+
 fn routing_headers(response: &axum::response::Response) -> Vec<(&str, &str)> {
     response
         .headers()
         .iter()
-        .filter(|(name, _)| name.as_str().starts_with("x-litellm-") && *name != "x-litellm-call-id")
+        .filter(|(name, _)| ROUTING_HEADERS.contains(&name.as_str()))
         .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
         .collect()
 }
@@ -1335,6 +1344,17 @@ async fn a_deployment_param_from_the_environment_reaches_the_provider_resolved(
     let forwarded = forwarded_body(deployment_params, json!({})).await;
 
     assert_eq!(forwarded.pointer(pointer), Some(&expected));
+}
+
+#[tokio::test]
+async fn a_param_the_model_does_not_support_is_dropped_under_the_global_drop_params() {
+    let forwarded = forwarded_body(
+        "litellm_settings:\n  drop_params: true\n",
+        json!({"speed": "fast"}),
+    )
+    .await;
+
+    assert_eq!(forwarded.get("speed"), None);
 }
 
 #[rstest]

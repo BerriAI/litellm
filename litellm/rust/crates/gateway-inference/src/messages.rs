@@ -1,8 +1,11 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
+use std::time::Duration;
+
 use axum::{Json, body::Bytes, http::HeaderMap, response::Response};
 use futures_util::StreamExt;
 use litellm_cache_response::CachePolicy;
+use litellm_config::Spelled;
 use litellm_framer::sse;
 use litellm_host::call::CallOutput;
 use litellm_host_http::Sse;
@@ -10,23 +13,25 @@ use litellm_inference_messages::{
     MessagesBody, MessagesCall, MessagesRoute, MessagesSettings, MessagesShaping, messages_body,
     route::Messages,
 };
+use litellm_llms::anthropic::model_capabilities::messages_route_capabilities;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams,
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
 };
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_model_catalog::Catalog;
 use litellm_python_compat::{flags::lax_bool, json::from_json};
 use litellm_router_core::{Attempt, Deployment, Op};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    Error, Gateway, JsonObject,
-    caching::CacheHeaders,
+    Checked, Error, Gateway, JsonObject,
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
+    record::{self, Recorder},
     routing::{self, Host, Prompt, RouteAttempt, RouteChunks},
     serve::{self, Call, Endpoint},
     stream_event::{Counts, Kind, Read, Reading},
@@ -46,7 +51,7 @@ const TOOLS: &str = "tools";
 /// and never sends them on.
 pub const REQUEST_SETTINGS: [&str; 2] = ["drop_params", "additional_drop_params"];
 
-pub async fn create<H: Host>(call: Call<H>, body: Result<JsonObject, Error>) -> Response {
+pub async fn create<H: Host>(Checked { call, body }: Checked<H, JsonObject>) -> Response {
     serve::run(&call, body.map(|JsonObject(body)| body), |body| {
         MessagesAttempt::new(&call, body)
     })
@@ -115,7 +120,7 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
         Some(counts.messages_usage())
     }
 
-    fn response_id((ran, _): &Self::Outcome) -> Option<String> {
+    fn response_id(ran: &Self::Output) -> Option<String> {
         match ran {
             CallOutput::Complete(MessagesBody::Message(message)) => Some(message.id.clone()),
             CallOutput::Complete(MessagesBody::Unchecked(fields)) => {
@@ -132,29 +137,40 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
         }
     }
 
-    fn render((ran, cache): Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error> {
+    fn configured_timeout<G: Host>(gateway: &Gateway<G>, _: &str) -> Option<Duration> {
+        gateway.messages_settings.request_timeout()
+    }
+
+    fn render(ran: Self::Output, reported: ReportedModel<'_>) -> Result<Response, Error> {
         let stream =
             Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
         let ran = reported.answer(ran, message_start);
-        let response = litellm_host_http::render(stream, stream_outcome::bytes(ran))?;
-        Ok(cache.apply(response))
+        Ok(litellm_host_http::render(
+            stream,
+            stream_outcome::bytes(ran),
+        )?)
     }
 }
 
 impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
-    type Outcome = (Streamed<Messages>, CacheHeaders);
+    type Output = Streamed<Messages>;
 
     fn prompt(&self) -> Option<Prompt<'_>> {
         Some(Prompt::Messages(&self.body))
     }
 
-    async fn run(&self, attempt: &Attempt) -> Result<Self::Outcome, Error> {
+    async fn run(&self, attempt: &Attempt) -> Result<Self::Output, Error> {
         let deployment = &attempt.deployment;
-        let shaping = self.gateway.shaping(&deployment.id);
+        let shaping = shaping(
+            deployment,
+            self.gateway.cost_map().catalog(),
+            &self.gateway.messages_settings,
+        );
         let call = MessagesCall {
             timeout: routing::timeout(
-                attempt,
-                routing::streamed(&self.body),
+                deployment,
+                attempt.timeout,
+                <Self as Endpoint>::streamed(&self.body),
                 shaping.settings.request_timeout(),
             ),
             ..project(
@@ -165,27 +181,76 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
             )?
         };
         let machine = self.route.clone().machine(call, self.policy);
-        let cache = CacheHeaders::default();
-        let ran = litellm_host_http::run(machine, (), cache.clone(), None).await?;
-        let ran = match ran {
+        let ran = litellm_host_http::run(machine, (), Recorder, None).await?;
+        Ok(match ran {
             CallOutput::Complete(body) => CallOutput::Complete(body),
-            CallOutput::Stream { head, chunks } => CallOutput::Stream {
-                head,
-                chunks: sse::blocks(chunks).boxed(),
-            },
-        };
-        Ok((ran, cache))
+            CallOutput::Stream { head, chunks } => {
+                record::stream_head(head.headers.clone());
+                CallOutput::Stream {
+                    head,
+                    chunks: sse::blocks(chunks).boxed(),
+                }
+            }
+        })
     }
 
-    fn counts((ran, _): &Self::Outcome) -> Option<Counts> {
+    fn counts(ran: &Self::Output) -> Option<Counts> {
         counts(ran)
     }
 
-    fn held(outcome: &mut Self::Outcome) -> Option<(&mut RouteChunks, Read)> {
-        match &mut outcome.0 {
+    fn held(ran: &mut Self::Output) -> Option<(&mut RouteChunks, Read)> {
+        match ran {
             CallOutput::Stream { chunks, .. } => Some((chunks, read_event)),
             CallOutput::Complete(_) => None,
         }
+    }
+}
+
+fn is_set(flag: Option<&Spelled<bool>>) -> bool {
+    match flag {
+        Some(Spelled::Value(on)) => *on,
+        Some(Spelled::Text(text)) => lax_bool(&text.as_str().into()) == Some(true),
+        None => false,
+    }
+}
+
+/// How the messages route shapes a call to `deployment`: the `configured` settings under its own
+/// `drop_params` and `additional_drop_params`, and the capabilities `catalog` and its
+/// `model_info` declare.
+fn shaping(
+    deployment: &Deployment,
+    catalog: &Catalog,
+    configured: &MessagesSettings,
+) -> MessagesShaping {
+    let params = &deployment.params;
+    let drop_params = configured.global_drop_params || is_set(params.drop_params.as_ref());
+    let base_model = params.extra.get("base_model").and_then(Value::as_str);
+    MessagesShaping {
+        settings: MessagesSettings {
+            drop_params,
+            drops_unsupported_params: drop_params,
+            additional_drop_params: params
+                .extra
+                .get("additional_drop_params")
+                .map(drop_paths)
+                .unwrap_or_default(),
+            base_model: base_model.map(str::to_owned),
+            ..configured.clone()
+        },
+        capabilities: messages_route_capabilities(
+            catalog,
+            &params.model,
+            params.custom_llm_provider.as_deref(),
+            base_model,
+            &|capability| {
+                deployment
+                    .model_info
+                    .raw
+                    .get(capability)
+                    .and_then(Value::as_bool)
+            },
+        ),
+        ..MessagesShaping::default()
     }
 }
 
@@ -250,7 +315,7 @@ fn is_on(value: &Value) -> bool {
 }
 
 /// `additional_drop_paths`: the text entries of a list, and none for any other value.
-pub fn drop_paths(value: &Value) -> Vec<String> {
+fn drop_paths(value: &Value) -> Vec<String> {
     value
         .as_array()
         .map(|paths| {
@@ -368,6 +433,10 @@ impl From<MessagesStreamUsage> for Counts {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use litellm_router_core::{DeploymentSpec, RouterConfig};
+    use litellm_router_types::RouterSettings;
     use rstest::rstest;
     use serde_json::json;
 
@@ -449,6 +518,123 @@ mod tests {
             counts(&CallOutput::Complete(body)).map(Counts::total),
             Some(132)
         );
+    }
+
+    fn deployment(litellm_params: Value, model_info: Value) -> Arc<Deployment> {
+        let (config, dynamic) = RouterConfig::from_settings(&RouterSettings::default()).unwrap();
+        let router = litellm_router_core::Router::new(
+            RouterConfig {
+                model_list: vec![DeploymentSpec {
+                    model_name: "public-model".into(),
+                    litellm_params: litellm_params.as_object().cloned().unwrap(),
+                    model_info: model_info.as_object().cloned().unwrap(),
+                    ..DeploymentSpec::default()
+                }],
+                ..config
+            },
+            dynamic,
+        )
+        .unwrap();
+        router.registry().group("public-model").unwrap().remove(0)
+    }
+
+    fn catalog() -> Catalog {
+        Catalog::parse(br#"{"provider-model": {"litellm_provider": "provider"}}"#)
+            .unwrap()
+            .value
+    }
+
+    #[rstest]
+    #[case::unset(false, json!({}), false)]
+    #[case::deployment_flag(false, json!({"drop_params": true}), true)]
+    #[case::deployment_word(false, json!({"drop_params": " True "}), true)]
+    #[case::deployment_off(false, json!({"drop_params": false}), false)]
+    #[case::deployment_unknown_word(false, json!({"drop_params": "maybe"}), false)]
+    #[case::deployment_yes(false, json!({"drop_params": "yes"}), true)]
+    #[case::deployment_no(false, json!({"drop_params": "no"}), false)]
+    #[case::global(true, json!({}), true)]
+    #[case::global_over_deployment_off(true, json!({"drop_params": false}), true)]
+    fn configured_drop_params_reach_the_deployment(
+        #[case] drops_params_globally: bool,
+        #[case] litellm_params: Value,
+        #[case] expected: bool,
+    ) {
+        let params = json!({"model": "provider/model"})
+            .as_object()
+            .cloned()
+            .into_iter()
+            .flatten()
+            .chain(litellm_params.as_object().cloned().unwrap())
+            .collect();
+        let deployment = deployment(Value::Object(params), json!({}));
+
+        let configured = MessagesSettings {
+            global_drop_params: drops_params_globally,
+            ..MessagesSettings::default()
+        };
+
+        let settings = shaping(&deployment, &catalog(), &configured).settings;
+
+        assert_eq!(
+            (settings.drop_params, settings.drops_unsupported_params),
+            (expected, expected)
+        );
+    }
+
+    #[rstest]
+    #[case::declared(json!({"supports_reasoning": true}), true)]
+    #[case::declared_off(json!({"supports_reasoning": false}), false)]
+    #[case::undeclared(json!({}), false)]
+    fn model_info_flags_reach_the_deployment(#[case] model_info: Value, #[case] expected: bool) {
+        let deployment = deployment(json!({"model": "anthropic/claude-unlisted-9"}), model_info);
+
+        let capabilities =
+            shaping(&deployment, &catalog(), &MessagesSettings::default()).capabilities;
+
+        assert_eq!(capabilities.supports_reasoning, expected);
+    }
+
+    #[test]
+    fn configured_settings_reach_the_deployment() {
+        let deployment = deployment(
+            json!({"model": "provider/model", "drop_params": false}),
+            json!({}),
+        );
+        let configured = MessagesSettings {
+            global_drop_params: true,
+            reasoning_auto_summary: true,
+            request_timeout: Some(30.0),
+            ..MessagesSettings::default()
+        };
+
+        let settings = shaping(&deployment, &catalog(), &configured).settings;
+
+        assert_eq!(
+            (
+                settings.global_drop_params,
+                settings.reasoning_auto_summary,
+                settings.request_timeout
+            ),
+            (true, true, Some(30.0))
+        );
+    }
+
+    #[rstest]
+    #[case::a_list(json!(["metadata.user_id", 1, "thinking"]), &["metadata.user_id", "thinking"])]
+    #[case::text(json!("metadata.user_id"), &[])]
+    #[case::a_map(json!({"metadata": "user_id"}), &[])]
+    fn a_deployments_additional_drop_params_are_the_text_entries_of_its_list(
+        #[case] written: Value,
+        #[case] expected: &[&str],
+    ) {
+        let deployment = deployment(
+            json!({"model": "provider/model", "additional_drop_params": written}),
+            json!({}),
+        );
+
+        let settings = shaping(&deployment, &catalog(), &MessagesSettings::default()).settings;
+
+        assert_eq!(settings.additional_drop_params, expected);
     }
 
     #[rstest]

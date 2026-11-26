@@ -120,7 +120,6 @@ export default function UserInfoView({
   const [allTeams, setAllTeams] = useState<Array<{ team_id: string; team_alias: string }>>([]);
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
   const [selectedRole, setSelectedRole] = useState<string>("user");
-  const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const { data: allMcpServers = [] } = useMCPServers();
   const { data: allMcpToolsets = [] } = useMCPToolsets();
 
@@ -176,7 +175,6 @@ export default function UserInfoView({
 
   const fetchAllTeams = async () => {
     if (!accessToken) return;
-    setIsLoadingTeams(true);
     try {
       const teams = await teamListCall(accessToken, null);
       setAllTeams(
@@ -187,8 +185,6 @@ export default function UserInfoView({
       );
     } catch (error) {
       console.error("Error fetching teams:", error);
-    } finally {
-      setIsLoadingTeams(false);
     }
   };
 

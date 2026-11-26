@@ -6,6 +6,15 @@ from typing import Final
 
 import litellm
 from litellm._logging import print_verbose
+from litellm.litellm_core_utils.core_helpers import (
+    iter_items,
+    json_contains,
+    length_of,
+    require_attributes,
+    set_item,
+    subscript,
+    unpackable_mapping,
+)
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ModelResponse
 from litellm.utils import get_optional_params
@@ -141,7 +150,7 @@ def batch_completion(
 
 # send one request to multiple models
 # return as soon as one of the llms responds
-def batch_completion_models(*args: object, **kwargs):
+def batch_completion_models(*args: object, **kwargs: object):
     """
     Send a request to multiple language models concurrently and return the response
     as soon as one of the models responds.
@@ -166,11 +175,13 @@ def batch_completion_models(*args: object, **kwargs):
         models: Final = kwargs["models"]
         kwargs.pop("models")
         futures = {}
-        with ThreadPoolExecutor(max_workers=len(models)) as executor:
-            for model in models:
+        with ThreadPoolExecutor(max_workers=length_of(models)) as executor:
+            for model in iter_items(models):
                 futures[model] = executor.submit(litellm.completion, *args, model=model, **kwargs)
 
-            for model, future in sorted(futures.items(), key=lambda x: models.index(x[0])):
+            for model, future in sorted(
+                futures.items(), key=lambda x: require_attributes(models, list[object], "index").index(x[0])
+            ):
                 if future.result() is not None:
                     return future.result()
     elif "deployments" in kwargs:
@@ -179,13 +190,14 @@ def batch_completion_models(*args: object, **kwargs):
         kwargs.pop("model_list")
         nested_kwargs: Final = kwargs.pop("kwargs", {})
         futures = {}
-        with ThreadPoolExecutor(max_workers=len(deployments)) as executor:
-            for deployment in deployments:
+        with ThreadPoolExecutor(max_workers=length_of(deployments)) as executor:
+            for deployment in iter_items(deployments):
                 for key in kwargs:
-                    if key not in deployment:  # don't override deployment values e.g. model name, api base, etc.
-                        deployment[key] = kwargs[key]
-                kwargs = {**deployment, **nested_kwargs}
-                futures[deployment["model"]] = executor.submit(litellm.completion, **kwargs)
+                    # don't override deployment values e.g. model name, api base, etc.
+                    if not json_contains(deployment, key):
+                        set_item(deployment, key, kwargs[key])
+                kwargs = {**unpackable_mapping(deployment), **unpackable_mapping(nested_kwargs)}
+                futures[subscript(deployment, "model")] = executor.submit(litellm.completion, **kwargs)
 
             while futures:
                 # wait for the first returned future

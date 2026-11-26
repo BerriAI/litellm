@@ -10,6 +10,9 @@ import { cn } from "@/lib/cva.config";
 import { makeModelGroupPublic } from "../../networking";
 import ModelFilters from "../../model_filters";
 import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toModelPublicationRequest } from "./makeModelPublicMapper";
+import { makeModelPublicSchema } from "./makeModelPublicSchema";
 import { displayMode } from "@/lib/decisionModels";
 
 const STEP_TITLES: ParseKeys[] = ["aiHub.makeModelPublic.steps.selectModels", "aiHub.makeModelPublic.steps.confirm"];
@@ -49,20 +52,21 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 }) => {
   const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0);
-  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const { getValues, setValue, watch } = useZodForm(makeModelPublicSchema, { defaultValues: { modelGroups: [] } });
+  const selectedModels = new Set(watch("modelGroups"));
   const [filteredData, setFilteredData] = useState<ModelGroupInfo[]>([]);
   const [loading, setLoading] = useState(false);
 
   const handleClose = () => {
     setCurrentStep(0);
-    setSelectedModels(new Set());
+    setValue("modelGroups", []);
     setFilteredData([]);
     onClose();
   };
 
   const handleNext = () => {
     if (currentStep === 0) {
-      if (selectedModels.size === 0) {
+      if (!makeModelPublicSchema.safeParse(getValues()).success) {
         toast.fromError(t("aiHub.makeModelPublic.selectAtLeastOne"));
         return;
       }
@@ -83,15 +87,15 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
     } else {
       newSelection.delete(modelGroup);
     }
-    setSelectedModels(newSelection);
+    setValue("modelGroups", Array.from(newSelection));
   };
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       const allModelGroups = filteredData.map((model) => model.model_group);
-      setSelectedModels(new Set(allModelGroups));
+      setValue("modelGroups", Array.from(new Set(allModelGroups)));
     } else {
-      setSelectedModels(new Set());
+      setValue("modelGroups", []);
     }
   };
 
@@ -110,19 +114,20 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
         .filter((model) => model.is_public_model_group === true)
         .map((model) => model.model_group);
 
-      setSelectedModels(new Set(alreadyPublicModels));
+      setValue("modelGroups", Array.from(new Set(alreadyPublicModels)));
     }
-  }, [visible, modelHubData]);
+  }, [visible, modelHubData, setValue]);
 
   const handleSubmit = async () => {
-    if (selectedModels.size === 0) {
+    const result = makeModelPublicSchema.safeParse(getValues());
+    if (!result.success) {
       toast.fromError(t("aiHub.makeModelPublic.selectAtLeastOne"));
       return;
     }
 
     setLoading(true);
     try {
-      const modelGroupsToMakePublic = Array.from(selectedModels);
+      const { model_groups: modelGroupsToMakePublic } = toModelPublicationRequest(result.data);
       await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
 
       toast.success(t("aiHub.makeModelPublic.success", { total: modelGroupsToMakePublic.length }));

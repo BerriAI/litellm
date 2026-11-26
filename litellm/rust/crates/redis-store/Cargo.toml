@@ -6,10 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-call-scope.workspace = true
 futures-util.workspace = true
 jiff.workspace = true
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
+litellm-config.workspace = true
 litellm-python-compat.workspace = true
 litellm-redis-client.workspace = true
 parking_lot.workspace = true
