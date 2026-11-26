@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, Type
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
@@ -56,6 +57,10 @@ def _thought_signature(provider_specific_fields: object) -> str | None:
         return None
     signature: Final = fields.get("thought_signature")
     return signature if isinstance(signature, str) else None
+
+
+def _tool_use_id(tool_call_id: str | None) -> str:
+    return (tool_call_id or "").split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] or str(uuid.uuid4())
 
 
 def _object_sequence(value: object) -> Sequence[object] | None:
@@ -1630,11 +1635,10 @@ class LiteLLMAnthropicMessagesAdapter:
                         tool_name_mapping.get(truncated_name, truncated_name) if tool_name_mapping else truncated_name
                     )
 
-                    raw_id = tool_call.id or ""
                     tool_use_block = AnthropicResponseContentBlockToolUse.model_validate(
                         {
                             "type": "tool_use",
-                            "id": raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0],
+                            "id": _tool_use_id(tool_call.id),
                             "name": original_name,
                             "input": parse_tool_call_arguments(
                                 tool_call.function.arguments,
@@ -1861,7 +1865,6 @@ class LiteLLMAnthropicMessagesAdapter:
         Literal["text", "tool_use", "thinking", "redacted_thinking"],
         "ContentBlockContentBlockDict",
     ]:
-        from litellm._uuid import uuid
         from litellm.types.llms.anthropic import TextBlock
 
         for choice in choices:
@@ -1875,7 +1878,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 thought_sig = self._streamed_tool_call_signature(raw_id, choice.delta.tool_calls[0])
                 tool_block: dict[str, object] = {
                     "type": "tool_use",
-                    "id": raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0],
+                    "id": _tool_use_id(raw_id),
                     "name": tool_name,
                     "input": {},
                 }

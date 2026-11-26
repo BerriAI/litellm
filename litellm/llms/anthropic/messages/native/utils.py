@@ -307,17 +307,6 @@ def renames_tool_use_ids_up_front(model: str, custom_llm_provider: str | None, a
     )
 
 
-def deployment_renames_tool_use_ids(litellm_params: Mapping[str, object], fallback_model: str) -> bool:
-    model: Final = litellm_params.get("model")
-    provider: Final = litellm_params.get("custom_llm_provider")
-    api_base: Final = litellm_params.get("api_base")
-    return renames_tool_use_ids_up_front(
-        model if isinstance(model, str) else fallback_model,
-        provider if isinstance(provider, str) else None,
-        api_base if isinstance(api_base, str) else None,
-    )
-
-
 def native_messages_to_send(
     messages: Sequence[object], drop_params: object, *, rewrites_tool_use_ids: bool = True
 ) -> list[dict[str, object]]:  # mutable-ok: cache-control injection and token counters take list[dict]

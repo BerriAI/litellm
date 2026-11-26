@@ -22,7 +22,6 @@ from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslat
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
-from litellm.llms.anthropic.messages.native.utils import deployment_renames_tool_use_ids
 from litellm.llms.anthropic.messages.responses_adapters.handler import count_messages_as_sent
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
@@ -302,7 +301,6 @@ class MistralTokenCounter(BaseTokenCounter):
         system: object,
         messages_format: TokenCountMessagesFormat,
         output_format: JsonValue,
-        rewrites_tool_use_ids: bool,
     ) -> ResponsesCountRequestParts:
         match messages_format:
             case "anthropic":
@@ -312,7 +310,6 @@ class MistralTokenCounter(BaseTokenCounter):
                     system=None,
                     tools=tools,
                     output_format=output_format,
-                    rewrites_tool_use_ids=rewrites_tool_use_ids,
                 )
                 system_text: Final = _anthropic_system_as_chat_sends_it(system)
                 return OpenAICountTokensConfig.count_request_parts(
@@ -421,9 +418,6 @@ class MistralTokenCounter(BaseTokenCounter):
         if isinstance(resolved, MistralError):
             return _count_error(model_to_use, request_model, resolved.message, resolved.status_code)
 
-        deployment_params: Final = (
-            as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
-        )
         input_items, instructions, counted_tools, text = self._responses_request_parts(
             model_to_use=model_to_use,
             messages=sent_messages,
@@ -431,7 +425,6 @@ class MistralTokenCounter(BaseTokenCounter):
             system=system,
             messages_format=messages_format,
             output_format=output_format,
-            rewrites_tool_use_ids=deployment_renames_tool_use_ids(deployment_params, model_to_use),
         )
 
         if not input_items:
@@ -441,7 +434,9 @@ class MistralTokenCounter(BaseTokenCounter):
             if text is not None
             else _CHAT_TO_RESPONSES.transform_response_format_to_text_format(chat_params.get("response_format"))
         )
-        timeout: Final = deployment_timeout(deployment_params)
+        timeout: Final = deployment_timeout(
+            as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
+        )
         tool_choice: Final = _counted_tool_choice(sent_chat_params.get("tool_choice")) if counted_tools else None
 
         return await self._counted(

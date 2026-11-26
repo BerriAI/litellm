@@ -492,6 +492,49 @@ async fn a_rejected_tool_use_id_and_then_a_rejected_thinking_replay_are_both_rec
 }
 
 #[rstest]
+#[tokio::test]
+async fn strict_tools_a_rejected_tool_use_id_and_a_thinking_replay_are_all_recovered(
+    call: MessagesCall,
+) {
+    let upstream = upstream([
+        rejection(400, STRICT_REJECTION),
+        rejection(400, TOOL_USE_ID_PATTERN),
+        rejection(400, INVALID_SIGNATURE),
+        message_response(),
+    ])
+    .await;
+    let host = RecordingCall::<Messages>::new(gateway_replay(
+        with_fields(
+            strict_tools(call, upstream.uri(), false, true),
+            json!({"thinking": enabled()}),
+        ),
+        upstream.uri(),
+        false,
+        true,
+    ));
+
+    execute(&host).await.expect("the third retry succeeds");
+
+    let sent: Vec<(Value, Value)> = received(&upstream)
+        .await
+        .iter()
+        .map(|request| {
+            let body = request.json();
+            (body["messages"].clone(), body["tools"][0]["strict"].clone())
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            (kimi_tool_round("functions.Bash:0", true), json!(true)),
+            (kimi_tool_round("functions.Bash:0", true), Value::Null),
+            (kimi_tool_round("functions_Bash_0", true), Value::Null),
+            (kimi_tool_round("functions_Bash_0", false), Value::Null),
+        ]
+    );
+}
+
+#[rstest]
 #[case::ids_already_match("toolu_01", TOOL_USE_ID_PATTERN)]
 #[case::other_field(
     "functions.Bash:0",

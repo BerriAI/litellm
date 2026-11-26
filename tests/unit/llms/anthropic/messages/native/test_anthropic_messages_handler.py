@@ -485,6 +485,7 @@ def test_replayed_tool_use_ids_are_rewritten_for_a_host_that_can_serve_claude_un
 
 _TOOL_USE_ID_REJECTION: Final = "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"
 _THINKING_REJECTION: Final = "messages.1.content.0: Invalid `signature` in `thinking` block"
+_STRICT_TOOLS_REJECTION: Final = "Too many strict tools (21). The maximum number of strict tools supported is 20."
 
 
 def _anthropic_rejection(message: str) -> httpx.Response:
@@ -499,24 +500,38 @@ def _replayed_thinking_tool_round(tool_use_id: str, thinking: bool) -> list[dict
     return [user, {**assistant, "content": [*signed, *assistant["content"]]}, result]
 
 
+def _bash_tool(strict: bool) -> dict[str, object]:
+    return {"name": "Bash", "input_schema": {"type": "object"}, **({"strict": True} if strict else {})}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("rejections", "sent_rounds"),
     [
         pytest.param(
             [_TOOL_USE_ID_REJECTION],
-            [("functions.Bash:0", True), ("functions_Bash_0", True)],
+            [("functions.Bash:0", True, True), ("functions_Bash_0", True, True)],
             id="tool-use-id-pattern",
         ),
         pytest.param(
             [_TOOL_USE_ID_REJECTION, _THINKING_REJECTION],
-            [("functions.Bash:0", True), ("functions_Bash_0", True), ("functions_Bash_0", False)],
+            [("functions.Bash:0", True, True), ("functions_Bash_0", True, True), ("functions_Bash_0", False, True)],
             id="tool-use-id-pattern-then-thinking-signature",
+        ),
+        pytest.param(
+            [_STRICT_TOOLS_REJECTION, _TOOL_USE_ID_REJECTION, _THINKING_REJECTION],
+            [
+                ("functions.Bash:0", True, True),
+                ("functions.Bash:0", True, False),
+                ("functions_Bash_0", True, False),
+                ("functions_Bash_0", False, False),
+            ],
+            id="strict-tools-then-tool-use-id-pattern-then-thinking-signature",
         ),
     ],
 )
 async def test_a_gateway_that_rejects_the_callers_tool_use_ids_gets_one_retry_with_renamed_ids(
-    monkeypatch: pytest.MonkeyPatch, rejections: list[str], sent_rounds: list[tuple[str, bool]]
+    monkeypatch: pytest.MonkeyPatch, rejections: list[str], sent_rounds: list[tuple[str, bool, bool]]
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock(assert_all_called=True) as upstream:
@@ -533,10 +548,14 @@ async def test_a_gateway_that_rejects_the_callers_tool_use_ids_gets_one_retry_wi
             api_base="http://gateway.test",
             api_key="sk-test",
             thinking={"type": "enabled", "budget_tokens": 2048},
+            tools=[_bash_tool(strict=True)],
+            drop_params=True,
         )
 
-    assert [json.loads(call.request.content)["messages"] for call in route.calls] == [
-        _replayed_thinking_tool_round(tool_use_id, thinking) for tool_use_id, thinking in sent_rounds
+    sent: Final = [json.loads(call.request.content) for call in route.calls]
+    assert [(body["messages"], body["tools"]) for body in sent] == [
+        (_replayed_thinking_tool_round(tool_use_id, thinking), [_bash_tool(strict)])
+        for tool_use_id, thinking, strict in sent_rounds
     ]
 
 

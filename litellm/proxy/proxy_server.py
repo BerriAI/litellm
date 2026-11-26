@@ -457,7 +457,7 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
     non_string_user_text_error,
     without_non_string_system_texts,
 )
-from litellm.llms.anthropic.messages.native.utils import deployment_renames_tool_use_ids, native_messages_to_send
+from litellm.llms.anthropic.messages.native.utils import native_messages_to_send
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange_and_chacha20
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler as JwksHTTPHandler
@@ -15508,7 +15508,6 @@ def _counted_request_messages(
     messages: Sequence[dict[str, object]] | None,  # mutable-ok: TokenCountRequest.messages is typed list[dict]
     messages_format: TokenCountMessagesFormat,
     deployment: Mapping[str, object] | None,
-    renames_tool_use_ids: bool,
 ) -> list[dict[str, object]] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes list messages
     if messages is None:
         return None
@@ -15518,7 +15517,7 @@ def _counted_request_messages(
     user_text_error: Final = None if drops else non_string_user_text_error(messages)
     if user_text_error is not None:
         raise ProxyException(message=user_text_error, type="invalid_request_error", param="messages", code=400)
-    kept: Final = native_messages_to_send(messages, drops, rewrites_tool_use_ids=renames_tool_use_ids)
+    kept: Final = native_messages_to_send(messages, drops)
     emptied_error: Final = emptied_messages_error(messages, kept)
     if emptied_error is not None:
         raise ProxyException(message=emptied_error, type="invalid_request_error", param="messages", code=400)
@@ -16640,12 +16639,7 @@ async def _count_request_tokens(
     prompt_as_message: Final = prompt_as_turn or (
         prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     )
-    request_messages: Final = _counted_request_messages(
-        messages,
-        messages_format,
-        count_deployment,
-        deployment_renames_tool_use_ids(count_litellm_params, request.model),
-    )
+    request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     request_system: Final = _counted_request_system(system, messages_format, count_deployment)
     local_count_error: Final = malformed_text_count_error(request_messages, messages_format, count_deployment)
     malformed_messages: Final = (

@@ -2143,7 +2143,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
         )
 
         config = AnthropicMessagesConfig()
-        assert config.max_retry_on_anthropic_messages_http_error == 3
+        assert config.max_retry_on_anthropic_messages_http_error == 4
 
         req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
         err_text = (

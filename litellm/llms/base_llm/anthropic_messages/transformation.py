@@ -196,7 +196,7 @@ class BaseAnthropicMessagesConfig(ABC):
         retry (e.g. strip invalid encrypted thinking signatures after a deployment or
         credential change).
         """
-        return 3
+        return 4
 
     def should_retry_anthropic_messages_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: Mapping[str, object], request_body: object = None
