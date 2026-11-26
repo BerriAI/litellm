@@ -686,6 +686,7 @@ azure_anthropic_models: Set[str] = set()
 azure_text_models: Set[str] = set()
 anyscale_models: Set[str] = set()
 cerebras_models: Set[str] = set()
+bineric_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 nadir_models: Set[str] = set()
 galadriel_models: Set[str] = set()
 nvidia_nim_models: Set[str] = set()
@@ -958,6 +959,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             anyscale_models.add(key)
         elif value.get("litellm_provider") == "cerebras":
             cerebras_models.add(key)
+        elif value.get("litellm_provider") == "bineric":
+            bineric_models.add(key)
         elif value.get("litellm_provider") == "nadir":
             nadir_models.add(key)
         elif value.get("litellm_provider") == "galadriel":
@@ -1199,6 +1202,7 @@ def _known_models() -> frozenset[str]:
         | azure_anthropic_models
         | anyscale_models
         | cerebras_models
+        | bineric_models
         | nadir_models
         | galadriel_models
         | nvidia_nim_models
@@ -1337,6 +1341,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "azure_text": azure_text_models,
         "anyscale": anyscale_models,
         "cerebras": cerebras_models,
+        "bineric": bineric_models,
         "nadir": nadir_models,
         "galadriel": galadriel_models,
         "nvidia_nim": nvidia_nim_models,
@@ -1872,6 +1877,9 @@ if TYPE_CHECKING:
     )
     from .llms.empiriolabs.decisions.transformation import (
         EmpirioLabsDecisionsConfig as EmpirioLabsDecisionsConfig,
+    )
+    from .llms.bineric.decisions.transformation import (
+        BinericDecisionsConfig as BinericDecisionsConfig,
     )
     from .llms.eu_jev.decisions.transformation import (
         EuJevDecisionsConfig as EuJevDecisionsConfig,

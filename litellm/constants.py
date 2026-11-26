@@ -1174,6 +1174,7 @@ openai_compatible_providers: Final[list[str]] = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "bineric",
     "baseten",
     "sambanova",
     "ai21_chat",
