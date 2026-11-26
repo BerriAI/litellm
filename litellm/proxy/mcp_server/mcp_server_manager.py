@@ -1347,6 +1347,20 @@ def _authorization_is_litellm_admission_credential_with_settings(
     )
 
 
+def without_admission_authorization(
+    raw_headers: Mapping[str, str], user_api_key_auth: UserAPIKeyAuth | None
+) -> Mapping[str, str]:
+    """Drop ``Authorization`` when it is the dashboard login an inference request was admitted with, so
+    neither guardrails nor a server listing it in ``extra_headers`` receive it."""
+    if (
+        user_api_key_auth is not None
+        and user_api_key_auth.mcp_authorization_is_admission_credential
+        and _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth)
+    ):
+        return {name: value for name, value in raw_headers.items() if name.lower() != "authorization"}
+    return raw_headers
+
+
 def _authorization_is_admission_jwt(
     raw_headers: Mapping[str, str] | None, user_api_key_auth: UserAPIKeyAuth | None
 ) -> bool:

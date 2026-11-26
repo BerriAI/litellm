@@ -57,6 +57,7 @@ def _private_gateway(
     stock: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final = directory / "stored-responses.yaml"
     (directory / f"{STREAM_BLOCK_MODULE}.py").write_text(STREAM_BLOCK_SOURCE)
+    (directory / f"{BEARER_PROBE_MODULE}.py").write_text(BEARER_PROBE_SOURCE)
     config.write_text(
         yaml.safe_dump(
             {
@@ -73,6 +74,10 @@ def _private_gateway(
                     {
                         "guardrail_name": STREAM_BLOCK,
                         "litellm_params": {"guardrail": f"{STREAM_BLOCK_MODULE}.BlockGuard", "mode": "post_call"},
+                    },
+                    {
+                        "guardrail_name": BEARER_PROBE,
+                        "litellm_params": {"guardrail": f"{BEARER_PROBE_MODULE}.BearerProbe", "mode": "pre_mcp_call"},
                     },
                     *guardrails,
                 ],
@@ -163,6 +168,18 @@ STREAM_BLOCK_SOURCE: Final = (
     "            pass\n"
     f'        raise HTTPException(status_code=400, detail="{STREAM_BLOCK_DETAIL}")\n'
     "        yield\n"
+)
+BEARER_PROBE: Final = "mcp-caller-bearer-probe"
+BEARER_PROBE_MODULE: Final = "mcp_caller_bearer_probe"
+BEARER_PROBE_DETAIL: Final = "guardrail received a caller bearer"
+BEARER_PROBE_SOURCE: Final = (
+    "from fastapi import HTTPException\n\n"
+    "from litellm.integrations.custom_guardrail import CustomGuardrail\n\n\n"
+    "class BearerProbe(CustomGuardrail):\n"
+    "    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):\n"
+    '        if data.get("incoming_bearer_token"):\n'
+    f'            raise HTTPException(status_code=400, detail="{BEARER_PROBE_DETAIL}")\n'
+    "        return data\n"
 )
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -810,6 +827,73 @@ def test_dashboard_viewer_login_token_never_reaches_a_passthrough_server(
         assert response.status_code == 200, response.text
         assert ANSWER in response.text, response.text
         assert _authorizations_seen_by(rig.peer) == frozenset({None})
+
+
+PLAIN_SERVER_FORWARDING_AUTHORIZATION: Final[Mapping[str, object]] = {
+    "auth_type": "none",
+    "extra_headers": ["Authorization"],
+}
+
+
+@pytest.mark.parametrize(("surface", "stream"), [("responses", True), ("responses", False), ("chat", False)])
+def test_dashboard_viewer_login_token_never_reaches_a_server_listing_authorization_in_extra_headers(
+    gateway: Gateway, surface: Surface, stream: bool
+) -> None:
+    with _rig(gateway, surface, server=PLAIN_SERVER_FORWARDING_AUTHORIZATION) as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=stream)
+
+        assert response.status_code == 200, response.text
+        assert ANSWER in response.text, response.text
+        assert _authorizations_seen_by(rig.peer) == frozenset({None})
+
+
+def test_dashboard_viewer_upstream_bearer_reaches_a_server_listing_authorization_in_extra_headers(
+    gateway: Gateway,
+) -> None:
+    with _rig(gateway, "responses", server=PLAIN_SERVER_FORWARDING_AUTHORIZATION) as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        upstream_bearer: Final = "upstream-" + uuid.uuid4().hex
+        response: Final = rig.send(
+            session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], upstream_bearer=upstream_bearer
+        )
+
+        assert response.status_code == 200, response.text
+        assert _authorizations_seen_by(rig.peer) == frozenset({f"Bearer {upstream_bearer}".encode()})
+
+
+@pytest.mark.parametrize("surface", ["responses", "chat"])
+def test_dashboard_viewer_login_token_never_reaches_a_pre_mcp_call_guardrail(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _rig(gateway, surface) as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(
+            session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], guardrails=[BEARER_PROBE]
+        )
+
+        assert response.status_code == 200, response.text
+        assert BEARER_PROBE_DETAIL not in response.text, response.text
+        assert [_add_call_arguments(call) for call in _peer_add_calls(rig.peer)] == [ADD], response.text
+
+
+@pytest.mark.parametrize("surface", ["responses", "chat"])
+def test_dashboard_viewer_upstream_bearer_reaches_a_pre_mcp_call_guardrail(gateway: Gateway, surface: Surface) -> None:
+    with _rig(gateway, surface) as rig:
+        team_id: Final = rig.scenario.team(object_permission={"mcp_servers": [rig.server_id]})
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(
+            session,
+            [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}],
+            upstream_bearer="upstream-" + uuid.uuid4().hex,
+            guardrails=[BEARER_PROBE],
+        )
+
+        assert BEARER_PROBE_DETAIL in response.text, response.text
+        assert _peer_add_calls(rig.peer) == ()
 
 
 @pytest.mark.parametrize(("surface", "stream"), [("responses", True), ("responses", False), ("chat", False)])
