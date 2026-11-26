@@ -172,7 +172,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
+        headers: dict[str, object],  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment forwards provider-specific extras
