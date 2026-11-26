@@ -1,6 +1,7 @@
 from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    ImageTokenCostReporter,
     calculate_image_response_cost_from_usage,
     flat_image_cost,
     generic_cost_per_token,
@@ -32,7 +33,13 @@ def _deployment_prices_per_image_only(model_info: ModelInfo | None) -> bool:
     )
 
 
-def image_cost_calculator(model: str, image_response: ImageResponse, model_info: ModelInfo | None = None) -> float:
+def image_cost_calculator(
+    model: str,
+    image_response: ImageResponse,
+    model_info: ModelInfo | None = None,
+    *,
+    report_token_cost: ImageTokenCostReporter | None = None,
+) -> float:
     resolved_model_info: Final = resolve_image_model_info(
         model=model, custom_llm_provider="tencent", model_info=_deployment_image_token_pricing(model_info)
     )
@@ -43,6 +50,7 @@ def image_cost_calculator(model: str, image_response: ImageResponse, model_info:
         image_response=image_response,
         custom_llm_provider="tencent",
         model_info=resolved_model_info,
+        report_token_cost=report_token_cost,
     )
     if token_based_cost is not None:
         return token_based_cost

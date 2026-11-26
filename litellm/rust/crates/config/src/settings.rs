@@ -1,6 +1,12 @@
-use litellm_python_compat::lenient::{IsTrue, LaxBool, StrBool, Truthy};
+use std::{num::NonZeroUsize, time::Duration};
+
+use litellm_python_compat::{
+    lenient::{IsTrue, LaxBool, StrBool, Truthy},
+    number::seconds,
+    pydantic::{lax_float, lax_int},
+};
 use litellm_secret_value::SecretValue;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de::Error as _};
 use serde_with::{Map, serde_as};
 use veil::Redact;
 
@@ -31,6 +37,36 @@ fn user_header_mappings<'de, D: serde::Deserializer<'de>>(
         Some(Shape::One(mapping)) => Box::new([mapping]),
         Some(Shape::Many(mappings)) => mappings,
     })
+}
+
+/// `general_settings.user_api_key_cache_ttl` as the proxy reads it at startup: `float(value)` seconds
+/// handed to the auth cache store, which reads a negative number as zero and refuses infinity and
+/// NaN, so the proxy does not start over a value refused here.
+fn user_api_key_cache_ttl<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Duration>, D::Error> {
+    Option::<litellm_python_compat::Value>::deserialize(deserializer)?
+        .map(|value| {
+            lax_float(&value)
+                .and_then(|value| seconds(value).ok())
+                .ok_or_else(|| D::Error::custom("expected a finite number of seconds"))
+        })
+        .transpose()
+}
+
+/// `general_settings.user_api_key_cache_max_size` as `ConfigGeneralSettings` validates it: a lax
+/// `int` greater than zero, so the proxy does not start over a value refused here.
+fn user_api_key_cache_max_size<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<NonZeroUsize>, D::Error> {
+    Option::<litellm_python_compat::Value>::deserialize(deserializer)?
+        .map(|value| {
+            lax_int(&value)
+                .and_then(|number| usize::try_from(number).ok())
+                .and_then(NonZeroUsize::new)
+                .ok_or_else(|| D::Error::custom("expected an integer greater than zero"))
+        })
+        .transpose()
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -135,6 +171,10 @@ pub struct GeneralSettings {
     pub token_rate_limit_type: Option<String>,
     #[serde(deserialize_with = "user_header_mappings")]
     pub user_header_mappings: Box<[UserHeaderMapping]>,
+    #[serde(deserialize_with = "user_api_key_cache_ttl")]
+    pub user_api_key_cache_ttl: Option<Duration>,
+    #[serde(deserialize_with = "user_api_key_cache_max_size")]
+    pub user_api_key_cache_max_size: Option<NonZeroUsize>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
@@ -197,6 +237,8 @@ impl Default for GeneralSettings {
             user_header_name: None,
             token_rate_limit_type: None,
             user_header_mappings: Box::default(),
+            user_api_key_cache_ttl: None,
+            user_api_key_cache_max_size: None,
             additional_fields: AdditionalFields::default(),
         }
     }
@@ -265,6 +307,8 @@ pub struct LiteLlmSettings {
 mod tests {
     use rstest::rstest;
 
+    use std::{num::NonZeroUsize, time::Duration};
+
     use super::{GeneralSettings, LiteLlmSettings};
     use crate::JwtAuthSettings;
 
@@ -309,5 +353,50 @@ mod tests {
         let settings: GeneralSettings =
             serde_json::from_value(serde_json::json!({"max_request_size_mb": limit})).unwrap();
         assert_eq!(settings.max_request_size_mb, Some(expected));
+    }
+
+    #[rstest]
+    #[case::unset(serde_json::json!({}), None)]
+    #[case::null(serde_json::json!({"user_api_key_cache_ttl": null}), None)]
+    #[case::int(serde_json::json!({"user_api_key_cache_ttl": 600}), Some(Duration::from_secs(600)))]
+    #[case::fraction(serde_json::json!({"user_api_key_cache_ttl": 1.5}), Some(Duration::from_millis(1500)))]
+    #[case::text(serde_json::json!({"user_api_key_cache_ttl": " 600 "}), Some(Duration::from_secs(600)))]
+    #[case::negative_is_zero(serde_json::json!({"user_api_key_cache_ttl": -5}), Some(Duration::ZERO))]
+    fn the_auth_cache_ttl_is_read_as_float_reads_it(
+        #[case] written: serde_json::Value,
+        #[case] expected: Option<Duration>,
+    ) {
+        let settings: GeneralSettings = serde_json::from_value(written).unwrap();
+
+        assert_eq!(settings.user_api_key_cache_ttl, expected);
+    }
+
+    #[rstest]
+    #[case::unset(serde_json::json!({}), None)]
+    #[case::null(serde_json::json!({"user_api_key_cache_max_size": null}), None)]
+    #[case::int(serde_json::json!({"user_api_key_cache_max_size": 500}), NonZeroUsize::new(500))]
+    #[case::whole_float(serde_json::json!({"user_api_key_cache_max_size": 500.0}), NonZeroUsize::new(500))]
+    #[case::text(serde_json::json!({"user_api_key_cache_max_size": "500"}), NonZeroUsize::new(500))]
+    fn the_auth_cache_size_is_read_as_pydantic_reads_an_int(
+        #[case] written: serde_json::Value,
+        #[case] expected: Option<NonZeroUsize>,
+    ) {
+        let settings: GeneralSettings = serde_json::from_value(written).unwrap();
+
+        assert_eq!(settings.user_api_key_cache_max_size, expected);
+    }
+
+    #[rstest]
+    #[case::ttl_text_that_is_no_number(serde_json::json!({"user_api_key_cache_ttl": "soon"}))]
+    #[case::ttl_infinity(serde_json::json!({"user_api_key_cache_ttl": "inf"}))]
+    #[case::ttl_nan(serde_json::json!({"user_api_key_cache_ttl": "nan"}))]
+    #[case::size_zero(serde_json::json!({"user_api_key_cache_max_size": 0}))]
+    #[case::size_negative(serde_json::json!({"user_api_key_cache_max_size": -1}))]
+    #[case::size_fraction(serde_json::json!({"user_api_key_cache_max_size": 1.5}))]
+    #[case::size_text_that_is_no_int(serde_json::json!({"user_api_key_cache_max_size": "many"}))]
+    fn an_auth_cache_setting_the_proxy_would_not_start_with_is_refused(
+        #[case] written: serde_json::Value,
+    ) {
+        assert!(serde_json::from_value::<GeneralSettings>(written).is_err());
     }
 }

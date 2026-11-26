@@ -21,6 +21,33 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
+async def resolve_inference_mcp_auth(auth: "UserAPIKeyAuth | None") -> "UserAPIKeyAuth | None":
+    if auth is None:
+        return None
+    from litellm.proxy.mcp_server.ui_session_utils import acting_user_auth
+
+    session: Final = auth.dashboard_model_access_auth()
+    if session.mcp_explicit_grants_only or any(
+        scope is not None
+        for scope in (
+            session.object_permission,
+            session.object_permission_id,
+            session.mcp_toolset_id,
+            session.mcp_session_resource_server_ids,
+        )
+    ):
+        return auth
+    acting: Final = await acting_user_auth(session)
+    if acting is session:
+        return acting
+    return acting.model_copy(
+        update={
+            "end_user_id": session.end_user_id,
+            "mcp_authorization_is_admission_credential": bool(session.api_key),
+        }
+    )
+
+
 class _AuthCarryingMetadata(TypedDict):
     """The one key this module reads out of a request's ``metadata`` / ``litellm_metadata``."""
 

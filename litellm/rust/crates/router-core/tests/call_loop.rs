@@ -506,6 +506,26 @@ fn agentic_followup() -> AttemptError {
     failed
 }
 
+fn follow_up_to_a_provider_held_response() -> AttemptError {
+    let mut failed = failure(FailureKind::Declined, 400);
+    failed.classes = [
+        "UnresolvablePreviousResponseError".into(),
+        "MalformedRequestFieldError".into(),
+        "BadRequestError".into(),
+    ]
+    .into();
+    failed.names_provider = true;
+    failed
+}
+
+fn follow_up_to_an_unknown_response() -> AttemptError {
+    let mut failed = follow_up_to_a_provider_held_response();
+    failed.classes = std::iter::once("UnknownPreviousResponseError".into())
+        .chain(failed.classes.iter().cloned())
+        .collect();
+    failed
+}
+
 fn create_may_exist() -> AttemptError {
     let mut failed = failure(FailureKind::Timeout, 408);
     failed.create_may_exist = true;
@@ -514,10 +534,11 @@ fn create_may_exist() -> AttemptError {
 
 fn over_every_tpm_limit() -> AttemptError {
     let mut failed = failure(FailureKind::RateLimit, 429);
-    failed.classes = vec![
+    failed.classes = [
         "RequestOverDeploymentTpmError".into(),
         "RateLimitError".into(),
-    ];
+    ]
+    .into();
     failed
 }
 
@@ -1452,6 +1473,29 @@ async fn a_failed_attempt_counts_its_request_only_when_its_callback_ran(
     let usage = router.health().usage(&deployment).await.unwrap();
     let counted = host.cache.outcomes("a1").await.unwrap().fails;
     assert_eq!((usage.1, counted), (requests, fails));
+}
+
+#[rstest]
+#[case::an_async_call(false)]
+#[case::a_sync_call(true)]
+#[tokio::test]
+async fn a_failed_attempt_on_a_billed_answer_counts_its_tokens_with_its_request(
+    #[case] uncounted_request: bool,
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "gemini/a", "tpm": 1000}, "model_info": {"id": "a1"}},
+        ]
+    }))
+    .unwrap();
+    let mut failure = AttemptError::new(FailureKind::ContentPolicyViolation, Some(400));
+    failure.uncounted_request = uncounted_request;
+    failure.answered_tokens = 1110;
+    let host = Arc::new(ScriptedHost::failing("primary", vec![failure]));
+    let router = router(config, json!({"num_retries": 0}), host.clone());
+    let _ = router.call(Op::from("aimage_generation"), request()).await;
+    let deployment = router.registry().deployment("a1").unwrap();
+    assert_eq!(router.health().usage(&deployment).await.unwrap(), (1110, 1));
 }
 
 #[rstest]
@@ -2480,6 +2524,7 @@ async fn a_num_retries_that_raises_leaves_a_context_window_error_standing(config
 #[rstest]
 #[case::agentic_followup(agentic_followup())]
 #[case::over_every_tpm_limit(over_every_tpm_limit())]
+#[case::follow_up_to_a_provider_held_response(follow_up_to_a_provider_held_response())]
 #[tokio::test]
 async fn a_failure_no_retry_clears_is_not_retried_but_still_falls_back(
     config: RouterConfig,
@@ -2498,6 +2543,89 @@ async fn a_failure_no_retry_clears_is_not_retried_but_still_falls_back(
     assert_eq!(response.deployment_id, "b1");
     assert_eq!(host.retries(), 0);
     assert_eq!(host.selected().len(), 2);
+}
+
+#[rstest]
+#[case::fallbacks(json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}))]
+#[case::default_fallbacks(json!({"num_retries": 3, "default_fallbacks": ["backup"]}))]
+#[tokio::test]
+async fn a_follow_up_to_an_unknown_response_is_neither_retried_nor_falls_back(
+    config: RouterConfig,
+    #[case] dynamic: Value,
+) {
+    let mut config = config;
+    config.retry_policy = serde_json::from_value(json!({"BadRequestErrorRetries": 2})).unwrap();
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![follow_up_to_an_unknown_response()],
+    ));
+    let router = router(config, dynamic, host.clone());
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.is_a("UnresolvablePreviousResponseError"))
+    );
+    assert_eq!((host.retries(), host.selected().len()), (0, 1));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_follow_up_to_an_unknown_response_on_a_fallback_ends_the_call_before_the_next_target() {
+    let host = Arc::new(ScriptedHost::scripted(vec![
+        ("primary", vec![server_error()]),
+        ("backup", vec![follow_up_to_an_unknown_response()]),
+    ]));
+    let router = router(
+        tiers(false),
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup", "context"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.is_a("UnknownPreviousResponseError"))
+    );
+    assert_eq!(host.selected(), ["p1", "b1"]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_fallback_that_cannot_rebuild_a_provider_held_response_hands_it_to_the_next_target() {
+    let host = Arc::new(ScriptedHost::scripted(vec![
+        ("primary", vec![server_error()]),
+        ("backup", vec![follow_up_to_a_provider_held_response()]),
+    ]));
+    let router = router(
+        tiers(false),
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup", "context"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(response.deployment_id, "c1");
+    assert_eq!(host.selected(), ["p1", "b1", "c1"]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_provider_held_follow_up_falls_back_without_fallback_on_unsupported_params(
+    mut config: RouterConfig,
+) {
+    config.fallback_on_unsupported_params = Some(false);
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![follow_up_to_a_provider_held_response()],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(response.deployment_id, "b1");
 }
 
 #[rstest]
@@ -3594,7 +3722,10 @@ async fn a_take_over_that_serves_nothing_says_which_error_it_ends_on(
         .await;
 
     let raised = match taken {
-        Some(Err(Unanswered { raised })) => raised.map(|Raised(deployment)| deployment),
+        Some(Err(Unanswered { raised })) => raised.map(|raised| {
+            assert_eq!(raised.deployment_id.as_ref(), Some(&raised.failure.0));
+            raised.failure.0
+        }),
         other => panic!("the take-over did not serve nothing: {other:?}"),
     };
     assert_eq!(raised.as_deref(), raised_on);
@@ -3711,7 +3842,10 @@ async fn a_retry_the_host_refuses_ends_the_take_over_before_any_fallback() {
 
     let ended = taken.map(|taken| taken.map(|answer| answer.output.response));
     let refused = Unanswered {
-        raised: Some(Raised("p1".to_owned())),
+        raised: Some(litellm_router_core::Raised {
+            failure: Raised("p1".to_owned()),
+            deployment_id: Some("p1".to_owned()),
+        }),
     };
     assert_eq!(
         (ended, host.selected()),
@@ -5346,10 +5480,11 @@ async fn every_event_of_a_retried_and_fallen_back_call_serializes_tagged_by_its_
 
 fn queue_rejected() -> AttemptError {
     let mut rejected = AttemptError::new(FailureKind::QueueRejected, Some(503));
-    rejected.classes = vec![
+    rejected.classes = [
         "DynamicQueueFullError".into(),
         "ServiceUnavailableError".into(),
-    ];
+    ]
+    .into();
     rejected
 }
 

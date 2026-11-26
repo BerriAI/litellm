@@ -206,6 +206,8 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         litellm_jwtauth: _,
         allow_user_auth: _,
         token_rate_limit_type: _,
+        user_api_key_cache_ttl: _,
+        user_api_key_cache_max_size: _,
         completion_model,
         max_in_flight_requests_per_worker,
         max_queued_requests_per_worker,
