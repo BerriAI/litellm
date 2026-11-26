@@ -17983,9 +17983,9 @@
         "supports_vision": true
     },
     "cloudflare/clef-flash": {
-        "input_cost_per_token": 9e-08,
+        "input_cost_per_token": 3.8e-08,
         "litellm_provider": "cloudflare",
-        "max_input_tokens": 65536,
+        "max_input_tokens": 24576,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
         "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
@@ -18001,9 +18001,9 @@
         "supports_vision": true
     },
     "cloudflare/@cf/cloudflare/clef-flash": {
-        "input_cost_per_token": 9e-08,
+        "input_cost_per_token": 3.8e-08,
         "litellm_provider": "cloudflare",
-        "max_input_tokens": 65536,
+        "max_input_tokens": 24576,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
         "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/",
