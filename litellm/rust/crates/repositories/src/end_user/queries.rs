@@ -1,41 +1,12 @@
 //! `LiteLLM_EndUserTable` reads: one end user with the budget and object permission it links, and the ids of
 //! end users that restrict something auth enforces
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::{PgExecutor, types::Json};
 
 use litellm_db::Error;
 
-use crate::{RawJson, budget::Budget};
-
-/// Every scalar column of one `LiteLLM_ObjectPermissionTable` row
-#[macro_rules_attribute::apply(crate::db_row)]
-#[derive(Deserialize, Serialize)]
-pub(super) struct ObjectPermission {
-    pub object_permission_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp_servers: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp_access_groups: Option<Vec<String>>,
-    pub mcp_tool_permissions: Option<RawJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vector_stores: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agents: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_access_groups: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub models: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blocked_tools: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp_toolsets: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub search_tools: Option<Vec<String>>,
-    pub mcp_tool_search_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skills: Option<Vec<String>>,
-}
+use crate::{ObjectPermission, budget::Budget};
 
 /// One `LiteLLM_EndUserTable` row with the budget and object permission it links, as the end user repository hands it out
 #[macro_rules_attribute::apply(crate::db_row)]
