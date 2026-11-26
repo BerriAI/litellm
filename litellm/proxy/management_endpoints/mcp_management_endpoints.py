@@ -2816,16 +2816,20 @@ if MCP_AVAILABLE:
         # This prevents accidentally deleting a BYOK credential if one exists
         # for the same (user_id, server_id) pair.
         cred_to_delete: Final = await get_user_oauth_credential(
-            prisma_client, target_user_id, server_id, include_invalidated=True
+            prisma_client, target_user_id, server_id, use_writer=True, include_invalidated=True
         )
         if cred_to_delete is not None:
-            await delete_user_oauth_credential_if_grant_matches(
+            delete_result: Final = await delete_user_oauth_credential_if_grant_matches(
                 prisma_client,
                 target_user_id,
                 server_id,
-                access_token=cred_to_delete["access_token"],
-                refresh_token=cred_to_delete.get("refresh_token"),
+                connected_at=cred_to_delete.get("connected_at"),
             )
+            if delete_result == "changed":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "oauth_credential_changed"},
+                )
             from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415
                 global_mcp_server_manager,
             )

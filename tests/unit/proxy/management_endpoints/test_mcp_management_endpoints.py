@@ -6010,9 +6010,9 @@ async def test_delete_mcp_oauth_user_credential_reads_invalidated_grants_for_rev
             user_api_key_dict=_make_user_auth(user_id),
         )
 
-    reader.assert_awaited_once_with(prisma, user_id, server_id, include_invalidated=True)
+    reader.assert_awaited_once_with(prisma, user_id, server_id, use_writer=True, include_invalidated=True)
     delete_mock.assert_awaited_once_with(
-        prisma, user_id, server_id, access_token="", refresh_token="dead-refresh"
+        prisma, user_id, server_id, connected_at=None
     )
     invalidate_mock.assert_awaited_once_with(user_id, server_id)
     assert result.has_credential is False
@@ -6060,6 +6060,51 @@ async def test_delete_mcp_oauth_user_credential_invalidates_cached_token():
 
     invalidate_mock.assert_awaited_once_with(user_id, server_id)
     assert result.has_credential is False
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_oauth_user_credential_reports_a_replacement_grant_as_a_conflict():
+    """A newer sign-in survives revoke, and the caller is told the revoke did not happen."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_oauth_user_credential,
+    )
+    from litellm.proxy.mcp_server import mcp_server_manager as manager_module
+
+    server_id = "srv-inv-race"
+    user_id = "user-inv-race"
+    invalidate_mock = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=AsyncMock(return_value={"type": "oauth2", "access_token": "old-tok", "connected_at": "old-grant"}),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
+            new=AsyncMock(return_value="changed"),
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_mcp_oauth_user_credential(
+                server_id=server_id,
+                user_api_key_dict=_make_user_auth(user_id),
+            )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {"error": "oauth_credential_changed"}
+    invalidate_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -982,32 +982,50 @@ async def test_invalidated_grants_are_absent_from_user_and_admin_credential_surf
 
 
 @pytest.mark.asyncio
-async def test_conditional_revocation_deletes_a_tombstone_but_never_a_replacement_grant(
-    credentials_prisma: SimpleNamespace,
+async def test_conditional_revocation_deletes_only_the_same_grant_generation(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    fixed_now: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    clock_ticks: Final = itertools.count()
+
+    class StepDateTime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            current_time: Final = fixed_now + timedelta(seconds=next(clock_ticks))
+            return current_time.replace(tzinfo=None) if tz is None else current_time.astimezone(tz)
+
+    monkeypatch.setattr("litellm.proxy.mcp_server.db.datetime", StepDateTime)
+
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
+    tombstone_connected_at: Final = (await _saved_grant(credentials_prisma))["connected_at"]
     assert await invalidate_user_oauth_credential_if_grant_matches(
         credentials_prisma, "alice", "srv-1", "at-old", "rt-old"
     )
-
-    deleted: Final = await delete_user_oauth_credential_if_grant_matches(
-        credentials_prisma, "alice", "srv-1", "", "rt-old"
-    )
-    assert deleted is True
-    assert await get_user_oauth_credential(credentials_prisma, "alice", "srv-1", include_invalidated=True) is None
+    assert await delete_user_oauth_credential_if_grant_matches(
+        credentials_prisma, "alice", "srv-1", tombstone_connected_at
+    ) == "deleted"
+    assert ("alice", "srv-1") not in rows.rows
 
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
-    assert await invalidate_user_oauth_credential_if_grant_matches(
-        credentials_prisma, "alice", "srv-1", "at-old", "rt-old"
+    rotated_connected_at: Final = (await _saved_grant(credentials_prisma))["connected_at"]
+    assert await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-rotated", refresh_token="rt-new", refreshed_from="rt-old"
     )
+    assert await delete_user_oauth_credential_if_grant_matches(
+        credentials_prisma, "alice", "srv-1", rotated_connected_at
+    ) == "deleted"
+    assert ("alice", "srv-1") not in rows.rows
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
+    replaced_connected_at: Final = (await _saved_grant(credentials_prisma))["connected_at"]
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new", refresh_token="rt-new")
+    replacement: Final = await _saved_grant(credentials_prisma)
+    assert replacement["connected_at"] != replaced_connected_at
 
-    replacement_deleted: Final = await delete_user_oauth_credential_if_grant_matches(
-        credentials_prisma, "alice", "srv-1", "", "rt-old"
-    )
-    assert replacement_deleted is False
-    assert rows.rows[("alice", "srv-1")] is not None
+    assert await delete_user_oauth_credential_if_grant_matches(
+        credentials_prisma, "alice", "srv-1", replaced_connected_at
+    ) == "changed"
     grant: Final = await _saved_grant(credentials_prisma)
     assert (grant["access_token"], grant["refresh_token"]) == ("at-new", "rt-new")
 
