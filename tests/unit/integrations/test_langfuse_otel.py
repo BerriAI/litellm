@@ -1740,11 +1740,14 @@ _PROVIDER_CALL: Final[Mapping[str, object]] = MappingProxyType(
 )
 
 
+_PROXY_FAILURE: Final = ("Failed Proxy Server Request", "POST /v1/chat/completions")
+
+
 @pytest.mark.parametrize("call", [_HOOK_CALL, _PROVIDER_CALL], ids=["hook", "provider-call"])
-def test_a_request_with_a_langfuse_destination_exports_nothing_through_the_legacy_logger(
+def test_a_request_with_a_langfuse_destination_exports_only_the_proxy_failure_through_the_legacy_logger(
     call: Mapping[str, object],
 ) -> None:
-    assert _spans_the_legacy_logger_exports((_LANGFUSE_DESTINATION,), call) == ()
+    assert _spans_the_legacy_logger_exports((_LANGFUSE_DESTINATION,), call) == _PROXY_FAILURE
 
 
 def test_a_call_rejected_before_any_provider_still_exports_through_the_legacy_logger() -> None:
@@ -1754,7 +1757,50 @@ def test_a_call_rejected_before_any_provider_still_exports_through_the_legacy_lo
         "litellm_request",
         "raw_gen_ai_request",
         "litellm_request",
+        *_PROXY_FAILURE,
     )
+
+
+def _proxy_failure_record(
+    destinations: tuple[OtelDestination, ...],
+) -> tuple[tuple[str, ...], Mapping[str, object]]:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
+        logger: Final = LangfuseOtelLogger(tracer_provider=provider)
+    server_span: Final = provider.get_tracer("proxy").start_span("POST /v1/chat/completions")
+    upstream_error: Final = litellm.InternalServerError(message="boom", model="gpt-4o-mini", llm_provider="openai")
+
+    async def fail() -> None:
+        set_request_destinations(destinations)
+        await logger.async_post_call_failure_hook(
+            {}, upstream_error, UserAPIKeyAuth(parent_otel_span=server_span, team_id="team-1", team_alias="alias-1")
+        )
+
+    try:
+        contextvars.copy_context().run(asyncio.run, fail())
+        return tuple(span.name for span in exporter.get_finished_spans()), dict(server_span.attributes or {})
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.parametrize(
+    "destinations",
+    [
+        (_LANGFUSE_DESTINATION,),
+        (_LANGFUSE_DESTINATION, _LANGFUSE_DESTINATION.model_copy(update={"callback_name": "arize"})),
+    ],
+    ids=["langfuse", "langfuse-and-arize"],
+)
+def test_a_langfuse_destination_leaves_the_proxy_failure_record_unchanged(
+    destinations: tuple[OtelDestination, ...],
+) -> None:
+    without_destination: Final = _proxy_failure_record(())
+
+    assert without_destination[0] == _PROXY_FAILURE
+    assert {"error.type", "error.code", "metadata.user_api_key_team_id"} <= without_destination[1].keys()
+    assert _proxy_failure_record(destinations) == without_destination
 
 
 def test_a_request_without_a_langfuse_destination_still_exports_through_the_legacy_logger() -> None:

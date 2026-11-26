@@ -1092,6 +1092,7 @@ class TestFanOut:
                     "error.message": message,
                     "litellm.provider.error.code": "500",
                     "litellm.provider.error.stack_trace": f"Traceback\n  File {install}\n{message}",
+                    "error.stack_trace": f"Traceback\n  File {install}\n{message}",
                 }
             )
             span.add_event(

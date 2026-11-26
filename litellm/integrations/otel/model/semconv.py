@@ -218,6 +218,8 @@ class LiteLLMError:
 
     CODE: Final = "litellm.provider.error.code"
     STACK_TRACE: Final = "litellm.provider.error.stack_trace"
+    # The same trace under the key the v1 failure hook stamps on the server span, so stripping it covers both.
+    STACK_TRACE_LEGACY: Final = "error.stack_trace"
     LLM_PROVIDER: Final = "litellm.provider.error.llm_provider"
 
 

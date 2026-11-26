@@ -49,8 +49,6 @@ _DECODED_JSON: Final = TypeAdapter(object)
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.proxy._types import UserAPIKeyAuth
-
     Span = _Span
 else:
     Span = Any
@@ -747,19 +745,6 @@ class LangfuseOtelLogger(OpenTelemetry):
     ) -> bool:
         """Whether to emit this span: once per request, and never for a call a Langfuse destination records."""
         return not _a_destination_records_the_call(kwargs) and super()._emit_once(kwargs, *scope)  # pyright: ignore[reportUnknownMemberType]  # the v1 hook takes a bare dict
-
-    async def async_post_call_failure_hook(
-        self,
-        request_data: dict[str, object],  # mutable-ok: the v1 hook contract
-        original_exception: Exception,
-        user_api_key_dict: "UserAPIKeyAuth",
-        traceback_str: str | None = None,
-    ) -> None:
-        """Record the proxy failure of a request no Langfuse destination carries."""
-        if not _a_destination_carries_the_trace():
-            await super().async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # the v1 hook takes a bare dict
-                request_data, original_exception, user_api_key_dict, traceback_str
-            )
 
     async def async_service_success_hook(self, *args: object, **kwargs: object):
         """

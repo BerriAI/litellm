@@ -796,7 +796,11 @@ def _guardrail_unreachable(attributes: Mapping[str, AttributeValue]) -> bool:
 
 
 def _tenant_visible(key: str, database: bool, owned: bool, unreachable_guardrail: bool) -> bool:
-    if key.startswith(_CAPTURED_HEADER_PREFIXES) or key in (LiteLLMError.STACK_TRACE, _URL_QUERY_KEY):
+    if key.startswith(_CAPTURED_HEADER_PREFIXES) or key in (
+        LiteLLMError.STACK_TRACE,
+        LiteLLMError.STACK_TRACE_LEGACY,
+        _URL_QUERY_KEY,
+    ):
         return False
     if database and key in _DATASTORE_ENDPOINT_KEYS:
         return False
