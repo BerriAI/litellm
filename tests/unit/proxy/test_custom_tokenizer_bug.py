@@ -9,17 +9,20 @@ The HuggingFace download boundary (Tokenizer.from_pretrained) is mocked so these
 stay hermetic unit tests; the proxy's extraction-and-selection path runs for real.
 """
 
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import Request, Response
 
 import litellm
 import litellm.proxy.proxy_server
 import litellm.utils
 from litellm import Router
-from litellm.proxy._types import ProxyException, TokenCountRequest
-from litellm.proxy.proxy_server import count_request_tokens
+from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
+from litellm.proxy.proxy_server import count_request_tokens, token_counter
+from litellm.types.utils import TokenCountResponse
 
 
 def _fake_hf_tokenizer(num_tokens: int) -> MagicMock:
@@ -106,7 +109,7 @@ async def test_model_without_custom_tokenizer_uses_default(monkeypatch):
 
 
 
-def _vertex_glm_router_with_its_own_tokenizer() -> Router:
+def _vertex_glm_router(model_info: Mapping[str, object]) -> Router:
     return Router(
         model_list=[
             {
@@ -116,47 +119,59 @@ def _vertex_glm_router_with_its_own_tokenizer() -> Router:
                     "vertex_project": "test-project",
                     "vertex_location": "global",
                 },
-                "model_info": {
-                    "custom_tokenizer": {"identifier": "zai-org/GLM-5.2", "revision": "main", "auth_token": None},
-                },
+                "model_info": dict(model_info),
             }
         ]
     )
+
+
+async def _vertex_glm_count(body: Mapping[str, object]) -> TokenCountResponse:
+    return await token_counter(
+        request=TokenCountRequest.model_validate({"model": "vertex-glm", **body}),
+        http_request=Request(
+            {"type": "http", "method": "POST", "path": "/utils/token_counter", "query_string": b"", "headers": []}
+        ),
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
+        call_endpoint=True,
+    )
+
+
+_GLM_TOKENIZER: Final = {"custom_tokenizer": {"identifier": "zai-org/GLM-5.2", "revision": "main", "auth_token": None}}
+
+_RETURN_OK_MESSAGES: Final = {"messages": [{"role": "user", "content": "Return exactly OK."}]}
+_RETURN_OK_CONTENTS: Final = {"contents": [{"role": "user", "parts": [{"text": "Return exactly OK."}]}]}
 
 
 @pytest.mark.asyncio
 async def test_custom_tokenizer_counts_a_vertex_partner_model_without_a_count_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _vertex_glm_router_with_its_own_tokenizer())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _vertex_glm_router(_GLM_TOKENIZER))
 
     with patch.object(litellm.utils, "tokenizer_dispatch") as mock_tokenizer_cls:
         mock_tokenizer_cls.from_pretrained.return_value = _fake_hf_tokenizer(9)
 
-        response: Final = await count_request_tokens(
-            request=TokenCountRequest(model="vertex-glm", messages=[{"role": "user", "content": "Return exactly OK."}]),
-            call_endpoint=True,
-        )
+        from_messages: Final = await _vertex_glm_count(_RETURN_OK_MESSAGES)
+        from_contents: Final = await _vertex_glm_count(_RETURN_OK_CONTENTS)
 
     mock_tokenizer_cls.from_pretrained.assert_called_once_with("zai-org/GLM-5.2", revision="main", token=None)
-    assert response.error is not True
-    assert response.tokenizer_type == "huggingface_tokenizer"
-    assert response.total_tokens >= 9
+    assert (from_messages.error, from_contents.error) == (False, False)
+    assert from_messages.tokenizer_type == from_contents.tokenizer_type == "huggingface_tokenizer"
+    assert from_contents.total_tokens == from_messages.total_tokens >= 9
 
 
 @pytest.mark.asyncio
-async def test_contents_only_count_of_a_vertex_partner_model_without_a_count_route_answers_400(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "body", [pytest.param(_RETURN_OK_MESSAGES, id="messages"), pytest.param(_RETURN_OK_CONTENTS, id="contents")]
+)
+async def test_count_of_a_vertex_partner_model_without_a_count_route_or_tokenizer_answers_400(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]
 ) -> None:
-    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _vertex_glm_router_with_its_own_tokenizer())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _vertex_glm_router({}))
 
     with pytest.raises(ProxyException) as raised:
-        await count_request_tokens(
-            request=TokenCountRequest(
-                model="vertex-glm", contents=[{"role": "user", "parts": [{"text": "Return exactly OK."}]}]
-            ),
-            call_endpoint=True,
-        )
+        await _vertex_glm_count(body)
 
     assert raised.value.code == "400"
     assert raised.value.message == "LiteLLM does not support counting tokens for Vertex AI model zai-org/glm-5.2-maas."

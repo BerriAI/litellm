@@ -750,6 +750,7 @@ from litellm.proxy.discovery_endpoints import (
 )
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
+from litellm.proxy.google_endpoints.endpoints import google_token_count_request
 from litellm.proxy.google_endpoints.endpoints import router as google_router
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
@@ -1010,6 +1011,7 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
+    max_request_size_bytes,
 )
 from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
@@ -2371,7 +2373,14 @@ from litellm.integrations.otel.mount import (
     trace_response_headers,
 )
 
-instrument_fastapi_app(app)
+
+def _max_request_body_bytes(scope: Scope) -> int | None:
+    return max_request_size_bytes(
+        scope, configured_max_request_size_mb() if premium_user is True else None, _ROUTE_MAX_REQUEST_SIZE_MB
+    )
+
+
+instrument_fastapi_app(app, max_request_body_bytes=_max_request_body_bytes)
 
 vertex_live_passthrough_vertex_base: Final = VertexBase()
 
@@ -16403,23 +16412,27 @@ async def token_counter(
         user_api_key_dict: the caller, whose team picks the deployment the count runs on
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
-    return await answered_with_litellm_call_id(
-        count_request_tokens(
-            request=request,
-            call_endpoint=call_endpoint,
-            request_litellm_params=MappingProxyType(
-                {}
-                if request.additional_drop_params is None
-                else {"additional_drop_params": request.additional_drop_params}
-            ),
-            litellm_call_id=call_id,
-            caller=user_api_key_dict,
-            request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
-        ),
-        call_id,
-        http_request,
-        fastapi_response,
-    )
+    match google_token_count_request(request):
+        case ProxyException() as invalid_body:
+            raise with_litellm_call_id(rejected_token_count(invalid_body, call_id, request.model), call_id)
+        case counted_request:
+            return await answered_with_litellm_call_id(
+                count_request_tokens(
+                    request=counted_request,
+                    call_endpoint=call_endpoint,
+                    request_litellm_params=MappingProxyType(
+                        {}
+                        if counted_request.additional_drop_params is None
+                        else {"additional_drop_params": counted_request.additional_drop_params}
+                    ),
+                    litellm_call_id=call_id,
+                    caller=user_api_key_dict,
+                    request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
+                ),
+                call_id,
+                http_request,
+                fastapi_response,
+            )
 
 
 async def count_request_tokens(
