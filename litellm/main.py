@@ -257,9 +257,11 @@ from .litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
     drops_unsupported_params,
+    joined,
     keyword_arguments,
     normalize_drop_params,
     safe_deep_copy,
+    subscript,
     without,
 )
 from .litellm_core_utils.fallback_utils import (
@@ -5501,7 +5503,7 @@ def _complete_custom(ctx: CompletionDispatchContext) -> _CompletionDispatchResul
     )
 
     """
-    prompt: Final = " ".join([message["content"] for message in messages])
+    prompt: Final = joined(" ", [subscript(message, "content") for message in messages])
     resp: Final = litellm.module_level_client.post(
         url,
         headers=headers,
@@ -7414,18 +7416,19 @@ def embedding(
         "encoding_format",
     ]
     default_params: Final = [*openai_params, "aembedding", "extra_headers"]
+    request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
     non_default_params: Final = filter_out_litellm_params(
-        kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
+        request_kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
     )
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**request_kwargs)
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
-        litellm_params=GenericLiteLLMParams(**kwargs),
+        litellm_params=GenericLiteLLMParams(**request_kwargs),
     )
 
     if dynamic_api_key is not None:
@@ -7447,7 +7450,7 @@ def embedding(
     )
 
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
-    logging.set_per_call_pricing(per_call_model_info(model, custom_llm_provider, kwargs, "embedding"))
+    logging.set_per_call_pricing(per_call_model_info(model, custom_llm_provider, request_kwargs, "embedding"))
     logging.update_environment_variables(
         model=model,
         user=user,
@@ -9084,7 +9087,7 @@ def transcription(
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**_REQUEST_KWARGS_ADAPTER.validate_python(kwargs))
     configured_base_model: Final = litellm_params_dict.get("base_model")
     pricing_model: Final = (
         configured_base_model.removeprefix(f"{custom_llm_provider}/")
@@ -9436,7 +9439,11 @@ def speech(
     )
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
-    litellm_params_dict: Final = get_litellm_params(metadata=metadata, api_key=api_key or dynamic_api_key, **kwargs)
+    litellm_params_dict: Final = get_litellm_params(
+        metadata=metadata,
+        api_key=api_key or dynamic_api_key,
+        **_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+    )
 
     # Get provider-specific text-to-speech config and map parameters
     text_to_speech_provider_config = ProviderConfigManager.get_provider_text_to_speech_config(

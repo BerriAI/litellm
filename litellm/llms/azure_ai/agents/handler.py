@@ -22,7 +22,7 @@ import asyncio
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict
 
 import httpx
@@ -214,7 +214,7 @@ class AzureAIAgentsHandler:
         content: str,
         model_response: ModelResponse,
         thread_id: object,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         annotations: list[_TransformedAnnotation] | None = None,
     ) -> ModelResponse:
         """Build the ModelResponse from agent output."""
@@ -297,7 +297,7 @@ class AzureAIAgentsHandler:
     def completion(
         self,
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
@@ -351,7 +351,7 @@ class AzureAIAgentsHandler:
         api_version: object,
         agent_id: str,
         thread_id: object,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         optional_params: dict[str, object],
     ) -> tuple[object, str, list[_TransformedAnnotation] | None]:
         """Execute the agent flow synchronously. Returns (thread_id, content, annotations)."""
@@ -419,7 +419,7 @@ class AzureAIAgentsHandler:
     async def acompletion(
         self,
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
@@ -477,7 +477,7 @@ class AzureAIAgentsHandler:
         api_version: object,
         agent_id: str,
         thread_id: object,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         optional_params: dict[str, object],
     ) -> tuple[object, str, list[_TransformedAnnotation] | None]:
         """Execute the agent flow asynchronously. Returns (thread_id, content, annotations)."""
@@ -545,7 +545,7 @@ class AzureAIAgentsHandler:
     async def acompletion_stream(
         self,
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str,
         logging_obj: LiteLLMLoggingObj,
