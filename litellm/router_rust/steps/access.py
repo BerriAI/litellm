@@ -46,10 +46,17 @@ def caller_fields(request: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def pinned_deployment_wildcard_grant(
-    name: object, allowed_models: object, team_id: str | None, registry: RouterRegistry
+    name: object,
+    allowed_models: object,
+    team_id: str | None,
+    registry: RouterRegistry,
+    *,
+    by_pinned_id: bool = False,
 ) -> tuple[str, ...] | None:
     granted: Final = _names(allowed_models)
-    if not isinstance(name, str) or not granted or name in granted or name in registry.index("model_name"):
+    if not isinstance(name, str) or not granted or name in granted:
+        return None
+    if not by_pinned_id and name in registry.index("model_name"):
         return None
     deployment: Final = registry.deployment(name)
     if deployment is None:
@@ -58,7 +65,9 @@ def pinned_deployment_wildcard_grant(
 
     access_groups: Final = registry.access_groups(model_name=deployment.model_name, team_id=team_id)
     patterns: Final = tuple(model for model in granted if model not in access_groups)
-    return (*granted, name) if model_matches_any_wildcard_pattern_in_list(deployment.model_name, patterns) else None
+    if not model_matches_any_wildcard_pattern_in_list(deployment.model_name, patterns):
+        return None
+    return (*granted, name, deployment.model_name) if by_pinned_id else (*granted, name)
 
 
 def _router_weights_error(raw: object) -> BaseException:

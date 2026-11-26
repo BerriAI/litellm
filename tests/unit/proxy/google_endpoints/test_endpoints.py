@@ -1179,3 +1179,160 @@ def test_id_only_get_reaches_shared_deployment_when_key_access_group_matches(
     assert response.status_code == 200, response.text
     assert _response_id(response.content) == encoded_id
     assert upstream.call_count == 1
+@pytest.mark.parametrize(
+    ("method", "path_suffix", "query", "body"),
+    (
+        ("GET", "", {"interaction_id": _INTERACTION_ID}, None),
+        ("DELETE", "", {"interaction_id": _INTERACTION_ID}, None),
+        ("POST", "/cancel", {"interaction_id": _INTERACTION_ID}, None),
+        ("POST", "/cancel", {}, {"interaction_id": _INTERACTION_ID}),
+    ),
+    ids=("get-query-shadow", "delete-query-shadow", "cancel-query-shadow", "cancel-body-shadow"),
+)
+def test_id_only_lifecycle_rejects_conflicting_query_or_body_interaction_id_shadowing(
+    interactions_proxy: TestClient,
+    respx_mock: respx.MockRouter,
+    google_oauth: responses.RequestsMock,
+    method: str,
+    path_suffix: str,
+    query: Mapping[str, str],
+    body: Mapping[str, str] | None,
+) -> None:
+    encoded_private: Final = encode_interaction_id(_INTERACTION_ID, "shared-priv")
+
+    with _cached_key(UserAPIKeyAuth(models=[_VERTEX_GROUP])) as authorization:
+        response: Final = interactions_proxy.request(
+            method,
+            f"/v1beta/interactions/{encoded_private}{path_suffix}",
+            params=query,
+            json=body,
+            headers={"authorization": authorization},
+        )
+
+    assert response.status_code == 403, response.text
+    assert not respx_mock.calls
+    assert not google_oauth.calls
+
+
+def test_id_only_get_pins_wildcard_key_inside_access_group_model(
+    interactions_proxy: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    priv_url: Final = _project_url("priv-project")
+    upstream: Final = respx_mock.get(f"{priv_url}/{_INTERACTION_ID}").mock(
+        return_value=httpx.Response(200, json=_INTERACTION)
+    )
+    encoded_id: Final = encode_interaction_id(_INTERACTION_ID, "shared-priv")
+
+    with _cached_key(UserAPIKeyAuth(models=[f"{_SHARED_GROUP}*", "public"])) as authorization:
+        response: Final = interactions_proxy.get(
+            f"/v1beta/interactions/{encoded_id}",
+            headers={"authorization": authorization},
+        )
+
+    assert response.status_code == 200, response.text
+    assert _response_id(response.content) == encoded_id
+    assert upstream.call_count == 1
+
+
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize(
+    ("method", "path_suffix", "upstream_suffix"),
+    (("GET", "", ""), ("DELETE", "", ""), ("POST", "/cancel", "/cancel")),
+)
+def test_colliding_deployment_id_and_group_name_pins_to_authorized_group(
+    interactions_proxy: TestClient,
+    respx_mock: respx.MockRouter,
+    google_oauth: responses.RequestsMock,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path_suffix: str,
+    upstream_suffix: str,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    colliding_router: Final = litellm.Router(
+        model_list=[
+            _vertex_deployment("alpha", "vertex_ai/gemini-4-argon", "alpha-project", "beta"),
+            _vertex_deployment("beta", "vertex_ai/gemini-4-argon", "beta-project", "beta-group-dep"),
+        ]
+    )
+    alpha_upstream: Final = respx_mock.request(
+        method, f"{_project_url('alpha-project')}/{_INTERACTION_ID}{upstream_suffix}"
+    ).mock(return_value=httpx.Response(200, json=_INTERACTION))
+    beta_upstream: Final = respx_mock.request(
+        method, f"{_project_url('beta-project')}/{_INTERACTION_ID}{upstream_suffix}"
+    ).mock(return_value=httpx.Response(200, json=_INTERACTION))
+    encoded_alpha: Final = encode_interaction_id(_INTERACTION_ID, "beta")
+
+    try:
+        monkeypatch.setattr(proxy_server, "llm_router", colliding_router)
+        with _cached_key(UserAPIKeyAuth(models=["alpha"])) as authorization:
+            allowed_resp: Final = interactions_proxy.request(
+                method,
+                f"/v1beta/interactions/{encoded_alpha}{path_suffix}",
+                headers={"authorization": authorization},
+            )
+        with _cached_key(UserAPIKeyAuth(models=["beta"])) as authorization:
+            denied_resp: Final = interactions_proxy.request(
+                method,
+                f"/v1beta/interactions/{encoded_alpha}{path_suffix}",
+                headers={"authorization": authorization},
+            )
+    finally:
+        colliding_router.retire()
+
+    assert allowed_resp.status_code == 200, allowed_resp.text
+    assert alpha_upstream.call_count == 1
+    assert beta_upstream.call_count == 0
+    assert denied_resp.status_code == 403, denied_resp.text
+
+
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("send_group", (False, True), ids=("id_only", "with_group_model"))
+def test_colliding_deployment_id_and_group_name_pins_previous_interaction_id(
+    interactions_proxy: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    send_group: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    colliding_router: Final = litellm.Router(
+        model_list=[
+            _vertex_deployment("alpha", "vertex_ai/gemini-4-argon", "alpha-project", "beta"),
+            _vertex_deployment("beta", "vertex_ai/gemini-4-argon", "beta-project", "beta-group-dep"),
+        ]
+    )
+    alpha_post: Final = respx_mock.post(_project_url("alpha-project")).mock(
+        return_value=httpx.Response(200, json={"id": "turn-2", "object": "interaction", "status": "completed"})
+    )
+    beta_post: Final = respx_mock.post(_project_url("beta-project")).mock(
+        return_value=httpx.Response(200, json={"id": "wrong-turn-2", "object": "interaction", "status": "completed"})
+    )
+    encoded_prev: Final = encode_interaction_id("turn-1", "beta")
+
+    try:
+        monkeypatch.setattr(proxy_server, "llm_router", colliding_router)
+        with _cached_key(UserAPIKeyAuth(models=["alpha"])) as authorization:
+            allowed_resp: Final = interactions_proxy.post(
+                "/v1beta/interactions",
+                json={
+                    "input": "Turn 2",
+                    "previous_interaction_id": encoded_prev,
+                    **({"model": "alpha"} if send_group else {}),
+                },
+                headers={"authorization": authorization},
+            )
+        with _cached_key(UserAPIKeyAuth(models=["beta"])) as authorization:
+            denied_resp: Final = interactions_proxy.post(
+                "/v1beta/interactions",
+                json={"input": "Turn 2", "previous_interaction_id": encoded_prev},
+                headers={"authorization": authorization},
+            )
+    finally:
+        colliding_router.retire()
+
+    assert allowed_resp.status_code == 200, allowed_resp.text
+    assert alpha_post.call_count == 1
+    assert beta_post.call_count == 0
+    assert denied_resp.status_code == 403, denied_resp.text

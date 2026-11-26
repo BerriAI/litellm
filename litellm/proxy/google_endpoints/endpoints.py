@@ -2,7 +2,7 @@ import json
 from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse, StreamingResponse
@@ -27,7 +27,12 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
+from litellm.router_rust.invoke.endpoints import PINNED_DEPLOYMENT_KEY
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
+
+if TYPE_CHECKING:
+    from litellm.router import Router
+    from litellm.types.router import Deployment
 
 _DECODED_JSON: Final = TypeAdapter(object)
 _REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
@@ -591,11 +596,13 @@ async def create_interaction(
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = "gemini"
 
-    prepared: Final = _prepare_create_interaction_routing(data, llm_router)
+    prepared: Final = _prepare_create_interaction_routing(data, llm_router, user_api_key_dict)
     if prepared.previous_interaction_id is not None:
         data["previous_interaction_id"] = prepared.previous_interaction_id
     if prepared.model_override is not None:
         data["model"] = prepared.model_override
+    if prepared.pinned_deployment_id is not None:
+        data[PINNED_DEPLOYMENT_KEY] = prepared.pinned_deployment_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response: Final = await processor.base_process_llm_request(
@@ -627,15 +634,112 @@ async def create_interaction(
         return _encode_interaction_payload(response, _routed_deployment_id(response, fastapi_response))
 
 
+class _ResolvedInteractionTarget(NamedTuple):
+    routing_model: str | None
+    pinned_deployment_id: str | None = None
+
+
 class _PreparedInteractionRouting(NamedTuple):
     routing_model: str | None
     previous_interaction_id: str | None = None
     model_override: str | None = None
+    pinned_deployment_id: str | None = None
+
+
+def _effective_allowed_models(user_api_key_dict: UserAPIKeyAuth) -> tuple[str, ...]:
+    raw_models: Final = tuple(user_api_key_dict.models or ())
+    raw_team_models: Final = tuple(user_api_key_dict.team_models or ())
+    effective: Final = (
+        raw_team_models if SpecialModelNames.all_team_models.value in raw_models else (*raw_models, *raw_team_models)
+    )
+    return tuple(dict.fromkeys(m for m in effective if m != SpecialModelNames.all_team_models.value))
+
+
+def _assert_interaction_deployment_accessible(
+    *,
+    deployment: "Deployment",
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: "Router",
+) -> None:
+    allowed: Final = _effective_allowed_models(user_api_key_dict)
+    if not allowed or SpecialModelNames.all_proxy_models.value in allowed:
+        return
+
+    group: Final = deployment.model_name
+    team_public: Final = deployment.model_info.team_public_model_name
+    deployment_id: Final = deployment.model_info.id
+    if group in allowed or (team_public is not None and team_public in allowed) or deployment_id in allowed:
+        return
+
+    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
+
+    group_access_groups: Final = llm_router.registry().access_groups(
+        model_name=group, team_id=user_api_key_dict.team_id
+    )
+    patterns: Final = tuple(model for model in allowed if model not in group_access_groups)
+    if model_matches_any_wildcard_pattern_in_list(group, patterns) or (
+        team_public is not None and model_matches_any_wildcard_pattern_in_list(team_public, patterns)
+    ):
+        return
+
+    matched_groups: Final = frozenset(group_access_groups).intersection(allowed)
+    dep_groups: Final = frozenset(deployment.model_info.access_groups or ())
+    if matched_groups and dep_groups.intersection(matched_groups):
+        return
+
+    raise HTTPException(status_code=400, detail=f"Deployment '{deployment_id}' is not accessible")
+
+
+def _resolve_interaction_target(
+    *,
+    selector: str | None,
+    encoded_deployment_id: str | None,
+    llm_router: object,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> _ResolvedInteractionTarget:
+    from litellm.router import Router  # noqa: PLC0415  # cycle-avoidance inline import
+
+    if encoded_deployment_id is None:
+        return _ResolvedInteractionTarget(routing_model=selector)
+
+    if not isinstance(llm_router, Router):
+        return _ResolvedInteractionTarget(routing_model=selector or encoded_deployment_id)
+
+    deployment: Final = llm_router.registry().deployment(encoded_deployment_id)
+    if deployment is None:
+        if not selector:
+            raise HTTPException(status_code=400, detail=f"Deployment '{encoded_deployment_id}' not found")
+        return _ResolvedInteractionTarget(routing_model=selector)
+
+    matches_group: Final = not selector or selector in (
+        deployment.model_name,
+        deployment.model_info.team_public_model_name,
+    )
+    if not matches_group:
+        return _ResolvedInteractionTarget(routing_model=selector)
+
+    _assert_interaction_deployment_accessible(
+        deployment=deployment,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    routing_model: Final = (
+        selector
+        if selector
+        and selector == deployment.model_info.team_public_model_name
+        and selector not in llm_router.registry().index("model_name")
+        else deployment.model_name
+    )
+    return _ResolvedInteractionTarget(
+        routing_model=routing_model,
+        pinned_deployment_id=encoded_deployment_id,
+    )
 
 
 def _prepare_create_interaction_routing(
     data: Mapping[str, object],
     llm_router: object,
+    user_api_key_dict: UserAPIKeyAuth,
 ) -> _PreparedInteractionRouting:
     typed_data: Final = _REQUEST_BODY.validate_python(data)
     raw_model: Final = typed_data.get("model")
@@ -648,48 +752,22 @@ def _prepare_create_interaction_routing(
     if prev_deployment_id is None:
         return _PreparedInteractionRouting(routing_model=explicit_model)
     raw_prev_id: Final = decoded_prev["interaction_id"]
-    if (
-        explicit_model is None
-        or not explicit_model
-        or _selector_matches_deployment_group(explicit_model, prev_deployment_id, llm_router)
-    ):
-        return _PreparedInteractionRouting(
-            routing_model=prev_deployment_id,
-            previous_interaction_id=raw_prev_id,
-            model_override=prev_deployment_id,
-        )
+    target: Final = _resolve_interaction_target(
+        selector=explicit_model,
+        encoded_deployment_id=prev_deployment_id,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
     return _PreparedInteractionRouting(
-        routing_model=explicit_model,
+        routing_model=target.routing_model,
         previous_interaction_id=raw_prev_id,
+        model_override=target.routing_model if target.pinned_deployment_id is not None else None,
+        pinned_deployment_id=target.pinned_deployment_id,
     )
 
 
 def _interaction_model_group(request: Request) -> str | None:
     return request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME)
-
-
-def _selector_matches_deployment_group(selector: str, deployment_id: str, llm_router: object) -> bool:
-    from litellm.router import Router  # noqa: PLC0415  # cycle-avoidance inline import
-
-    if not isinstance(llm_router, Router):
-        return False
-    deployment: Final = llm_router.registry().deployment(deployment_id)
-    if deployment is None:
-        return False
-    return selector in (deployment.model_name, deployment.model_info.team_public_model_name)
-
-
-def _resolve_interaction_selector(
-    request: Request, encoded_deployment_id: str | None, llm_router: object
-) -> str | None:
-    explicit: Final = _interaction_model_group(request)
-    if not explicit:
-        return encoded_deployment_id
-    if encoded_deployment_id is not None and _selector_matches_deployment_group(
-        explicit, encoded_deployment_id, llm_router
-    ):
-        return encoded_deployment_id
-    return explicit
 
 
 def _routed_deployment_id(response: object, fastapi_response: Response) -> str | None:
@@ -821,11 +899,17 @@ async def _run_interaction_by_id(
 
     decoded: Final = decode_interaction_id(interaction_id)
     encoded_deployment_id: Final = decoded["deployment_id"]
-    model: Final = _resolve_interaction_selector(request, encoded_deployment_id, llm_router)
+    target: Final = _resolve_interaction_target(
+        selector=_interaction_model_group(request),
+        encoded_deployment_id=encoded_deployment_id,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
     data: Final = {
         "interaction_id": decoded["interaction_id"],
         "custom_llm_provider": "gemini",
-        "model": model,
+        "model": target.routing_model,
+        **({PINNED_DEPLOYMENT_KEY: target.pinned_deployment_id} if target.pinned_deployment_id is not None else {}),
     }
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -840,7 +924,7 @@ async def _run_interaction_by_id(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=model,
+            model=target.routing_model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,

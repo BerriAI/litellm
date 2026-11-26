@@ -1807,3 +1807,30 @@ def test_read_request_path_params_returns_mappings_and_drops_non_mapping_metadat
 
 def test_read_request_path_params_without_request_is_none() -> None:
     assert read_request_path_params(None) is None
+@pytest.mark.parametrize(
+    ("path_params", "query_string"),
+    (
+        ({"interaction_id": "path-encoded-id"}, b"interaction_id=plain"),
+        ({"api_version": "v1beta"}, b"interaction_id=plain"),
+        ({}, b"interaction_id=plain"),
+    ),
+    ids=("path_params_with_id", "partial_path_params", "fallback_url_path"),
+)
+def test_populate_request_with_path_params_overrides_query_and_body_interaction_id(
+    path_params: dict[str, str], query_string: bytes
+) -> None:
+    from litellm.proxy.common_utils.http_parsing_utils import populate_request_with_path_params
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1beta/interactions/path-encoded-id/cancel",
+            "query_string": query_string,
+            "path_params": path_params,
+            "headers": [],
+        }
+    )
+    payload: Final[dict[str, object]] = {"interaction_id": "body-plain"}
+    populate_request_with_path_params(request_data=payload, request=request)
+    assert payload["interaction_id"] == "path-encoded-id"
