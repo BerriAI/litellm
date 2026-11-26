@@ -2939,6 +2939,11 @@ def _latest_alias_router() -> tuple[litellm.Router, str, str]:
                 "model_name": "unrelated",
                 "litellm_params": {"model": "openai/unrelated-model", "api_key": "test-api-key"},
             },
+            *(
+                {"model_name": name, "litellm_params": {"model": model, "api_key": "test-api-key"}}
+                for name, served in (("latest-or-unrelated", alias), ("pinned-or-unrelated", target))
+                for model in (f"openai/{served}", "openai/unrelated-model")
+            ),
         ]
     )
     return router, alias, target
@@ -2951,8 +2956,13 @@ def _latest_alias_router() -> tuple[litellm.Router, str, str]:
         ("latest", ["pinned"], True),
         ("latest", ["pinned-group"], True),
         ("latest", ["unrelated"], False),
-        ("pinned", ["latest"], True),
+        ("pinned", ["latest"], False),
         ("pinned", ["unrelated"], False),
+        ("latest", ["pinned-or-unrelated"], False),
+        ("pinned-or-unrelated", ["latest"], False),
+        ("latest-or-unrelated", ["pinned"], False),
+        ("latest-or-unrelated", ["latest"], False),
+        ("latest-or-unrelated", ["latest-or-unrelated"], True),
         ("unrelated", ["pinned"], False),
         ("unrelated", ["latest"], False),
     ],
@@ -2985,7 +2995,10 @@ def test_a_latest_alias_requested_by_its_provider_name_passes_on_its_versioned_n
         )
 
 
-@pytest.mark.parametrize(("requested", "served_by"), [("latest", "pinned"), ("pinned", None), ("unrelated", None)])
+@pytest.mark.parametrize(
+    ("requested", "served_by"),
+    [("latest", "pinned"), ("pinned", None), ("unrelated", None), ("latest-or-unrelated", None)],
+)
 def test_a_latest_alias_is_served_by_the_model_group_of_the_model_it_points_to(
     requested: str, served_by: str | None
 ) -> None:

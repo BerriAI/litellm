@@ -126,8 +126,8 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_query_params,
 )
 from litellm.proxy.common_utils.latest_alias_model_group import (
-    latest_alias_targets,
-    shared_underlying_models,
+    model_groups_serving_only,
+    sole_latest_alias_target,
     underlying_models,
 )
 from litellm.proxy.common_utils.model_listing_utils import alias_map
@@ -5110,38 +5110,17 @@ def _owning_team_names_for_team_deployment(
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
 
-def _latest_alias_targets(model: str, llm_router: RegistryReader, team_id: str | None) -> frozenset[str]:
-    requested: Final = (
-        model,
-        *(name for _, name in underlying_models(llm_router.registry().deployments(model, team_id=team_id))),
-    )
-    return latest_alias_targets(requested)
-
-
 def _latest_alias_equivalent_models(
     model: str, llm_router: RegistryReader | None, team_id: str | None
 ) -> tuple[str, ...]:
     if llm_router is None:
         return expand_model_latest_alias(model)[1:]
     registry: Final = llm_router.registry()
-    targets: Final = _latest_alias_targets(model, llm_router, team_id)
-    served: Final = frozenset(
-        (model, *(name for _, name in underlying_models(registry.deployments(model, team_id=team_id))))
-    )
-    shared: Final = tuple(shared_underlying_models(registry.deployments()))
-    return tuple(
-        dict.fromkeys(
-            (
-                *sorted(targets),
-                *(name for name, underlying in shared if underlying in targets),
-                *(
-                    name
-                    for name, underlying in shared
-                    if served.intersection(expand_model_latest_alias(underlying)[1:])
-                ),
-            )
-        )
-    )
+    served: Final = tuple(name for _, name in underlying_models(registry.deployments(model, team_id=team_id)))
+    target: Final = sole_latest_alias_target(served or (model,))
+    if target is None:
+        return ()
+    return (target, *model_groups_serving_only(target, registry.deployments()))
 
 
 def _can_object_call_model(

@@ -7,23 +7,34 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 
 LATEST_ALIAS_REQUESTED_DEPLOYMENT_METADATA_KEY: Final = "latest_alias_requested_deployment"
+LATEST_ALIAS_IO_TOKEN_RESERVATION_KEY: Final = "io_token_reservation"
 _METADATA_CHANNELS: Final = ("litellm_metadata", "metadata")
 
 
-def latest_alias_requested_deployment(success_kwargs: Mapping[str, object]) -> tuple[str, str] | None:
-    """``(id, model)`` of the latest-alias deployment a rerouted request was also admitted on"""
+def _admitted_latest_alias_deployment(success_kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
     litellm_params: Final = as_str_mapping(success_kwargs.get("litellm_params")) or {}
     buckets: Final = (as_str_mapping(litellm_params.get(channel)) or {} for channel in _METADATA_CHANNELS)
-    admitted: Final = next(
+    return next(
         filter(
             None, (as_str_mapping(bucket.get(LATEST_ALIAS_REQUESTED_DEPLOYMENT_METADATA_KEY)) for bucket in buckets)
         ),
         None,
     )
+
+
+def latest_alias_requested_deployment(success_kwargs: Mapping[str, object]) -> tuple[str, str] | None:
+    """``(id, model)`` of the latest-alias deployment a rerouted request was also admitted on"""
+    admitted: Final = _admitted_latest_alias_deployment(success_kwargs)
     if admitted is None:
         return None
     deployment_id, model = admitted.get("id"), admitted.get("model")
     return (deployment_id, model) if isinstance(deployment_id, str) and isinstance(model, str) else None
+
+
+def latest_alias_io_token_reservation(success_kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    """The input and output tokens a rerouted request holds on the latest-alias deployment it was also admitted on"""
+    admitted: Final = _admitted_latest_alias_deployment(success_kwargs)
+    return None if admitted is None else as_str_mapping(admitted.get(LATEST_ALIAS_IO_TOKEN_RESERVATION_KEY))
 
 
 def _cost_map() -> Mapping[str, object]:

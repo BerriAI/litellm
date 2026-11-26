@@ -35,19 +35,31 @@ def latest_alias_targets(names: Iterable[str]) -> frozenset[str]:
     return frozenset(chain.from_iterable(expand_model_latest_alias(name)[1:] for name in names))
 
 
+def sole_latest_alias_target(names: Iterable[str]) -> str | None:
+    served: Final = tuple(names)
+    targets: Final = latest_alias_targets(served)
+    resolved: Final = frozenset(expand_model_latest_alias(name)[-1] for name in served)
+    return next(iter(targets)) if len(targets) == 1 and resolved == targets else None
+
+
+def model_groups_serving_only(target: str, deployments: Iterable[Mapping[str, object]] | None) -> tuple[str, ...]:
+    """Shared model groups whose every deployment serves ``target``, in config order"""
+    listed: Final = tuple(deployments or ())
+    served: Final = tuple(underlying_models(listed))
+    mixed: Final = frozenset(name for name, underlying in served if underlying != target)
+    return tuple(
+        dict.fromkeys(
+            name for name, underlying in shared_underlying_models(listed) if underlying == target and name not in mixed
+        )
+    )
+
+
 def latest_alias_versioned_model_group(model: str, llm_router: RegistryReader) -> str | None:
     registry: Final = llm_router.registry()
-    targets: Final = latest_alias_targets(name for _, name in underlying_models(registry.deployments(model)))
-    if len(targets) != 1:
+    target: Final = sole_latest_alias_target(name for _, name in underlying_models(registry.deployments(model)))
+    if target is None:
         return None
-    return next(
-        (
-            name
-            for name, underlying in shared_underlying_models(registry.deployments())
-            if underlying in targets and name != model
-        ),
-        None,
-    )
+    return next((name for name in model_groups_serving_only(target, registry.deployments()) if name != model), None)
 
 
 def expand_latest_alias_model_groups(model: str) -> tuple[str, ...]:

@@ -24,7 +24,10 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.model_latest_aliases import latest_alias_requested_deployment
+from litellm.litellm_core_utils.model_latest_aliases import (
+    latest_alias_io_token_reservation,
+    latest_alias_requested_deployment,
+)
 from litellm.llms.gemini.empty_image_response import (
     billed_deployment_tokens,
     is_answer_without_an_image,
@@ -35,6 +38,8 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     async_io_token_refund_failure,
+    async_refund_held_io_token_reservation,
+    async_settle_held_io_token_reservation,
     async_socket_turn_misses_itpm_room,
     deployment_has_io_token_limits,
     get_io_token_rate_limit_request_kwargs,
@@ -473,6 +478,9 @@ class ModelRateLimitingCheck(CustomLogger):
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             await async_io_token_reconcile_success(self.usage, kwargs, response_obj)
+            held: Final = latest_alias_io_token_reservation(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
+            if held is not None:
+                await async_settle_held_io_token_reservation(self.usage, held, kwargs, response_obj)  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
 
             if standard_logging_object is None:
                 return
@@ -537,10 +545,15 @@ class ModelRateLimitingCheck(CustomLogger):
         # Never fail the primary logging pipeline over an io-token refund or usage error.
         with contextlib.suppress(Exception):
             billed: Final = billed_deployment_tokens(kwargs)
+            held: Final = latest_alias_io_token_reservation(kwargs)
             if billed is None:
                 await async_io_token_refund_failure(self.usage, kwargs)
+                if held is not None:
+                    await async_refund_held_io_token_reservation(self.usage, held)
                 return
             await async_io_token_reconcile_success(self.usage, kwargs, None)
+            if held is not None:
+                await async_settle_held_io_token_reservation(self.usage, held, kwargs, None)
             await self._async_count_tokens(kwargs, billed.deployment_id, billed.deployment_name, billed.tokens)
 
     @with_service_target(ROUTER_USAGE_TARGET)

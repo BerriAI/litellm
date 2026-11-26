@@ -3781,6 +3781,87 @@ async def test_tokens_of_a_rerouted_latest_alias_request_count_against_the_tpm_o
         await _serve_latest_alias_from_versioned_model_group({"model": "latest", "metadata": {}}, router)
 
 
+def _io_token_limited_latest_alias_router(itpm: int) -> litellm.Router:
+    router, _ = _latest_alias_router_with_limits({"itpm": itpm}, optional_pre_call_checks=["enforce_model_rate_limits"])
+    return router
+
+
+def _latest_alias_request(words: int) -> dict[str, object]:
+    return {"model": "latest", "messages": [{"role": "user", "content": "hello " * words}], "metadata": {}}
+
+
+def _rate_limit_check() -> "ModelRateLimitingCheck":
+    from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+    return next(callback for callback in litellm.callbacks if isinstance(callback, ModelRateLimitingCheck))
+
+
+@pytest.mark.asyncio
+async def test_a_rerouted_latest_alias_request_larger_than_the_itpm_of_the_latest_deployment_is_refused() -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router: Final = _io_token_limited_latest_alias_router(itpm=50)
+    with pytest.raises(litellm.RateLimitError):
+        await _serve_latest_alias_from_versioned_model_group(_latest_alias_request(words=200), router)
+    small: Final = _latest_alias_request(words=5)
+    await _serve_latest_alias_from_versioned_model_group(small, router)
+    assert small["model"] == "pinned"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("words", "failed_attempts", "prompt_tokens", "refused_after"),
+    [
+        pytest.param(5, 0, 45, True, id="used_tokens_replace_the_reservation"),
+        pytest.param(30, 0, 1, False, id="unused_reserved_tokens_are_returned"),
+        pytest.param(5, 1, 45, True, id="used_tokens_are_charged_after_a_failed_attempt_refunded_the_reservation"),
+        pytest.param(5, 1, 20, False, id="used_tokens_are_charged_once"),
+    ],
+)
+async def test_input_tokens_of_a_rerouted_latest_alias_request_settle_on_the_itpm_of_the_latest_deployment(
+    words: int, failed_attempts: int, prompt_tokens: int, refused_after: bool
+) -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router: Final = _io_token_limited_latest_alias_router(itpm=50)
+    data: Final = _latest_alias_request(words=words)
+    await _serve_latest_alias_from_versioned_model_group(data, router)
+    callback_kwargs: Final = {"litellm_params": {"metadata": data["metadata"]}}
+    check: Final = _rate_limit_check()
+    for _ in range(failed_attempts):
+        await check.async_log_failure_event(callback_kwargs, None, None, None)
+    served: Final = {
+        **callback_kwargs,
+        "standard_logging_object": {"prompt_tokens": prompt_tokens, "completion_tokens": 1},
+    }
+    await check.async_log_success_event(served, None, None, None)
+    await check.async_log_success_event(served, None, None, None)
+    following: Final = (
+        await asyncio.gather(
+            _serve_latest_alias_from_versioned_model_group(_latest_alias_request(words=words), router),
+            return_exceptions=True,
+        )
+    )[0]
+    assert isinstance(following, litellm.RateLimitError) is refused_after
+
+
+@pytest.mark.asyncio
+async def test_a_failed_rerouted_latest_alias_request_returns_its_input_tokens_to_the_latest_deployment() -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router: Final = _io_token_limited_latest_alias_router(itpm=50)
+    data: Final = _latest_alias_request(words=40)
+    await _serve_latest_alias_from_versioned_model_group(data, router)
+    with pytest.raises(litellm.RateLimitError):
+        await _serve_latest_alias_from_versioned_model_group(_latest_alias_request(words=40), router)
+    await _rate_limit_check().async_log_failure_event(
+        {"litellm_params": {"metadata": data["metadata"]}}, None, None, None
+    )
+    retried: Final = _latest_alias_request(words=40)
+    await _serve_latest_alias_from_versioned_model_group(retried, router)
+    assert retried["model"] == "pinned"
+
+
 def _latest_alias_and_two_targets() -> tuple[str, str, str]:
     from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 
@@ -3804,6 +3885,8 @@ def _deployment(name: str, model: str, **info: str) -> dict[str, object]:
         pytest.param([], "latest", id="no_group_of_the_versioned_model"),
         pytest.param(["team-owned"], "latest", id="team_owned_group_is_not_a_target"),
         pytest.param(["mixed"], "latest", id="latest_group_pointing_at_two_models"),
+        pytest.param(["first", "latest+unrelated"], "latest", id="latest_group_also_serving_an_unrelated_model"),
+        pytest.param(["first+unrelated", "second"], "second", id="group_also_serving_an_unrelated_model_is_skipped"),
     ],
 )
 async def test_a_latest_alias_request_is_served_by_the_shared_model_group_of_its_versioned_model(
@@ -3816,7 +3899,13 @@ async def test_a_latest_alias_request_is_served_by_the_shared_model_group_of_its
         model_list=[
             _deployment("latest", alias),
             *(_deployment("latest", other_alias) for name in pinned if name == "mixed"),
-            *(_deployment(name, target, **({"team_id": "team-1"} if name == "team-owned" else {})) for name in pinned),
+            *(_deployment("latest", "unrelated-model") for name in pinned if name == "latest+unrelated"),
+            *(
+                _deployment(name, target, **({"team_id": "team-1"} if name == "team-owned" else {}))
+                for name in pinned
+                if name != "latest+unrelated"
+            ),
+            *(_deployment(name, "unrelated-model") for name in pinned if name == "first+unrelated"),
         ]
     )
     data: Final = {"model": "latest", "metadata": {}}
