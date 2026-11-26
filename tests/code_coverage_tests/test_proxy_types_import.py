@@ -82,6 +82,30 @@ print("UserAPIKeyAuth identity: True")
     )
 
 
+def _run_proxy_package_check(repo_root: Path) -> subprocess.CompletedProcess[str]:
+    program: Final = """
+import pathlib
+import sys
+import litellm
+
+repo_root = sys.argv[1]
+if not pathlib.Path(litellm.__file__).resolve().is_relative_to(pathlib.Path(repo_root)):
+    raise SystemExit(f"imported litellm from {litellm.__file__}, expected under {repo_root}")
+
+proxy_modules = sorted(
+    name for name in sys.modules if name == "litellm.proxy" or name.startswith("litellm.proxy.")
+)
+print("proxy modules loaded:", proxy_modules)
+    """
+    return subprocess.run(
+        [sys.executable, "-I", "-c", program, str(repo_root.resolve())],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 @pytest.mark.parametrize("block_enterprise", (False, True))
 def test_import_litellm_does_not_load_proxy_types(block_enterprise: bool) -> None:
     result: Final = _run_import_check(block_enterprise, _REPO_ROOT)
@@ -97,10 +121,19 @@ def test_proxy_types_attribute_access_still_works() -> None:
     assert "UserAPIKeyAuth identity: True" in result.stdout
 
 
+def test_import_litellm_does_not_load_the_proxy_package() -> None:
+    # An SDK module importing a proxy type at runtime pulls in litellm.proxy without
+    # touching litellm.proxy._types (#54251 via litellm.types.proxy.auth.user_api_key_auth).
+    result: Final = _run_proxy_package_check(_REPO_ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "proxy modules loaded: []" in result.stdout, result.stdout + result.stderr
+
+
 def main(repo_root: Path = _REPO_ROOT) -> None:
     results: Final = (
         ("enterprise blocked: False", _run_import_check(False, repo_root), "_types loaded: False"),
         ("enterprise blocked: True", _run_import_check(True, repo_root), "_types loaded: False"),
+        ("proxy package", _run_proxy_package_check(repo_root), "proxy modules loaded: []"),
         (
             "proxy._types attribute access",
             _run_proxy_types_attribute_access(repo_root),
