@@ -24,7 +24,6 @@ from litellm.proxy.mcp_server.outbound_credentials.redis_refresh_coordinator imp
     RedisRefreshCoordinator,
 )
 
-
 CoordinatorOutcomeT = TypeVar("CoordinatorOutcomeT")
 
 
