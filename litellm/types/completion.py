@@ -215,7 +215,7 @@ class CompletionDispatchContext:
     api_version: str | None
     client: Any
     custom_llm_provider: str
-    custom_prompt_dict: dict
+    custom_prompt_dict: dict[str, dict[str, object]]
     extra_headers: dict[str, object] | None
     headers: dict[str, object]
     hf_model_name: str | None
