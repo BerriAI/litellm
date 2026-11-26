@@ -82,6 +82,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Download the Rust bridge
         uses: ./.github/actions/rust-bridge
@@ -171,6 +172,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Download the Rust bridge
         uses: ./.github/actions/rust-bridge

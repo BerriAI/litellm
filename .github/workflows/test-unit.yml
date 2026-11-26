@@ -1094,6 +1094,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
@@ -1197,6 +1198,7 @@ jobs:
           set +e
           uv run --no-sync pytest "${pytest_args[@]}" \
             --tb=short -vv \
+            -p no:ddtrace -p no:logfire -p no:pytest_logfire -p no:langsmith_plugin -p no:codspeed \
             --maxfail="${MAX_FAILURES}" \
             "${xdist_args[@]}" \
             --reruns "${RERUNS}" \
@@ -1493,6 +1495,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
@@ -1613,6 +1616,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Set up the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
@@ -1698,6 +1702,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
