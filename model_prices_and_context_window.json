@@ -26515,13 +26515,29 @@
         "litellm_provider": "nodecode",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
-        "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
         "source": "https://nodecode.ai/docs/pricing",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
