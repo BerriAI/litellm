@@ -17,6 +17,7 @@ import litellm
 from litellm._internal_context import resent_on
 from litellm._logging import verbose_logger
 from litellm.caching.caching import with_caller_message_count
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -65,7 +66,6 @@ from litellm.llms.anthropic.messages.utils import (
     proxy_sub_call_trace_id,
     requested_reasoning_summary,
 )
-from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
