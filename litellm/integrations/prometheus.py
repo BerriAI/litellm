@@ -66,6 +66,7 @@ from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
 from litellm.models.verification_token import LiteLLM_DeletedVerificationToken
+from litellm.proxy.spend_tracking.team_member_budget import hours_until
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.end_user_repository import EndUserRepository
@@ -916,6 +917,25 @@ class PrometheusLogger(CustomLogger):
                 "litellm_customer_budget_remaining_hours_metric",
                 "Remaining hours for customer (end user) budget to be reset",
                 labelnames=self.get_labels_for_metric("litellm_customer_budget_remaining_hours_metric"),
+            )
+
+            self.litellm_remaining_team_member_budget_metric = self._gauge_factory(
+                "litellm_remaining_team_member_budget_metric",
+                "Remaining budget for a team member within a team",
+                labelnames=self.get_labels_for_metric("litellm_remaining_team_member_budget_metric"),
+            )
+
+            self.litellm_team_member_max_budget_metric = self._gauge_factory(
+                "litellm_team_member_max_budget_metric",
+                "Effective maximum budget for a team member within a team "
+                "(per-member budget or the team's default member budget)",
+                labelnames=self.get_labels_for_metric("litellm_team_member_max_budget_metric"),
+            )
+
+            self.litellm_team_member_budget_remaining_hours_metric = self._gauge_factory(
+                "litellm_team_member_budget_remaining_hours_metric",
+                "Hours until a team member's budget within a team resets",
+                labelnames=self.get_labels_for_metric("litellm_team_member_budget_remaining_hours_metric"),
             )
 
             ########################################
@@ -5037,6 +5057,45 @@ class PrometheusLogger(CustomLogger):
             and isinstance(self.litellm_customer_max_budget_metric, NoOpMetric)
             and isinstance(self.litellm_customer_budget_remaining_hours_metric, NoOpMetric)
         )
+
+    def _team_member_budget_gauges_are_noop(self) -> bool:
+        return (
+            isinstance(self.litellm_remaining_team_member_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_team_member_max_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_team_member_budget_remaining_hours_metric, NoOpMetric)
+        )
+
+    def _team_member_labels(
+        self, metric_name: DEFINED_PROMETHEUS_METRICS, enum_values: UserAPIKeyLabelValues
+    ) -> dict[str, str | None]:
+        return prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(metric_name), enum_values=enum_values
+        )
+
+    def _set_team_member_budget_metrics(
+        self,
+        team_id: str,
+        team_alias: str | None,
+        user_id: str,
+        user_email: str | None,
+        max_budget: float,
+        spend: float,
+        budget_reset_at: datetime | None,
+        now: datetime,
+    ) -> None:
+        enum_values: Final = UserAPIKeyLabelValues(
+            team=team_id, team_alias=team_alias or "", user=user_id, user_email=user_email
+        )
+        self.litellm_remaining_team_member_budget_metric.labels(
+            **self._team_member_labels("litellm_remaining_team_member_budget_metric", enum_values)
+        ).set(max_budget - spend)
+        self.litellm_team_member_max_budget_metric.labels(
+            **self._team_member_labels("litellm_team_member_max_budget_metric", enum_values)
+        ).set(max_budget)
+        if budget_reset_at is not None:
+            self.litellm_team_member_budget_remaining_hours_metric.labels(
+                **self._team_member_labels("litellm_team_member_budget_remaining_hours_metric", enum_values)
+            ).set(hours_until(budget_reset_at, now))
 
     def _set_customer_budget_metrics(
         self,
