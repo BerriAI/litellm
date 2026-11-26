@@ -6,10 +6,8 @@ import {
   useDeleteProxyConfigField,
   useProxyConfig,
 } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
-import {
-  StoreRequestInSpendLogsParams,
-  useStoreRequestInSpendLogs,
-} from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
+import { useStoreRequestInSpendLogs } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { FieldGroup } from "@/components/ui/field";
@@ -25,8 +23,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CircleHelp, Clock } from "lucide-react";
 import type { ParseKeys } from "i18next";
 import React, { useCallback, useMemo } from "react";
-import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
+import { countDisplay, formToPayload, omittedFieldNames, storedValuesToForm } from "./mapper";
+import { loggingSettingsSchema, type LoggingSettingsFormValues } from "./schema";
 
 const STORE_PROMPTS_FIELD_NAME = "store_prompts_in_spend_logs";
 
@@ -76,63 +75,6 @@ const OPTIONAL_FIELDS: readonly OptionalField[] = [
   },
 ];
 
-const MINIMUM_COUNT = 1;
-
-interface LoggingSettingsFormValues {
-  store_prompts_in_spend_logs: boolean;
-  maximum_spend_logs_retention_period: string;
-  maximum_spend_logs_cleanup_batch_size: string;
-  maximum_spend_logs_cleanup_max_batches: string;
-  maximum_spend_logs_cleanup_run_budget: string;
-  maximum_spend_logs_cleanup_batch_timeout: string;
-}
-
-const duration = (value: string): string | undefined => (value.trim() === "" ? undefined : value);
-
-// antd InputNumber applied `min` and `precision` to the committed value rather
-// than only to the display, and it did so on blur, so the raw keystrokes have
-// to survive until then or "12.34" commits as 124 instead of 12.
-const count = (raw: string): number | undefined => {
-  const parsed = Number(raw);
-  if (raw.trim() === "" || !Number.isFinite(parsed)) {
-    return undefined;
-  }
-  return Math.max(MINIMUM_COUNT, Math.round(parsed));
-};
-
-const countDisplay = (raw: string): string => {
-  const normalized = count(raw);
-  return normalized === undefined ? "" : String(normalized);
-};
-
-const buildUpdateParams = (formValues: LoggingSettingsFormValues): StoreRequestInSpendLogsParams => {
-  const retentionPeriod = duration(formValues.maximum_spend_logs_retention_period);
-  const batchSize = count(formValues.maximum_spend_logs_cleanup_batch_size);
-  const maxBatches = count(formValues.maximum_spend_logs_cleanup_max_batches);
-  const runBudget = duration(formValues.maximum_spend_logs_cleanup_run_budget);
-  const batchTimeout = duration(formValues.maximum_spend_logs_cleanup_batch_timeout);
-
-  return {
-    store_prompts_in_spend_logs: formValues.store_prompts_in_spend_logs,
-    ...(retentionPeriod !== undefined && { maximum_spend_logs_retention_period: retentionPeriod }),
-    ...(batchSize !== undefined && { maximum_spend_logs_cleanup_batch_size: batchSize }),
-    ...(maxBatches !== undefined && { maximum_spend_logs_cleanup_max_batches: maxBatches }),
-    ...(runBudget !== undefined && { maximum_spend_logs_cleanup_run_budget: runBudget }),
-    ...(batchTimeout !== undefined && { maximum_spend_logs_cleanup_batch_timeout: batchTimeout }),
-  };
-};
-
-// A blank field only needs clearing when something is actually stored for it.
-// Asking the proxy to clear a field it has no value for is a 400 whenever no
-// general_settings row exists at all, which is the state of every deployment
-// that has never saved one, so clearing unconditionally would fail the first
-// save on a new proxy and take the rest of the form down with it.
-const omittedFieldNames = (
-  updateParams: StoreRequestInSpendLogsParams,
-  isStored: (name: GeneralSettingsFieldName) => boolean,
-): readonly GeneralSettingsFieldName[] =>
-  OPTIONAL_FIELDS.map((field) => field.name).filter((name) => !(name in updateParams) && isStored(name));
-
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
     {label}
@@ -157,7 +99,7 @@ const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
   onSubmit,
 }) => {
   const { t } = useTranslation();
-  const form = useForm<LoggingSettingsFormValues>({ defaultValues: initialValues });
+  const form = useZodForm(loggingSettingsSchema, { defaultValues: initialValues });
 
   return (
     <TooltipProvider>
@@ -249,19 +191,7 @@ const LoggingSettings: React.FC = () => {
     return value !== null && value !== undefined;
   };
 
-  const initialValues = useMemo(
-    () =>
-      ({
-        store_prompts_in_spend_logs: storedValue(STORE_PROMPTS_FIELD_NAME) ?? false,
-        ...Object.fromEntries(
-          OPTIONAL_FIELDS.map((field) => {
-            const stored = storedValue(field.name);
-            return [field.name, stored === null || stored === undefined ? "" : String(stored)];
-          }),
-        ),
-      }) as LoggingSettingsFormValues,
-    [storedValue],
-  );
+  const initialValues = useMemo(() => storedValuesToForm(storedValue), [storedValue]);
 
   // Resolves to the field name when clearing it failed, or null when it worked.
   const clearStoredField = (fieldName: GeneralSettingsFieldName) =>
@@ -295,7 +225,7 @@ const LoggingSettings: React.FC = () => {
   };
 
   const handleFormSubmit = (formValues: LoggingSettingsFormValues) => {
-    const updateParams = buildUpdateParams(formValues);
+    const updateParams = formToPayload(formValues);
     const submitUpdate = () =>
       mutate(updateParams, {
         onSuccess: () => toast.success(t("adminPanel.loggingSettings.toasts.updated")),
@@ -303,7 +233,11 @@ const LoggingSettings: React.FC = () => {
           toast.fromError(t("adminPanel.loggingSettings.toasts.saveFailed", { error: parseErrorMessage(error) })),
       });
 
-    const fieldsToClear = omittedFieldNames(updateParams, isStored);
+    const fieldsToClear = omittedFieldNames(
+      updateParams,
+      OPTIONAL_FIELDS.map((field) => field.name),
+      isStored,
+    );
     if (fieldsToClear.length === 0) {
       submitUpdate();
       return;

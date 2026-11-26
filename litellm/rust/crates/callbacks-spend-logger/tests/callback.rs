@@ -959,6 +959,33 @@ async fn a_failure_releases_the_reservation_and_writes_every_billed_row(golden: 
 
 #[rstest]
 #[tokio::test]
+async fn a_failed_tool_call_inside_the_request_keeps_its_reservation_and_still_writes_its_row(
+    golden: (Json, Json),
+) {
+    let (config, row) = golden;
+    let harness = harness(Store::default());
+    let mut request = failure(&config, vec![row]);
+    request["nested_tool_call"] = json!(true);
+
+    let ran = run(
+        &harness,
+        failure_input(
+            request,
+            json!({"failure_row_response_cost": 0.0}),
+            Json::Null,
+            Some(reservation()),
+        ),
+        false,
+    )
+    .await;
+
+    assert_eq!(counter(&harness, KEY_COUNTER), Some(5.0));
+    assert!(ran.written_back.is_none());
+    assert_eq!(queued(&harness).len(), 1);
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_failure_row_stores_the_released_reservation_in_its_request_body(golden: (Json, Json)) {
     let (config, mut row) = golden;
     row["stores_prompts"] = json!(true);

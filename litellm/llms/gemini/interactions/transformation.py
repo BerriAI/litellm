@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     has_attributes,
     process_response_headers,
+    str_param,
     without,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
@@ -158,7 +159,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         headers = headers or {}
         headers["Content-Type"] = "application/json"
         if litellm_params:
-            api_key: Final = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
+            api_key: Final = GeminiModelInfo.get_api_key(str_param(litellm_params, "api_key"))
             if api_key:
                 headers["x-goog-api-key"] = api_key
 

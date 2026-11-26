@@ -7811,6 +7811,113 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
+_REFUSAL_TEXT: Final = "I can't help with that."
+_REFUSAL_MESSAGE: Final = MappingProxyType({"type": "message", "role": "assistant", "content": []})
+
+
+def _stream_contents(events: Sequence[Mapping[str, object]], **iterator_options: bool) -> tuple[str, ...]:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(()), sync_stream=True, **iterator_options
+    )
+    return tuple(iterator.chunk_parser(dict(event)).choices[0].delta.content or "" for event in events)
+
+
+def test_stream_refusal_deltas_become_content_once_and_keep_the_terminal_chunk() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    refusal_part: Final = {"type": "refusal", "refusal": _REFUSAL_TEXT}
+    refused_message: Final = {**_REFUSAL_MESSAGE, "content": [refusal_part]}
+    events: Final[tuple[dict[str, object], ...]] = (
+        {"type": "response.created", "response": {"id": "resp_refusal", "output": []}},
+        {"type": "response.output_item.added", "output_index": 0, "item": dict(_REFUSAL_MESSAGE)},
+        {"type": "response.content_part.added", "output_index": 0, "content_index": 0, "part": {"type": "refusal"}},
+        {"type": "response.refusal.delta", "output_index": 0, "content_index": 0, "delta": "I can't "},
+        {"type": "response.refusal.delta", "output_index": 0, "content_index": 0, "delta": "help with that."},
+        {"type": "response.refusal.done", "output_index": 0, "content_index": 0, "refusal": _REFUSAL_TEXT},
+        {"type": "response.content_part.done", "output_index": 0, "content_index": 0, "part": refusal_part},
+        {"type": "response.output_item.done", "output_index": 0, "item": refused_message},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_refusal",
+                "status": "completed",
+                "output": [refused_message],
+                "usage": {"input_tokens": 5, "output_tokens": 4, "total_tokens": 9},
+            },
+        },
+    )
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=iter(()), sync_stream=True)
+
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _REFUSAL_TEXT
+    assert [chunk.choices[0].finish_reason for chunk in chunks] == [None] * (len(events) - 1) + ["stop"]
+    assert chunks[-1].usage.total_tokens == 9
+
+
+@pytest.mark.parametrize(
+    "delta_field",
+    [{"delta": ""}, {"delta": None}, {}, {"delta": 7}, {"delta": ["no"]}, {"delta": {"text": "no"}}],
+    ids=["empty", "null", "missing", "number", "list", "object"],
+)
+def test_stream_refusal_delta_without_text_still_yields_an_empty_chunk(delta_field: Mapping[str, object]) -> None:
+    event: Final = {"type": "response.refusal.delta", "output_index": 0, "content_index": 0, **delta_field}
+
+    assert _stream_contents([event]) == ("",)
+
+
+def test_stream_mixed_text_and_refusal_deltas_keep_their_order() -> None:
+    events: Final = (
+        {"type": "response.output_item.added", "output_index": 0, "item": dict(_REFUSAL_MESSAGE)},
+        {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "Here is part. "},
+        {"type": "response.refusal.delta", "output_index": 0, "content_index": 1, "delta": _REFUSAL_TEXT},
+    )
+
+    assert "".join(_stream_contents(events)) == f"Here is part. {_REFUSAL_TEXT}"
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [(True, _REFUSAL_TEXT), (False, f"{_REFUSAL_TEXT}Still no.")],
+)
+def test_stream_structured_output_drops_refusal_after_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    events: Final = (
+        {"type": "response.output_item.added", "output_index": 0, "item": dict(_REFUSAL_MESSAGE)},
+        {"type": "response.refusal.delta", "output_index": 0, "delta": _REFUSAL_TEXT},
+        {"type": "response.output_item.done", "output_index": 0, "item": dict(_REFUSAL_MESSAGE)},
+        {"type": "response.output_item.added", "output_index": 1, "item": dict(_REFUSAL_MESSAGE)},
+        {"type": "response.refusal.delta", "output_index": 1, "delta": "Still no."},
+    )
+
+    assert "".join(_stream_contents(events, structured_output=structured_output)) == expected_content
+
+
+def test_stream_refusal_delta_carries_the_phase_of_its_message_like_text() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(()), sync_stream=True, replays_openai_history=True
+    )
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 0, "item": {**_REFUSAL_MESSAGE, "phase": "final_answer"}}
+    )
+
+    text: Final = iterator.chunk_parser({"type": "response.output_text.delta", "output_index": 0, "delta": "a"})
+    refusal: Final = iterator.chunk_parser({"type": "response.refusal.delta", "output_index": 0, "delta": "b"})
+
+    assert refusal.provider_specific_fields == text.provider_specific_fields == {"phase": "final_answer"}
+
+
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider", "forwards"),
     [
