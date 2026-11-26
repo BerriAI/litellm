@@ -11,6 +11,7 @@ import importlib
 import time
 import types
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from functools import partial
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -23,6 +24,7 @@ from pydantic import TypeAdapter
 from typing_extensions import overload
 
 import litellm
+from litellm.litellm_core_utils.attempt_settlement import DeploymentAttemptResult
 from litellm.litellm_core_utils.fallback_utils import without_global_fallbacks_around
 from litellm.router_config import RouterConfig, RouterDynamicConfig, live_dynamic_config
 
@@ -115,6 +117,30 @@ class PythonHost:
         if not callable(endpoint):
             raise TypeError(f"litellm.{op} is not an endpoint")
         return without_global_fallbacks_around(endpoint)
+
+    def deployment_attempt_recorder(
+        self,
+        op: str,
+        *,
+        stream: object,
+        model_group: Callable[[], str | None],
+        fallback_level: object,
+        retry: object,
+    ) -> Callable[[DeploymentAttemptResult], None] | None:
+        if op != "acompletion" or stream or not litellm.callbacks:
+            return None
+
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        logger: Final = PrometheusLogger.get_instance()
+        if logger is None:
+            return None
+        return partial(
+            logger.record_deployment_attempt,
+            model_group=model_group(),
+            phase="fallback" if isinstance(fallback_level, int) and fallback_level > 0 else "primary",
+            attempt_kind="retry" if isinstance(retry, int) and retry > 0 else "initial",
+        )
 
     def sleep(self, seconds: float) -> Awaitable[None]:
         return asyncio.sleep(seconds)

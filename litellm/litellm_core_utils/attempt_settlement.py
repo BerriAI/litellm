@@ -8,21 +8,33 @@ import asyncio
 import contextlib
 import sys
 import uuid
-from collections.abc import Coroutine, Generator, Sequence
+from collections.abc import Callable, Coroutine, Generator, Sequence
 from contextvars import ContextVar
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 from litellm._logging import verbose_router_logger
 
 ATTEMPT_SETTLEMENT_GRACE_SECONDS: Final = 5.0
 
 
+DeploymentAttemptResult: TypeAlias = Literal["success", "error", "cancelled"]
+
+
 class RoutedAttempt:
-    __slots__ = ("answered", "attempt_id")
+    __slots__ = ("_recorder", "answered", "attempt_id")
 
     def __init__(self) -> None:
         self.attempt_id: Final = uuid.uuid4().hex
         self.answered: bool = False
+        self._recorder: Callable[[DeploymentAttemptResult], None] | None = None
+
+    def set_recorder(self, recorder: Callable[[DeploymentAttemptResult], None] | None) -> None:
+        self._recorder = recorder
+
+    def take_recorder(self) -> Callable[[DeploymentAttemptResult], None] | None:
+        recorder: Final = self._recorder
+        self._recorder = None
+        return recorder
 
 
 _ATTEMPT: Final[ContextVar[RoutedAttempt | None]] = ContextVar("routed_attempt", default=None)
@@ -32,6 +44,11 @@ _RELEASING: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: a release le
 def current_attempt_id() -> str | None:
     attempt: Final = _ATTEMPT.get()
     return None if attempt is None else attempt.attempt_id
+
+
+def take_deployment_attempt_recorder() -> Callable[[DeploymentAttemptResult], None] | None:
+    attempt: Final = _ATTEMPT.get()
+    return None if attempt is None else attempt.take_recorder()
 
 
 def mark_attempt_answered() -> None:
