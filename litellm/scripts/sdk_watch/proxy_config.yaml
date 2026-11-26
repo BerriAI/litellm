@@ -1,0 +1,5 @@
+model_list:
+  - model_name: sdk-watch
+    litellm_params:
+      model: anthropic/claude-opus-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY

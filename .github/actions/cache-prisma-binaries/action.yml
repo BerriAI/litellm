@@ -15,6 +15,12 @@ description: >-
   keyed by both versions, so a cache entry can never be served to a run that
   expects different binaries.
 
+inputs:
+  save-cache:
+    description: "'false' to never save the cache, for jobs that run untrusted code"
+    required: false
+    default: "true"
+
 runs:
   using: composite
   steps:
@@ -30,7 +36,7 @@ runs:
         echo "version=${version}" >> "$GITHUB_OUTPUT"
 
     - name: Restore Prisma binaries
-      if: github.ref == 'refs/heads/main'
+      if: inputs.save-cache == 'true' && github.ref == 'refs/heads/main'
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         # ~/.cache/prisma-python holds the npm install tree prisma-client-py
@@ -41,7 +47,7 @@ runs:
         key: ${{ runner.os }}-prisma-binaries-${{ steps.version.outputs.version }}
 
     - name: Restore Prisma binaries
-      if: github.ref != 'refs/heads/main'
+      if: inputs.save-cache != 'true' || github.ref != 'refs/heads/main'
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
