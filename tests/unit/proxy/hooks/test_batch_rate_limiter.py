@@ -1013,6 +1013,40 @@ async def test_key_and_team_output_limits_size_and_charge_the_output_a_batch_row
 
 
 @pytest.mark.asyncio
+async def test_a_team_output_limit_the_key_overrides_does_not_shrink_the_output_a_batch_row_may_produce(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+    key_limit: Final = 400
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-batch"),
+            models=[_BATCH_ALIAS],
+            team_id="team-1",
+            metadata={"model_otpm_limit": {_BATCH_ALIAS: key_limit}},
+            team_metadata={"model_otpm_limit": {_BATCH_ALIAS: 200}},
+        ),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+
+    charged: Final = await _counter(
+        internal_usage_cache, rate_limiter, "model_per_key_otpm", f"{hash_token('sk-batch')}:{_BATCH_ALIAS}", "tokens"
+    )
+    assert charged == no_max_tokens_output_floor(key_limit)
+    assert charged > no_max_tokens_output_floor(200)
+    assert (
+        await _counter(internal_usage_cache, rate_limiter, "model_per_team_otpm", f"team-1:{_BATCH_ALIAS}", "tokens")
+        == 0
+    )
+
+
+@pytest.mark.asyncio
 async def test_key_output_limit_still_refuses_a_batch_the_project_enqueued_token_limit_covers(
     alias_routed_batch: respx.MockRouter,
 ):

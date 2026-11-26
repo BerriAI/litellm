@@ -701,22 +701,30 @@ impl Request<'_> {
             (
                 "project_id",
                 [
-                    (PROJECT_ITPM, &metadata.project_model_itpm_limit),
-                    (PROJECT_OTPM, &metadata.project_model_otpm_limit),
+                    (PROJECT_ITPM, &metadata.project_model_itpm_limit, &Value::Null),
+                    (PROJECT_OTPM, &metadata.project_model_otpm_limit, &Value::Null),
                 ],
             ),
             (
                 "api_key",
                 [
-                    (KEY_ITPM, &metadata.key_model_itpm_limit),
-                    (KEY_OTPM, &metadata.key_model_otpm_limit),
+                    (KEY_ITPM, &metadata.key_model_itpm_limit, &Value::Null),
+                    (KEY_OTPM, &metadata.key_model_otpm_limit, &Value::Null),
                 ],
             ),
             (
                 "team_id",
                 [
-                    (TEAM_ITPM, &metadata.team_model_itpm_limit),
-                    (TEAM_OTPM, &metadata.team_model_otpm_limit),
+                    (
+                        TEAM_ITPM,
+                        &metadata.team_model_itpm_limit,
+                        &metadata.key_model_itpm_limit,
+                    ),
+                    (
+                        TEAM_OTPM,
+                        &metadata.team_model_otpm_limit,
+                        &metadata.key_model_otpm_limit,
+                    ),
                 ],
             ),
         ];
@@ -729,8 +737,8 @@ impl Request<'_> {
             }
             for model in &models {
                 let value = format!("{}:{}", text(entity), model.group);
-                for (key, configured) in limits {
-                    let limit = limit_in(configured, model)?;
+                for (key, configured, own) in limits {
+                    let limit = self.inherited_team_limit(model, configured, own.clone())?;
                     if !limit.is_null() {
                         found.push(descriptor(
                             key,
@@ -1290,12 +1298,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::a_key_and_its_team_each_count_their_own_limit(
+    #[case::a_key_with_its_own_output_limit_is_not_held_to_its_teams(
         json!({"api_key": "k", "team_id": "t"}),
         vec![
             descriptor("model_per_key_itpm", json!("k:gpt-4o"), json!(null), json!(7), 60),
             descriptor("model_per_key_otpm", json!("k:gpt-4o"), json!(null), json!(5), 60),
-            descriptor("model_per_team_otpm", json!("t:gpt-4o"), json!(null), json!(20), 60),
         ],
     )]
     #[case::a_key_without_a_team_has_no_team_counter(
@@ -1311,6 +1318,54 @@ mod tests {
     ) {
         assert_eq!(
             built(auth, io_metadata(), &lookups(&["gpt-4o"]), "gpt-4o"),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::no_limit_of_its_own_inherits_both_directions(
+        json!(null),
+        json!(null),
+        vec![
+            descriptor("model_per_team_itpm", json!("t:gpt-4o"), json!(null), json!(30), 60),
+            descriptor("model_per_team_otpm", json!("t:gpt-4o"), json!(null), json!(20), 60),
+        ],
+    )]
+    #[case::its_own_input_limit_still_inherits_the_output_limit(
+        json!({"gpt-4o": 7}),
+        json!(null),
+        vec![
+            descriptor("model_per_key_itpm", json!("k:gpt-4o"), json!(null), json!(7), 60),
+            descriptor("model_per_team_otpm", json!("t:gpt-4o"), json!(null), json!(20), 60),
+        ],
+    )]
+    #[case::its_own_limit_for_another_model_inherits_both_directions(
+        json!({"other": 7}),
+        json!({"other": 5}),
+        vec![
+            descriptor("model_per_team_itpm", json!("t:gpt-4o"), json!(null), json!(30), 60),
+            descriptor("model_per_team_otpm", json!("t:gpt-4o"), json!(null), json!(20), 60),
+        ],
+    )]
+    fn a_key_inherits_the_team_input_and_output_limits_it_does_not_set_itself(
+        #[case] key_itpm: Value,
+        #[case] key_otpm: Value,
+        #[case] expected: Vec<Value>,
+    ) {
+        let metadata = AuthMetadata {
+            key_model_itpm_limit: key_itpm,
+            key_model_otpm_limit: key_otpm,
+            team_model_itpm_limit: json!({"gpt-4o": 30}),
+            team_model_otpm_limit: json!({"gpt-4o": 20}),
+            ..AuthMetadata::default()
+        };
+        assert_eq!(
+            built(
+                json!({"api_key": "k", "team_id": "t"}),
+                metadata,
+                &lookups(&["gpt-4o"]),
+                "gpt-4o"
+            ),
             expected
         );
     }

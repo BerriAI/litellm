@@ -76,7 +76,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     project_io_token_rate_limit_descriptors,
     rate_limited_model,
 )
-from litellm.proxy.hooks.rate_limiter_utils import io_limit_values, resolve_llm_provider_for_rate_limit
+from litellm.proxy.hooks.rate_limiter_utils import io_limit_entries, resolve_llm_provider_for_rate_limit
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitScope
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import BatchInputFormat, HttpxBinaryResponseContent
@@ -172,13 +172,14 @@ def _rows_were_rewritten_on_upload(input_file_id: str) -> bool:
 def _key_and_team_io_token_limits(
     user_api_key_dict: UserAPIKeyAuth, limit: Literal["model_itpm_limit", "model_otpm_limit"]
 ) -> tuple[int, ...]:
-    return (
-        *io_limit_values(
-            user_api_key_dict.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # UserAPIKeyAuth.metadata is a bare dict
-            limit,
-        ),
-        *io_limit_values(user_api_key_dict.team_metadata if user_api_key_dict.team_id is not None else None, limit),
+    own: Final = io_limit_entries(
+        user_api_key_dict.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # UserAPIKeyAuth.metadata is a bare dict
+        limit,
     )
+    inherited: Final = io_limit_entries(
+        user_api_key_dict.team_metadata if user_api_key_dict.team_id is not None else None, limit
+    )
+    return (*own.values(), *(value for model, value in inherited.items() if model not in own))
 
 
 def _deployment_model_name_via_proxy_router(model: str) -> str | None:

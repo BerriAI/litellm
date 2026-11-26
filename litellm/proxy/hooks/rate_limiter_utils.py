@@ -5,7 +5,7 @@ Shared utility functions for rate limiter hooks.
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import StrictInt, TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -16,14 +16,19 @@ from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypes, PriorityReservationDict, Usage
 
 _SOCKET_SESSION_EVENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-_IO_LIMIT: Final[TypeAdapter[int | None]] = TypeAdapter(StrictInt | None)
 
 
 def valid_io_limit(value: object) -> int | None:
-    try:
-        return _IO_LIMIT.validate_python(value)
-    except ValidationError:
-        return None
+    match value:
+        case bool():
+            return None
+        case int() | float() | str():
+            try:
+                return int(value)
+            except (ValueError, OverflowError):
+                return None
+        case _:
+            return None
 
 
 def mapping_entries(value: object) -> Mapping[object, object] | None:
@@ -35,9 +40,9 @@ def metadata_member(metadata: object, name: str) -> object:
     return entries.get(name) if entries else None
 
 
-def io_limit_values(metadata: object, name: str) -> tuple[int, ...]:
-    entries: Final = mapping_entries(metadata_member(metadata, name))
-    return tuple(limit for limit in map(valid_io_limit, entries.values()) if limit is not None) if entries else ()
+def io_limit_entries(metadata: object, name: str) -> Mapping[str, int]:
+    entries: Final = mapping_entries(metadata_member(metadata, name)) or {}
+    return {str(model): limit for model, value in entries.items() if (limit := valid_io_limit(value)) is not None}
 
 
 def socket_session_usage(kwargs: Mapping[str, object], response_obj: object) -> Usage | None:
