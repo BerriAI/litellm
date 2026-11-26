@@ -17,3 +17,15 @@ async def test_serves_the_presented_token_regardless_of_key():
     # one-shot store backs a single preview call, so the lookup key is irrelevant
     assert await store.fetch("alice", "srv-1") is token
     assert await store.fetch("", "") is token
+    assert await store.peek("alice", "srv-1") is token
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_presented_token_cannot_be_refreshed_in_place():
+    token = OAuthToken(access_token="at")
+    store = PresentedOAuthTokenStore(token)
+
+    outcome = await store.refresh_now("alice", "srv-1", "at")
+
+    assert outcome.is_error()
+    assert await store.fetch("alice", "srv-1") is token

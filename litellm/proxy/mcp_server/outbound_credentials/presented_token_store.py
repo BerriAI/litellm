@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
+from litellm.proxy.mcp_server.outbound_credentials.result import Error, Result
+from litellm.proxy.mcp_server.outbound_credentials.types import CredError
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,3 +26,14 @@ class PresentedOAuthTokenStore:
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         return self.token
+
+    async def peek(self, user_id: str, server_id: str) -> OAuthToken | None:
+        return self.token
+
+    async def invalidate(self, user_id: str, server_id: str) -> None:
+        return None
+
+    async def refresh_now(
+        self, user_id: str, server_id: str, failed_access_token: str
+    ) -> Result[OAuthToken, CredError]:
+        return Error(CredError.of_unauthorized("The presented OAuth token cannot be refreshed."))
