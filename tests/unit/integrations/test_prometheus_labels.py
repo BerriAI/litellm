@@ -1842,3 +1842,366 @@ if __name__ == "__main__":
     test_prometheus_label_value_sanitization_none()
     test_prometheus_label_value_sanitization_non_string_types()
     print("\n✅ All prometheus label tests passed!")
+
+
+@pytest.mark.parametrize("excluded", [False, True])
+def test_routed_attempt_counter_keeps_phase_kind_and_result_together(
+    monkeypatch: pytest.MonkeyPatch, excluded: bool
+) -> None:
+    from prometheus_client import REGISTRY
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    metric: Final = "litellm_deployment_attempts_total"
+    monkeypatch.setattr(litellm, "prometheus_exclude_metrics", [metric] if excluded else [])
+    _clear_prometheus_registry()
+    try:
+        logger: Final = PrometheusLogger()
+        logger.record_deployment_attempt("error", model_group="primary-chat", phase="primary", attempt_kind="initial")
+        logger.record_deployment_attempt("error", model_group="fallback-chat", phase="fallback", attempt_kind="initial")
+        logger.record_deployment_attempt("success", model_group="fallback-chat", phase="fallback", attempt_kind="retry")
+        logger.record_deployment_attempt("error", model_group=None, phase="primary", attempt_kind="initial")
+        expected: Final = None if excluded else 1.0
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "primary-chat", "phase": "primary", "attempt_kind": "initial", "result": "error"},
+            )
+            == expected
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "fallback-chat", "phase": "fallback", "attempt_kind": "initial", "result": "error"},
+            )
+            == expected
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "fallback-chat", "phase": "fallback", "attempt_kind": "retry", "result": "success"},
+            )
+            == expected
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "other", "phase": "primary", "attempt_kind": "initial", "result": "error"},
+            )
+            == expected
+        )
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_router_attempt_counter_bounds_model_group_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    from prometheus_client import REGISTRY
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    metric: Final = "litellm_deployment_attempts_total"
+    _clear_prometheus_registry()
+    logger: Final = PrometheusLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    try:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "primary-group",
+                    "litellm_params": {
+                        "model": "openai/fail-primary",
+                        "api_key": "k",
+                        "mock_response": "litellm.InternalServerError",
+                    },
+                },
+                {
+                    "model_name": "fallback-group",
+                    "litellm_params": {
+                        "model": "openai/ok-fallback",
+                        "api_key": "k",
+                        "mock_response": "ok",
+                    },
+                },
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "k",
+                        "mock_response": "ok",
+                    },
+                },
+            ],
+            num_retries=1,
+            retry_after=0,
+            disable_cooldowns=True,
+            fallbacks=[{"primary-group": ["fallback-group"]}],
+        )
+        router.default_deployment = {
+            "model_name": "default-wildcard",
+            "litellm_params": {
+                "model": "openai/default-model",
+                "custom_llm_provider": "openai",
+                "api_key": "k",
+                "mock_response": "ok",
+            },
+            "model_info": {"id": "default-id"},
+        }
+
+        await router.acompletion(model="primary-group", messages=[{"role": "user", "content": "hi"}])
+        await router.acompletion(model="openai/caller-a", messages=[{"role": "user", "content": "hi"}])
+        await router.acompletion(model="openai/caller-b", messages=[{"role": "user", "content": "hi"}])
+        await router.acompletion(model="unconfigured-a", messages=[{"role": "user", "content": "hi"}])
+        await router.acompletion(model="unconfigured-b", messages=[{"role": "user", "content": "hi"}])
+
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "primary-group", "phase": "primary", "attempt_kind": "initial", "result": "error"},
+            )
+            == 1.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "primary-group", "phase": "primary", "attempt_kind": "retry", "result": "error"},
+            )
+            == 1.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "fallback-group", "phase": "fallback", "attempt_kind": "initial", "result": "success"},
+            )
+            == 1.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "openai/*", "phase": "primary", "attempt_kind": "initial", "result": "success"},
+            )
+            == 2.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "openai/caller-a", "phase": "primary", "attempt_kind": "initial", "result": "success"},
+            )
+            is None
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "other", "phase": "primary", "attempt_kind": "initial", "result": "success"},
+            )
+            == 2.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "unconfigured-a", "phase": "primary", "attempt_kind": "initial", "result": "success"},
+            )
+            is None
+        )
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_router_streaming_attempt_counter_records_retries_fallbacks_and_cancellations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from prometheus_client import REGISTRY
+
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    metric: Final = "litellm_deployment_attempts_total"
+    _clear_prometheus_registry()
+    logger: Final = PrometheusLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    try:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "stream-primary",
+                    "litellm_params": {
+                        "model": "openai/fail-stream",
+                        "api_key": "k",
+                        "mock_response": "litellm.InternalServerError",
+                    },
+                },
+                {
+                    "model_name": "stream-fallback",
+                    "litellm_params": {
+                        "model": "openai/ok-stream",
+                        "api_key": "k",
+                        "mock_response": "hello streaming world",
+                    },
+                },
+                {
+                    "model_name": "stream-cancel",
+                    "litellm_params": {
+                        "model": "openai/cancel-stream",
+                        "api_key": "k",
+                        "mock_response": "one two three four five",
+                    },
+                },
+            ],
+            num_retries=2,
+            retry_after=0,
+            disable_cooldowns=True,
+            fallbacks=[{"stream-primary": ["stream-fallback"]}],
+        )
+
+        # Primary fails initial + 2 retries, then fallback streams to completion.
+        fallback_stream: Final = await router.acompletion(
+            model="stream-primary",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )
+        chunks: Final = [chunk async for chunk in fallback_stream]
+        assert chunks
+
+        # Client closes stream early after reading first chunk -> cancelled.
+        cancelled_stream: Final = await router.acompletion(
+            model="stream-cancel",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )
+        _ = await cancelled_stream.__anext__()
+        await cancelled_stream.aclose()
+
+        # Client closes stream before reading any chunk -> cancelled.
+        unstarted_stream: Final = await router.acompletion(
+            model="stream-cancel",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )
+        await unstarted_stream.aclose()
+
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "stream-primary", "phase": "primary", "attempt_kind": "initial", "result": "error"},
+            )
+            == 1.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "stream-primary", "phase": "primary", "attempt_kind": "retry", "result": "error"},
+            )
+            == 2.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "stream-fallback", "phase": "fallback", "attempt_kind": "initial", "result": "success"},
+            )
+            == 1.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "stream-cancel", "phase": "primary", "attempt_kind": "initial", "result": "cancelled"},
+            )
+            == 2.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "stream-cancel", "phase": "primary", "attempt_kind": "initial", "result": "success"},
+            )
+            is None
+        )
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_router_streaming_attempt_counter_records_mid_stream_error_once() -> None:
+    from collections.abc import AsyncIterator
+    from types import SimpleNamespace
+
+    from prometheus_client import REGISTRY
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    metric: Final = "litellm_deployment_attempts_total"
+    _clear_prometheus_registry()
+    logger: Final = PrometheusLogger()
+
+    async def broken_chunks() -> AsyncIterator[ModelResponseStream]:
+        yield ModelResponseStream(
+            id="chatcmpl-mid-err",
+            model="gpt-4o-mini",
+            choices=[StreamingChoices(index=0, delta=Delta(content="partial"), finish_reason=None)],
+        )
+        raise RuntimeError("upstream stream reset")
+
+    class _PassthroughStream(CustomStreamWrapper):
+        def __init__(self) -> None:
+            self.completion_stream = broken_chunks()
+            self.make_call = None
+            self.model = "gpt-4o-mini"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = SimpleNamespace(model_call_details={})  # pyright: ignore[reportAttributeAccessIssue]  # minimal logging stub for CustomStreamWrapper init
+            self.chunks = []
+            self._hidden_params = {}
+            self._response_headers = None
+
+        def __aiter__(self) -> AsyncIterator[ModelResponseStream]:
+            return self.completion_stream
+
+    async def _noop_report(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    fake_core: Final = SimpleNamespace(
+        outcome_callbacks=lambda *_a, **_kw: {"success": False, "failure": False},
+        report_stream_failure=_noop_report,
+    )
+    logging_obj: Final = SimpleNamespace(_has_logged_async_failure=True)
+    attempt: Final = StreamAttempt(
+        core=fake_core,  # pyright: ignore[reportArgumentType]  # minimal stub for stream outcome recording
+        op="acompletion",
+        request={"model": "mid-err-group", "stream": True},
+        kwargs={"model": "openai/gpt-4o-mini", "stream": True, "litellm_logging_obj": logging_obj},
+        group="mid-err-group",
+        order=None,
+        depth=0,
+        level=0,
+        deployment_id="dep-1",
+        attempted_retries=1,
+        attempt_recorder=lambda result: logger.record_deployment_attempt(
+            result, model_group="mid-err-group", phase="primary", attempt_kind="retry"
+        ),
+    )
+
+    try:
+        wrapped: Final = await open_attempt_stream(attempt, _PassthroughStream())
+        assert isinstance(wrapped, CustomStreamWrapper)
+        assert isinstance(await wrapped.__anext__(), ModelResponseStream)
+        with pytest.raises(RuntimeError, match="upstream stream reset"):
+            await wrapped.__anext__()
+        await wrapped.aclose()
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "mid-err-group", "phase": "primary", "attempt_kind": "retry", "result": "error"},
+            )
+            == 1.0
+        )
+        assert (
+            REGISTRY.get_sample_value(
+                metric,
+                {"model_group": "mid-err-group", "phase": "primary", "attempt_kind": "retry", "result": "cancelled"},
+            )
+            is None
+        )
+    finally:
+        _clear_prometheus_registry()

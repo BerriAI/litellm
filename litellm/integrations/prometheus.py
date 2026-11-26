@@ -49,6 +49,7 @@ from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker i
 from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions import (
     SharedPrometheusSeriesAdmissions,
 )
+from litellm.litellm_core_utils.attempt_settlement import DeploymentAttemptResult
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -1088,6 +1089,14 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_deployment_total_requests"),
             )
 
+            self.litellm_deployment_attempts_total: PrometheusCounter | _LabeledMetric | NoOpMetric = (
+                self._counter_factory(  # pyright: ignore[reportUnknownMemberType]  # the shared factory is untyped
+                    name="litellm_deployment_attempts_total",
+                    documentation="Routed Chat Completions provider call attempts, counted at completion",
+                    labelnames=self.get_labels_for_metric("litellm_deployment_attempts_total"),
+                )
+            )
+
             # Deployment Latency tracking
             self.litellm_deployment_latency_per_output_token = self._histogram_factory(
                 name="litellm_deployment_latency_per_output_token",
@@ -1798,6 +1807,34 @@ class PrometheusLogger(CustomLogger):
         )
         counter.labels(**_labels).inc(amount)
         self._track_end_user_metric_series(counter, metric_name, _labels)
+
+    def record_deployment_attempt(
+        self,
+        result: DeploymentAttemptResult,
+        *,
+        model_group: str | None = None,
+        phase: Literal["primary", "fallback"],
+        attempt_kind: Literal["initial", "retry"],
+    ) -> None:
+        try:
+            counter: Final = self.litellm_deployment_attempts_total
+            if not self.get_labels_for_metric("litellm_deployment_attempts_total") and not isinstance(
+                counter, _LabeledMetric
+            ):
+                counter.inc()
+                return
+            self._inc_labeled_counter(
+                counter,
+                "litellm_deployment_attempts_total",
+                UserAPIKeyLabelValues(
+                    model_group=model_group or UNRECOGNIZED_REQUESTED_MODEL_LABEL,
+                    phase=phase,
+                    attempt_kind=attempt_kind,
+                    result=result,
+                ),
+            )
+        except Exception:  # noqa: BLE001  # metric collection cannot change the provider outcome
+            verbose_logger.debug("Could not record deployment attempt", exc_info=True)
 
     async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         # Define prometheus client

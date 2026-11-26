@@ -239,6 +239,9 @@ class UserAPIKeyLabelNames(Enum):
     MCP_SERVER_NAME = "mcp_server_name"
     SERVICE_TIER = "service_tier"
     INPUT_SEQUENCE_LENGTH = "input_sequence_length"
+    PHASE = "phase"
+    ATTEMPT_KIND = "attempt_kind"
+    RESULT = "result"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -264,6 +267,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_output_audio_tokens_metric",
     "litellm_video_duration_seconds_metric",
     "litellm_images_generated_metric",
+    "litellm_deployment_attempts_total",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
     "litellm_dynamic_limiter_share_tokens",
@@ -727,6 +731,13 @@ class PrometheusMetricLabels:
 
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
 
+    litellm_deployment_attempts_total: ClassVar[tuple[str, ...]] = (
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.PHASE.value,
+        UserAPIKeyLabelNames.ATTEMPT_KIND.value,
+        UserAPIKeyLabelNames.RESULT.value,
+    )
+
     litellm_dynamic_limiter_share_tokens: ClassVar[tuple[str, ...]] = (
         UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.TEAM.value,
@@ -1141,6 +1152,9 @@ class UserAPIKeyLabelValues:
     mcp_server_name: str | None = None
     service_tier: str | None = None
     input_sequence_length: str | None = None
+    phase: str | None = None
+    attempt_kind: str | None = None
+    result: str | None = None
 
     # Added for test compatibility.
     def __init__(self, **kwargs: Any) -> None:
