@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
+from litellm.llms.gemini.empty_image_response import success_cost_without_failed_image_answers
 from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.router_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
 from litellm.router_utils.cooldown_callbacks import (
@@ -521,9 +522,10 @@ class RouterBudgetLimiting(CustomLogger):
         if standard_logging_payload is None:
             raise ValueError("standard_logging_payload is required")
 
-        batch_response, response_cost = _BATCH_CHARGE_VALUES.validate_python(
+        batch_response, logged_cost = _BATCH_CHARGE_VALUES.validate_python(
             (response_obj, _CALLBACK_FIELDS.validate_python(standard_logging_payload).get("response_cost", 0))
         )
+        response_cost: Final = success_cost_without_failed_image_answers(callback_fields, logged_cost)
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
         custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
 

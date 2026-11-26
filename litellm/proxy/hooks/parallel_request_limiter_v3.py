@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms.azure.ptu_capacity import normalized_tokens
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     ESTIMATED_OUTPUT_TOKENS_FIELD,
@@ -5176,9 +5177,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             total_tokens = self._aggregate_only_total_tokens(usage=_usage)
 
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-        reserved_tokens: Final = stash.reserved_tokens if stash is not None else 0
+        held: Final = stash if stash is not None and not stash.reservation_released else None
+        reserved_tokens: Final = held.reserved_tokens if held is not None else 0
         reserved_model: Final = stash.reserved_model if stash is not None else None
         reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
+        held_scopes: Final[frozenset[tuple[str, str]]] = held.reserved_scopes if held is not None else frozenset()
         # Reconciliation must target the same model-scoped counter that the
         # pre-call reservation incremented. If a reservation was made,
         # ``reserved_model`` (resolved at admission, so an alias map reload
@@ -5225,7 +5228,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         pipeline_operations.extend(
             self._build_reservation_aware_tpm_ops(
                 targets=charged_targets,
-                reserved_scopes=reserved_scopes,
+                reserved_scopes=held_scopes,
                 actual_tokens=total_tokens,
                 reserved_tokens=reserved_tokens,
             )
@@ -5235,10 +5238,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 standard_logging_metadata,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging metadata
                 usage_source=response_obj if _usage is None else _usage,
                 reconcile_model=reconcile_model,
-                reserved_scopes=reserved_scopes,
+                reserved_scopes=held_scopes,
                 reserved_ceiling=stash.ptu_ceiling if stash is not None else None,
-                reserved_tokens=stash.ptu_reserved_tokens if stash is not None else 0,
-                reserved_windows=stash.ptu_reserved_window_identities if stash is not None else frozenset(),
+                reserved_tokens=held.ptu_reserved_tokens if held is not None else 0,
+                reserved_windows=held.ptu_reserved_window_identities if held is not None else frozenset(),
                 total_tokens=total_tokens,
             )
         )
@@ -5326,27 +5329,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
             await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span, in_logging_callback=True)
 
-            pipeline_operations: Final = self._build_success_event_pipeline_operations(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                rate_limit_type=rate_limit_type,
+            await self._apply_tpm_operations(
+                self._build_success_event_pipeline_operations(
+                    kwargs=kwargs,
+                    response_obj=response_obj,
+                    rate_limit_type=rate_limit_type,
+                ),
+                litellm_parent_otel_span,
             )
-            unguarded_operations: Final = [
-                operation for operation in pipeline_operations if _as_window_guarded(operation) is None
-            ]
-            window_guarded_operations: Final = tuple(
-                guarded for operation in pipeline_operations if (guarded := _as_window_guarded(operation)) is not None
-            )
-            if unguarded_operations:
-                await self.async_increment_tokens_with_ttl_preservation(
-                    pipeline_operations=unguarded_operations,
-                    parent_otel_span=litellm_parent_otel_span,
-                )
-            if window_guarded_operations:
-                await self.async_increment_reservation_aware_tokens(
-                    pipeline_operations=window_guarded_operations,
-                    parent_otel_span=litellm_parent_otel_span,
-                )
             io_token_operations: Final = self._build_io_token_reservation_ops(
                 kwargs=kwargs,
                 response_obj=response_obj,
@@ -5365,6 +5355,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
+
+    async def _apply_tpm_operations(
+        self, operations: Sequence[RedisPipelineIncrementOperation], parent_otel_span: Span | None
+    ) -> None:
+        unguarded_operations: Final = [operation for operation in operations if _as_window_guarded(operation) is None]
+        window_guarded_operations: Final = tuple(
+            guarded for operation in operations if (guarded := _as_window_guarded(operation)) is not None
+        )
+        if unguarded_operations:
+            await self.async_increment_tokens_with_ttl_preservation(
+                pipeline_operations=unguarded_operations,
+                parent_otel_span=parent_otel_span,
+            )
+        if window_guarded_operations:
+            await self.async_increment_reservation_aware_tokens(
+                pipeline_operations=window_guarded_operations,
+                parent_otel_span=parent_otel_span,
+            )
 
     @with_service_target("rate_limits")
     async def async_logging_hook(
@@ -5426,14 +5434,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 statuses=statuses,
             )
 
-    def _recovered_partial_usage(self, source: Mapping[str, object]) -> Usage | None:
+    def _recovered_partial_usage(self, source: Mapping[str, object], provider_billed: bool) -> Usage | None:
         usage: Final = source.get("combined_usage_object")
-        if not isinstance(usage, Usage) or (usage.completion_tokens or 0) <= 0:
+        if not isinstance(usage, Usage) or (not provider_billed and (usage.completion_tokens or 0) <= 0):
             return None
         return usage
 
-    def _recovered_partial_usage_tokens(self, source: Mapping[str, object]) -> tuple[int, int, int]:
-        usage: Final = self._recovered_partial_usage(source)
+    def _recovered_partial_usage_tokens(
+        self, source: Mapping[str, object], provider_billed: bool
+    ) -> tuple[int, int, int]:
+        usage: Final = self._recovered_partial_usage(source, provider_billed)
         if usage is None:
             return 0, 0, 0
         billable_input, completion_tokens, _ = self._resolve_io_token_reconcile_usage(usage)
@@ -5443,15 +5453,46 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             completion_tokens,
         )
 
+    def _billed_failure_after_settlement_ops(
+        self, stash: RequestRateLimiterStash, tpm_actual: int, itpm_actual: int, otpm_actual: int
+    ) -> tuple[RedisPipelineIncrementOperation, ...]:
+        nothing_held: Final[frozenset[tuple[str, str]]] = frozenset()
+        return (
+            *self._build_reservation_aware_tpm_ops(
+                targets=tuple(scope for scope in stash.reserved_scopes if scope[0] != PTU_TEAM_DESCRIPTOR_KEY),
+                reserved_scopes=nothing_held,
+                actual_tokens=tpm_actual,
+                reserved_tokens=0,
+            ),
+            *self._build_reservation_aware_tpm_ops(
+                targets=tuple(stash.itpm_reserved_scopes),
+                reserved_scopes=nothing_held,
+                actual_tokens=itpm_actual,
+                reserved_tokens=0,
+            ),
+            *self._build_reservation_aware_tpm_ops(
+                targets=tuple(stash.otpm_reserved_scopes),
+                reserved_scopes=nothing_held,
+                actual_tokens=otpm_actual,
+                reserved_tokens=0,
+            ),
+        )
+
     def _build_ptu_failure_settlement_ops(
-        self, stash: RequestRateLimiterStash, source: Mapping[str, object], raw_actual_tokens: int
+        self,
+        stash: RequestRateLimiterStash,
+        source: Mapping[str, object],
+        raw_actual_tokens: int,
+        provider_billed: bool,
+        reservation_held: bool,
     ) -> tuple[ReservationAwareIncrementOperation, ...]:
         """Settle the team PTU reservation on failure in the normalized tokens it was taken in:
-        at the recovered partial usage when there is one, else a full refund."""
+        at the recovered partial usage when there is one, else a full refund. Once an earlier
+        failure settled the reservation, a billed failure charges its usage without a second refund."""
         ptu_scopes: Final = tuple(scope for scope in stash.reserved_scopes if scope[0] == PTU_TEAM_DESCRIPTOR_KEY)
         if not ptu_scopes:
             return ()
-        usage: Final = self._recovered_partial_usage(source)
+        usage: Final = self._recovered_partial_usage(source, provider_billed)
         return self._build_project_reservation_ops(
             targets=ptu_scopes,
             reserved_scopes=stash.reserved_scopes,
@@ -5460,7 +5501,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._resolve_reconciled_usage(usage) if usage is not None else None,
                 raw_actual_tokens,
             ),
-            reserved_tokens=stash.ptu_reserved_tokens,
+            reserved_tokens=stash.ptu_reserved_tokens if reservation_held else 0,
             reservation_window_identities=stash.ptu_reserved_window_identities,
         )
 
@@ -5495,7 +5536,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if stash is None or stash.reservation_released
                 else (stash.reserved_tokens, stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
             )
-            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(kwargs)
+            provider_billed: Final = isinstance(kwargs.get("exception"), IMAGE_ANSWER_ERRORS)
+            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(kwargs, provider_billed)
 
             if stash is not None and reserved_tokens > 0:
                 verbose_proxy_logger.debug(
@@ -5511,6 +5553,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         actual_tokens=tpm_actual,
                         reserved_tokens=reserved_tokens,
                     )
+                )
+            if stash is not None and stash.reservation_released and provider_billed:
+                pipeline_operations.extend(
+                    self._billed_failure_after_settlement_ops(stash, tpm_actual, itpm_actual, otpm_actual)
+                )
+            if stash is not None and stash.reserved_tokens <= 0 and provider_billed and tpm_actual > 0:
+                await self._apply_tpm_operations(
+                    self._build_success_event_pipeline_operations(
+                        kwargs=kwargs, response_obj=None, rate_limit_type=self.get_rate_limit_type()
+                    ),
+                    litellm_parent_otel_span,
                 )
 
             # Settle project ITPM/OTPM reservations the same way: at the
@@ -5558,8 +5611,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     stash,
                     kwargs,  # pyright: ignore[reportUnknownArgumentType]  # hook kwargs are unannotated
                     tpm_actual,
+                    provider_billed,
+                    reservation_held=reserved_tokens > 0,
                 )
-                if stash is not None and reserved_tokens > 0
+                if stash is not None and (reserved_tokens > 0 or (stash.reservation_released and provider_billed))
                 else ()
             )
 
@@ -5582,7 +5637,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
 
-    @with_service_target("rate_limits")
     async def async_release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -5601,6 +5655,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         object's current max_parallel_requests configuration, which can
         change mid-request) decides whether there is anything to release.
         """
+        await self.async_release_request_parallel_slot()
+
+    @with_service_target("rate_limits")
+    async def async_release_request_parallel_slot(self) -> None:
         await self._release_stashed_parallel_slot(get_request_stash(), None)
 
     @with_service_target("rate_limits")
@@ -5710,7 +5768,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             otpm_reserved: Final = stash.otpm_reserved_tokens
             if reserved_tokens <= 0 and itpm_reserved <= 0 and otpm_reserved <= 0:
                 return
-            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(request_data)
+            provider_billed: Final = isinstance(original_exception, IMAGE_ANSWER_ERRORS)
+            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(request_data, provider_billed)
 
             combined_ops: Final = (
                 self._build_reservation_aware_tpm_ops(
@@ -5727,6 +5786,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     stash,
                     request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is a bare dict
                     tpm_actual,
+                    provider_billed,
+                    reservation_held=True,
                 )
                 if reserved_tokens > 0
                 else ()

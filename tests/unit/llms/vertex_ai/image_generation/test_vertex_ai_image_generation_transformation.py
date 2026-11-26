@@ -2,17 +2,19 @@ import base64
 import datetime
 import json
 from collections.abc import Mapping
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from typing import Final
 
 import httpx
 import pytest
 from google.oauth2.credentials import Credentials
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.exceptions import UnprocessableEntityError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.llms.vertex_ai.image_generation import (
     get_vertex_ai_image_generation_config,
 )
@@ -24,6 +26,48 @@ from litellm.llms.vertex_ai.image_generation.vertex_imagen_transformation import
     VertexAIImagenImageGenerationConfig,
 )
 from litellm.types.utils import ImageResponse
+
+
+@pytest.mark.parametrize("size", ("1536x1024", "1024x1536", "3072x2048", "256x256", "512x512", "4096x4096"))
+@pytest.mark.parametrize("model", ("gemini-3.1-flash-image", "gemini-3-pro-image", "gemini-3.1-flash-lite-image"))
+def test_vertex_gemini_size_matches_direct_gemini_request(size: str, model: str) -> None:
+    vertex: Final = VertexAIGeminiImageGenerationConfig()
+    direct: Final = GoogleImageGenConfig()
+    vertex_request: Final = vertex.transform_image_generation_request(
+        model, "mountains", vertex.map_openai_params({"size": size}, {}, model, False), {}, {}
+    )
+    direct_request: Final = direct.transform_image_generation_request(
+        model, "mountains", direct.map_openai_params({"size": size}, {}, model, False), {}, {}
+    )
+    assert vertex_request["generationConfig"].get("imageConfig") == direct_request["generationConfig"].get(
+        "imageConfig"
+    )
+
+
+def test_vertex_gemini_generation_warns_when_size_ratio_is_approximated(caplog: pytest.LogCaptureFixture) -> None:
+    mapped: Final = VertexAIGeminiImageGenerationConfig().map_openai_params(
+        {"size": "100000x1"}, {}, "gemini-3.1-flash-image", False
+    )
+    assert "100000x1" in caplog.text
+    assert str(mapped["aspectRatio"]) in caplog.text
+
+
+@pytest.mark.parametrize("size_first", (True, False))
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"aspect_ratio": "9:16", "image_size": "2K"},
+        {"imageConfig": {"aspectRatio": "9:16", "imageSize": "2K"}},
+    ),
+)
+def test_vertex_gemini_explicit_image_settings_override_size(size_first: bool, overrides: dict[str, object]) -> None:
+    model: Final = "gemini-3.1-flash-image"
+    config: Final = VertexAIGeminiImageGenerationConfig()
+    params: Final = {"size": "1536x1024", **overrides} if size_first else {**overrides, "size": "1536x1024"}
+    request: Final = config.transform_image_generation_request(
+        model, "mountains", config.map_openai_params(params, {}, model, False), {}, {}
+    )
+    assert request["generationConfig"]["imageConfig"] == {"aspectRatio": "9:16", "imageSize": "2K"}
 
 
 class TestVertexAIGeminiImageGenerationConfig:
@@ -58,14 +102,13 @@ class TestVertexAIGeminiImageGenerationConfig:
         result = self.config.map_openai_params(non_default_params, optional_params, "gemini-2.5-flash-image", False)
         assert result.get("aspectRatio") == "16:9"
 
-    def test_map_size_to_aspect_ratio(self):
-        """Test size to aspect ratio mapping"""
-        assert self.config._map_size_to_aspect_ratio("1024x1024") == "1:1"
-        assert self.config._map_size_to_aspect_ratio("1792x1024") == "16:9"
-        assert self.config._map_size_to_aspect_ratio("1024x1792") == "9:16"
-        assert self.config._map_size_to_aspect_ratio("1280x896") == "4:3"
-        assert self.config._map_size_to_aspect_ratio("896x1280") == "3:4"
-        assert self.config._map_size_to_aspect_ratio("unknown") == "1:1"  # default
+    @pytest.mark.parametrize(
+        "size, expected_ratio",
+        (("1024x1024", "1:1"), ("1792x1024", "16:9"), ("1024x1792", "9:16"), ("1280x896", "4:3"), ("896x1280", "3:4")),
+    )
+    def test_map_openai_params_legacy_sizes(self, size: str, expected_ratio: str) -> None:
+        mapped: Final = self.config.map_openai_params({"size": size}, {}, "gemini-3.1-flash-image", False)
+        assert mapped["aspectRatio"] == expected_ratio
 
     def test_get_supported_openai_params_includes_native_gemini_params(self):
         """Test that native Gemini imageConfig params are supported"""
@@ -121,15 +164,6 @@ class TestVertexAIGeminiImageGenerationConfig:
         }
         result = self.config.map_openai_params(payload, {}, "gemini-3.1-flash-image", False)
         assert result["imageConfig"] == payload["imageConfig"]
-
-    def test_map_openai_params_image_config_non_dict_warns_and_drops(self):
-        """Non-dict imageConfig is dropped with a warning, not silently discarded"""
-        with patch("litellm.llms.vertex_ai.image_generation.vertex_gemini_transformation.verbose_logger") as mock_log:
-            result = self.config.map_openai_params(
-                {"imageConfig": "bad-string-value"}, {}, "gemini-3.1-flash-image", False
-            )
-        assert "imageConfig" not in result
-        mock_log.warning.assert_called_once()
 
     def test_transform_image_generation_request_from_image_config(self):
         """Full imageConfig dict is forwarded verbatim into generationConfig"""
@@ -320,42 +354,6 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert result.usage.input_tokens_details.image_tokens == 39
         assert result.usage.output_tokens == 17
         assert result.usage.total_tokens == 110
-
-    def test_transform_text_only_no_image_response_bills_text_tokens(self) -> None:
-        result: Final = self.config.transform_image_generation_response(
-            model="gemini-3.1-flash-image",
-            raw_response=httpx.Response(
-                200,
-                json={
-                    "candidates": [
-                        {"content": {"parts": [{"text": "No image generated"}]}, "finishReason": "NO_IMAGE"}
-                    ],
-                    "usageMetadata": {
-                        "promptTokenCount": 5,
-                        "candidatesTokenCount": 25,
-                        "totalTokenCount": 30,
-                        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 25}],
-                    },
-                },
-            ),
-            model_response=ImageResponse(),
-            logging_obj=MagicMock(),
-            request_data={},
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
-        assert result.data == []
-        assert cost_calculator(
-            model="gemini-3.1-flash-image",
-            image_response=result,
-            model_info={
-                "input_cost_per_token": 5e-7,
-                "output_cost_per_token": 3e-6,
-                "output_cost_per_image_token": 6e-5,
-            },
-            vertex_location="global",
-        ) == pytest.approx(5 * 5e-7 + 25 * 3e-6)
 
     def test_transform_image_generation_response_preserves_usage_details_and_traffic_type(self):
         mock_response: Final = MagicMock(spec=httpx.Response)
@@ -790,12 +788,16 @@ def test_gemini_image_generation_response_maps_usage_by_modality():
 def test_gemini_image_generation_response_with_falsy_usage_metadata_keeps_zeroed_usage(usage_metadata: object):
     response: Final = _transform_gemini_response(
         {
-            "candidates": [{"content": {"parts": []}, "groundingMetadata": {"webSearchQueries": ["a"]}}],
+            "candidates": [
+                {
+                    "content": {"parts": [{"inlineData": {"data": "aGVsbG8="}}]},
+                    "groundingMetadata": {"webSearchQueries": ["a"]},
+                }
+            ],
             "usageMetadata": usage_metadata,
         }
     )
 
-    assert response.data == []
     assert (response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens) == (0, 0, 0)
     assert response.usage.web_search_requests == 1
 
@@ -805,7 +807,12 @@ def test_gemini_image_generation_response_rejects_non_object_usage_metadata_with
     usage_metadata: object,
 ):
     with pytest.raises(ValidationError) as exc_info:
-        _transform_gemini_response({"candidates": [], "usageMetadata": usage_metadata})
+        _transform_gemini_response(
+            {
+                "candidates": [{"content": {"parts": [{"inlineData": {"data": "aGVsbG8="}}]}}],
+                "usageMetadata": usage_metadata,
+            }
+        )
 
     assert "input_value" not in str(exc_info.value)
 
@@ -818,7 +825,6 @@ def test_gemini_image_generation_response_rejects_non_object_usage_metadata_with
         {"candidates": ""},
         {"candidates": {}},
         {"candidates": [{}]},
-        {"candidates": [{"finishReason": "SAFETY"}]},
         {"candidates": [{"content": {}}]},
         {"candidates": [{"content": {"parts": ""}}]},
         {"candidates": [{"content": {"parts": "plain text"}}]},
@@ -830,8 +836,9 @@ def test_gemini_image_generation_response_rejects_non_object_usage_metadata_with
         {"candidates": [{"content": {"parts": [{"inline_data": {"data": "snake-case-is-not-read"}}]}}]},
     ],
 )
-def test_gemini_image_generation_response_without_inline_image_data_has_no_images(payload: object):
-    assert _transform_gemini_response(payload).data == []
+def test_gemini_image_generation_response_without_inline_image_data_is_unprocessable(payload: object):
+    with pytest.raises(UnprocessableEntityError):
+        _transform_gemini_response(payload)
 
 
 def test_gemini_image_generation_response_keeps_image_order_and_thought_signatures():
@@ -1201,3 +1208,98 @@ def test_vertex_image_generation_drops_a_caller_labels_header_only_while_the_set
     assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
     assert "x-vertex-ai-labels" not in setting_on
     assert setting_on["x-trace-id"] == "t-1"
+
+
+_SENT_JSON: Final = TypeAdapter(Mapping[str, object])
+
+
+def _sent_gemini_generation_request(**params: object) -> Mapping[str, object]:
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: MockTransport hands each request to a callback
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=_GEMINI_IMAGE_REPLY)
+
+    litellm.image_generation(
+        model="vertex_ai/gemini-3.1-flash-image",
+        prompt="a lighthouse",
+        api_base="https://vertex.invalid/generate",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(reply))),
+        **params,
+    )
+    return _SENT_JSON.validate_json(sent[0].content)
+
+
+def _sent_gemini_generation_config(**params: object) -> Mapping[str, object]:
+    return _SENT_JSON.validate_python(_sent_gemini_generation_request(**params)["generationConfig"])
+
+
+@pytest.mark.parametrize("size", ("unknown", "0x1024", "-1x1024", "1024x", "3:2", 1024))
+def test_vertex_gemini_generation_rejects_an_unmappable_size_unless_dropping_params(size: object) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="`size`"):
+        _sent_gemini_generation_request(size=size)
+
+    assert _sent_gemini_generation_config(size=size, drop_params=True) == {"responseModalities": ["IMAGE"]}
+
+
+def test_vertex_gemini_generation_auto_size_leaves_the_aspect_ratio_to_the_model() -> None:
+    assert _sent_gemini_generation_config(size="auto") == {"responseModalities": ["IMAGE"]}
+
+
+@pytest.mark.parametrize("image_config", ("banana", "[1]", '"9:16"', 5, ["9:16"]))
+def test_vertex_gemini_generation_rejects_a_non_object_image_config_unless_dropping_params(
+    image_config: object,
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="`imageConfig`"):
+        _sent_gemini_generation_request(imageConfig=image_config)
+
+    assert _sent_gemini_generation_config(imageConfig=image_config, drop_params=True) == {
+        "responseModalities": ["IMAGE"]
+    }
+
+
+def test_vertex_gemini_generation_reads_an_image_config_sent_as_a_json_string() -> None:
+    sent: Final = _sent_gemini_generation_config(
+        imageConfig='{"aspectRatio": "9:16", "imageSize": "2K", "personGeneration": "DONT_ALLOW"}', size="1536x1024"
+    )
+    assert sent == {
+        "responseModalities": ["IMAGE"],
+        "imageConfig": {"aspectRatio": "9:16", "imageSize": "2K", "personGeneration": "DONT_ALLOW"},
+    }
+
+
+@pytest.mark.parametrize("image_config", ({"aspectRatio": "9:16"}, {"aspect_ratio": "9:16"}))
+def test_vertex_gemini_generation_image_config_overrides_the_size_in_either_key_spelling(
+    image_config: Mapping[str, object],
+) -> None:
+    assert _sent_gemini_generation_config(imageConfig=image_config, size="3072x2048") == {
+        "responseModalities": ["IMAGE"],
+        "imageConfig": {"aspectRatio": "9:16", "imageSize": "2K"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("param", "value"),
+    (("background", "auto"), ("background", "transparent"), ("moderation", "low"), ("output_compression", 50)),
+)
+def test_vertex_gemini_generation_leaves_out_openai_only_params_without_failing_the_call(
+    param: str, value: object
+) -> None:
+    assert _sent_gemini_generation_config(**{param: value}) == {"responseModalities": ["IMAGE"]}
+
+
+def test_vertex_gemini_generation_accepts_the_snake_case_image_config() -> None:
+    assert _sent_gemini_generation_config(image_config={"aspect_ratio": "9:16"}) == {
+        "responseModalities": ["IMAGE"],
+        "imageConfig": {"aspectRatio": "9:16"},
+    }
+    with pytest.raises(litellm.UnsupportedParamsError, match="`image_config`"):
+        _sent_gemini_generation_request(image_config="banana")
+
+
+def test_vertex_gemini_generation_sends_n_as_a_candidate_count_next_to_the_size() -> None:
+    assert _sent_gemini_generation_config(n=2, size="1536x1024") == {
+        "responseModalities": ["IMAGE"],
+        "candidateCount": 2,
+        "imageConfig": {"aspectRatio": "3:2", "imageSize": "1K"},
+    }

@@ -1,12 +1,17 @@
 import asyncio
 import copy
 import json
+import logging
 import os
 import uuid
+from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import Any, Dict, Final, List
 
 import httpx
+import openai
 import pytest
+import respx
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -20,6 +25,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import Router
+from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 from litellm.types.utils import (
     Delta,
     ModelResponse,
@@ -27,6 +33,54 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 import unittest.mock
+
+
+CONTAINER_RESPONSE: Final = {
+    "id": "resp_container",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.5",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+async def test_openai_messages_container_answers_400_unless_drop_params_drops_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = {
+        "model": "openai/gpt-5.5",
+        "max_tokens": 80,
+        "messages": [{"role": "user", "content": "hi"}],
+        "container": {"id": "container_abc"},
+        "api_key": "test-api-key",
+    }
+    with respx.mock as upstream:
+        bridge: Final = upstream.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=CONTAINER_RESPONSE)
+        )
+        with pytest.raises(litellm.BadRequestError) as rejected:
+            await litellm.anthropic.messages.acreate(**request)
+        assert rejected.value.status_code == 400
+        assert "no equivalent for container" in rejected.value.message
+        assert not bridge.called
+
+        await litellm.anthropic.messages.acreate(**request, drop_params=True)
+        assert "container" not in json.loads(bridge.calls.last.request.content)
 
 
 def test_anthropic_experimental_pass_through_messages_handler():
@@ -180,6 +234,27 @@ async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
 
     assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]
     assert len(msgs[0]["content"]) == 2  # caller untouched
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("claude-sonnet-4-5", "anthropic"), ("claude-sonnet-4-5", "vertex_ai")],
+    ids=["anthropic", "vertex_ai_claude"],
+)
+def test_a_claude_target_gets_no_user_turn_for_a_trailing_empty_text_block(model: str, custom_llm_provider: str) -> None:
+    from litellm.llms.anthropic.pass_through.messages.utils import prepare_native_messages
+
+    history: Final = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]
+
+    prepared, _system = prepare_native_messages(
+        [*history, {"role": "user", "content": [{"type": "text", "text": ""}]}],
+        None,
+        {},
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert prepared == history
 
 
 @pytest.mark.asyncio
@@ -2326,3 +2401,846 @@ def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(mon
     assert "cache_control" not in captured["params"]["tools"][0]
     assert captured["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
     assert tools == tools_before
+
+
+@pytest.mark.asyncio
+async def test_native_messages_tool_config_point_marks_the_last_tool_that_is_not_deferred() -> None:
+    loaded: Final = {"name": "Read", "description": "Reads a file", "input_schema": {"type": "object"}}
+    deferred: Final = {
+        "name": "mcp__weather__get_alerts",
+        "description": "Gets weather alerts",
+        "input_schema": {"type": "object"},
+        "defer_loading": True,
+    }
+    with recording_service() as upstream:
+        upstream.enqueue(
+            ResponseSpec(
+                body={
+                    "id": "msg_tool_config",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-opus-5-5",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            )
+        )
+        await litellm.anthropic.messages.acreate(
+            model="anthropic/claude-opus-5-5",
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[loaded, deferred],
+            cache_control_injection_points=[{"location": "tool_config"}],
+            api_key="sk-test",
+            api_base=upstream.base_url,
+        )
+
+    sent: Final = upstream.requests[-1].body
+    assert isinstance(sent, dict)
+    assert sent["tools"] == [{**loaded, "cache_control": {"type": "ephemeral"}}, deferred]
+
+
+_CLAUDE_CODE_TOOL_SEARCH_TOOLS: Final = [
+    {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
+    {
+        "name": "ToolSearch",
+        "description": "Load deferred tools",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    },
+    {
+        "name": "DeferredToolPlaceholder",
+        "description": "Never call this tool",
+        "input_schema": {"type": "object", "properties": {}},
+        "defer_loading": True,
+    },
+]
+
+
+async def _azure_messages_tool_types(model_info: Mapping[str, object] | None, **extra: object) -> set[str]:
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="azure/gpt-6.1-sol",
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info=model_info,
+                **extra,
+            )
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    return {tool["type"] for tool in chain.from_iterable(body["tools"] for body in bodies)}
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_tools_send_azure_messages_to_responses_with_client_tool_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="azure/gpt-6.1-sol",
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info={"deferred_tools": "native"},
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert {call.request.url.path.rsplit("/", 1)[-1] for call in upstream.calls} == {"responses"}
+    assert {
+        tuple((tool["type"], tool.get("name"), tool.get("defer_loading")) for tool in body["tools"]) for body in bodies
+    } == {(("function", "Read", None), ("tool_search", None, None), ("function", "DeferredToolPlaceholder", True))}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_info, extra",
+    [
+        (None, {}),
+        ({"deferred_tools": "drop"}, {}),
+        ({"deferred_tools": "native"}, {"stop_sequences": ["END"], "drop_params": True}),
+        ({"deferred_tools": "loaded"}, {"drop_params": True}),
+    ],
+    ids=["unset", "drop", "native_with_stop_sequences", "unknown_with_drop_params"],
+)
+async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_native(
+    model_info: Mapping[str, object] | None, extra: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    assert await _azure_messages_tool_types(model_info, **extra) == {"function"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, model_info, extra, way_out",
+    [
+        ("azure/gpt-6.1-sol", {"deferred_tools": "loaded"}, {}, "passthrough, native, emulate, drop"),
+        (
+            "bedrock/chat_completions/us.moonshotai.kimi-k3.1",
+            {"deferred_tools": "native"},
+            {},
+            "emulate, passthrough or drop",
+        ),
+        ("xai/grok-4.7", {"deferred_tools": "native"}, {}, "emulate, passthrough or drop"),
+        (
+            "fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro",
+            {"deferred_tools": "native"},
+            {},
+            "emulate, passthrough or drop",
+        ),
+        (
+            "azure/gpt-6.1-sol",
+            {"deferred_tools": "native"},
+            {"tool_choice": {"type": "tool", "name": "ToolSearch"}},
+            "Remove tool_choice, or set drop_params",
+        ),
+        ("azure/gpt-6.1-sol", {"deferred_tools": "native"}, {"stop_sequences": ["END"]}, "Remove stop_sequences"),
+        ("anthropic/claude-opus-5-5", {"deferred_tools": "loaded"}, {}, "passthrough, native, emulate, drop"),
+        ("openai/gpt-6.2-sol", {"deferred_tools": "passthrough"}, {}, "Pick native or emulate"),
+        ("azure/gpt-6.1-sol", {"deferred_tools": "passthrough"}, {}, "Pick native or emulate"),
+        ("mistral/mistral-medium-latest", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
+        ("bedrock/converse/us.amazon.nova-2-lite-v1:0", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
+        ("bedrock/chat_completions/moonshotai.kimi-k3.1", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
+        ("gemini/gemini-pro-latest", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
+        ("vertex_ai/gemini-pro-latest", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
+        ("vertex_ai_beta/gemini-pro-latest", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
+        ("vertex_ai/1234567890", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
+        (
+            "vertex_ai/tuned-endpoint",
+            {"deferred_tools": "passthrough", "base_model": "gemini-pro-latest"},
+            {},
+            "Pick emulate or drop",
+        ),
+        (
+            "vertex_ai/tuned-endpoint",
+            {"deferred_tools": "passthrough"},
+            {"base_model": "gemini-pro-latest"},
+            "Pick emulate or drop",
+        ),
+        ("bedrock/us.xai.grok-4.7", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
+        ("deepseek/deepseek-chat", {"deferred_tools": "emulate"}, {}, "set it to passthrough"),
+        ("deepseek/deepseek-chat", {"deferred_tools": "native"}, {}, "set it to passthrough"),
+        ("anthropic/claude-opus-5-5", {"deferred_tools": "drop"}, {}, "set it to passthrough"),
+    ],
+    ids=[
+        "unknown_value",
+        "native_without_a_responses_api",
+        "native_without_client_tool_search",
+        "native_where_tool_search_still_prompts_deferred_tools",
+        "native_with_a_forced_tool_search",
+        "native_with_stop_sequences",
+        "unknown_value_on_a_messages_api_route",
+        "passthrough_where_deferral_needs_tool_search",
+        "passthrough_on_azure",
+        "passthrough_where_the_chat_api_rejects_deferral",
+        "passthrough_where_bedrock_converse_builds_tools_without_deferral",
+        "passthrough_where_bedrock_sends_a_tools_request_to_converse",
+        "passthrough_where_gemini_builds_tools_without_deferral",
+        "passthrough_where_vertex_gemini_builds_tools_without_deferral",
+        "passthrough_where_vertex_beta_gemini_builds_tools_without_deferral",
+        "passthrough_where_a_vertex_psc_endpoint_routes_to_gemini",
+        "passthrough_where_model_info_base_model_routes_vertex_to_gemini",
+        "passthrough_where_litellm_params_base_model_routes_vertex_to_gemini",
+        "passthrough_where_bedrock_native_chat_can_fall_back_to_converse",
+        "emulate_on_a_messages_api_route",
+        "native_on_a_messages_api_route",
+        "drop_on_a_messages_api_route",
+    ],
+)
+async def test_unusable_deferred_tools_setting_is_a_400_before_any_upstream_call(
+    model: str,
+    model_info: Mapping[str, object],
+    extra: Mapping[str, object],
+    way_out: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(litellm.BadRequestError, match=way_out):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model=model,
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                aws_region_name="us-east-1",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info=model_info,
+                **extra,
+            )
+
+    assert upstream.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, deferral_flags, fallback_warnings",
+    [
+        ("fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro", {None, True}, 0),
+        ("bedrock/moonshotai.kimi-k2-thinking", {None, True}, 0),
+        ("openai/gpt-6.2-sol", {None}, 1),
+        ("mistral/mistral-medium-latest", {None}, 1),
+    ],
+    ids=[
+        "kept_where_the_provider_takes_it",
+        "kept_on_bedrock_invoke",
+        "dropped_where_deferral_needs_tool_search",
+        "dropped_where_the_chat_api_rejects_deferral",
+    ],
+)
+async def test_passthrough_deferred_tools_fall_back_to_drop_under_drop_params_only_where_the_provider_rejects_them(
+    model: str,
+    deferral_flags: set[object],
+    fallback_warnings: int,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model=model,
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                aws_region_name="us-east-1",
+                aws_access_key_id="AKIAEXAMPLEKEY",
+                aws_secret_access_key="example-secret",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info={"deferred_tools": "passthrough"},
+                drop_params=True,
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert {tool.get("defer_loading") for tool in chain.from_iterable(body["tools"] for body in bodies)} == (
+        deferral_flags
+    )
+    assert len(_deferred_tools_fallback_warnings(caplog)) == fallback_warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    ["bedrock/converse/us.amazon.nova-2-lite-v1:0", "bedrock/us.xai.grok-4.7", "gemini/gemini-pro-latest"],
+    ids=["bedrock_converse", "bedrock_native_chat_that_can_fall_back_to_converse", "gemini"],
+)
+async def test_passthrough_deferred_tools_send_the_drop_request_under_drop_params_where_the_route_cannot_defer(
+    model: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        passthrough_body: Final = await _tool_loaded_upstream_body(model, {"deferred_tools": "passthrough"})
+    dropped_body: Final = await _tool_loaded_upstream_body(model, {"deferred_tools": "drop"})
+
+    assert passthrough_body == dropped_body
+    assert len(_deferred_tools_fallback_warnings(caplog)) == 1
+
+
+async def _tool_loaded_upstream_body(model: str, model_info: Mapping[str, object]) -> object:
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=_TOOL_LOADED_CONVERSATION,
+                model=model,
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                aws_region_name="us-east-1",
+                aws_access_key_id="AKIAEXAMPLEKEY",
+                aws_secret_access_key="example-secret",
+                tools=[*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _FORECAST_TOOL],
+                model_info=model_info,
+                drop_params=True,
+            )
+    return json.loads(upstream.calls[0].request.content)
+
+
+def _deferred_tools_fallback_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "model_info.deferred_tools" in record.getMessage()
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_info", [{"deferred_tools": "emulate"}, {"deferred_tools": "native"}])
+async def test_a_messages_api_route_ignores_deferred_tools_under_drop_params(
+    model_info: Mapping[str, object], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((litellm.exceptions.APIConnectionError, litellm.exceptions.InternalServerError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="deepseek/deepseek-chat",
+                api_key="deployment-key",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info=model_info,
+                drop_params=True,
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert [[tool.get("defer_loading") for tool in body["tools"]] for body in bodies][:1] == [[None, None, True]]
+    assert any(str(model_info["deferred_tools"]) in warning for warning in _deferred_tools_fallback_warnings(caplog))
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_tools_keep_client_tool_search_when_chat_completions_is_forced_globally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+
+    assert await _azure_messages_tool_types({"deferred_tools": "native"}) == {"function", "tool_search"}
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_tools_drop_a_forced_tool_search_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="azure/gpt-6.1-sol",
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                tool_choice={"type": "tool", "name": "ToolSearch"},
+                model_info={"deferred_tools": "native"},
+                drop_params=True,
+            )
+
+    sent_tool_choices: Final = [json.loads(call.request.content).get("tool_choice") for call in upstream.calls]
+    assert sent_tool_choices
+    assert not any(sent_tool_choices)
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_tools_send_a_request_whose_tool_choice_is_not_an_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    assert await _azure_messages_tool_types({"deferred_tools": "native"}, tool_choice="") == {"function", "tool_search"}
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_tools_send_stop_sequences_to_chat_completions_with_a_warning_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tool_types: Final = await _azure_messages_tool_types(
+            {"deferred_tools": "native"}, stop_sequences=["END"], drop_params=True
+        )
+
+    assert tool_types == {"function"}
+    assert any("stop_sequences" in warning for warning in _deferred_tools_fallback_warnings(caplog))
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_tools_keep_openai_stop_sequences_requests_on_responses_with_client_tool_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="openai/gpt-6.2-sol",
+                api_key="deployment-key",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info={"deferred_tools": "native"},
+                stop_sequences=["END"],
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert {call.request.url.path for call in upstream.calls} == {"/v1/responses"}
+    assert {tool["type"] for tool in chain.from_iterable(body["tools"] for body in bodies)} == {"function", "tool_search"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tools",
+    [
+        None,
+        [tool for tool in _CLAUDE_CODE_TOOL_SEARCH_TOOLS if tool["name"] != "ToolSearch"],
+        [tool for tool in _CLAUDE_CODE_TOOL_SEARCH_TOOLS if not tool.get("defer_loading")],
+    ],
+    ids=["no_tools", "deferred_tools_without_tool_search", "tool_search_with_nothing_deferred"],
+)
+async def test_native_deferred_tools_send_azure_stop_sequences_requests_without_tool_search_to_chat_completions(
+    tools: list[dict[str, object]] | None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="azure/gpt-4.1",
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=tools,
+                model_info={"deferred_tools": "native"},
+                stop_sequences=["END"],
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert all(call.request.url.path.endswith("/chat/completions") for call in upstream.calls)
+    assert [body["stop"] for body in bodies] == [["END"]] * len(bodies)
+    assert not _deferred_tools_fallback_warnings(caplog)
+
+
+_FORECAST_TOOL: Final = {
+    "name": "mcp__weather__get_forecast",
+    "description": "Get the forecast for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    "defer_loading": True,
+}
+_TOOL_LOADED_CONVERSATION: Final = [
+    {"role": "user", "content": "What is the forecast for Paris?"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_search", "name": "ToolSearch", "input": {"query": "weather"}}],
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_search",
+                "content": [
+                    {"type": "tool_reference", "tool_name": "mcp__weather__get_forecast"},
+                    {"type": "text", "text": "Tool loaded."},
+                ],
+            }
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "tool_use", "id": "toolu_paris", "name": "mcp__weather__get_forecast", "input": {"city": "Paris"}}
+        ],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_paris", "content": "Sunny"}]},
+]
+_DISPATCHER_ARGUMENTS: Final = json.dumps({"name": "mcp__weather__get_forecast", "input": {"city": "Lyon"}})
+
+
+def _dispatcher_chat_completion() -> dict[str, object]:
+    return {
+        "id": "chatcmpl-emulate",
+        "object": "chat.completion",
+        "created": 1795516158,
+        "model": "accounts/fireworks/models/kimi-k3",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_lyon",
+                            "type": "function",
+                            "function": {"name": "CallLoadedTool", "arguments": _DISPATCHER_ARGUMENTS},
+                        }
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 900, "completion_tokens": 20, "total_tokens": 920},
+    }
+
+
+def _dispatcher_chat_stream() -> bytes:
+    split: Final = len(_DISPATCHER_ARGUMENTS) // 2
+    deltas: Final = (
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "index": 0,
+                    "id": "call_lyon",
+                    "type": "function",
+                    "function": {"name": "CallLoadedTool", "arguments": ""},
+                }
+            ],
+        },
+        {"tool_calls": [{"index": 0, "function": {"arguments": _DISPATCHER_ARGUMENTS[:split]}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": _DISPATCHER_ARGUMENTS[split:]}}]},
+    )
+    chunks: Final = (
+        *({"choices": [{"index": 0, "delta": delta, "finish_reason": None}]} for delta in deltas),
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+    )
+    envelope: Final = {"id": "chatcmpl-emulate", "object": "chat.completion.chunk", "created": 1795516158}
+    frames: Final = (f"data: {json.dumps({**envelope, 'model': 'kimi-k3', **chunk})}\n\n" for chunk in chunks)
+    return ("".join(frames) + "data: [DONE]\n\n").encode()
+
+
+async def _fireworks_kimi_messages(
+    model_info: Mapping[str, object],
+    upstream_response: httpx.Response,
+    *,
+    stream: bool,
+    forecast_tool: Mapping[str, object] = _FORECAST_TOOL,
+    **extra: object,
+) -> tuple[dict[str, object], object]:
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(return_value=upstream_response)
+        response: Final = await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=copy.deepcopy(_TOOL_LOADED_CONVERSATION),
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+            api_key="fireworks-key",
+            tools=[*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, forecast_tool],
+            model_info=model_info,
+            stream=stream,
+            **extra,
+        )
+        body: Final = json.loads(upstream.calls[0].request.content)
+    return body, response
+
+
+@pytest.mark.asyncio
+async def test_emulated_deferred_tools_keep_one_tool_list_and_hand_claude_code_the_loaded_tool_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    body, response = await _fireworks_kimi_messages(
+        {"deferred_tools": "emulate"}, httpx.Response(200, json=_dispatcher_chat_completion()), stream=False
+    )
+
+    assert [tool["function"]["name"] for tool in body["tools"]] == ["Read", "ToolSearch", "CallLoadedTool"]
+    sent: Final = json.dumps(body["messages"])
+    assert "tool_reference" not in sent
+    assert "Loaded tool mcp__weather__get_forecast: Get the forecast for a city" in sent
+    replayed_calls: Final = list(chain.from_iterable(message.get("tool_calls") or () for message in body["messages"]))
+    assert [(call["id"], call["function"]["name"]) for call in replayed_calls] == [
+        ("toolu_search", "ToolSearch"),
+        ("toolu_paris", "CallLoadedTool"),
+    ]
+    assert json.loads(replayed_calls[1]["function"]["arguments"]) == {
+        "name": "mcp__weather__get_forecast",
+        "input": {"city": "Paris"},
+    }
+    assert [block for block in response["content"] if block["type"] == "tool_use"] == [
+        {"type": "tool_use", "id": "call_lyon", "name": "mcp__weather__get_forecast", "input": {"city": "Lyon"}}
+    ]
+
+
+_LIST_NAMED_TOOL: Final = {"name": ["Read"], "description": "Read a file", "input_schema": {"type": "object"}}
+_LIST_TOOL_USE_ID_CONVERSATION: Final = [
+    *_TOOL_LOADED_CONVERSATION[:-1],
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": ["toolu_paris"], "content": "Sunny"}]},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, model_info, tools, messages",
+    [
+        (
+            "azure/gpt-6.1-sol",
+            {"deferred_tools": "native"},
+            [*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _LIST_NAMED_TOOL],
+            _TOOL_LOADED_CONVERSATION,
+        ),
+        (
+            "fireworks_ai/accounts/fireworks/models/kimi-k3",
+            {"deferred_tools": "emulate"},
+            [*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _LIST_NAMED_TOOL],
+            _TOOL_LOADED_CONVERSATION,
+        ),
+        (
+            "azure/gpt-6.1-sol",
+            {"deferred_tools": "native"},
+            [*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _FORECAST_TOOL],
+            _LIST_TOOL_USE_ID_CONVERSATION,
+        ),
+    ],
+    ids=["native_list_tool_name", "emulate_list_tool_name", "native_list_tool_use_id"],
+)
+async def test_a_non_string_tool_name_or_tool_use_id_gets_the_provider_400_under_deferred_tools(
+    model: str,
+    model_info: Mapping[str, object],
+    tools: Sequence[object],
+    messages: Sequence[object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.route().mock(
+            return_value=httpx.Response(
+                400, json={"error": {"message": "Invalid type for a tool field", "type": "invalid_request_error"}}
+            )
+        )
+        with pytest.raises(litellm.exceptions.BadRequestError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=copy.deepcopy(messages),
+                model=model,
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=tools,
+                model_info=model_info,
+            )
+
+
+_STRICT_FORECAST_TOOL: Final = {**_FORECAST_TOOL, "strict": True}
+
+
+@pytest.mark.asyncio
+async def test_emulate_answers_400_for_a_strict_deferred_tool_before_any_upstream_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(litellm.BadRequestError, match="strict input for mcp__weather__get_forecast"):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=copy.deepcopy(_TOOL_LOADED_CONVERSATION),
+                model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+                api_key="fireworks-key",
+                tools=[*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _STRICT_FORECAST_TOOL],
+                model_info={"deferred_tools": "emulate"},
+            )
+
+    assert upstream.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_emulate_sends_a_strict_deferred_tool_without_strict_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        body, response = await _fireworks_kimi_messages(
+            {"deferred_tools": "emulate"},
+            httpx.Response(200, json=_dispatcher_chat_completion()),
+            stream=False,
+            forecast_tool=_STRICT_FORECAST_TOOL,
+            drop_params=True,
+        )
+
+    assert [tool["function"]["name"] for tool in body["tools"]] == ["Read", "ToolSearch", "CallLoadedTool"]
+    assert [block["name"] for block in response["content"] if block["type"] == "tool_use"] == [
+        "mcp__weather__get_forecast"
+    ]
+    assert any("strict" in warning for warning in _deferred_tools_fallback_warnings(caplog))
+
+
+@pytest.mark.asyncio
+async def test_emulated_deferred_tools_force_a_forced_deferred_tool_through_the_dispatcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    body, response = await _fireworks_kimi_messages(
+        {"deferred_tools": "emulate"},
+        httpx.Response(200, json=_dispatcher_chat_completion()),
+        stream=False,
+        tool_choice={"type": "tool", "name": "mcp__weather__get_forecast"},
+    )
+
+    assert body["tool_choice"] == {"type": "function", "function": {"name": "CallLoadedTool"}}
+    assert [block["name"] for block in response["content"] if block["type"] == "tool_use"] == [
+        "mcp__weather__get_forecast"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emulated_deferred_tools_answer_a_request_whose_tool_choice_is_not_an_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    _, response = await _fireworks_kimi_messages(
+        {"deferred_tools": "emulate"},
+        httpx.Response(200, json=_dispatcher_chat_completion()),
+        stream=False,
+        tool_choice="",
+    )
+
+    assert [block["name"] for block in response["content"] if block["type"] == "tool_use"] == [
+        "mcp__weather__get_forecast"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emulated_deferred_tools_stream_the_loaded_tool_call_under_its_own_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    _, response = await _fireworks_kimi_messages(
+        {"deferred_tools": "emulate"},
+        httpx.Response(200, content=_dispatcher_chat_stream(), headers={"content-type": "text/event-stream"}),
+        stream=True,
+    )
+    streamed: Final = b"".join([chunk async for chunk in response]).decode()
+
+    events: Final = [json.loads(line[len("data: ") :]) for line in streamed.splitlines() if line.startswith("data: {")]
+    tool_starts: Final = [event["content_block"] for event in events if event["type"] == "content_block_start"]
+    tool_input: Final = "".join(
+        event["delta"].get("partial_json", "") for event in events if event["type"] == "content_block_delta"
+    )
+    assert "CallLoadedTool" not in streamed
+    assert [(block["type"], block.get("name")) for block in tool_starts] == [("tool_use", "mcp__weather__get_forecast")]
+    assert json.loads(tool_input) == {"city": "Lyon"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_info, search_result",
+    [
+        ({"deferred_tools": "passthrough"}, "Loaded tool mcp__weather__get_forecast.Tool loaded."),
+        ({"deferred_tools": "drop"}, "Tool loaded."),
+    ],
+    ids=["passthrough", "drop"],
+)
+async def test_a_chat_backend_reads_which_tools_a_passthrough_tool_search_loaded(
+    model_info: Mapping[str, object], search_result: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    body, _ = await _fireworks_kimi_messages(
+        model_info, httpx.Response(200, json=_dispatcher_chat_completion()), stream=False
+    )
+
+    search_results: Final = [
+        message for message in body["messages"] if message.get("tool_call_id") == "toolu_search"
+    ]
+    assert len(search_results) == 1
+    content: Final = search_results[0]["content"]
+    assert (content if isinstance(content, str) else "".join(part["text"] for part in content)) == search_result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_info, tools",
+    [
+        ({"deferred_tools": "drop"}, [*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _FORECAST_TOOL]),
+        ({"deferred_tools": "emulate"}, [_CLAUDE_CODE_TOOL_SEARCH_TOOLS[0], _FORECAST_TOOL]),
+    ],
+    ids=["drop", "emulate_without_tool_search"],
+)
+async def test_deferred_tools_reach_a_chat_backend_as_plain_tools_unless_emulated_with_tool_search(
+    model_info: Mapping[str, object], tools: list[dict[str, object]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_dispatcher_chat_completion()))
+        await litellm.anthropic.messages.acreate(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+            api_key="fireworks-key",
+            tools=tools,
+            model_info=model_info,
+        )
+        body: Final = json.loads(upstream.calls[0].request.content)
+
+    assert [tool["function"]["name"] for tool in body["tools"]] == [tool["name"] for tool in tools]

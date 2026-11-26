@@ -1150,3 +1150,88 @@ async def test_post_call_failure_hook_guardrail_block_fires_failure_callback(
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert recorded == ["failure"]
+
+
+def _gemini_image_refusal() -> Exception:
+    import httpx
+
+    from litellm.llms.gemini.empty_image_response import ImageRefusalError
+
+    return ImageRefusalError(
+        message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+        model="gemini-3.1-flash-image",
+        llm_provider="gemini",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://gemini.invalid")),
+        provider_specific_fields={"finish_reason": "IMAGE_SAFETY"},
+    )
+
+
+def _gemini_outage() -> Exception:
+    return litellm.InternalServerError(message="down", llm_provider="gemini", model="gemini-3.1-flash-image")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_failure", "last_attempt_failure", "logged_deployment"),
+    (
+        pytest.param(
+            _gemini_image_refusal(), _gemini_image_refusal(), ("dep-fallback", "fallback"), id="fallback-refusal"
+        ),
+        pytest.param(_gemini_outage(), _gemini_outage(), ("dep-first", "first"), id="fallback-500"),
+        pytest.param(_gemini_image_refusal(), _gemini_outage(), ("dep-first", "first"), id="refusal-then-fallback-500"),
+    ),
+)
+async def test_a_fallback_refusal_the_client_gets_is_logged_on_the_fallback_deployment(
+    proxy_logging, make_user_api_key_auth, monkeypatch, client_failure, last_attempt_failure, logged_deployment
+):
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_post_call_failure_hook(
+            self, request_data, original_exception, user_api_key_dict, traceback_str=None
+        ):
+            recorded.append(dict(request_data))
+
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []  # rebind-ok: isolate the fixture-owned alert configuration
+    logging_obj = Logging(
+        model="fallback",
+        messages=[],
+        stream=False,
+        call_type="aimage_generation",
+        start_time=datetime.now(),
+        litellm_call_id="call-fallback-refusal",
+        function_id="fn-fallback-refusal",
+    )
+    logging_obj.update_environment_variables(
+        model="fallback",
+        user="",
+        optional_params={},
+        litellm_params=get_litellm_params(metadata={"model_info": {"id": "dep-fallback"}}),
+    )
+    logging_obj.model_call_details["standard_logging_object"] = {
+        "id": "call-fallback-refusal",
+        "model_id": "dep-fallback",
+        "model_group": "fallback",
+        "model": "gemini/gemini-3.1-flash-image",
+        "custom_llm_provider": "gemini",
+    }
+    logging_obj.model_call_details["exception"] = last_attempt_failure
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "first",
+            "prompt": "a red dot",
+            "metadata": {"model_group": "first", "model_info": {"id": "dep-first"}},
+            "litellm_logging_obj": logging_obj,
+        },
+        original_exception=client_failure,
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/images/generations"),
+        route="/v1/images/generations",
+    )
+
+    (seen,) = recorded
+    assert (seen["metadata"]["model_info"]["id"], seen["metadata"]["model_group"]) == logged_deployment

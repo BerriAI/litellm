@@ -10,7 +10,7 @@ from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUser
 from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
 from litellm.utils import ProviderConfigManager
 
-from ..common_utils import BaseOpenAILLM, OpenAIError
+from ..common_utils import BaseOpenAILLM, OpenAIError, RelayOnlyBodyOpenAIError, upstream_error_body
 from ..workload_identity import build_async_openai_client, build_openai_client
 from .transformation import OpenAITextCompletionConfig
 
@@ -164,7 +164,9 @@ class OpenAITextCompletion(BaseLLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise RelayOnlyBodyOpenAIError(
+                status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
+            )
 
     async def acompletion(
         self,
@@ -220,7 +222,9 @@ class OpenAITextCompletion(BaseLLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise RelayOnlyBodyOpenAIError(
+                status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
+            )
 
     def streaming(
         self,
@@ -261,7 +265,9 @@ class OpenAITextCompletion(BaseLLM):
             error_response: object = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise RelayOnlyBodyOpenAIError(
+                status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
+            )
         streamwrapper: Final = CustomStreamWrapper(
             completion_stream=response,
             model=model,
@@ -280,7 +286,9 @@ class OpenAITextCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise RelayOnlyBodyOpenAIError(
+                status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
+            )
 
     async def async_streaming(
         self,
@@ -331,4 +339,6 @@ class OpenAITextCompletion(BaseLLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise RelayOnlyBodyOpenAIError(
+                status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
+            )

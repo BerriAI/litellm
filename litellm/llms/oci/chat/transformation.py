@@ -19,8 +19,10 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -217,6 +219,14 @@ def _tool_identifiers(tool: Mapping[str, object]) -> tuple[object, ...]:
     return (tool.get("type"), tool.get("name"), nested.get("name"))
 
 
+def _sends_only_non_function_tools(params: Mapping[str, object]) -> bool:
+    try:
+        tools: Final = _TOOLS_ADAPTER.validate_python(params.get("tools"))
+    except ValidationError:
+        return False
+    return bool(tools) and all(tool.get("type") != "function" for tool in tools)
+
+
 def _without_non_function_tools(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
     if params.get("tools") is None:
         return params
@@ -405,6 +415,9 @@ class OCIChatConfig(BaseConfig):
             if value and (key != "reasoning_effort" or _model_supports_reasoning_effort(model))
         ]
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -418,8 +431,18 @@ class OCIChatConfig(BaseConfig):
             self.openai_to_oci_cohere_param_map if vendor == OCIVendors.COHERE else self.openai_to_oci_generic_param_map
         )
 
+        sent_params: Final = dict[str, object]({**non_default_params, **optional_params})
         request_params: Final = _without_non_function_tools(
-            {**non_default_params, **optional_params}, drop_params or litellm.drop_params
+            sent_params
+            if _sends_only_non_function_tools(sent_params)
+            else tool_params_without_hosted_mcp(
+                sent_params,
+                model=model,
+                route="oci",
+                drop_params=drop_params or litellm.drop_params,
+                handling=self.hosted_mcp_tool_handling(model),
+            ),
+            drop_params or litellm.drop_params,
         )
         for key, value in request_params.items():
             alias = param_map.get(key)

@@ -1,13 +1,16 @@
 import asyncio
+import base64
 import contextlib
 import copy
 import datetime
 import importlib.abc
+import io
 import json
 import logging
 import os
 import sys
 import threading
+import wave
 import time
 import traceback
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
@@ -3476,6 +3479,59 @@ def test_response_cost_calculator_native_generate_content_body_uses_usage_metada
 
     cost = logging_obj.response_cost_calculator(result=native_body)
     assert cost == pytest.approx(expected_cost)
+
+
+def _gemini_tts_wav_base64() -> str:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(bytes(range(256)) * 8)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def _gemini_tts_reply(wav_base64: str) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {"parts": [{"inlineData": {"mimeType": "audio/wav", "data": wav_base64}}], "role": "model"},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 40, "totalTokenCount": 47},
+        "modelVersion": "gemini-3.8-flash-tts",
+    }
+
+
+def test_native_generate_content_logs_the_tts_audio_the_caller_received():
+    wav_base64: Final = _gemini_tts_wav_base64()
+    reply: Final = _gemini_tts_reply(wav_base64)
+    logging_obj: Final = LitellmLogging(
+        model="gemini-3.8-flash-tts",
+        messages=[{"role": "user", "content": "Say hello"}],
+        stream=False,
+        call_type="agenerate_content",
+        start_time=time.time(),
+        litellm_call_id="tts-wav",
+        function_id="tts-wav",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, model="gemini-3.8-flash-tts")
+    logging_obj.model_call_details["httpx_response"] = httpx.Response(200, json=reply)
+
+    _, _, logged, _ = logging_obj._prepare_success_logging(
+        result=reply,
+        start_time=None,
+        end_time=None,
+        cache_hit=False,
+        standard_logging_object=None,
+        build_logging_payload=False,
+        publish_logging_payload=False,
+    )
+
+    assert isinstance(logged, litellm.ModelResponse)
+    assert logged.choices[0].message.audio.data == wav_base64
 
 
 def test_response_cost_calculator_does_not_transform_non_generate_content_dict():
@@ -12375,6 +12431,37 @@ def test_masking_function_not_in_metadata_when_not_provided():
     assert result["metadata"]["some_key"] == "some_value"
 
 
+@pytest.mark.parametrize("attempt_sets_its_own", [False, True], ids=["kept_from_request", "replaced_by_attempt"])
+def test_router_attempt_keeps_langfuse_masking_on_the_shared_logging_object(attempt_sets_its_own: bool) -> None:
+    def request_mask(data: object) -> object:
+        return data
+
+    def attempt_mask(data: object) -> object:
+        return data
+
+    request_metadata: Final[dict[str, object]] = {"langfuse_masking_function": request_mask}
+    logging_obj: Final = LitellmLogging(
+        model="gemini/gemini-image",
+        messages=[],
+        stream=False,
+        call_type="aimage_generation",
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+        litellm_call_id="masking-call",
+        function_id="masking-function",
+        kwargs={"metadata": request_metadata},
+    )
+    attempt_metadata: Final[dict[str, object]] = (
+        {"langfuse_masking_function": attempt_mask} if attempt_sets_its_own else request_metadata
+    )
+
+    logging_obj.follow_attempt_callback_settings({"model": "gemini/gemini-image", "metadata": attempt_metadata})
+
+    assert logging_obj.litellm_params["_langfuse_masking_function"] is (
+        attempt_mask if attempt_sets_its_own else request_mask
+    )
+    assert "langfuse_masking_function" not in logging_obj.litellm_params["metadata"]
+
+
 def test_copy_for_new_call_logs_a_turn_under_its_own_call_id_against_the_connections_reservation() -> None:
     reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": []}
     connection: Final = LitellmLogging(
@@ -12593,3 +12680,54 @@ def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_call
     (first_cost, second_cost) = costs
     assert second_cost == pytest.approx(2 * first_cost)
     assert shared_metadata == {"tag": "x"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "before_logging",
+    [
+        pytest.param(lambda logging_obj, served: None, id="edit"),
+        pytest.param(
+            lambda logging_obj, served: logging_obj.response_cost_calculator(result=served),
+            id="edit_already_priced_for_its_response_headers",
+        ),
+    ],
+)
+async def test_an_image_served_after_a_billed_failure_sums_the_tokens_of_both_attempts(
+    before_logging: Callable[[LitellmLogging, ImageResponse], object],
+) -> None:
+    from litellm.types.utils import ImageUsage, ImageUsageInputTokensDetails
+
+    logging_obj: Final = LitellmLogging(
+        model="gpt-image-2",
+        messages=[],
+        stream=False,
+        call_type="aimage_edit",
+        start_time=time.time(),
+        litellm_call_id="recovered-image",
+        function_id="recovered-image",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-image-2", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    logging_obj.owe_failed_attempt_on_success(
+        litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.02
+    )
+    served: Final = ImageResponse(
+        created=1,
+        data=[],
+        usage=ImageUsage(
+            input_tokens=9,
+            input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=9),
+            output_tokens=14,
+            total_tokens=23,
+        ),
+    )
+    before_logging(logging_obj, served)
+    now: Final = datetime.datetime.now()
+    await logging_obj.async_success_handler(served, now, now)
+
+    combined: Final = logging_obj.model_call_details["combined_usage_object"]
+    logged: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert (combined.prompt_tokens, combined.completion_tokens, combined.total_tokens) == (1009, 514, 1523)
+    assert (logged["prompt_tokens"], logged["completion_tokens"], logged["total_tokens"]) == (1009, 514, 1523)

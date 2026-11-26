@@ -7,7 +7,7 @@ import random
 import time
 from collections.abc import Callable
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast  # noqa: TID251  # logging callbacks get kwargs untyped
 
 from openai import APIError
 from pydantic import TypeAdapter
@@ -38,9 +38,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.router_utils.deployment_pricing import base_model_for_pricing
 from litellm.types.integrations.slack_alerting import *
 from litellm.types.integrations.slack_alerting import (
     AlertType,
@@ -1046,7 +1048,7 @@ class SlackAlerting(CustomBatchLogger):
         model_info = {}
         base_model = ""
         if base_model_from_user is not None:
-            model_info = litellm.model_cost.get(base_model_from_user, {})
+            model_info = litellm.model_cost.get(base_model_for_pricing(base_model_from_user) or litellm_model_name, {})
             base_model = f"Base Model: `{base_model_from_user}`\n"
         else:
             model_info = litellm.model_cost.get(litellm_model_name, {})
@@ -1726,8 +1728,9 @@ Model Info:
         _litellm_params: Final = kwargs.get("litellm_params", {})
         _model_info: Final = _litellm_params.get("model_info", {}) or {}
         model_id: Final = _model_info.get("id", "")
+        failure: Final = cast("dict[str, object]", kwargs).get("exception")  # cast-ok: untyped kwargs dict
         try:
-            if "daily_reports" in self.alert_types:
+            if "daily_reports" in self.alert_types and not isinstance(failure, IMAGE_ANSWER_ERRORS):
                 try:
                     await self.async_update_daily_reports(
                         DeploymentMetrics(

@@ -9698,8 +9698,15 @@
               "type": "string"
             },
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "probabilities": {
               "additionalProperties": {
@@ -9717,7 +9724,6 @@
           "required": [
             "type",
             "choice",
-            "confidence",
             "probabilities"
           ],
           "title": "ChoiceAnswer",
@@ -9905,8 +9911,15 @@
               "title": "Choice"
             },
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "name": {
               "anyOf": [
@@ -9936,8 +9949,7 @@
           "required": [
             "name",
             "choice",
-            "probabilities",
-            "confidence"
+            "probabilities"
           ],
           "title": "OpenAIChoiceAnswer",
           "type": "object"
@@ -10142,8 +10154,15 @@
         "OpenAIScoreAnswer": {
           "properties": {
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "name": {
               "anyOf": [
@@ -10177,8 +10196,7 @@
           "required": [
             "name",
             "score",
-            "probabilities",
-            "confidence"
+            "probabilities"
           ],
           "title": "OpenAIScoreAnswer",
           "type": "object"
@@ -10210,8 +10228,15 @@
           "additionalProperties": true,
           "properties": {
             "confidence": {
-              "title": "Confidence",
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
             },
             "legend": {
               "additionalProperties": {
@@ -10252,7 +10277,6 @@
           "required": [
             "type",
             "score",
-            "confidence",
             "legend",
             "probabilities"
           ],
@@ -14325,6 +14349,19 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "forward_messages_as_sent": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.",
+              "title": "Forward Messages As Sent"
+            },
             "guard_name": {
               "anyOf": [
                 {
@@ -16675,6 +16712,19 @@
               ],
               "description": "HTTP timeout in seconds for checking attached files. Default: 10.",
               "title": "File Guardrail Timeout"
+            },
+            "forward_messages_as_sent": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.",
+              "title": "Forward Messages As Sent"
             },
             "gateway_name": {
               "anyOf": [
@@ -21798,6 +21848,36 @@
                 }
               ],
               "title": "Image[]"
+            },
+            "markup": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Markup"
+            },
+            "markup[]": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Markup[]"
             },
             "mask": {
               "anyOf": [

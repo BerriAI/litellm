@@ -8,15 +8,25 @@ Tests that session-scoped budget tracking works correctly:
 - Requests without agent_id pass through
 """
 
+import asyncio
+import contextlib
+from datetime import datetime
 from typing import Final
 from unittest.mock import patch
 
+import httpx
 import logging
 import pytest
+import respx
 from fastapi import HTTPException
+
+import litellm
+from litellm import Router
 
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
     PROXY_MaxBudgetPerSessionHandler,
@@ -226,3 +236,94 @@ async def test_an_open_circuit_breaker_reads_session_spend_locally_without_a_war
     assert spend == 0.0
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+_IMAGE_USAGE: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+
+
+async def _session_spend_after(
+    router: Router, handler: PROXY_MaxBudgetPerSessionHandler, model: str, session_id: str
+) -> float:
+    metadata: Final = {"session_id": session_id, "agent_id": "agent-budget-123"}
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model=model,
+        prompt="draw a circle",
+        metadata=metadata,
+        litellm_call_id=session_id,
+    )
+    with contextlib.suppress(ImageRefusalError):
+        await router.aimage_generation(
+            model=model,
+            prompt="draw a circle",
+            metadata=metadata,
+            litellm_logging_obj=logging_obj,
+            litellm_call_id=session_id,
+        )
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    return await handler._get_current_spend(handler._make_cache_key(session_id))
+
+
+@pytest.mark.asyncio
+async def test_a_billed_image_refusal_counts_once_toward_the_session_budget(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Final = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [handler])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    respx_mock.post(url__startswith="https://refuses.example/").mock(
+        return_value=httpx.Response(
+            200, json={"candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT"}], "usageMetadata": _IMAGE_USAGE}
+        )
+    )
+    respx_mock.post(url__startswith="https://rejects-the-key.example/").mock(
+        return_value=httpx.Response(401, json={"error": {"code": 401, "message": "bad key"}})
+    )
+    respx_mock.post(url__startswith="https://backup.example/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}]}}
+                ],
+                "usageMetadata": _IMAGE_USAGE,
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{host}.example",
+                },
+            }
+            for group, host in (
+                ("refuses", "refuses"),
+                ("refuses-alone", "refuses"),
+                ("rejects-the-key", "rejects-the-key"),
+                ("backup", "backup"),
+            )
+        ],
+        content_policy_fallbacks=[{"refuses": ["backup"]}],
+        fallbacks=[{"rejects-the-key": ["backup"]}],
+        num_retries=0,
+    )
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=100.0)
+        refused_alone: Final = await _session_spend_after(router, handler, "refuses-alone", "session-refused")
+        served_after_unbilled: Final = await _session_spend_after(router, handler, "rejects-the-key", "session-401")
+        served_after_refused: Final = await _session_spend_after(router, handler, "refuses", "session-fallback")
+
+    assert refused_alone > 0
+    assert served_after_unbilled > 0
+    assert served_after_refused == pytest.approx(refused_alone + served_after_unbilled)
