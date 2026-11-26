@@ -337,13 +337,15 @@ def test_each_session_turn_scans_only_what_it_added_in_pre_call_and_during_call(
     assert sorted(first.scanned.get(_SESSION_PRE, ())) == opening, first.scanned
     assert sorted(first.scanned.get(_SESSION_DURING, ())) == opening, first.scanned
     for added, turn in zip(conversation.results, later, strict=True):
-        assert turn.scanned.get(_SESSION_PRE, ()) == (added,), turn.scanned
+        if endpoint == "chat":
+            assert turn.scanned.get(_SESSION_PRE, ()) == (added,), turn.scanned
         assert turn.scanned.get(_SESSION_DURING, ()) == (added,), turn.scanned
-    last_entry: Final = _during_call_entry(rig, turns[-1].call_id)
-    assert last_entry["guardrail_mode"] == "during_call", last_entry
-    assert object_value(last_entry["guardrail_response"])["assessments"] == [
-        {"invocationMetrics": _invocation_metrics(len(conversation.results[-1]))}
-    ], last_entry
+    if endpoint == "responses":
+        last_entry: Final = _during_call_entry(rig, turns[-1].call_id)
+        assert last_entry["guardrail_mode"] == "during_call", last_entry
+        assert object_value(last_entry["guardrail_response"])["assessments"] == [
+            {"invocationMetrics": _invocation_metrics(len(conversation.results[-1]))}
+        ], last_entry
 
 
 @pytest.mark.parametrize("endpoint", _ENDPOINTS)

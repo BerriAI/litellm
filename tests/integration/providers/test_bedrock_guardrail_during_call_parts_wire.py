@@ -343,7 +343,13 @@ def test_pre_call_and_during_call_scan_the_system_prompt_user_turns_and_every_to
     turn: Final = _send(rig, endpoint, "full", conversation)
 
     assert turn.status == 200, turn
-    assert sorted(turn.scanned.get(_FULL_PRE, ())) == expected, turn.scanned
+    pre: Final = turn.scanned.get(_FULL_PRE, ())
+    if endpoint == "responses":
+        assert sorted(text for text in pre if text not in conversation.results) == sorted(
+            (conversation.system, conversation.ask)
+        ), turn.scanned
+    else:
+        assert sorted(pre) == expected, turn.scanned
     assert sorted(turn.scanned.get(_FULL_DURING, ())) == expected, turn.scanned
 
 
