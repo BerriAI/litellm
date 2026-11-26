@@ -470,15 +470,12 @@ def test_raise_context_window_exceeded_error_no_retry():
         ]
     )
 
-    try:
-        response = router.should_retry_this_error(
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router.should_retry_this_error(
             error=context_window_error,
             healthy_deployments=None,
             context_window_fallbacks=context_window_fallbacks,
         )
-        assert response == True, "Should not have raised exception since we do not have context window fallbacks"
-    except litellm.ContextWindowExceededError:
-        pass
 
 
 def test_no_retry_for_not_found_error_404():

@@ -134,7 +134,7 @@ impl<S: LedgerStore + 'static> SpendLogs<S> {
             wake,
             interval,
         });
-        tokio::spawn(spend_logs_write_loop(Arc::downgrade(&logs)));
+        litellm_call_scope::spawn_detached(spend_logs_write_loop(Arc::downgrade(&logs)));
         logs
     }
 

@@ -22,6 +22,10 @@ PREFIX_BLOCK_HASHES_BLOCK_SIZE: Final = get_env_int_in_range(
 )
 OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
+DROP_UNSUPPORTED_PARAMS_HINT: Final = (
+    "To drop unsupported params, set `litellm.drop_params = True`, "
+    "or `drop_params: true` under `litellm_settings` in the proxy config."
+)
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
 # Replies depend on the caller's delegated identity, which response-cache keys do not include.
 RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot", "databricks_agent"})
@@ -140,6 +144,7 @@ MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 S3_LOG_PROMPTS_ONLY_ENV_VAR: Final = "S3_LOG_PROMPTS_ONLY"
 MAX_FILE_LIST_LIMIT: Final = 10000
 MAX_IMAGE_FAN_OUT_REQUESTS: Final = get_env_int("MAX_IMAGE_FAN_OUT_REQUESTS", 10)
+IMAGE_CALL_TYPES: Final = frozenset({"image_generation", "aimage_generation", "image_edit", "aimage_edit"})
 ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
@@ -219,6 +224,7 @@ DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: Final = get_env_float("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 50.0)
 MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB: Final = get_env_float("MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB", 50.0)
 MAX_REQUEST_BODY_DECOMPRESSION_RATIO: Final = get_env_int("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", 200)
+BODY_READ_AHEAD_NS: Final = "litellm_body_read_ahead_ns"
 MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB: Final = get_env_float(
     "MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", 200.0
 )
@@ -703,6 +709,7 @@ HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
 SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = get_env_float("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", 5.0)
 SEMANTIC_CACHE_PARAMS_KEY: Final = "cache_params"
 SEMANTIC_CACHE_POLICY_KEY: Final = "_semantic_cache_policy"
+CALLER_MESSAGE_COUNT_KEY: Final = "_caller_message_count"
 _request_timeout_from_env: Final = get_env_float_or_none("REQUEST_TIMEOUT")
 request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env

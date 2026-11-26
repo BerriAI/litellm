@@ -319,11 +319,20 @@ async fn routed(config: &str, model: &str) -> axum::response::Response {
     app(config).await.oneshot(asking(&body)).await.unwrap()
 }
 
+/// The headers that tell what the router did for a call.
+const ROUTING_HEADERS: [&str; 5] = [
+    "x-litellm-model-id",
+    "x-litellm-model-group",
+    "x-litellm-attempted-retries",
+    "x-litellm-attempted-fallbacks",
+    "x-litellm-max-retries",
+];
+
 fn routing_headers(response: &axum::response::Response) -> Vec<(&str, &str)> {
     response
         .headers()
         .iter()
-        .filter(|(name, _)| name.as_str().starts_with("x-litellm-") && *name != "x-litellm-call-id")
+        .filter(|(name, _)| ROUTING_HEADERS.contains(&name.as_str()))
         .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
         .collect()
 }
@@ -1348,6 +1357,49 @@ async fn a_deployment_additional_drop_param_never_reaches_the_provider(
     let forwarded = forwarded_body(deployment_params, json!({"temperature": 0.5})).await;
 
     assert_eq!(forwarded.get("temperature").cloned(), expected);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_requests_messages_settings_lay_over_the_deployments_and_never_reach_the_provider() {
+    let forwarded = forwarded_body(
+        "      additional_drop_params: [top_k]\n",
+        json!({
+            "temperature": 0.5,
+            "top_k": 5,
+            "drop_params": true,
+            "additional_drop_params": ["temperature"],
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        [
+            "temperature",
+            "top_k",
+            "drop_params",
+            "additional_drop_params"
+        ]
+        .map(|key| forwarded.get(key).cloned()),
+        [None, Some(json!(5)), None, None]
+    );
+}
+
+#[rstest]
+#[case::text_python_reads_as_on("  reasoning_auto_summary: \"false\"\n", Some(json!("summarized")))]
+#[case::off("  reasoning_auto_summary: false\n", None)]
+#[tokio::test]
+async fn litellm_settings_reasoning_auto_summary_asks_for_summarized_thinking(
+    #[case] settings: &str,
+    #[case] expected: Option<Value>,
+) {
+    let forwarded = forwarded_body(
+        &format!("    model_info:\n      supports_reasoning: true\nlitellm_settings:\n{settings}"),
+        json!({"max_tokens": 2048, "thinking": {"type": "enabled", "budget_tokens": 1024}}),
+    )
+    .await;
+
+    assert_eq!(forwarded["thinking"].get("display").cloned(), expected);
 }
 
 #[rstest]

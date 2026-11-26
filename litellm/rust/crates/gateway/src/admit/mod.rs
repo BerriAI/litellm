@@ -14,7 +14,7 @@ use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_gateway_auth::{Auth, Authenticated, Preauthenticated};
-use litellm_gateway_auth_core::authz::Layer;
+use litellm_gateway_auth_core::{Allowlists, authz::Layer};
 use litellm_gateway_inference::{JsonObject, routing};
 use litellm_model_catalog::CostMap;
 use litellm_router_core::{Router, registry::DeploymentFilter};
@@ -24,6 +24,7 @@ use crate::{
     AppState, Gateway, StoredConfig,
     callbacks::parallel_request_limiter,
     host::{self, NativeHost, NativeRows},
+    middleware::request_allowlist,
 };
 use checks::Fields;
 pub use checks::Reason;
@@ -84,6 +85,8 @@ pub struct Admit {
     router: Router,
     /// The native host, which says which of a model group's host steps it answers.
     host: NativeHost,
+    /// The proxy's address and route allowlists, read by the rule the Python proxy reads them with.
+    allowlists: Allowlists,
     auth: Auth<NativeRows>,
     /// The native app's inference, which tells whether a caller may call the model it asks for.
     /// `None` leaves every caller with a model list to Python.
@@ -162,6 +165,7 @@ impl Admit {
     fn built(config: &Config, router: Router, deployed: Vec<Deployed>) -> Self {
         Self {
             router,
+            allowlists: Allowlists::new(&config.general_settings),
             auth: host::auth::auth(config, None),
             config: config.clone(),
             environment: Environment::default(),
@@ -187,7 +191,9 @@ impl Admit {
 
     /// The body is read only for a request that passes every other check, and parsed once: an
     /// admitted request carries it parsed, as the [`JsonObject`] the route takes. A refused request
-    /// keeps the bytes the client sent and carries nothing more.
+    /// keeps the bytes the client sent and carries nothing more. A request the proxy's allowlists
+    /// leave out is admitted as sent, before its caller or body is read, as Python refuses it before
+    /// it reads either, and `middleware::request_allowlist` refuses it in the native app.
     pub async fn admit(
         self: Arc<Self>,
         request: Request,
@@ -195,6 +201,16 @@ impl Admit {
         let (mut parts, body) = request.into_parts();
         if let Some(reason) = checks::HEAD.iter().find_map(|check| check(&self, &parts)) {
             return Err(refused(parts, body, reason));
+        }
+        if request_allowlist::checked(
+            &self.allowlists,
+            parts.uri.path(),
+            &parts.headers,
+            &parts.extensions,
+        )
+        .is_err()
+        {
+            return Ok(Request::from_parts(parts, body));
         }
         let authenticated = self.auth.authenticate_parts(&parts).await;
         if let Some(reason) = checks::CALLER

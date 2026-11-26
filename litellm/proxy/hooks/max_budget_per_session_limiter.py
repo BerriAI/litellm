@@ -16,6 +16,7 @@ Follows the same pattern as max_iterations_limiter.py.
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ConfigDict, TypeAdapter
@@ -34,9 +35,11 @@ from litellm.litellm_core_utils.batch_utils import (
     job_to_charge_once,
 )
 from litellm.litellm_core_utils.core_helpers import finite_cost
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.router_strategy.budget_limiter import cost_left_after_failed_attempts
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -205,7 +208,9 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 return
 
             callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
-            response_cost: Final = finite_cost(charged_poll_cost(callback_fields)) or 0.0
+            response_cost: Final = cost_left_after_failed_attempts(
+                callback_fields, finite_cost(charged_poll_cost(callback_fields)) or 0.0
+            )
             if response_cost <= 0:
                 return
 
@@ -229,6 +234,14 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 "MaxBudgetPerSessionHandler: error in async_log_success_event: %s",
                 str(e),
             )
+
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return is_answer_without_an_image(exception)
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""

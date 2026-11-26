@@ -4223,6 +4223,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     signoz_ingestion_endpoint: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
     signoz_ingestion_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
 
+    mixpanel_project_token: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+    mixpanel_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
     litellm_disabled_callbacks: list[str] | None
@@ -5054,6 +5057,11 @@ class LiteLLMLoggingBaseClass:
 
 
 TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
+
+
+@dataclass(frozen=True, slots=True)
+class FailureLoggedCost:
+    cost: float
 
 
 @dataclass(frozen=True, slots=True)

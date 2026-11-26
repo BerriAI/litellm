@@ -7,10 +7,12 @@ Backoff values carry litellm's random jitter (up to ``JITTER`` seconds), so slee
 
 import asyncio
 import copy
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import httpx
+import pytest
 
 import litellm
 from litellm.router_core import RouterCore
@@ -67,6 +69,21 @@ def api_status(status: int) -> ErrorBuilder:
     )
 
 
+def previous_response_rejected() -> Exception:
+    message: Final = "Previous response with id 'resp_gone' not found."
+    return litellm.BadRequestError(
+        message=message,
+        llm_provider="openai",
+        model="gpt-4o",
+        body={
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": "previous_response_not_found",
+            "message": message,
+        },
+    )
+
+
 def plain_error() -> ValueError:
     return ValueError("not a provider error")
 
@@ -100,6 +117,26 @@ def attempt_sync(core: RouterCore, model: str = "g", **kwargs: object) -> object
         raise
     except Exception as error:
         return error
+
+
+def _total(values: Sequence[int | None]) -> int | None:
+    counted: Final = [value for value in values if value is not None]
+    return sum(counted) if counted else None
+
+
+async def usage_since(
+    core: RouterCore, monkeypatch: pytest.MonkeyPatch, group: str, started: datetime
+) -> tuple[int | None, int | None]:
+    """The group's (tpm, rpm) summed over every minute from ``started`` to now. Usage is counted under
+    the minute a call ran in, so a read after the minute changed has to look back at that minute."""
+    first: Final = started.replace(second=0, microsecond=0)
+    minutes: Final = int((datetime.now(timezone.utc) - first).total_seconds() // 60) + 1
+    readings: Final[list[tuple[int | None, int | None]]] = []  # mutable-ok: collected in the loop below
+    for offset in range(minutes):
+        at = first + timedelta(minutes=offset)
+        monkeypatch.setattr("litellm.router_rust.surface.model_info.get_utc_datetime", lambda at=at: at)
+        readings.append(await core.health().usage(group))
+    return _total([tpm for tpm, _ in readings]), _total([rpm for _, rpm in readings])
 
 
 def cooled_down(core: RouterCore, ids: list[str]) -> dict[str, Mapping[str, object]]:  # mutable-ok: a fresh dict
