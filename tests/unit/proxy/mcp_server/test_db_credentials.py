@@ -1017,6 +1017,30 @@ async def test_conditional_revocation_deletes_only_the_same_grant_generation(
     ) == "deleted"
     assert ("alice", "srv-1") not in rows.rows
 
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-legacy", refresh_token="rt-legacy")
+    legacy_row: Final = rows.rows[("alice", "srv-1")]
+    legacy_decoded: Final = _decode_user_credential(legacy_row.credential_b64)
+    assert legacy_decoded is not None
+    legacy_payload: Final = json.loads(legacy_decoded)
+    legacy_payload.pop("connected_at")
+    rows.rows = {
+        **rows.rows,
+        ("alice", "srv-1"): SimpleNamespace(
+            **{**vars(legacy_row), "credential_b64": encrypt_value_helper(json.dumps(legacy_payload))}
+        ),
+    }
+    assert await store_user_oauth_credential(
+        credentials_prisma,
+        "alice",
+        "srv-1",
+        "at-legacy-rotated",
+        refresh_token="rt-legacy-new",
+        refreshed_from="rt-legacy",
+    )
+    assert "connected_at" not in await _saved_grant(credentials_prisma)
+    assert await delete_user_oauth_credential_if_grant_matches(credentials_prisma, "alice", "srv-1", None) == "deleted"
+    assert ("alice", "srv-1") not in rows.rows
+
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
     replaced_connected_at: Final = (await _saved_grant(credentials_prisma))["connected_at"]
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new", refresh_token="rt-new")

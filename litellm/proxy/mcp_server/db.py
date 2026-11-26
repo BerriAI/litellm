@@ -1929,10 +1929,14 @@ async def _store_refreshed_oauth_credential(
         return False
     refreshed: Final[OAuthCredentialPayload] = _OAUTH_CREDENTIAL_PAYLOAD_ADAPTER.validate_python(
         {
-            **payload,
-            "refresh_token": payload.get("refresh_token") or refreshed_from,
-            **({"connected_at": grant["connected_at"]} if "connected_at" in grant else {}),
-            **({"needs_scopes": grant["needs_scopes"]} if "needs_scopes" in grant else {}),
+            key: value
+            for key, value in {
+                **payload,
+                "refresh_token": payload.get("refresh_token") or refreshed_from,
+                **({"connected_at": grant["connected_at"]} if "connected_at" in grant else {}),
+                **({"needs_scopes": grant["needs_scopes"]} if "needs_scopes" in grant else {}),
+            }.items()
+            if key != "connected_at" or "connected_at" in grant
         }
     )
     written: Final = await _user_credential_actions(prisma_client).update_many(
