@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent
+from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent, ToolAnnotations
 from mcp.types import Tool as MCPTool
 
 # Import required modules
@@ -4236,6 +4236,45 @@ async def test_a_streamed_call_an_allowed_tools_choice_excludes_comes_back_as_a_
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_a_streamed_round_handing_back_an_excluded_call_before_a_callers_call_keeps_each_streamed_index(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    calls: Final = [
+        {"index": index, "id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+        for index, (call_id, name) in enumerate((("call_ask", "deepwiki-ask_question"), ("call_lookup", "lookup")))
+    ]
+    _serve_responses(
+        respx.mock,
+        monkeypatch,
+        (_chat_stream(_chat_chunk({"role": "assistant", "tool_calls": calls}, None), _chat_chunk({}, "tool_calls")),),
+        _DEEPSEEK_URL,
+    )
+    server: Final = _ScriptedMCPServer()
+
+    stream: Final = await _gateway_hosted_mcp_request(
+        _DEEPSEEK_MODEL,
+        server,
+        beside=(_LOOKUP_FUNCTION,),
+        drop_params=True,
+        stream=True,
+        tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "lookup"}]},
+    )
+    events: Final = await _drain(stream)
+
+    final_output: Final = [_item(item) for item in events[-1].response.output]
+    streamed_calls: Final = [
+        (event.output_index, _item(event.item)["call_id"])
+        for event in events
+        if _event_type(event) == "response.output_item.done" and _item(event.item)["type"] == "function_call"
+    ]
+    assert server.calls == ()
+    assert sorted(call_id for _, call_id in streamed_calls) == ["call_ask", "call_lookup"]
+    assert [(index, final_output[index]["call_id"]) for index, _ in streamed_calls] == streamed_calls
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_an_allowlisted_server_receives_the_arguments_a_pre_call_guardrail_rewrote(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -4419,6 +4458,40 @@ async def test_a_registered_hosted_mcp_url_answers_the_gateways_403_for_a_key_wi
     assert denied.value.status_code == 403
     assert denied.value.detail == {"error": "The key is not allowed to access the requested MCP servers: deepwiki"}
     assert (server.opened, provider.call_count, mcp_client.call_tool.await_count) == ((), 0, 0)
+
+
+_DELETE_TOOL: Final = MCPTool(
+    name="delete_wiki", description="Delete a repository's wiki", inputSchema={"type": "object"}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allowed_tools",
+    [{"read_only": True}, {"tool_names": ["ask_question"]}, ["ask_question"]],
+    ids=["read_only", "tool_names", "list"],
+)
+@respx.mock
+async def test_a_registered_hosted_mcp_url_offers_only_the_tools_its_allowed_tools_admit(
+    monkeypatch: pytest.MonkeyPatch, allowed_tools: object
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ())
+    mcp_client: Final = _deepwiki_registered(monkeypatch)
+    mcp_client.list_tools_result.return_value = ListToolsResult(
+        tools=[_ASK_TOOL.model_copy(update={"annotations": ToolAnnotations(readOnlyHint=True)}), _DELETE_TOOL]
+    )
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (_answer_round(_BEDROCK_MODEL),), _BEDROCK_URL)
+
+    response: Final = await _gateway_hosted_mcp_request(
+        _BEDROCK_MODEL,
+        _ScriptedMCPServer(),
+        {**_DEEPWIKI_TOOL, "allowed_tools": allowed_tools},
+        caller=_key_holding("srv-deepwiki"),
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert _sent_tool_names(_sent_body(provider, 0)) == ("deepwiki-ask_question",)
+    assert [tool["name"] for tool in _item(response.output[0])["tools"]] == ["ask_question"]
 
 
 def _virtual_key(**permission: object) -> object:

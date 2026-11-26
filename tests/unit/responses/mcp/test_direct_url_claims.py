@@ -167,6 +167,22 @@ def test_routing_and_framing_headers_the_caller_sets_are_not_sent_to_the_direct_
     assert [server.headers for server in claims.direct] == [{"X-Team": "a"}]
 
 
+@pytest.mark.parametrize("padding", [" ", "\t"])
+def test_routing_headers_padded_with_whitespace_are_not_sent_to_the_direct_server(padding: str):
+    caller_headers: Final = {
+        f"{padding}Host{padding}": "admin.internal.example.com",
+        f"{padding}X-Forwarded-For": "127.0.0.1",
+        f"Connection{padding}": "close",
+        f"{padding}X-Team": "a",
+    }
+    claims: Final = _plan(
+        [_mcp_tool("https://mcp.example.com/mcp", {"headers": caller_headers})], allowed_hosts=("mcp.example.com",)
+    )
+
+    assert claims is not None
+    assert [server.headers for server in claims.direct] == [{"X-Team": "a"}]
+
+
 @pytest.mark.parametrize(
     "server_url",
     ["https://mcp.deepwiki.com/./mcp", "https://mcp.deepwiki.com/a/../mcp", "https://mcp.deepwiki.com/mcp?x=1"],

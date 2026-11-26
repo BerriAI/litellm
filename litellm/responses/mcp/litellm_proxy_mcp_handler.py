@@ -63,7 +63,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy.mcp_server.ui_session_utils import GrantedToolsetIds
     from litellm.proxy.utils import ProxyLogging
-    from litellm.responses.mcp.direct_url_claims import DirectTool
+    from litellm.responses.mcp.direct_url_claims import AllowedTools, DirectTool
     from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
     from litellm.responses.mcp.openai_mcp_items import OpenAIStreamShaper
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -226,6 +226,26 @@ def _served_tool(tool_name: str, server_name: str) -> tuple[MCPServer | None, st
     ) or global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
     resolved_tool_name: Final = _resolve_display_name_to_original(tool_name, [mcp_server]) if mcp_server else tool_name
     return mcp_server, strip_known_server_prefix(resolved_tool_name, mcp_server)
+
+
+def admitted_by_server_allowed_tools(
+    mcp_tools: list[MCPTool], tool_server_map: dict[str, str], allowed_tools: Mapping[str, "AllowedTools"]
+) -> tuple[list[MCPTool], dict[str, str]]:
+    if not allowed_tools:
+        return mcp_tools, tool_server_map
+    admitted: Final = frozenset(
+        tool.name for tool in mcp_tools if _server_admits(tool, tool_server_map.get(tool.name, ""), allowed_tools)
+    )
+    return (
+        [tool for tool in mcp_tools if tool.name in admitted],
+        {name: server_name for name, server_name in tool_server_map.items() if name in admitted},
+    )
+
+
+def _server_admits(tool: MCPTool, server_name: str, allowed_tools: Mapping[str, "AllowedTools"]) -> bool:
+    server, tool_name = _served_tool(tool.name, server_name)
+    allowed: Final = None if server is None else allowed_tools.get(server.server_id)
+    return allowed is None or allowed.admits(tool.model_copy(update={"name": tool_name}))
 
 
 @dataclass(frozen=True, slots=True)

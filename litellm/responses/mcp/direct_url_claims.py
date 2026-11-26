@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
@@ -76,11 +76,13 @@ class DirectMCPServer:
 @dataclass(frozen=True, slots=True)
 class HostedMCPClaims:
     """What the gateway runs for a request: `tools` with each registered match pointed at its gateway name and each
-    direct claim removed, the direct servers it reaches itself, and the caller's label for every matched server name."""
+    direct claim removed, the direct servers it reaches itself, the caller's label for every matched server name, and
+    the caller's `allowed_tools` for every matched server id."""
 
     tools: tuple[Mapping[str, object], ...]
     direct: tuple[DirectMCPServer, ...]
     server_labels: Mapping[str, str]
+    registered_allowed_tools: Mapping[str, AllowedTools] = field(default_factory=lambda: MappingProxyType({}))
 
 
 class DirectMCPClient(Protocol):
@@ -214,16 +216,20 @@ def _caller_headers(tool: Mapping[str, object]) -> Mapping[str, str]:
         headers: Final = _HEADERS.validate_python(tool.get("headers") or {})
     except ValidationError:
         return MappingProxyType({})
-    sent: Final = {name: value for name, value in headers.items() if _is_caller_header(name)}
+    sent: Final = {name: value for name, value in _stripped_names(headers) if _is_caller_header(name)}
     token: Final = _text_field(tool, "authorization")
     sets_authorization: Final = any(name.lower() == "authorization" for name in sent)
     bearer: Final = {} if token is None or sets_authorization else {"Authorization": f"Bearer {token}"}
     return MappingProxyType({**sent, **bearer})
 
 
+def _stripped_names(headers: Mapping[str, str]) -> Iterable[tuple[str, str]]:
+    return ((name.strip(), value) for name, value in headers.items())
+
+
 def _header_names(tool: Mapping[str, object]) -> tuple[str, ...]:
     try:
-        return tuple(_HEADERS.validate_python(tool.get("headers") or {}))
+        return tuple(name.strip() for name in _HEADERS.validate_python(tool.get("headers") or {}))
     except ValidationError:
         return ()
 
@@ -424,6 +430,9 @@ def plan_hosted_mcp_claims(
         direct=direct,
         server_labels=MappingProxyType(
             dict(chain.from_iterable(entries.items() for entries in map(_label_entries, registered)))
+        ),
+        registered_allowed_tools=MappingProxyType(
+            {claim.server.server_id: allowed_tools_filter(claim.tool) for claim in registered}
         ),
     )
 

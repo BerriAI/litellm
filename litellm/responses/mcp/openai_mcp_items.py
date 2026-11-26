@@ -414,8 +414,9 @@ class OpenAIStreamShaper:
         index: Final = _field(event, "output_index")
         item: Final = _field(event, "item")
         if event_type in _TERMINAL_EVENTS:
-            final_state, handed_back_events = self._released(event)
-            return final_state, (*handed_back_events, self._terminal(event))
+            handed_back: Final = self._handed_back_indexes(event)
+            final_state, handed_back_events = self._released(handed_back)
+            return final_state, (*handed_back_events, self._terminal(event, self._withheld_call_ids(handed_back)))
         if not isinstance(index, int):
             return self, (event,)
         if index in self.withheld:
@@ -444,18 +445,24 @@ class OpenAIStreamShaper:
     def _withholding(self, index: int, events: tuple[ResponsesAPIStreamingResponse, ...]) -> "OpenAIStreamShaper":
         return replace(self, withheld=MappingProxyType({**self.withheld, index: events}))
 
-    def _released(
-        self, terminal: ResponsesAPIStreamingResponse
-    ) -> tuple["OpenAIStreamShaper", tuple[ResponsesAPIStreamingResponse, ...]]:
+    def _handed_back_indexes(self, terminal: ResponsesAPIStreamingResponse) -> tuple[int, ...]:
         response: Final = _field(terminal, "response")
         handed_back: Final = frozenset(
             _call_id(item)
             for item in (output_items(response) if isinstance(response, ResponsesAPIResponse) else ())
             if _is_gateway_function_call(self.items.names, item)
         )
-        indexes: Final = tuple(
+        return tuple(
             index for index in sorted(self.withheld) if _call_id(_field(self.withheld[index][0], "item")) in handed_back
         )
+
+    def _withheld_call_ids(self, indexes: Sequence[int]) -> frozenset[str]:
+        call_ids: Final = (_call_id(_field(self.withheld[index][0], "item")) for index in indexes)
+        return frozenset(call_id for call_id in call_ids if call_id is not None)
+
+    def _released(
+        self, indexes: Sequence[int]
+    ) -> tuple["OpenAIStreamShaper", tuple[ResponsesAPIStreamingResponse, ...]]:
         start: Final[tuple[OpenAIStreamShaper, tuple[ResponsesAPIStreamingResponse, ...]]] = (self, ())
         return reduce(lambda released, index: released[0]._release(released[1], index), indexes, start)
 
@@ -465,22 +472,24 @@ class OpenAIStreamShaper:
         indexed_state, public = self._public_index(index)
         return indexed_state, (*events, *(_copied(each, {"output_index": public}) for each in self.withheld[index]))
 
-    def _terminal(self, event: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse:
+    def _terminal(
+        self, event: ResponsesAPIStreamingResponse, released_call_ids: frozenset[str]
+    ) -> ResponsesAPIStreamingResponse:
         response: Final = _field(event, "response")
         if not isinstance(response, ResponsesAPIResponse):
             return event
-        return _copied(
-            event,
-            {
-                "response": response.model_copy(
-                    update={"output": list(openai_output(self.items, output_items(response)))}
-                )
-            },
-        )
+        output: Final = openai_output(self.items, output_items(response))
+        streamed_first: Final = [item for item in output if not _is_released_call(item, released_call_ids)]
+        released_last: Final = [item for item in output if _is_released_call(item, released_call_ids)]
+        return _copied(event, {"response": response.model_copy(update={"output": [*streamed_first, *released_last]})})
 
 
 def _call_id(item: object) -> str | None:
     return _text(item, "call_id") or _text(item, "id")
+
+
+def _is_released_call(item: object, released_call_ids: frozenset[str]) -> bool:
+    return _field(item, "type") == "function_call" and _call_id(item) in released_call_ids
 
 
 def _is_empty_message(item: object) -> bool:

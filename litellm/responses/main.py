@@ -382,6 +382,7 @@ async def _aresponses_api_with_mcp(
     )
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
+        admitted_by_server_allowed_tools,
     )
 
     request_kwargs: Final = _STR_MAPPING.validate_python(kwargs)
@@ -427,8 +428,8 @@ async def _aresponses_api_with_mcp(
 
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
-        original_mcp_tools,
-        tool_server_map,
+        fetched_mcp_tools,
+        fetched_tool_server_map,
     ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
@@ -438,6 +439,11 @@ async def _aresponses_api_with_mcp(
         mcp_server_auth_headers=mcp_server_auth_headers,
         request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
         raw_headers=discovery_raw_headers,
+    )
+    original_mcp_tools, tool_server_map = admitted_by_server_allowed_tools(
+        fetched_mcp_tools,
+        fetched_tool_server_map,
+        MappingProxyType({}) if hosted_mcp_claims is None else hosted_mcp_claims.registered_allowed_tools,
     )
     direct_listing: Final = await _direct_listing(
         hosted_mcp_claims, dependencies.direct_client_factory, user_api_key_auth, discovery_raw_headers
