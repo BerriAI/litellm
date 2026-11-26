@@ -48,6 +48,7 @@ from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthr
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
+    IMAGE_CALL_TYPES,
     LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
@@ -143,6 +144,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
+from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.openai_files_endpoints.common_utils import (
     ManagedResourceAccessChecker,
@@ -689,6 +691,14 @@ def serialize_http_exception_detail(
 
 
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+
+
+def _failed_image_response_cost(request_data: Mapping[str, object]) -> float:
+    if request_data.get("call_type") not in IMAGE_CALL_TYPES:
+        return 0
+    return failure_row_response_cost(request_data) or 0
+
+
 _UNSEEN_DEPLOYMENT: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
 
 
@@ -1828,6 +1838,15 @@ def _header_value(value: float | None) -> str | None:
     return str(value) if value is not None else None
 
 
+def response_cost_with_failed_attempts(response_cost: object, logging_obj: object) -> float | str:
+    if isinstance(response_cost, str):
+        return response_cost
+    own_cost: Final = response_cost if isinstance(response_cost, int | float) else 0.0
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return own_cost or ""
+    return logging_obj.with_failed_attempts_owed(own_cost) or ""
+
+
 def cost_headers(
     response_cost: float | str | None, litellm_logging_obj: LiteLLMLoggingObj | None
 ) -> Mapping[str, str | None]:
@@ -2822,6 +2841,15 @@ class ProxyBaseLLMRequestProcessing:
         recomputed_cost: Final = logging_obj.response_cost_calculator(result=response)
         return recomputed_cost if isinstance(recomputed_cost, (int, float)) else ""
 
+    @staticmethod
+    def _recovered_cost_with_failed_attempts(*, response: object, logging_obj: LiteLLMLoggingObj) -> float | str:
+        recovered: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=response, logging_obj=logging_obj
+        )
+        if "failed_attempts_billed_on_success" in logging_obj.model_call_details:
+            return recovered or ""
+        return response_cost_with_failed_attempts(recovered if isinstance(recovered, float) else None, logging_obj)
+
     def _debug_log_request_payload(self) -> None:
         """Log request payload at DEBUG level, truncating if too large."""
         if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
@@ -3299,9 +3327,9 @@ class ProxyBaseLLMRequestProcessing:
 
         recover_response_cost: Final = not response_cost and hidden_params.get("response_cost") is None
         computed_cost_for_headers: Final = (
-            self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
+            self._recovered_cost_with_failed_attempts(response=response, logging_obj=logging_obj)
             if recover_response_cost
-            else response_cost
+            else response_cost_with_failed_attempts(hidden_params.get("response_cost", response_cost), logging_obj)
         )
         llm_cost_for_headers: Final = (
             0.0
@@ -4244,7 +4272,7 @@ class ProxyBaseLLMRequestProcessing:
             call_id=self.litellm_call_id,
             model_id=model_id,
             version=version,
-            response_cost=0,
+            response_cost=_failed_image_response_cost(_REQUEST_FIELDS.validate_python(self.data)),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
             timeout=timeout,

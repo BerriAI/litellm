@@ -91,7 +91,7 @@ pub(super) async fn execute(
                 });
             }
             let body = response.text().await.map_err(network)?;
-            let raw = RawResponse { body: body.clone() };
+            let raw = RawResponse::new(body.clone());
             if let Some(observers) = observers {
                 observers.emit(litellm_host::lifecycle::CallEvent::Execution(
                     ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },

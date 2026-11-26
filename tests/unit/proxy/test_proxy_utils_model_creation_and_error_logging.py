@@ -3261,3 +3261,26 @@ def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog)
     assert provider_result.code == internal_result.code == "500"
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
+
+
+def test_image_answers_without_an_image_are_client_errors() -> None:
+    from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    reply: Final = httpx.Response(400, request=httpx.Request("POST", "https://google.invalid"))
+    refused: Final = ImageRefusalError(
+        message="refused",
+        model="gemini/image-model",
+        llm_provider="gemini",
+        response=reply,
+        provider_specific_fields={},
+    )
+    unserved: Final = UnservedImageError(
+        message="no image",
+        model="gemini/image-model",
+        llm_provider="gemini",
+        response=reply,
+    )
+
+    assert _is_client_error_exception(refused) is True
+    assert _is_client_error_exception(unserved) is True

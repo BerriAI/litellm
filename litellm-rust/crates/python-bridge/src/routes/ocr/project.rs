@@ -5,7 +5,7 @@ use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };
-use litellm_llms::base_llm::ocr::error::Error;
+use litellm_llms::base_llm::ocr::{error::Error, transformation::DROP_PARAMS_PARAM};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
@@ -16,6 +16,8 @@ use crate::{
     marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
     python_settings::{PythonSettings, Snapshot},
 };
+
+pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.ocr";
 
 /// What the host keeps after projection: the caller's token callable that answers the
 /// token operation, and the provider name the failure mapping reports.
@@ -136,6 +138,15 @@ pub(super) fn project_request(
         Some(defaults) => fold_module_globals(bound.py(), optional_params, &globals, &defaults)?,
         None => optional_params,
     };
+    let optional_params = if names.contains(&DROP_PARAMS_PARAM) {
+        fold_drop_params(
+            bound.py(),
+            optional_params,
+            present(kwargs, bound, DROP_PARAMS_PARAM)?,
+        )?
+    } else {
+        optional_params
+    };
     let input_sources = request_input_sources(
         kwargs,
         names
@@ -210,6 +221,23 @@ fn fold_module_globals(
     Ok(optional_params
         .into_iter()
         .chain(read.into_iter().flatten())
+        .collect())
+}
+
+fn fold_drop_params(
+    py: Python<'_>,
+    optional_params: Map<String, Value>,
+    requested: Option<Bound<'_, PyAny>>,
+) -> PyResult<Map<String, Value>> {
+    let drops: bool = py
+        .import(ROUTE_HOST_MODULE)?
+        .getattr("drops_unsupported_params")?
+        .call1((requested,))?
+        .extract()?;
+    Ok(optional_params
+        .into_iter()
+        .filter(|(name, _)| name != DROP_PARAMS_PARAM)
+        .chain(drops.then(|| (DROP_PARAMS_PARAM.to_string(), Value::Bool(true))))
         .collect())
 }
 

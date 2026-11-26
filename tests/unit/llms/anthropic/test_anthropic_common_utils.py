@@ -29,6 +29,7 @@ import respx
 import litellm
 from litellm.llms.anthropic.common_utils import (
     DROP_UNPAIRED_ADVISOR_BLOCKS_WARNING,
+    process_anthropic_headers,
     strip_advisor_blocks_from_messages,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -4856,3 +4857,41 @@ def test_a_stale_tool_search_is_left_out_beside_blocks_with_list_ids() -> None:
     kept: Final = without_stale_tool_search_results(messages, [{"name": "get_weather"}])
 
     assert kept == (messages[0], {"role": "assistant", "content": [*list_id_blocks, _OK_TEXT]}, messages[2])
+
+
+def test_process_anthropic_headers_keeps_the_rate_limit_headers_a_provider_sends_under_openai_names():
+    foundry_headers: Final = httpx.Headers(
+        {
+            "x-ratelimit-remaining-requests": "49",
+            "x-ratelimit-remaining-tokens": "49900",
+            "x-ratelimit-limit-requests": "50",
+            "x-ratelimit-limit-tokens": "50000",
+            "apim-request-id": "req-1",
+        }
+    )
+
+    processed: Final = process_anthropic_headers(foundry_headers)
+
+    assert processed == {
+        "x-ratelimit-remaining-requests": "49",
+        "x-ratelimit-remaining-tokens": "49900",
+        "x-ratelimit-limit-requests": "50",
+        "x-ratelimit-limit-tokens": "50000",
+        "llm_provider-x-ratelimit-remaining-requests": "49",
+        "llm_provider-x-ratelimit-remaining-tokens": "49900",
+        "llm_provider-x-ratelimit-limit-requests": "50",
+        "llm_provider-x-ratelimit-limit-tokens": "50000",
+        "llm_provider-apim-request-id": "req-1",
+    }
+
+
+def test_process_anthropic_headers_prefers_the_anthropic_rate_limit_when_both_names_are_sent():
+    processed: Final = process_anthropic_headers(
+        {
+            "x-ratelimit-remaining-tokens": "49900",
+            "anthropic-ratelimit-tokens-remaining": "11999000",
+        }
+    )
+
+    assert processed["x-ratelimit-remaining-tokens"] == "11999000"
+    assert processed["llm_provider-x-ratelimit-remaining-tokens"] == "49900"

@@ -4,6 +4,13 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2
 
 FROM $UV_IMAGE AS uvbin
 
+FROM $LITELLM_BUILD_IMAGE AS prisma-openssl-builder
+USER root
+RUN apk add --no-cache build-base perl curl
+WORKDIR /build
+COPY docker/build_prisma_openssl.sh /build_prisma_openssl.sh
+RUN sh /build_prisma_openssl.sh
+
 # ---------- Builder ----------
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -79,10 +86,13 @@ ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
 USER root
 
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash openssl libssl3 tzdata python-3.13 libsndfile libatomic && break; \
+      apk add --no-cache bash openssl-4.0 '!libssl3' '!libcrypto3' tzdata python-3.13 libsndfile libatomic && break; \
       [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
       sleep 5; \
     done
+
+COPY --from=prisma-openssl-builder /runtime/ /
+RUN ldconfig
 
 # wolfi-base ships an unprivileged `nonroot` account (UID/GID 65532) with
 # /home/nonroot. We run the backend as that user

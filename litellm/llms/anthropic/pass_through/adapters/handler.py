@@ -109,6 +109,14 @@ def _declared_base_model(kwargs: Mapping[str, object]) -> str | None:
     return info_base_model if isinstance(info_base_model, str) else None
 
 
+def model_info_with_request_base_model(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    model_info: Final = as_str_mapping(kwargs.get("model_info"))
+    base_model: Final = kwargs.get("base_model")
+    if not isinstance(base_model, str) or not base_model:
+        return model_info
+    return {**(model_info or {}), "base_model": base_model}
+
+
 def _provider_error_code(body: object) -> str | None:
     mapping: Final = as_str_mapping(body)
     if mapping is None:
@@ -755,16 +763,25 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         model: Final = completion_kwargs.get("model", "")
         custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
+        deployment_model_info: Final = model_info_with_request_base_model(completion_kwargs)
 
         if isinstance(reasoning_effort, str):
             normalized = normalize_reasoning_effort_value(
-                reasoning_effort, model=model, custom_llm_provider=custom_llm_provider
+                reasoning_effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
             )
             if normalized != reasoning_effort:
                 completion_kwargs["reasoning_effort"] = normalized
         elif isinstance(reasoning_effort, dict) and "effort" in reasoning_effort:
             effort: Final = reasoning_effort["effort"]
-            normalized = normalize_reasoning_effort_value(effort, model=model, custom_llm_provider=custom_llm_provider)
+            normalized = normalize_reasoning_effort_value(
+                effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
+            )
             if normalized != effort:
                 completion_kwargs["reasoning_effort"] = {
                     **reasoning_effort,

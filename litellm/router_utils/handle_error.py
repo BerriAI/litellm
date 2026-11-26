@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import redact_secrets, verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
 from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments_with_debug_info,
 )
@@ -49,6 +50,9 @@ async def send_llm_exception_alert(
     if "proxy_server_request" in request_kwargs:
         # Do not send any alert if it's a request from litellm proxy server request
         # the proxy is already instrumented to send LLM API call failures
+        return
+
+    if isinstance(original_exception, IMAGE_ANSWER_ERRORS):
         return
 
     litellm_debug_info: Final = getattr(original_exception, "litellm_debug_info", None)

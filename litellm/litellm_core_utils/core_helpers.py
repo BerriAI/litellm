@@ -4,7 +4,7 @@ import copy
 import json
 import logging
 import re
-from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from http import HTTPStatus
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
@@ -570,7 +570,7 @@ def reconstruct_model_name(
 
 # Helper functions used for OTEL logging
 def get_parent_otel_span_from_kwargs(
-    kwargs: dict[str, object] | None = None,
+    kwargs: Mapping[str, object] | None = None,
 ) -> Span | None:
     try:
         if kwargs is None:
@@ -914,16 +914,19 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
 
 _HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+_RATE_LIMIT_HEADER_PREFIXES: Final = ("anthropic-ratelimit-", "x-ratelimit-")
 
 
 def set_provider_response_headers_in_hidden_params(
-    response: _CarriesHiddenParams, headers: httpx.Headers | Mapping[str, str]
+    response: _CarriesHiddenParams,
+    headers: httpx.Headers | Mapping[str, str],
+    process_headers: Callable[[dict[str, str]], Mapping[str, object]] = process_response_headers,
 ) -> None:
     hidden_params: Final = response.hidden_params
     existing_additional_headers: Final[object] = hidden_params.get("additional_headers")
     raw_headers: Final[dict[str, str]] = dict(headers)  # mutable-ok: stored as the plain-dict hidden param
     additional_headers: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
-        **process_response_headers(raw_headers),
+        **process_headers(raw_headers),
         **(existing_additional_headers if isinstance(existing_additional_headers, Mapping) else _NO_HEADERS),
     }
     hidden_params["headers"] = raw_headers
@@ -937,3 +940,21 @@ def get_provider_response_headers_from_hidden_params(response: object) -> Mappin
         return _PROVIDER_HEADERS_ADAPTER.validate_python(validated.get("headers"))
     except ValidationError:
         return None
+
+
+def rate_limit_headers(headers: Mapping[str, object]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            name.lower(): value
+            for name, value in headers.items()
+            if name.lower().startswith(_RATE_LIMIT_HEADER_PREFIXES) and isinstance(value, str) and value.isascii()
+        }
+    )
+
+
+def get_recorded_rate_limit_headers(model_call_details: Mapping[str, object]) -> Mapping[str, str] | None:
+    try:
+        recorded: Final = _PROVIDER_HEADERS_ADAPTER.validate_python(model_call_details.get("response_headers"))
+    except ValidationError:
+        return None
+    return rate_limit_headers(recorded)

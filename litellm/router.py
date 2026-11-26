@@ -86,6 +86,8 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
+    as_str_mapping,
+    attribute_or_none,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -138,6 +140,12 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.llms.gemini.empty_image_response import (
+    IMAGE_ANSWER_ERRORS,
+    SETTLED_BY_THE_ASYNC_FAILURE_HOOK,
+    billed_deployment_tokens,
+    success_tokens_without_failed_image_answers,
+)
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
     MODEL_INFO_DISCOVERY_PROVIDERS,
@@ -238,8 +246,10 @@ from litellm.router_utils.deployment_pricing import (
     unpriced_bedrock_arn,
 )
 from litellm.router_utils.fallback_event_handlers import (
+    ATTEMPT_FIELDS,
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
+    RetriedAttemptsSpend,
     attempted_fallback_targets_from,
     attempted_retries_for_request,
     carry_over_pre_routing_selection,
@@ -247,6 +257,7 @@ from litellm.router_utils.fallback_event_handlers import (
     check_non_standard_fallback_format,
     clear_pre_routing_selection,
     committed_retry_budget_for_request,
+    deployment_fields_for_shared_logging,
     fallback_lookup_groups,
     fallbacks_disabled_for_request,
     get_fallback_model_group_for_lookup_groups,
@@ -553,6 +564,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
             or delta.get("reasoning_content")
             or delta.get("thinking_blocks")
             or delta.get("reasoning_items")
+            or attribute_or_none(delta, "reasoning_details")
             or delta.get("audio")
             or delta.get("images")
             or delta.get("annotations")
@@ -5174,10 +5186,13 @@ class Router:
             )
 
             self.total_calls[model_name] += 1
+            deployment_fields: Final = deployment_fields_for_shared_logging(
+                ATTEMPT_FIELDS.validate_python(data), ATTEMPT_FIELDS.validate_python(kwargs)
+            )
             async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
                 response = await litellm.aimage_generation(
                     **{
-                        **data,
+                        **deployment_fields,
                         "prompt": prompt,
                         "caching": self.cache_responses,
                         "client": model_client,
@@ -5838,12 +5853,19 @@ class Router:
             )
 
             custom_llm_provider: Final = provider_for_generic_call(data)
+            deployment_fields: Final[Mapping[str, object]] = (
+                deployment_fields_for_shared_logging(
+                    ATTEMPT_FIELDS.validate_python(data), ATTEMPT_FIELDS.validate_python(kwargs)
+                )
+                if handler_name == "aimage_edit"
+                else data
+            )
 
             response_kwargs: Final = {
                 **(
                     store_search_params(_LITELLM_PARAMS_ADAPTER.validate_python(data))
                     if original_generic_function in self._vector_store_search_handlers
-                    else data
+                    else deployment_fields
                 ),
                 "caching": self.cache_responses,
                 **kwargs,
@@ -8245,7 +8267,7 @@ class Router:
                         to fallbacks, if available.{error_message}"
                     )
 
-                    if litellm.expose_router_debug_in_errors:
+                    if litellm.expose_router_debug_in_errors and not isinstance(e, IMAGE_ANSWER_ERRORS):
                         e.message += f"\n{error_message}"
             if fallbacks is not None and lookup_groups:
                 verbose_router_logger.debug("inside model fallbacks: %s", mask_sensitive_structure(fallbacks))
@@ -8270,6 +8292,7 @@ class Router:
                     if (
                         hasattr(original_exception, "message")
                         and litellm.expose_router_debug_in_errors
+                        and not isinstance(original_exception, IMAGE_ANSWER_ERRORS)
                         and not nested_fallback_hop
                     ):
                         original_exception.message += format_no_fallback_group_message(lookup_groups, fallbacks)
@@ -8305,11 +8328,16 @@ class Router:
                 fallback_failure_exception_str,
                 cooldown_info,
             )
+            if isinstance(new_exception, IMAGE_ANSWER_ERRORS) and not isinstance(
+                original_exception, IMAGE_ANSWER_ERRORS
+            ):
+                raise
 
         attempted_fallback_group: Final = input_kwargs.get("fallback_model_group")
         if (
             hasattr(original_exception, "message")
             and litellm.expose_router_debug_in_errors
+            and not isinstance(original_exception, IMAGE_ANSWER_ERRORS)
             and not no_fallback_group_explained
             and not nested_fallback_hop
         ):
@@ -8579,8 +8607,10 @@ class Router:
 
             await asyncio.sleep(retry_after)
 
+            retried_attempts_spend: Final = RetriedAttemptsSpend.from_kwargs(ATTEMPT_FIELDS.validate_python(kwargs))
             for current_attempt in range(num_retries):
                 try:
+                    retried_attempts_spend.set_aside_last_attempt()
                     # Update retry tracking metadata before each retry attempt
                     _metadata["attempted_retries"] = current_attempt + 1
                     _metadata["max_retries"] = num_retries
@@ -8637,6 +8667,7 @@ class Router:
                                 content_policy_fallbacks=content_policy_fallbacks,
                             )
                         except Exception:
+                            retried_attempts_spend.restore()
                             raise e
 
                     skipped_ids = self._deployment_ids_to_skip_on_retry(
@@ -8664,6 +8695,7 @@ class Router:
                 actual_retries_attempted: Final = current_attempt + 1 if current_attempt is not None else num_retries
                 setattr(original_exception, "num_retries", actual_retries_attempted)
 
+            retried_attempts_spend.restore()
             raise original_exception
 
     async def make_call(self, original_function: Any, *args, **kwargs):
@@ -8883,7 +8915,9 @@ class Router:
                 deployment_id=str(deployment_id),
             )
 
-            total_tokens: Final[float] = standard_logging_object.get("total_tokens", 0)
+            total_tokens: Final = success_tokens_without_failed_image_answers(
+                kwargs, standard_logging_object.get("total_tokens", 0)
+            )
             counted_tokens: Final = get_counted_usage_tokens(litellm_params)
             deployment_name: Final = metadata.get("deployment", None)
             return await self._increment_deployment_usage(
@@ -8948,6 +8982,29 @@ class Router:
     ) -> str | None:
         from litellm.types.caching import RedisPipelineIncrementOperation
 
+        if total_tokens <= 0 and rpm_increment <= 0:
+            return None
+        keys: Final = self._deployment_usage_keys(deployment_id, deployment_name, model_group)
+        if keys is None:
+            return None
+        pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = [
+            RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=RoutingArgs.ttl.value)
+            for key, increment_value in zip(keys, (total_tokens, rpm_increment))
+        ]
+        post_increment_values: Final = await self.cache.async_increment_cache_pipeline(
+            increment_list=pipeline_operations,
+            parent_otel_span=parent_otel_span,
+        )
+        if post_increment_values is not None and self.cache.redis_cache is not None:
+            for operation, value in zip(pipeline_operations, post_increment_values):
+                await self.cache.async_set_cache(
+                    operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
+                )
+        return keys[0]
+
+    def _deployment_usage_keys(
+        self, deployment_id: str, deployment_name: str | None, model_group: str
+    ) -> tuple[str, str] | None:
         deployment_info: Final = self.get_deployment(model_id=deployment_id)
         if deployment_info is None:
             return None
@@ -8971,30 +9028,41 @@ class Router:
             deployment_info.model_dump()
         ):
             return None
-        if total_tokens <= 0 and rpm_increment <= 0:
-            return None
 
         current_minute: Final = get_utc_datetime().strftime("%H-%M")  # use the same timezone regardless of system clock
-        tpm_key: Final = RouterCacheEnum.TPM.value.format(
-            id=deployment_id, current_minute=current_minute, model=deployment_name
+        return (
+            RouterCacheEnum.TPM.value.format(id=deployment_id, current_minute=current_minute, model=deployment_name),
+            RouterCacheEnum.RPM.value.format(id=deployment_id, current_minute=current_minute, model=deployment_name),
+        )
+
+    def _count_sync_image_answer_usage(self, call_details: Mapping[str, object]) -> None:
+        if call_details.get("call_type") in SETTLED_BY_THE_ASYNC_FAILURE_HOOK:
+            return
+        call_params: Final = as_str_mapping(call_details.get("litellm_params")) or {}
+        router_metadata: Final = (
+            as_str_mapping(call_params.get("litellm_metadata")) or as_str_mapping(call_params.get("metadata")) or {}
+        )
+        model_group: Final = router_metadata.get("model_group")
+        deployment_id: Final = (as_str_mapping(call_params.get("model_info")) or {}).get("id")
+        if not isinstance(model_group, str) or not isinstance(deployment_id, (str, int)):
+            return
+        deployment_name: Final = router_metadata.get("deployment")
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")
+        billed: Final = billed_deployment_tokens(call_details)
+        keys: Final = (
+            None
+            if billed is None
+            else self._deployment_usage_keys(str(deployment_id), billed.deployment_name, model_group)
         )
         rpm_key: Final = RouterCacheEnum.RPM.value.format(
             id=deployment_id, current_minute=current_minute, model=deployment_name
         )
-        pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = [
-            RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=RoutingArgs.ttl.value)
-            for key, increment_value in ((tpm_key, total_tokens), (rpm_key, rpm_increment))
-        ]
-        post_increment_values: Final = await self.cache.async_increment_cache_pipeline(
-            increment_list=pipeline_operations,
-            parent_otel_span=parent_otel_span,
+        increments: Final = (
+            ((rpm_key, 1),) if billed is None or keys is None else ((rpm_key, 1), (keys[0], billed.tokens))
         )
-        if post_increment_values is not None and self.cache.redis_cache is not None:
-            for operation, value in zip(pipeline_operations, post_increment_values):
-                await self.cache.async_set_cache(
-                    operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
-                )
-        return tpm_key
+        with service_target(ROUTER_USAGE_TARGET):
+            for key, value in increments:
+                _ = self.cache.increment_cache(key=key, value=value, ttl=RoutingArgs.ttl.value)
 
     def sync_deployment_callback_on_success(
         self,
@@ -9057,6 +9125,16 @@ class Router:
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "Failure did not come from the selected deployment."
+                )
+                return False
+
+            if isinstance(exception, IMAGE_ANSWER_ERRORS):
+                self._count_sync_image_answer_usage(
+                    cast("Mapping[str, object]", kwargs)  # cast-ok: untyped kwargs dict
+                )
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "The deployment answered without an image, which is not a deployment failure."
                 )
                 return False
 
@@ -9173,10 +9251,15 @@ class Router:
         """
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
-        deployment_name: Final = kwargs["litellm_params"]["metadata"].get(
+        call_details: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: untyped kwargs dict
+        call_params: Final = as_str_mapping(call_details.get("litellm_params")) or {}
+        router_metadata: Final = (
+            as_str_mapping(call_params.get("litellm_metadata")) or as_str_mapping(call_params.get("metadata")) or {}
+        )
+        deployment_name: Final = router_metadata.get(
             "deployment", None
         )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
-        model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
+        model_group: Final = router_metadata.get("model_group", None)
         model_info: Final = kwargs["litellm_params"].get("model_info", {}) or {}
         id = model_info.get("id", None)
         if model_group is None or id is None:
@@ -9196,6 +9279,16 @@ class Router:
                 value=1,
                 parent_otel_span=parent_otel_span,
                 ttl=RoutingArgs.ttl.value,
+            )
+        billed: Final = billed_deployment_tokens(call_details)
+        if billed is not None:
+            await self._increment_deployment_usage(
+                deployment_id=f"{id}",
+                deployment_name=billed.deployment_name,
+                model_group=f"{model_group}",
+                total_tokens=billed.tokens,
+                rpm_increment=0,
+                parent_otel_span=parent_otel_span,
             )
 
     def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:

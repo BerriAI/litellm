@@ -1,4 +1,4 @@
-
+from typing import Final
 
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 
@@ -46,3 +46,36 @@ def test_langfuse_model_parameters_no_secret_leakage():
     assert "secret_fields" not in sanitized
     assert "authorization" not in sanitized
     assert "headers" not in sanitized
+
+
+def test_standard_logging_model_parameters_redact_mcp_credentials():
+    server_url: Final = "https://mcp.example.com/mcp"
+    sanitized: Final = ModelParamHelper.get_standard_logging_model_parameters(
+        {
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server_label": "deepwiki",
+                    "server_url": server_url,
+                    "authorization": "oauth-secret",
+                    "headers": {"X-Api-Key": "header-secret"},
+                },
+                {"type": "function", "name": "lookup"},
+            ],
+            "mcp_servers": [{"type": "url", "url": server_url, "name": "deepwiki", "authorization_token": "oauth-secret"}],
+        }
+    )
+
+    assert sanitized == {
+        "tools": [
+            {
+                "type": "mcp",
+                "server_label": "deepwiki",
+                "server_url": server_url,
+                "authorization": "REDACTED",
+                "headers": "REDACTED",
+            },
+            {"type": "function", "name": "lookup"},
+        ],
+        "mcp_servers": [{"type": "url", "url": server_url, "name": "deepwiki", "authorization_token": "REDACTED"}],
+    }
