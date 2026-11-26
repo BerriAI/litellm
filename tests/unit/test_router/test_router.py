@@ -22726,3 +22726,43 @@ async def test_a_drop_listed_vertex_alias_set_next_to_its_canonical_name_stays_o
 
     assert "/projects/canonical-project/locations/eu/" in vertex.requests[0].path
     assert not [key for key in json.loads(vertex.requests[0].raw_body) if key.startswith("vertex_")]
+
+
+
+_VERTEX_EMBEDDING_REPLY: Final = {
+    "predictions": [{"embeddings": {"values": [0.1, 0.2], "statistics": {"token_count": 1}}}]
+}
+
+
+@pytest.mark.asyncio
+async def test_a_drop_listed_vertex_alias_set_next_to_its_canonical_name_stays_out_of_the_embedding_body(
+    vertex_service_account: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("VERTEXAI_LOCATION", "VERTEX_LOCATION", "VERTEXAI_PROJECT", "VERTEXAI_CREDENTIALS"):
+        monkeypatch.delenv(name, raising=False)
+    with recording_service() as vertex:
+        vertex.enqueue(ResponseSpec(_VERTEX_EMBEDDING_REPLY))
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embedding-eu",
+                    "litellm_params": {
+                        "model": "vertex_ai/text-embedding-005",
+                        "api_base": vertex.base_url,
+                        "vertex_project": "canonical-project",
+                        "vertex_ai_project": "alias-project",
+                        "vertex_location": "europe-west4",
+                        "vertex_ai_location": "us-east5",
+                        "vertex_credentials": vertex_service_account,
+                        "vertex_ai_credentials": vertex_service_account,
+                        "additional_drop_params": ["vertex_ai_project", "vertex_ai_location", "vertex_ai_credentials"],
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+
+        await router.aembedding(model="embedding-eu", input=["Say hi"])
+
+    assert "/projects/canonical-project/locations/europe-west4/" in vertex.requests[0].path
+    assert "vertex_ai_" not in vertex.requests[0].raw_body.decode()

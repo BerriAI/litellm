@@ -4151,23 +4151,22 @@ def _complete_vertex_ai_beta(
     optional_params: Final = ctx.optional_params
     timeout: Final = ctx.timeout
 
-    project_alias: Final[str | None] = optional_params.pop("vertex_ai_project", None)  # pyright: ignore[reportUnknownVariableType]  # optional_params is an untyped dict
     vertex_ai_project: Final = (
         optional_params.pop("vertex_project", None)
-        or project_alias
+        or optional_params.pop("vertex_ai_project", None)
         or litellm.vertex_project
         or get_secret("VERTEXAI_PROJECT")
     )
-    location_alias: Final[str | None] = optional_params.pop("vertex_ai_location", None)  # pyright: ignore[reportUnknownVariableType]  # optional_params is an untyped dict
     vertex_ai_location: Final = (
         optional_params.pop("vertex_location", None)
-        or location_alias
+        or optional_params.pop("vertex_ai_location", None)
         or litellm.vertex_location
         or get_secret("VERTEXAI_LOCATION")
     )
-    credentials_alias: Final[VERTEX_CREDENTIALS_TYPES | None] = optional_params.pop("vertex_ai_credentials", None)  # pyright: ignore[reportUnknownVariableType]  # optional_params is an untyped dict
     vertex_credentials: Final = (
-        optional_params.pop("vertex_credentials", None) or credentials_alias or get_secret("VERTEXAI_CREDENTIALS")
+        optional_params.pop("vertex_credentials", None)
+        or optional_params.pop("vertex_ai_credentials", None)
+        or get_secret("VERTEXAI_CREDENTIALS")
     )
 
     gemini_api_key: Final = (
