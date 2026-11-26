@@ -22691,3 +22691,38 @@ async def test_drop_listed_vertex_alias_settings_the_deployment_sets_are_the_one
 
     assert "/projects/alias-project/locations/eu/" in vertex.requests[0].path
     assert vertex.requests[0].headers["authorization"] == "Bearer region-access-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["chat", "responses"])
+async def test_a_drop_listed_vertex_alias_set_next_to_its_canonical_name_stays_out_of_the_body(
+    vertex_service_account: str, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    for name in ("VERTEXAI_LOCATION", "VERTEX_LOCATION", "VERTEXAI_PROJECT", "VERTEXAI_CREDENTIALS"):
+        monkeypatch.delenv(name, raising=False)
+    with recording_service() as vertex:
+        vertex.enqueue(ResponseSpec(_VERTEX_CLAUDE_REPLY))
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "claude-eu",
+                    "litellm_params": {
+                        "model": "vertex_ai/claude-haiku-5-5",
+                        "api_base": vertex.base_url,
+                        "vertex_project": "canonical-project",
+                        "vertex_ai_project": "alias-project",
+                        "vertex_location": "eu",
+                        "vertex_ai_location": "us-east5",
+                        "vertex_credentials": vertex_service_account,
+                        "vertex_ai_credentials": vertex_service_account,
+                        "additional_drop_params": ["vertex_ai_project", "vertex_ai_location", "vertex_ai_credentials"],
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+
+        await _call_vertex_claude_route(router, route, {})
+
+    assert "/projects/canonical-project/locations/eu/" in vertex.requests[0].path
+    assert not [key for key in json.loads(vertex.requests[0].raw_body) if key.startswith("vertex_")]
