@@ -701,6 +701,20 @@ def test_sampling_flagged_row_keeps_sampling_at_an_effort_none_it_allows(monkeyp
     assert params == request
 
 
+def test_sampling_flagged_row_keeps_sampling_at_effort_none_behind_the_chat_completions_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _flagged_row_allowing_effort_none(monkeypatch, allows_none=True)
+    monkeypatch.setattr(litellm, "bedrock_converse_models", {*litellm.bedrock_converse_models, _NO_SAMPLING_MODEL})
+    request: Final[ResponsesAPIOptionalRequestParams] = {"temperature": 0.2, "reasoning": {"effort": "none"}}
+
+    params: Final = _cfg().map_openai_params(
+        response_api_optional_params=request, model=f"chat_completions/{_NO_SAMPLING_MODEL}", drop_params=False
+    )
+
+    assert params == request
+
+
 @pytest.mark.parametrize(
     ("default_effort", "kept"),
     [("none", {"temperature": 0.2}), (None, {})],
