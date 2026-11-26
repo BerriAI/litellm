@@ -5,7 +5,7 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -335,7 +335,7 @@ _mcp_listing_credential_scope: Final[ContextVar[tuple[MCPServer, ...]]] = Contex
 
 
 @contextmanager
-def shared_mcp_listing(servers: Sequence[MCPServer]) -> Iterator[None]:
+def shared_mcp_listing(servers: Sequence[MCPServer]) -> Generator[None]:
     """Treat every listing made inside the block as one discovery over ``servers``: each server's rate
     limit is charged once, and the caller's request-wide Authorization is withheld as if all of them
     were listed together."""
