@@ -46,6 +46,7 @@ from litellm.proxy.management_endpoints import (
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerConfig, MCPServerManager
 from litellm.proxy.utils import ProxyLogging
 from litellm.rust_bridge._native import RustOrganizationRepository, RustTeamRepository, RustUserRepository
+from litellm.types.agents import AgentCaller
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 from tests.unit.proxy.rust_auth_stores import FakeUserStore, RustAuthStores
@@ -9831,6 +9832,7 @@ class TestMCPServerResolutionCharacterization:
                 {"team_id": "team"},
                 {"end_user_id": "end-user"},
                 {"agent_id": "agent"},
+                {"agent_caller": AgentCaller(user_id="caller")},
                 {"mcp_admitted_user_subject": True},
                 {"mcp_explicit_grants_only": True},
                 {"mcp_toolset_id": "toolset"},
