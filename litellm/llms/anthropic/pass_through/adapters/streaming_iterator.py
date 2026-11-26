@@ -425,7 +425,7 @@ class _CombinedChunkSplitter:
     def _carries_only_unrenderable_reasoning_details(chunk: "ModelResponseStream") -> bool:
         choices: Final = _optional_attr_sequence(chunk, "choices")
         return (
-            bool(choices)
+            len(choices) == 1
             and getattr(chunk, "usage", None) is None
             and bool(_optional_attr_sequence(_optional_attr(choices[0], "delta"), "reasoning_details"))
             and _is_blank_delta(chunk)
