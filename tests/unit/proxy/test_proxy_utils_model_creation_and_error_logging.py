@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -348,12 +349,12 @@ async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
         (
             "/v1/responses",
             {"input": "PROMPT-CANARY", "turn_off_message_logging": True},
-            [{"role": "user", "content": "default-message-value"}],
+            [{"role": "user", "content": REDACTED_BY_LITELLM}],
         ),
         (
             "/v1/completions",
             {"prompt": "PROMPT-CANARY", "metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
-            [{"role": "user", "content": "default-message-value"}],
+            [{"role": "user", "content": REDACTED_BY_LITELLM}],
         ),
         (
             "/v1/embeddings",
@@ -361,7 +362,7 @@ async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
                 "input": "PROMPT-CANARY",
                 "proxy_server_request": {"headers": {"litellm-enable-message-redaction": "true"}},
             },
-            [{"role": "user", "content": "default-message-value"}],
+            [{"role": "user", "content": REDACTED_BY_LITELLM}],
         ),
         (
             "/v1/responses",
@@ -376,7 +377,7 @@ async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
         (
             "/v1/completions",
             {"prompt": "PROMPT-CANARY", "turn_off_message_logging": "True"},
-            [{"role": "user", "content": "default-message-value"}],
+            [{"role": "user", "content": REDACTED_BY_LITELLM}],
         ),
     ],
     ids=[
