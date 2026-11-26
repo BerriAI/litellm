@@ -11,15 +11,6 @@ import { AutoRouterTag } from "@/components/shared/table_cells";
 import { ClassifyTag } from "./ClassifyTag";
 import { SidebarToggle } from "./SidebarToggle";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
-import {
-  DRAWER_HEADER_PADDING,
-  COLOR_BORDER,
-  COLOR_BACKGROUND,
-  SPACING_MEDIUM,
-  FONT_SIZE_HEADER,
-  FONT_SIZE_MEDIUM,
-  FONT_FAMILY_MONO,
-} from "./constants";
 
 interface DrawerHeaderProps {
   log: LogEntry;
@@ -57,18 +48,9 @@ export function DrawerHeader({
     log.litellm_call_id && log.litellm_call_id !== log.request_id ? log.litellm_call_id : null;
 
   return (
-    <div
-      className="z-chrome"
-      style={{
-        padding: DRAWER_HEADER_PADDING,
-        borderBottom: `1px solid ${COLOR_BORDER}`,
-        backgroundColor: COLOR_BACKGROUND,
-        position: "sticky",
-        top: 0,
-      }}
-    >
+    <div className="sticky top-0 z-chrome border-b border-border bg-background px-6 py-4">
       {/* Row 0: Model + Provider with Logo */}
-      <div className="flex items-center gap-2" style={{ marginBottom: SPACING_MEDIUM }}>
+      <div className="mb-2 flex items-center gap-2">
         {showToggleWithProvider && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
         <ModelProviderSection
           model={log.model}
@@ -80,27 +62,16 @@ export function DrawerHeader({
       </div>
 
       {/* Row 1: Request ID + Actions */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 4,
-          marginBottom: SPACING_MEDIUM,
-        }}
-      >
+      <div className="mb-2 flex items-center justify-between gap-1">
         {showToggleWithRequestId && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <CopyableId value={log.request_id} label={t("logs.detail.header.requestId")} fontSize={FONT_SIZE_HEADER} />
+        <div className="min-w-0 flex-1">
+          <CopyableId value={log.request_id} label={t("logs.detail.header.requestId")} />
           {callId && (
             <div className="flex items-center gap-1">
-              <span
-                className="text-muted-foreground"
-                style={{ fontSize: FONT_SIZE_MEDIUM, fontFamily: FONT_FAMILY_MONO, whiteSpace: "nowrap" }}
-              >
+              <span className="text-[13px] whitespace-nowrap text-muted-foreground [font-family:monospace]">
                 x-litellm-call-id:
               </span>
-              <CopyableId value={callId} label="x-litellm-call-id" fontSize={FONT_SIZE_MEDIUM} muted />
+              <CopyableId value={callId} label="x-litellm-call-id" muted />
             </div>
           )}
         </div>
@@ -136,7 +107,7 @@ function ModelProviderSection({
         <img
           src={providerLogo}
           alt={providerName || t("logs.detail.header.provider")}
-          style={{ width: 24, height: 24 }}
+          className="size-6"
           onError={(e) => {
             const target = e.target as HTMLImageElement;
             target.style.display = "none";
@@ -144,11 +115,11 @@ function ModelProviderSection({
         />
       )}
       <div className="flex items-center gap-2">
-        <span className="font-semibold" style={{ fontSize: 14 }}>
+        <span className="text-[14px] font-semibold">
           {model}
         </span>
         {providerName && (
-          <span className="text-muted-foreground" style={{ fontSize: 12 }}>
+          <span className="text-[12px] text-muted-foreground">
             {providerName}
           </span>
         )}
@@ -162,12 +133,10 @@ function ModelProviderSection({
 function CopyableId({
   value,
   label,
-  fontSize,
   muted,
 }: {
   value: string;
   label: string;
-  fontSize: number;
   muted?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
@@ -186,15 +155,7 @@ function CopyableId({
         <TooltipTrigger
           render={
             <span
-              className={muted ? "text-muted-foreground" : "font-semibold"}
-              style={{
-                fontSize,
-                fontFamily: FONT_FAMILY_MONO,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                display: "block",
-              }}
+              className={`block truncate [font-family:monospace] ${muted ? "text-[13px] text-muted-foreground" : "text-[16px] font-semibold"}`}
             />
           }
         >
@@ -228,29 +189,23 @@ function NavigationSection({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const keyboardShortcutStyle = {
-    border: "1px solid var(--color-border)",
-    borderRadius: 4,
-    padding: "0 4px",
-    fontSize: 12,
-    fontFamily: "monospace",
-    marginLeft: 4,
-    background: "var(--color-muted)",
-  };
-  const splitStyle = { width: 1, height: 20, background: COLOR_BORDER };
 
   return (
     <div className="flex items-center gap-1">
       <Button variant="ghost" size="sm" onClick={onPrevious}>
         <ChevronUp className="size-4" />
-        <span style={keyboardShortcutStyle}>K</span>
+        <span className="ml-1 rounded-[4px] border border-border bg-muted px-1 text-[12px] [font-family:monospace]">
+          K
+        </span>
       </Button>
-      <div style={splitStyle} />
+      <div className="h-5 w-px bg-border" />
       <Button variant="ghost" size="sm" onClick={onNext}>
         <ChevronDown className="size-4" />
-        <span style={keyboardShortcutStyle}>J</span>
+        <span className="ml-1 rounded-[4px] border border-border bg-muted px-1 text-[12px] [font-family:monospace]">
+          J
+        </span>
       </Button>
-      <div style={splitStyle} />
+      <div className="h-5 w-px bg-border" />
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger render={<Button variant="ghost" size="icon-sm" onClick={onClose} />}>
@@ -283,10 +238,10 @@ function StatusBar({
       <Badge variant={statusColor === "error" ? "destructive" : "secondary"}>{statusLabel}</Badge>
       <Badge variant="outline">{t("logs.detail.header.environment", { environment })}</Badge>
       <div className="flex items-center gap-2">
-        <span className="text-muted-foreground" style={{ fontSize: FONT_SIZE_MEDIUM }}>
+        <span className="text-[13px] text-muted-foreground">
           {moment(log.startTime).format("MMM D, YYYY h:mm:ss A")}
         </span>
-        <span className="text-muted-foreground" style={{ fontSize: FONT_SIZE_MEDIUM }}>
+        <span className="text-[13px] text-muted-foreground">
           ({moment(log.startTime).fromNow()})
         </span>
       </div>
