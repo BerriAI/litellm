@@ -296,6 +296,12 @@ S3_VECTORS_METADATA: Final = {
         ),
         ({"type": "S3", "s3Location": {"uri": "s3://kb-docs/"}}, S3_VECTORS_METADATA, "kb-docs", "s3://kb-docs/"),
         (
+            {"type": "KENDRA", "kendraDocumentLocation": {"uri": "faq/"}},
+            S3_VECTORS_METADATA,
+            "bedrock-kb-document-CYQOANZ7OJ",
+            "bedrock-kb-764f684b-5a68-4950-9881-50250f22e87d",
+        ),
+        (
             {"type": "WEB", "webLocation": {"url": "https://docs.example.com/"}},
             S3_VECTORS_METADATA,
             "docs.example.com",
