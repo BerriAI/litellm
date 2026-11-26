@@ -2390,3 +2390,31 @@ def test_messages_bridge_hook_sees_the_definition_the_request_served(hooked: Hoo
         assert _echoed(JSON_VALUE.validate_json(blocked.content)) == _served(LOOKUP), blocked.text
         assert rig.peer_calls() == (("lookup", {"query": marker}),)
         assert rig.hook_messages(marker) == (f"Tool: lookup\nArguments: {dict(query=marker)}",)
+
+
+DELEGATE_SERVER: Final[Mapping[str, object]] = {"auth_type": "oauth_delegate", "extra_headers": ["Authorization"]}
+
+
+def test_dashboard_viewer_upstream_bearer_is_withheld_when_toolsets_span_two_delegate_servers(
+    gateway: Gateway,
+) -> None:
+    with _rig(gateway, "responses", server=DELEGATE_SERVER) as rig, mcp_peer() as other_peer:
+        other_id: Final = register_mcp(rig.scenario, other_peer, "llm" + uuid.uuid4().hex[:8], **DELEGATE_SERVER)
+        names: Final = tuple("ts" + uuid.uuid4().hex[:8] for _ in range(2))
+        toolset_ids: Final = [
+            create_toolset(rig.scenario, ((server_id, "add"),), toolset_name=name)
+            for name, server_id in zip(names, (rig.server_id, other_id), strict=True)
+        ]
+        team_id: Final = rig.scenario.team(
+            object_permission={"mcp_servers": [rig.server_id, other_id], "mcp_toolsets": toolset_ids}
+        )
+        session: Final = _viewer_session(rig.scenario, team_id)
+        other_peer.drain()
+        response: Final = rig.send(
+            session,
+            [{**AUTO, "server_url": f"litellm_proxy/mcp/{name}"} for name in names],
+            upstream_bearer="upstream-" + uuid.uuid4().hex,
+        )
+
+        assert response.status_code == 200, response.text
+        assert _authorizations_seen_by(other_peer) == frozenset({None}), response.text
