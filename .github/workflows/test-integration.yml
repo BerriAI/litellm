@@ -272,8 +272,13 @@ jobs:
           status=0
           while read -r suite shard; do
             latest="$(find "$RESULTS" -mindepth 1 -maxdepth 1 -name "integration-$suite-$shard-$RUN_ID-*" | sort -V | tail -n 1)"
+            if [ ! -f "$latest/integration-$suite/execution.json" ]; then
+              echo "::error::integration $suite shard $shard uploaded no execution record"
+              status=1
+              continue
+            fi
             mkdir -p "$CENSUS/$suite/$shard"
-            cp "$latest/integration-$suite/execution.json" "$CENSUS/$suite/$shard/" || status=1
+            cp "$latest/integration-$suite/execution.json" "$CENSUS/$suite/$shard/"
           done < <(jq -r '.[] | select(.suite != "browser") | "\(.suite) \(.shard)"' <<< "$INCLUDE")
           while read -r suite shards; do
             uv run --no-project --python 3.12 --with pydantic==2.13.4 \
