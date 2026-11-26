@@ -833,6 +833,7 @@ mod tests {
         (model, custom_llm_provider): (&str, Option<&str>),
         (api_base, env): Upstream<'_>,
         shaping: MessagesShaping,
+        sent: &str,
     ) -> (Value, Value) {
         let lookup = |name: &str| {
             env.iter()
@@ -847,10 +848,10 @@ mod tests {
                     "messages": [
                         {"role": "user", "content": "run ls"},
                         {"role": "assistant", "content": [
-                            {"type": "tool_use", "id": KEPT, "name": "Bash", "input": {"command": "ls"}}
+                            {"type": "tool_use", "id": sent, "name": "Bash", "input": {"command": "ls"}}
                         ]},
                         {"role": "user", "content": [
-                            {"type": "tool_result", "tool_use_id": KEPT, "content": "README.md"}
+                            {"type": "tool_result", "tool_use_id": sent, "content": "README.md"}
                         ]}
                     ]
                 })),
@@ -907,8 +908,21 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            forwarded_tool_use_ids(route, upstream, shaping),
+            forwarded_tool_use_ids(route, upstream, shaping, KEPT),
             (json!(expected), json!(expected))
+        );
+    }
+
+    #[rstest]
+    #[case::kept_by_a_custom_host(KIMI_HOST)]
+    #[case::renamed_for_the_default_host(ANTHROPIC_BY_DEFAULT)]
+    fn an_empty_tool_use_id_is_sent_as_the_fallback_id(
+        shaping: MessagesShaping,
+        #[case] upstream: Upstream<'_>,
+    ) {
+        assert_eq!(
+            forwarded_tool_use_ids(KIMI_ON_ANTHROPIC, upstream, shaping, ""),
+            (json!("tool_use_id"), json!("tool_use_id"))
         );
     }
 }

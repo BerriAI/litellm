@@ -302,23 +302,27 @@ pub fn normalize_anthropic_tool_use_id(raw_id: &str) -> String {
             }
         })
         .collect();
-    if sanitized.is_empty() {
+    fill_empty_tool_use_id(&sanitized)
+}
+
+pub fn fill_empty_tool_use_id(raw_id: &str) -> String {
+    if raw_id.is_empty() {
         "tool_use_id".to_string()
     } else {
-        sanitized
+        raw_id.to_string()
     }
 }
 
-fn normalized_if_changed(raw_id: Option<&str>) -> Option<String> {
+fn renamed_if_changed(raw_id: Option<&str>, rename: fn(&str) -> String) -> Option<String> {
     let raw_id = raw_id?;
-    let normalized = normalize_anthropic_tool_use_id(raw_id);
-    (normalized != raw_id).then_some(normalized)
+    let renamed = rename(raw_id);
+    (renamed != raw_id).then_some(renamed)
 }
 
-fn sanitize_tool_use_id_block(block: ContentBlock) -> ContentBlock {
+fn rename_tool_use_id_block(block: ContentBlock, rename: fn(&str) -> String) -> ContentBlock {
     match block.block_type.as_ref() {
         Some(ContentBlockType::ToolUse | ContentBlockType::ServerToolUse) => {
-            match normalized_if_changed(block.id.as_deref()) {
+            match renamed_if_changed(block.id.as_deref(), rename) {
                 Some(id) => ContentBlock {
                     id: Some(id),
                     ..block
@@ -327,7 +331,7 @@ fn sanitize_tool_use_id_block(block: ContentBlock) -> ContentBlock {
             }
         }
         Some(ContentBlockType::ToolResult) => {
-            match normalized_if_changed(block.tool_use_id.as_deref()) {
+            match renamed_if_changed(block.tool_use_id.as_deref(), rename) {
                 Some(tool_use_id) => ContentBlock {
                     tool_use_id: Some(tool_use_id),
                     ..block
@@ -339,19 +343,30 @@ fn sanitize_tool_use_id_block(block: ContentBlock) -> ContentBlock {
     }
 }
 
-pub fn sanitize_tool_use_ids(messages: Vec<Message>) -> Vec<Message> {
+fn rename_tool_use_ids(messages: Vec<Message>, rename: fn(&str) -> String) -> Vec<Message> {
     messages
         .into_iter()
         .map(|message| match message.content {
             MessageContent::Blocks(blocks) => Message {
                 content: MessageContent::Blocks(
-                    blocks.into_iter().map(sanitize_tool_use_id_block).collect(),
+                    blocks
+                        .into_iter()
+                        .map(|block| rename_tool_use_id_block(block, rename))
+                        .collect(),
                 ),
                 ..message
             },
             MessageContent::Text(_) => message,
         })
         .collect()
+}
+
+pub fn sanitize_tool_use_ids(messages: Vec<Message>) -> Vec<Message> {
+    rename_tool_use_ids(messages, normalize_anthropic_tool_use_id)
+}
+
+pub fn fill_empty_tool_use_ids(messages: Vec<Message>) -> Vec<Message> {
+    rename_tool_use_ids(messages, fill_empty_tool_use_id)
 }
 
 const TOOL_USE_ID_PATTERN_ERRORS: [&str; 2] = [
@@ -388,7 +403,10 @@ fn rename_raw_tool_use_id(block: &mut Value) {
         Some("tool_result") => "tool_use_id",
         _ => return,
     };
-    if let Some(renamed) = normalized_if_changed(block.get(field).and_then(Value::as_str)) {
+    if let Some(renamed) = renamed_if_changed(
+        block.get(field).and_then(Value::as_str),
+        normalize_anthropic_tool_use_id,
+    ) {
         block[field] = Value::String(renamed);
     }
 }

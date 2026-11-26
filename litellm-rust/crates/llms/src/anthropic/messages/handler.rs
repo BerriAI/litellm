@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use crate::{
     Error,
     anthropic::common_utils::{
-        flatten_unencrypted_web_search_results, sanitize_tool_use_ids, strip_empty_content_blocks,
-        strip_provider_specific_fields,
+        fill_empty_tool_use_ids, flatten_unencrypted_web_search_results, sanitize_tool_use_ids,
+        strip_empty_content_blocks, strip_provider_specific_fields,
     },
 };
 
@@ -65,7 +65,7 @@ fn sanitize_anthropic_messages(
     let identified = if rewrites_tool_use_ids {
         sanitize_tool_use_ids(stripped)
     } else {
-        stripped
+        fill_empty_tool_use_ids(stripped)
     };
     strip_provider_specific_fields(flatten_unencrypted_web_search_results(identified))
 }
