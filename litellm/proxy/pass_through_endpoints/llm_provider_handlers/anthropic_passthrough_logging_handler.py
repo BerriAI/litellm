@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.core_helpers import (
     native_messages_reported_cost,
     override_stamped_response_cost,
     response_cost_in_hidden_params,
+    set_provider_response_headers_in_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.anthropic import get_anthropic_config
+from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_events_before_upstream_error,
     build_complete_streaming_response,
@@ -63,6 +65,8 @@ else:
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _DECODED_JSON: Final = TypeAdapter(object)
+_PROVIDER_RESPONSE_HEADERS: Final = TypeAdapter(Mapping[str, str], config=ConfigDict(hide_input_in_errors=True))
+_RATE_LIMIT_HEADER_PREFIXES: Final = ("anthropic-ratelimit-", "x-ratelimit-")
 
 
 def _event_payload(event: str) -> Mapping[str, object] | None:
@@ -95,6 +99,21 @@ def _message_delta_usages(all_chunks: Sequence[str | bytes]) -> Iterator[object]
             for payload in map(_event_payload, reversed(split_sse_chunk_into_events(chunk)))
             if payload is not None and payload.get("type") == "message_delta"
         )
+
+
+def _stamp_provider_response_headers(response: ModelResponse, logging_obj: LiteLLMLoggingObj) -> None:
+    try:
+        headers: Final = _PROVIDER_RESPONSE_HEADERS.validate_python(
+            logging_obj.model_call_details.get("response_headers")
+        )
+    except ValidationError:
+        return
+    rate_limit_headers: Final = {
+        name.lower(): value for name, value in headers.items() if name.lower().startswith(_RATE_LIMIT_HEADER_PREFIXES)
+    }
+    set_provider_response_headers_in_hidden_params(
+        response, rate_limit_headers, process_headers=process_anthropic_headers
+    )
 
 
 def _stamp_reported_stream_cost(
@@ -303,6 +322,7 @@ class AnthropicPassthroughLoggingHandler:
         )
         if not isinstance(response, ModelResponse):
             return response
+        _stamp_provider_response_headers(response, litellm_logging_obj)
         _stamp_reported_stream_cost(response, all_chunks, litellm_logging_obj)
         recovered_usage: Final = AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
             response=response, all_chunks=all_chunks, model=model

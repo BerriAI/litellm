@@ -9,6 +9,7 @@ repository.workspace = true
 test-support = []
 
 [dependencies]
+arc-swap.workspace = true
 litellm-call-scope.workspace = true
 litellm-secret-value.workspace = true
 litellm-cache-response.workspace = true
@@ -30,6 +31,7 @@ litellm-host-http.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
+litellm-model-catalog.workspace = true
 litellm-router-core.workspace = true
 litellm-redis-store.workspace = true
 litellm-cache.workspace = true

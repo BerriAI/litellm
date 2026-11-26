@@ -208,13 +208,6 @@ MAX_BASE64_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_BASE64_LENGTH_STDOUT_LOG"
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
 LITELLM_DETAILED_TIMING: Final = os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
 
-# Model cost map validation constants
-MODEL_COST_MAP_MIN_MODEL_COUNT: Final = get_env_int(
-    "MODEL_COST_MAP_MIN_MODEL_COUNT", 50
-)  # Minimum number of models a fetched cost map must contain to be considered valid
-MODEL_COST_MAP_MAX_SHRINK_RATIO: Final = get_env_float(
-    "MODEL_COST_MAP_MAX_SHRINK_RATIO", 0.5
-)  # Maximum allowed shrinkage ratio vs local backup (0.5 = reject if fetched map is <50% of backup)
 DEFAULT_IMAGE_WIDTH: Final = get_env_int("DEFAULT_IMAGE_WIDTH", 300)
 DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 # Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)
@@ -747,6 +740,9 @@ STREAM_FINISH_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, "provider_spec
 STREAM_CHUNK_CHOICE_FIELDS: Final = ("token_ids",)
 PROVIDER_FINISH_REASONS_HIDDEN_PARAM: Final = "provider_finish_reasons"
 VLLM_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, *STREAM_CHUNK_CHOICE_FIELDS)
+VLLM_STREAM_PROMPT_FIELDS: Final = ("prompt_token_ids", "prompt_text")
+VLLM_PROMPT_DERIVED_FIELDS: Final = (*VLLM_STREAM_PROMPT_FIELDS, "prompt_logprobs")
+VLLM_PROMPT_FIELD_REQUEST_PARAMS: Final = ("prompt_logprobs", "return_prompt_text", "return_token_ids")
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
     "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400

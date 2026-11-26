@@ -36,6 +36,8 @@ litellm/proxy/mcp_server/
   oauth2_token_cache.py      # OAuth2 and per-user token resolution/cache        [PR7: resolve_mcp_auth removed, cache class stays, V1OAuth2CacheAdapter delegates to async_get_token]
   db.py                      # MCP server, credential, env var, submission DB access  [unchanged, V1ByokStore delegates to _get_byok_credential / get_user_credential]
   toolset_db.py              # MCP toolset DB access
+  auth_profiles.py           # parse a server's additional_auth list and check its profiles hold credentials
+  stored_auth_profiles.py    # encrypt, merge and decrypt a server's stored additional_auth profiles
   rest_endpoints.py          # proxy REST facade for listing/calling MCP tools   [PR7: 7-arm only — pass identity + inbound token down instead of mcp_auth_header]
   openapi_to_mcp_generator.py# OpenAPI spec to MCP tool generation
   sampling_handler.py        # MCP sampling to LiteLLM completion flow

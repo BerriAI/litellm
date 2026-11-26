@@ -157,6 +157,7 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
         server_id=server.server_id,
         resource=resource,
         config=ClientCredentialsConfig(
+            profile_id=server.auth_profile_id,
             header_name=token_header(server),
             client_id=server.client_id,
             client_secret=SecretStr(server.client_secret) if server.client_secret else None,

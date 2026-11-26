@@ -1,8 +1,10 @@
 from dataclasses import dataclass, field, replace
 import asyncio
 import contextlib
+import importlib
 import json
 import logging
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, SimpleNamespace
@@ -4938,3 +4940,19 @@ class TestOpenAIPassthroughDeploymentPricing:
         register_deployments(_priced_deployment("priced", api_key=key_reference))
 
         assert _chat_pass_through_cost() == pytest.approx(DEPLOYMENT_COST)
+
+
+def test_the_sdk_stream_logging_handler_loads_on_an_install_without_fastapi(monkeypatch: pytest.MonkeyPatch) -> None:
+    handlers_package: Final = "litellm.proxy.pass_through_endpoints.llm_provider_handlers"
+    handler_module: Final = f"{handlers_package}.openai_passthrough_logging_handler"
+    router_module: Final = "litellm.proxy.pass_through_endpoints.passthrough_endpoint_router"
+    monkeypatch.setattr(
+        sys.modules[handlers_package], "openai_passthrough_logging_handler", sys.modules[handler_module]
+    )
+    monkeypatch.delitem(sys.modules, handler_module)
+    monkeypatch.delitem(sys.modules, router_module, raising=False)
+    monkeypatch.setitem(sys.modules, "fastapi", None)
+
+    reloaded: Final = importlib.import_module(handler_module)
+
+    assert reloaded.pricing_deployment_id(model="gpt-5.1", declared_provider=None, url_route="/v1/messages") is None

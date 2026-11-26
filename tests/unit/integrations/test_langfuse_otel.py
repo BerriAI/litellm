@@ -15,7 +15,7 @@ import pytest
 from openai.types.responses import ResponseFunctionToolCall
 from opentelemetry import trace
 from opentelemetry.context import Context
-from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Span
@@ -1800,9 +1800,20 @@ def test_observation_input_carries_the_request_functions_and_tools(
     assert json.loads(str(span.attributes["langfuse.observation.input"])) == expected_input
 
 
-def _exported_calls(*calls: Mapping[str, object]) -> tuple[ReadableSpan, ...]:
+class _FillsEverySpan(SpanProcessor):
+    def __init__(self, attributes: int) -> None:
+        self.attributes: Final = {f"filler.{index}": index for index in range(attributes)}
+
+    def on_start(self, span: Span, parent_context: Context | None = None) -> None:
+        span.set_attributes(self.attributes)
+
+
+def _exported_calls(
+    *calls: Mapping[str, object], limits: SpanLimits | None = None, fillers: int = 0
+) -> tuple[ReadableSpan, ...]:
     exporter: Final = InMemorySpanExporter()
-    provider: Final = TracerProvider()
+    provider: Final = TracerProvider(span_limits=limits)
+    provider.add_span_processor(_FillsEverySpan(fillers))
     with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
         logger: Final = LangfuseOtelLogger(config=OpenTelemetryConfig(exporter=exporter), tracer_provider=provider)
     provider.add_span_processor(logger._get_span_processor())
@@ -1856,6 +1867,16 @@ def test_a_call_naming_a_trace_is_exported_as_its_root_unless_it_joins_an_existi
 
     assert trace.format_trace_id(span.context.trace_id) == _NAMED_TRACE
     assert (span.parent is None) is exported_as_a_root
+
+
+def test_a_call_exported_as_its_named_trace_root_keeps_its_dropped_attribute_count() -> None:
+    limits: Final = SpanLimits(max_span_attributes=4)
+    (root,) = _exported_calls({"metadata": {"trace_id": _NAMED_TRACE}}, limits=limits, fillers=6)
+    (joined,) = _exported_calls({"metadata": {"existing_trace_id": _NAMED_TRACE}}, limits=limits, fillers=6)
+
+    assert (root.parent is None, joined.parent is None) == (True, False)
+    assert (len(root.attributes or {}), len(joined.attributes or {})) == (4, 4)
+    assert (root.dropped_attributes, joined.dropped_attributes) == (2, 2), (root.attributes, joined.attributes)
 
 
 def test_calls_naming_one_trace_share_it_under_the_request_span_another_otel_logger_started() -> None:
