@@ -733,7 +733,12 @@ mod tests {
     #[case::no_stop_details("anthropic", Value::Null, 0, false)]
     #[case::bio("anthropic", refusal_details(Some("bio")), 0, true)]
     #[case::frontier_llm("anthropic", refusal_details(Some("frontier_llm")), 0, true)]
-    #[case::reasoning_extraction("anthropic", refusal_details(Some("reasoning_extraction")), 0, true)]
+    #[case::reasoning_extraction(
+        "anthropic",
+        refusal_details(Some("reasoning_extraction")),
+        0,
+        true
+    )]
     #[case::after_partial_output("anthropic", refusal_details(Some("cyber")), 7, true)]
     #[case::another_platform("bedrock", refusal_details(Some("cyber")), 0, true)]
     fn a_refusal_is_charged_only_where_anthropic_bills_it(
@@ -743,7 +748,11 @@ mod tests {
         #[case] output_tokens: u64,
         #[case] billed: bool,
     ) {
-        let pricing = call_pricing(&recording, &refusal_case(provider), RequestedPricing::default());
+        let pricing = call_pricing(
+            &recording,
+            &refusal_case(provider),
+            RequestedPricing::default(),
+        );
 
         let cost = pricing.message(&refusal_body(&stop_details, output_tokens));
 
