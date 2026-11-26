@@ -7154,12 +7154,12 @@ class MCPServerManager:
                             ) from e
                         auth_info: Final = _extract_upstream_auth_failure(e)
                         recovery_error: Final = _extract_per_user_oauth_recovery_error(e) if managed_per_user else None
-                        if managed_per_user and recovery_error is not None:
-                            if auth_info is not None and auth_info[0] == 401:
+                        match (recovery_error, auth_info):
+                            case (CredError() as recovery_error, (401, www_authenticate)):
                                 if recovery_error.tag == "unauthorized":
                                     raise MCPUpstreamAuthError(
                                         status_code=401,
-                                        www_authenticate=auth_info[1],
+                                        www_authenticate=www_authenticate,
                                         server_name=server_label,
                                     ) from e
                                 raise_public(recovery_error)
