@@ -7427,7 +7427,7 @@ def embedding(
         request_kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
     )
 
-    litellm_params_dict: Final = get_litellm_params(**request_kwargs)
+    litellm_params_dict: Final[dict[str, object]] = get_litellm_params(**request_kwargs)
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,

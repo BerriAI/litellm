@@ -34,7 +34,7 @@ class BudgetManager:
         project_name: str,
         client_type: str = "local",
         api_base: str | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ):
         self.client_type = client_type
         self.project_name = project_name
@@ -229,6 +229,9 @@ class BudgetManager:
             return {"status": "success"}
         elif self.client_type == "hosted":
             url: Final = self.api_base + "/set_budget"
-            data: Final = {"project_name": self.project_name, "user_dict": self.user_dict}
+            data: Final[dict[str, object]] = {
+                "project_name": self.project_name,
+                "user_dict": self.user_dict,
+            }
             response: Final = litellm.module_level_client.post(url, headers=self.headers, json=data)
             return _BUDGET_SERVER_REPLY.validate_python(response.json())
