@@ -2427,7 +2427,7 @@ class PrometheusLogger(CustomLogger):
         budget_metrics_timeout: Final = _get_budget_metrics_per_request_timeout()
         committed_read_timeout: Final = budget_metrics_timeout / 2
 
-        async def emit_budget_metrics() -> tuple[object, ...]:
+        async def emit_budget_metrics() -> tuple[tuple[str, object], ...]:
             committed: Final = await _committed_spend_without_own_charge(
                 counter_keys=_committed_at_auth.counter_keys
                 if _committed_at_auth is not None
@@ -2442,48 +2442,64 @@ class PrometheusLogger(CustomLogger):
                 response_cost=response_cost,
                 read_timeout=committed_read_timeout,
             )
-            return await asyncio.gather(
-                self._set_api_key_budget_metrics_after_api_request(
-                    user_api_key=user_api_key,
-                    user_api_key_alias=user_api_key_alias,
-                    response_cost=response_cost,
-                    key_max_budget=_api_key_max_budget,
-                    key_spend=_committed_floor(_stored_spend(_api_key_spend), committed.key),
-                    carried=KeyBudgetSnapshot.from_metadata(_carried_metadata),
+            budget_emitters: Final = (
+                (
+                    "key",
+                    self._set_api_key_budget_metrics_after_api_request(
+                        user_api_key=user_api_key,
+                        user_api_key_alias=user_api_key_alias,
+                        response_cost=response_cost,
+                        key_max_budget=_api_key_max_budget,
+                        key_spend=_committed_floor(_stored_spend(_api_key_spend), committed.key),
+                        carried=KeyBudgetSnapshot.from_metadata(_carried_metadata),
+                    ),
                 ),
-                self._set_team_budget_metrics_after_api_request(
-                    user_api_team=user_api_team,
-                    user_api_team_alias=user_api_team_alias,
-                    team_spend=_committed_floor(_stored_spend(_team_spend), committed.team),
-                    team_max_budget=_team_max_budget,
-                    response_cost=response_cost,
-                    carried=TeamBudgetSnapshot.from_metadata(_carried_metadata),
+                (
+                    "team",
+                    self._set_team_budget_metrics_after_api_request(
+                        user_api_team=user_api_team,
+                        user_api_team_alias=user_api_team_alias,
+                        team_spend=_committed_floor(_stored_spend(_team_spend), committed.team),
+                        team_max_budget=_team_max_budget,
+                        response_cost=response_cost,
+                        carried=TeamBudgetSnapshot.from_metadata(_carried_metadata),
+                    ),
                 ),
-                self._set_user_budget_metrics_after_api_request(
-                    user_id=user_id,
-                    user_spend=_committed_floor(_stored_spend(_user_spend), committed.user),
-                    user_max_budget=_user_max_budget,
-                    response_cost=response_cost,
-                    carried=UserBudgetSnapshot.from_metadata(_carried_metadata),
-                    user_email=_user_email if isinstance(_user_email, str) else None,
+                (
+                    "user",
+                    self._set_user_budget_metrics_after_api_request(
+                        user_id=user_id,
+                        user_spend=_committed_floor(_stored_spend(_user_spend), committed.user),
+                        user_max_budget=_user_max_budget,
+                        response_cost=response_cost,
+                        carried=UserBudgetSnapshot.from_metadata(_carried_metadata),
+                        user_email=_user_email if isinstance(_user_email, str) else None,
+                    ),
                 ),
-                self._set_org_budget_metrics_after_api_request(
-                    org_id=user_api_key_org_id,
-                    response_cost=response_cost,
-                    carried=OrgBudgetSnapshot.from_metadata(_carried_metadata),
-                    org_alias=_org_alias if isinstance(_org_alias, str) else None,
-                    committed_spend=committed.org,
+                (
+                    "org",
+                    self._set_org_budget_metrics_after_api_request(
+                        org_id=user_api_key_org_id,
+                        response_cost=response_cost,
+                        carried=OrgBudgetSnapshot.from_metadata(_carried_metadata),
+                        org_alias=_org_alias if isinstance(_org_alias, str) else None,
+                        committed_spend=committed.org,
+                    ),
                 ),
-                self._set_customer_budget_metrics_after_api_request(
-                    end_user_id=end_user_id,
-                    response_cost=response_cost,
-                    committed_spend=committed.end_user,
+                (
+                    "customer",
+                    self._set_customer_budget_metrics_after_api_request(
+                        end_user_id=end_user_id,
+                        response_cost=response_cost,
+                        committed_spend=committed.end_user,
+                    ),
                 ),
-                return_exceptions=True,
             )
+            results: Final = await asyncio.gather(*(emitter for _, emitter in budget_emitters), return_exceptions=True)
+            return tuple(zip((name for name, _ in budget_emitters), results, strict=True))
 
         try:
-            results: Final = await asyncio.wait_for(emit_budget_metrics(), timeout=budget_metrics_timeout)
+            named_results: Final = await asyncio.wait_for(emit_budget_metrics(), timeout=budget_metrics_timeout)
         except asyncio.TimeoutError:
             verbose_logger.debug(
                 "[Non-Blocking] Prometheus: per-request budget metric emission "
@@ -2492,13 +2508,9 @@ class PrometheusLogger(CustomLogger):
                 budget_metrics_timeout,
             )
             return
-        for i, r in enumerate(results):
-            if isinstance(r, Exception):
-                verbose_logger.debug(
-                    "[Non-Blocking] Prometheus: Budget metric lookup %s failed: %s",
-                    ("key", "team", "user", "org", "customer")[i],
-                    r,
-                )
+        for name, result in named_results:
+            if isinstance(result, Exception):
+                verbose_logger.debug("[Non-Blocking] Prometheus: Budget metric lookup %s failed: %s", name, result)
 
     def _increment_top_level_request_and_spend_metrics(
         self,
