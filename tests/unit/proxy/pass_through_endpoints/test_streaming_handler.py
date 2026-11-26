@@ -1,14 +1,18 @@
+import asyncio
 import json
 import logging
 from collections.abc import Iterator
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
@@ -235,3 +239,167 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
     partial_usage = logging_obj.record_partial_usage_for_failure.call_args.kwargs["usage"]
     assert partial_usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
+
+
+def _anthropic_sse(event: str, data: dict[str, object]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+_RATE_LIMITED_ANTHROPIC_STREAM: Final = "".join(
+    (
+        _anthropic_sse(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_rate_limit",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-5-20250929",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 17, "output_tokens": 1},
+                },
+            },
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}},
+        ),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    )
+)
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_anthropic_passthrough_call_logs_the_rate_limit_the_provider_reported():
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="passthrough-rate-limit",
+        function_id="passthrough-rate-limit",
+    )
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-4-5-20250929",
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    upstream: Final = httpx.Response(
+        200,
+        headers={
+            "content-type": "text/event-stream",
+            "anthropic-ratelimit-tokens-remaining": "11999000",
+            "anthropic-ratelimit-requests-remaining": "12999",
+            "anthropic-organization-id": "org-secret",
+            "request-id": "req_passthrough",
+            "set-cookie": "session=secret",
+        },
+        content=_RATE_LIMITED_ANTHROPIC_STREAM.encode(),
+    )
+    logged_results: Final[asyncio.Queue[PassThroughEndpointLoggingResultValues]] = asyncio.Queue()
+
+    async def record_logging_result(
+        *,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        passthrough_success_handler_obj: PassThroughEndpointLogging,
+        url_route: str,
+        request_body: dict[str, object],
+        endpoint_type: EndpointType,
+        start_time: datetime,
+        raw_bytes: list[bytes],
+        end_time: datetime,
+    ) -> None:
+        result, _ = PassThroughStreamingHandler._build_passthrough_logging_result(
+            litellm_logging_obj=litellm_logging_obj,
+            passthrough_success_handler_obj=passthrough_success_handler_obj,
+            url_route=url_route,
+            request_body=request_body,
+            endpoint_type=endpoint_type,
+            start_time=start_time,
+            raw_bytes=raw_bytes,
+            end_time=end_time,
+            model=None,
+        )
+        logged_results.put_nowait(result)
+
+    async for _ in PassThroughStreamingHandler.chunk_processor(
+        response=upstream,
+        request_body={"model": "claude-sonnet-4-5-20250929", "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime(2025, 1, 1),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/anthropic/v1/messages",
+        route_streaming_logging=record_logging_result,
+    ):
+        pass
+    logged_result: Final = await asyncio.wait_for(logged_results.get(), timeout=5)
+
+    assert logged_results.empty()
+    assert isinstance(logged_result, litellm.ModelResponse)
+    logged_headers: Final = logged_result._hidden_params["additional_headers"]
+    assert logged_headers["x-ratelimit-remaining-tokens"] == "11999000"
+    assert logged_headers["x-ratelimit-remaining-requests"] == "12999"
+    assert logging_obj.model_call_details["response_headers"] == {
+        "anthropic-ratelimit-tokens-remaining": "11999000",
+        "anthropic-ratelimit-requests-remaining": "12999",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint_type", [EndpointType.VERTEX_AI, EndpointType.GENERIC])
+async def test_a_streamed_non_anthropic_passthrough_call_keeps_provider_headers_out_of_logging(
+    endpoint_type: EndpointType,
+):
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="passthrough-non-anthropic-headers",
+        function_id="passthrough-non-anthropic-headers",
+    )
+    upstream: Final = httpx.Response(
+        200,
+        headers={
+            "content-type": "text/event-stream",
+            "set-cookie": "session=secret",
+            "x-ratelimit-remaining-tokens": "11999000",
+        },
+        content=b'data: {"candidates": []}\n\n',
+    )
+    logged_details: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+
+    async def record_logged_details(*, litellm_logging_obj: LiteLLMLoggingObj, **_: object) -> None:
+        logged_details.put_nowait(dict(litellm_logging_obj.model_call_details))
+
+    async for _ in PassThroughStreamingHandler.chunk_processor(
+        response=upstream,
+        request_body={"model": "gemini-2.5-flash", "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=endpoint_type,
+        start_time=datetime(2025, 1, 1),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/vertex_ai/v1/models/gemini-2.5-flash:streamGenerateContent",
+        route_streaming_logging=record_logged_details,
+    ):
+        pass
+    details: Final = await asyncio.wait_for(logged_details.get(), timeout=5)
+
+    assert "response_headers" not in details

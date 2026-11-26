@@ -1,12 +1,25 @@
 import asyncio
 import json
+import sys
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    REDACTED_BY_LITELLM,
+    REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
+)
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.tool_fields import (
+    declared_function_names,
+    truncate_tool_name,
+    with_renamed_tool_calls,
+    with_tool_calls_named_as_declared,
+)
+from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -49,9 +62,76 @@ def _is_a_failed_turn(spend_log: "SpendLogsPayload") -> bool:
     return "status" in spend_log and spend_log["status"] == _FAILED_TURN_STATUS
 
 
+def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    """The stored turn's ``tools`` with its ``additional_tools`` items hoisted, as the bridge sent them."""
+    if proxy_server_request is None:
+        return None
+    request_input: Final = proxy_server_request.get("input")
+    if not isinstance(request_input, list):
+        return proxy_server_request
+    top_level_tools: Final = proxy_server_request.get("tools")
+    stored_input: Final = cast(ResponseInputParam, request_input)  # cast-ok: forwarded as sent, as the bridge does
+    hoisted: Final = hoist_additional_tools(stored_input, None).hoisted
+    return {"tools": [*(top_level_tools if isinstance(top_level_tools, list) else ()), *hoisted]}
+
+
+def _rebuilt_from_cold_storage(spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object]) -> bool:
+    stored_request: Final = str(spend_log.get("proxy_server_request") or "{}")
+    return "input" not in proxy_server_request and (
+        stored_request == "{}" or LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_request
+    )
+
+
+def _declared_tool_names(
+    spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object] | None
+) -> frozenset[str]:
+    if proxy_server_request is None or not _rebuilt_from_cold_storage(spend_log, proxy_server_request):
+        return frozenset()
+    model_parameters: Final = as_str_mapping(proxy_server_request.get("model_parameters"))
+    return frozenset() if model_parameters is None else declared_function_names(model_parameters.get("tools"))
+
+
+def _input_item_named_as_declared(item: object, declared_names: frozenset[str]) -> object:
+    fields: Final = as_str_mapping(item)
+    if fields is None or fields.get("type") != "function_call" or fields.get("namespace"):
+        return item
+    name: Final = fields.get("name")
+    if not isinstance(name, str) or name in declared_names or truncate_tool_name(name) not in declared_names:
+        return item
+    return {**fields, "name": truncate_tool_name(name)}
+
+
+def _input_named_as_declared(stored_input: object, declared_names: frozenset[str]) -> object:
+    items: Final = as_object_list(stored_input)
+    if not declared_names or items is None:
+        return stored_input
+    return [_input_item_named_as_declared(item, declared_names) for item in items]
+
+
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
     instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
     return instructions if isinstance(instructions, str) and instructions else None
+
+
+_MCP_AUTO_EXECUTE_OUTPUT_TYPES: Final = frozenset(("mcp_tools_fetched", "tool_execution_results"))
+
+
+def _is_model_output(item: object) -> bool:
+    match item:
+        case {"type": str() as item_type}:
+            return item_type not in _MCP_AUTO_EXECUTE_OUTPUT_TYPES
+        case _:
+            return True
+
+
+def _stored_responses_api_output(stored_response: object) -> ResponseInputParam | None:
+    match stored_response:
+        case {"object": "response", "output": list() as output}:
+            return [item for item in output if _is_model_output(item)]
+        case {"object": "response"}:
+            return []
+        case _:
+            return None
 
 
 class ResponsesSessionHandler:
@@ -141,13 +221,15 @@ class ResponsesSessionHandler:
         )
 
         response_input_param: str | ResponseInputParam | None = None
+        declared_tool_names: Final = _declared_tool_names(spend_log, proxy_server_request_dict)
 
         ############################################################
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
-            _response_input_param: Final = proxy_server_request_dict.get("input") or proxy_server_request_dict.get(
-                "messages"
+            _response_input_param: Final = _input_named_as_declared(
+                proxy_server_request_dict.get("input") or proxy_server_request_dict.get("messages"),
+                declared_tool_names,
             )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
@@ -161,7 +243,11 @@ class ResponsesSessionHandler:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                     input=response_input_param,
-                    responses_api_request={},
+                    responses_api_request={
+                        "tools": LiteLLMCompletionResponsesConfig.request_tools(
+                            _stored_request_tools(proxy_server_request_dict)
+                        )
+                    },
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
                     replay_tool_search=True,
@@ -172,9 +258,28 @@ class ResponsesSessionHandler:
         # Add Output messages for this Spend Log
         ############################################################
         _response_output: Final = spend_log.get("response", "{}")
-        if isinstance(_response_output, dict) and _response_output and _response_output != {}:
+        stored_responses_api_output: Final = _stored_responses_api_output(_response_output)
+        if stored_responses_api_output is not None:
+            chat_completion_message_history.extend(
+                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                    input=stored_responses_api_output,
+                    responses_api_request={},
+                    replay_reasoning=True,
+                    item_cache_control=item_cache_control,
+                    replay_tool_search=True,
+                )
+            )
+        elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
-            model_response: Final = ModelResponse(**_response_output)
+            model_response: Final = with_tool_calls_named_as_declared(
+                with_renamed_tool_calls(
+                    ModelResponse(**_response_output),
+                    LiteLLMCompletionResponsesConfig.member_chat_names(
+                        LiteLLMCompletionResponsesConfig.request_tools(_stored_request_tools(proxy_server_request_dict))
+                    ),
+                ),
+                declared_tool_names,
+            )
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
                     _normalize_redacted_tool_call_arguments(choice.message)
@@ -189,7 +294,7 @@ class ResponsesSessionHandler:
         Get the parsed proxy server request from the spend log
         """
         proxy_server_request: Final[str | dict] = spend_log.get("proxy_server_request") or "{}"
-        proxy_server_request_dict: dict | None = None
+        proxy_server_request_dict: dict[str, object] | None = None
         if isinstance(proxy_server_request, dict):
             proxy_server_request_dict = proxy_server_request
         else:
@@ -264,15 +369,13 @@ class ResponsesSessionHandler:
 
     @staticmethod
     def _should_check_cold_storage_for_full_payload(
-        proxy_server_request_dict: dict | None,
+        proxy_server_request_dict: Mapping[str, object] | None,
     ) -> bool:
         """
         Only check cold storage when both are true
         1. `LITELLM_TRUNCATED_PAYLOAD_FIELD` is in the proxy server request dict
         2. `litellm.cold_storage_custom_logger` is not None
         """
-        from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
-
         configured_cold_storage_custom_logger: Final = litellm.cold_storage_custom_logger
         if configured_cold_storage_custom_logger is None:
             return False
@@ -306,6 +409,9 @@ class ResponsesSessionHandler:
             RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS,
             RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL,
         )
+
+        if "litellm.proxy.proxy_server" not in sys.modules:
+            return []
         from litellm.proxy.proxy_server import disable_spend_logs, prisma_client
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)

@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use crate::{
     Error,
     anthropic::common_utils::{
-        flatten_unencrypted_web_search_results, sanitize_tool_use_ids, strip_empty_content_blocks,
-        strip_provider_specific_fields,
+        fill_empty_tool_use_ids, flatten_unencrypted_web_search_results, sanitize_tool_use_ids,
+        strip_empty_content_blocks, strip_provider_specific_fields,
     },
 };
 
@@ -19,8 +19,30 @@ pub fn shape_anthropic_messages_request(
     request: MessagesRequest,
     reasoning_auto_summary: bool,
 ) -> Result<MessagesRequest, Error> {
+    shape_messages_request(request, reasoning_auto_summary, true)
+}
+
+pub fn shape_anthropic_messages_request_keeping_tool_use_ids(
+    request: MessagesRequest,
+    reasoning_auto_summary: bool,
+) -> Result<MessagesRequest, Error> {
+    shape_messages_request(request, reasoning_auto_summary, false)
+}
+
+pub fn with_sanitized_tool_use_ids(request: MessagesRequest) -> MessagesRequest {
+    MessagesRequest {
+        messages: sanitize_tool_use_ids(request.messages),
+        ..request
+    }
+}
+
+fn shape_messages_request(
+    request: MessagesRequest,
+    reasoning_auto_summary: bool,
+    rewrites_tool_use_ids: bool,
+) -> Result<MessagesRequest, Error> {
     Ok(MessagesRequest {
-        messages: sanitize_anthropic_messages(request.messages),
+        messages: sanitize_anthropic_messages(request.messages, rewrites_tool_use_ids),
         params: MessagesOptionalParams {
             metadata: request
                 .params
@@ -35,10 +57,17 @@ pub fn shape_anthropic_messages_request(
     })
 }
 
-fn sanitize_anthropic_messages(messages: Vec<Message>) -> Vec<Message> {
-    strip_provider_specific_fields(flatten_unencrypted_web_search_results(
-        sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
-    ))
+fn sanitize_anthropic_messages(
+    messages: Vec<Message>,
+    rewrites_tool_use_ids: bool,
+) -> Vec<Message> {
+    let stripped = strip_empty_content_blocks(messages);
+    let identified = if rewrites_tool_use_ids {
+        sanitize_tool_use_ids(stripped)
+    } else {
+        fill_empty_tool_use_ids(stripped)
+    };
+    strip_provider_specific_fields(flatten_unencrypted_web_search_results(identified))
 }
 
 fn validate_anthropic_api_metadata(metadata: &Value) -> Result<Value, Error> {
@@ -196,7 +225,7 @@ mod tests {
         #[case] expected: Value,
     ) {
         assert_eq!(
-            serde_json::to_value(sanitize_anthropic_messages(messages(history))).unwrap(),
+            serde_json::to_value(sanitize_anthropic_messages(messages(history), true)).unwrap(),
             expected
         );
     }

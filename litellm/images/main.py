@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import importlib
-from collections.abc import Coroutine, Mapping
+from collections.abc import Collection, Coroutine, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast, get_type_hints, overload
 
@@ -30,7 +30,7 @@ from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_valu
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.azure.common_utils import AZURE_V1_API_VERSION, is_azure_openai_v1_base
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, handler_for_httpx_client
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.utils import exception_type, filter_out_litellm_params, get_litellm_params, header_auth_params
 
@@ -65,6 +65,7 @@ from litellm.types.utils import (
     ProviderRoutingHints,
 )
 from litellm.utils import (
+    EXTRA_BODY_ROUTING_KEYS,
     ImageResponse,
     ProviderConfigManager,
     get_llm_provider,
@@ -72,6 +73,27 @@ from litellm.utils import (
 )
 
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
+_PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE: Final = (LlmProviders.VOLCENGINE,)
+_MAX_RETRIES: Final = TypeAdapter(int)
+
+
+def _sdk_max_retries(max_retries: object, is_router_call: bool) -> int:
+    if is_router_call:
+        return 0
+    return openai.DEFAULT_MAX_RETRIES if max_retries is None else _MAX_RETRIES.validate_python(max_retries)
+
+
+def _supplied_openai_client(client: object) -> openai.OpenAI | openai.AsyncOpenAI | None:
+    return client if isinstance(client, openai.OpenAI | openai.AsyncOpenAI) else None
+
+
+def _image_http_handler(
+    supplied_openai_client: openai.OpenAI | openai.AsyncOpenAI | None, client: object
+) -> HTTPHandler | AsyncHTTPHandler | None:
+    if supplied_openai_client is not None:
+        return handler_for_httpx_client(supplied_openai_client._client)  # pyright: ignore[reportPrivateUsage]  # the SDK keeps the caller's http_client only here
+    return client if isinstance(client, HTTPHandler | AsyncHTTPHandler) else None
+
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
@@ -227,6 +249,7 @@ def image_generation(
     """
     try:
         args: Final = locals()
+        requested_api_base: Final = api_base
         aimg_generation: Final = kwargs.get("aimg_generation", False)
         litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         logger_fn: Final = kwargs.get("logger_fn", None)
@@ -240,6 +263,12 @@ def image_generation(
         extra_headers: Final = kwargs.get("extra_headers", None)
         headers: Final[dict] = kwargs.get("headers", None) or {}
         base_model: Final = kwargs.get("base_model", None)
+        call_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: image_generation's **kwargs is untyped
+        max_retries: Final = call_kwargs.get("max_retries")
+        is_router_call: Final = any(
+            isinstance(call_metadata := call_kwargs.get(k), Mapping) and "model_group" in call_metadata
+            for k in ("metadata", "litellm_metadata")
+        )
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
@@ -413,25 +442,48 @@ def image_generation(
             litellm.LlmProviders.QWENCLOUD,
             litellm.LlmProviders.QWEN_AI_PLATFORM,
             litellm.LlmProviders.EDENAI,
+            litellm.LlmProviders.MINIMAX,
+            litellm.LlmProviders.VOLCENGINE,
         ):
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
 
+            supplied_openai_client: Final = (
+                _supplied_openai_client(call_kwargs.get("client"))
+                if custom_llm_provider == litellm.LlmProviders.VOLCENGINE
+                else None
+            )
             # Resolve api_base from litellm.api_base if not explicitly provided
-            _api_base: Final = api_base or litellm.api_base
+            _api_base: Final = (
+                str(supplied_openai_client.base_url)
+                if supplied_openai_client is not None
+                else requested_api_base
+                if custom_llm_provider in _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE
+                else api_base or litellm.api_base
+            )
             litellm_params_dict["api_base"] = _api_base
 
             return llm_http_handler.image_generation_handler(
-                api_key=api_key,
+                api_key=api_key if supplied_openai_client is None else supplied_openai_client.api_key,
                 model=model,
                 prompt=prompt,
                 image_generation_provider_config=image_generation_config,
-                image_generation_optional_request_params=optional_params,
+                image_generation_optional_request_params=(
+                    {**optional_params, "extra_headers": headers}
+                    if custom_llm_provider == litellm.LlmProviders.VOLCENGINE and headers
+                    else optional_params
+                ),
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params_dict,
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
-                client=client,
+                client=_image_http_handler(supplied_openai_client, call_kwargs.get("client")),
+                _is_async=aimg_generation is True and custom_llm_provider == litellm.LlmProviders.VOLCENGINE,
+                max_retries=(
+                    _sdk_max_retries(max_retries, is_router_call)
+                    if custom_llm_provider == litellm.LlmProviders.VOLCENGINE
+                    else 0
+                ),
             )
         elif custom_llm_provider == "black_forest_labs":
             # Route to BFL-specific handler (polling required)
@@ -752,6 +804,10 @@ _OBJECT_DICT_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
+_IGNORED_UNLESS_SUPPORTED_EDIT_PARAMS: Final = frozenset({"markup"})
+_PASSTHROUGH_EDIT_PROVIDERS: Final = frozenset(
+    {litellm.LlmProviders.MINIMAX.value, litellm.LlmProviders.VOLCENGINE.value}
+)
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
@@ -759,6 +815,21 @@ def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
         return _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params)
     except ValidationError:
         return ()
+
+
+def _passthrough_edit_params(
+    non_default_params: Mapping[str, object],
+    extra_body: Mapping[str, object] | None,
+    mapped_params: Collection[str],
+    additional_drop_params: Collection[str] | None,
+) -> Mapping[str, object]:
+    dropped: Final = frozenset(additional_drop_params or ())
+    unmapped_excluded: Final = _DROP_PARAM_KWARGS | _IMAGE_EDIT_OPENAI_PARAMS | frozenset(mapped_params) | dropped
+    body_fields: Final = {} if "extra_body" in dropped else (extra_body or {})
+    return {
+        **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
+        **{key: value for key, value in body_fields.items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
+    }
 
 
 def _custom_handler_edit_params(
@@ -788,6 +859,7 @@ def image_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    markup: FileTypes | list[FileTypes] | None = None,  # mutable-ok: a tuple is one upload, a list is several
     **kwargs,
 ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
     """
@@ -836,11 +908,11 @@ def image_edit(
             extra_headers = dict(merged_extra_headers)
 
         # get llm provider logic
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
             custom_llm_provider=custom_llm_provider,
         )
+        litellm_params: Final = GenericLiteLLMParams(**kwargs, custom_llm_provider=custom_llm_provider)
 
         # Check for custom provider
         if custom_llm_provider in litellm._custom_providers:
@@ -853,6 +925,7 @@ def image_edit(
             custom_optional_params: Final = _custom_handler_edit_params(
                 _OBJECT_DICT_ADAPTER.validate_python(kwargs),
                 {
+                    "markup": markup,
                     "mask": mask,
                     "n": n,
                     "quality": quality,
@@ -929,10 +1002,15 @@ def image_edit(
                 message=f"`{requested_params.param}` {requested_params.reason} for {model}. "
                 "To drop it from the call, set `litellm.drop_params = True`.",
             )
+        ignored_edit_params: Final = _IGNORED_UNLESS_SUPPORTED_EDIT_PARAMS - provider_supported_params
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
-                {**local_vars, **requested_params},
+                {
+                    key: value
+                    for key, value in {**local_vars, **requested_params}.items()
+                    if key not in ignored_edit_params
+                },
                 provider_supported_params=provider_supported_params.intersection(requested_params),
             )
         )
@@ -1052,7 +1130,19 @@ def image_edit(
             image=images,
             prompt=prompt,
             image_edit_provider_config=image_edit_provider_config,
-            image_edit_optional_request_params=image_edit_request_params,
+            image_edit_optional_request_params={
+                **image_edit_request_params,
+                **(
+                    _passthrough_edit_params(
+                        kept_params,
+                        extra_body if isinstance(extra_body, dict) else None,
+                        provider_supported_params,
+                        additional_drop_params,
+                    )
+                    if custom_llm_provider in _PASSTHROUGH_EDIT_PROVIDERS
+                    else {}
+                ),
+            },
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
@@ -1092,6 +1182,7 @@ async def aimage_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    markup: FileTypes | list[FileTypes] | None = None,  # mutable-ok: a tuple is one upload, a list is several
     **kwargs,
 ) -> ImageResponse:
     """
@@ -1122,6 +1213,7 @@ async def aimage_edit(
             image=images,
             prompt=prompt,
             mask=mask,
+            markup=markup,
             model=model,
             n=n,
             quality=quality,

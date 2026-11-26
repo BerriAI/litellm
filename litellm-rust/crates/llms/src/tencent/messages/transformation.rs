@@ -88,6 +88,14 @@ impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
         Ok(format!("{base}{MESSAGES_PATH}"))
     }
 
+    fn checks_claude_signatures(
+        &self,
+        _api_base: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        false
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,

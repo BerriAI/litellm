@@ -4,13 +4,14 @@
 import json
 import re
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
@@ -29,7 +30,14 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason, normalize_drop_params
+from litellm.litellm_core_utils.audio_utils.utils import as_raw_pcm16_base64
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+    map_finish_reason,
+    normalize_drop_params,
+)
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
@@ -109,7 +117,7 @@ from ..common_utils import (
 )
 from ..request_labels import vertex_request_label_fields, without_caller_labels_header
 from ..vertex_llm_base import VertexBase
-from .grounding_requests import calculate_grounding_requests
+from .grounding_requests import calculate_grounding_requests, search_tool_call_queries, web_search_queries
 from .long_decode import (
     HOP_FAILURES,
     AsyncStreamResume,
@@ -144,6 +152,7 @@ from .transformation import (
     gemini_convert_messages_with_history,
     sync_transform_request_body,
 )
+from .web_search_calls import gemini_web_search_calls
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -236,6 +245,34 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
     )
 
 
+_SERVER_SIDE_TOOL_INVOCATIONS_KEYS: Final = ("include_server_side_tool_invocations", "includeServerSideToolInvocations")
+
+
+def _turns_server_side_tools_off(params: Mapping[str, object]) -> bool:
+    return any(params.get(key) is False for key in _SERVER_SIDE_TOOL_INVOCATIONS_KEYS)
+
+
+def _pins_function_calling_mode(params: Mapping[str, object]) -> bool:
+    match params.get("tool_choice"):
+        case "required" | "none" | {"function": {"name": str()}}:
+            return True
+        case _:
+            return False
+
+
+_PINNED_FUNCTION_CALLING_MODES: Final = frozenset({"ANY", "NONE"})
+
+
+def _tool_config_keeps_the_old_search_drop(tool_config: Mapping[str, object]) -> bool:
+    calling: Final = as_str_mapping(
+        tool_config.get("functionCallingConfig", tool_config.get("function_calling_config"))
+    )
+    mode: Final = calling.get("mode") if calling is not None else None
+    return _turns_server_side_tools_off(tool_config) or (
+        isinstance(mode, str) and mode in _PINNED_FUNCTION_CALLING_MODES
+    )
+
+
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
@@ -243,6 +280,26 @@ def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
 
 def _names_its_finish(candidate: Candidates) -> bool:
     return (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
+
+
+def requests_audio_mime_type(request_body: Mapping[str, object]) -> bool:
+    match request_body.get("generationConfig") or request_body.get("generation_config"):
+        case {
+            "responseFormat": {
+                "audio": {"mimeType": str() | int() | float() as mime_type}
+                | {"mime_type": str() | int() | float() as mime_type}
+            }
+        }:
+            return bool(mime_type)
+        case {
+            "response_format": {
+                "audio": {"mimeType": str() | int() | float() as mime_type}
+                | {"mime_type": str() | int() | float() as mime_type}
+            }
+        }:
+            return bool(mime_type)
+        case _:
+            return False
 
 
 def _content_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
@@ -293,6 +350,24 @@ def _fallback_thought_image(candidate: Candidates) -> tuple[ImageURLListItem, ..
 
 def _with_delta_images(choice: "StreamingChoices", images: tuple[ImageURLListItem, ...]) -> "StreamingChoices":
     return choice.model_copy(update={"delta": choice.delta.model_copy(update={"images": list(images)})})
+
+
+def _candidate_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
+    content: Final = candidate.get("content")
+    return (content.get("parts") or ()) if content else ()
+
+
+def _parts_of_candidates(candidates: Sequence[Candidates]) -> Iterator[HttpxPartType]:
+    for candidate in candidates:
+        yield from _candidate_parts(candidate)
+
+
+def _candidate_web_search_queries(candidate: Candidates) -> tuple[str, ...]:
+    grounding: Final = candidate.get("groundingMetadata")
+    grounding_items: Final = as_object_list(grounding) or (() if grounding is None else per_hop(grounding))
+    return web_search_queries(
+        tuple(filter(None, map(as_str_mapping, grounding_items))), search_tool_call_queries(_candidate_parts(candidate))
+    )
 
 
 def _served_model_name(model_version: object) -> str | None:
@@ -527,6 +602,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> bool:
         return cls._forward_gemini_function_call_id(model)
 
+    def _supports_search_tools_with_functions(self, model: str) -> bool:
+        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
+        bare: Final = model.split("/")[-1]
+        flags: Final = (
+            rows.get(candidate, {}).get("supports_search_tools_with_functions")
+            for candidate in (f"{self._route}/{bare}", bare)
+        )
+        return next((flag for flag in flags if isinstance(flag, bool)), False)
+
+    @staticmethod
+    def caller_tool_config_keeps_the_old_search_drop(tool_config: JsonValue | None) -> bool:
+        fields: Final = as_str_mapping(tool_config)
+        return fields is not None and _tool_config_keeps_the_old_search_drop(fields)
+
+    def _keeps_search_tools_with_functions(self, model: str, *param_sources: Mapping[str, object]) -> bool:
+        keeps_the_old_drop: Final = any(
+            _turns_server_side_tools_off(params) or _pins_function_calling_mode(params) for params in param_sources
+        )
+        return not keeps_the_old_drop and self._supports_search_tools_with_functions(model)
+
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -623,33 +718,55 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._search_tool_keys()
 
     @classmethod
-    def _drop_search_tools_mixed_with_functions(cls, optional_params: dict) -> None:
+    def _is_search_tool(cls, tool: object) -> bool:
+        return not cls.search_tool_keys().isdisjoint(as_str_mapping(tool) or ())
+
+    @classmethod
+    def _mixes_search_tools_with_functions(cls, tools: Sequence[object]) -> bool:
+        return any((as_str_mapping(tool) or {}).get("function_declarations") for tool in tools) and any(
+            map(cls._is_search_tool, tools)
+        )
+
+    @staticmethod
+    def _is_search_retrieval_tool(tool: object) -> bool:
+        return VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value in (as_str_mapping(tool) or ())
+
+    @classmethod
+    def _drop_search_tools_mixed_with_functions(
+        cls,
+        optional_params: dict[str, object],  # mutable-ok: map_openai_params builds the request params in place
+        keeps_search_tools: bool = False,
+        drops_search_retrieval: bool = False,
+    ) -> None:
         """
         Drop search tools from optional_params when mixed with function declarations
-        and include_server_side_tool_invocations is not enabled.
+        and include_server_side_tool_invocations is not enabled. A model that keeps
+        search tools next to function declarations (Gemini 3+) keeps both and gets
+        include_server_side_tool_invocations set instead, minus googleSearchRetrieval,
+        which Gemini 3+ rejects. A caller who set include_server_side_tool_invocations
+        keeps googleSearchRetrieval unless drop_params is set, as before.
 
         Runs after map_openai_params merges tools and web_search_options so both
         code paths (single _map_function call vs split tools + web_search_options)
         get the same conflict resolution.
         """
+        tools: Final = as_object_list(optional_params.get("tools")) or ()
+        if not cls._mixes_search_tools_with_functions(tools):
+            return
+        if keeps_search_tools:
+            caller_flag_on: Final = optional_params.get("include_server_side_tool_invocations") is True
+            cls._keep_search_tools_next_to_functions(
+                optional_params, tools, drops_search_retrieval or not caller_flag_on
+            )
+            return
         if optional_params.get("include_server_side_tool_invocations"):
             return
+        optional_params["tools"] = list(cls.without_search_tools_next_to_functions(tools))
 
-        tools: Final = optional_params.get("tools")
-        if not isinstance(tools, list) or not tools:
-            return
-
-        search_tool_keys: Final = cls._search_tool_keys()
-        has_function_declarations = any(isinstance(tool, dict) and tool.get("function_declarations") for tool in tools)
-        if not has_function_declarations:
-            return
-
-        has_search_tools: Final = any(
-            isinstance(tool, dict) and any(key in tool for key in search_tool_keys) for tool in tools
-        )
-        if not has_search_tools:
-            return
-
+    @classmethod
+    def without_search_tools_next_to_functions(cls, tools: Sequence[object]) -> tuple[object, ...]:
+        if not cls._mixes_search_tools_with_functions(tools):
+            return tuple(tools)
         verbose_logger.warning(
             "Vertex AI does not support mixing function declarations with "
             "search tools (googleSearch, enterpriseWebSearch, urlContext, "
@@ -657,9 +774,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "tools and keeping function declarations. To use search tools, "
             "send a request without function calling tools."
         )
-        optional_params["tools"] = [
-            tool for tool in tools if not (isinstance(tool, dict) and any(key in tool for key in search_tool_keys))
-        ]
+        return tuple(tool for tool in tools if not cls._is_search_tool(tool))
+
+    @classmethod
+    def _keep_search_tools_next_to_functions(
+        cls,
+        optional_params: dict[str, object],  # mutable-ok: map_openai_params builds the request params in place
+        tools: Sequence[object],
+        drops_search_retrieval: bool,
+    ) -> None:
+        kept: Final = (
+            [tool for tool in tools if not cls._is_search_retrieval_tool(tool)] if drops_search_retrieval else tools
+        )
+        if len(kept) < len(tools):
+            verbose_logger.warning(
+                "Gemini 3+ does not support googleSearchRetrieval next to function declarations. Dropping it, "
+                "use googleSearch instead."
+            )
+            optional_params["tools"] = kept  # rebind-ok: map_openai_params builds the request params in place
+        if cls._mixes_search_tools_with_functions(kept):
+            optional_params["include_server_side_tool_invocations"] = True  # rebind-ok: built in place as above
 
     @classmethod
     def drop_search_tools_mixed_with_functions(
@@ -782,14 +916,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         enterpriseWebSearch: dict | None,
         urlContext: dict | None,
         optional_params: dict,
+        keep_search_tools_with_functions: bool = False,
     ) -> tuple:
         """
-        Resolve Vertex AI constraint: multiple Tool objects in a request must
+        Resolve the Gemini 2.x constraint: multiple Tool objects in a request must
         ALL be search tools. When function declarations are mixed with search
         tools, drop search tools to avoid 400 error.
 
-        Skip when include_server_side_tool_invocations is enabled (Gemini 3+
-        supports tool combination natively).
+        Skip when include_server_side_tool_invocations is enabled or the model
+        keeps search tools next to function declarations (Gemini 3+).
 
         Note: code_execution, computerUse, and googleMaps are NOT search tools
         and CAN coexist with function declarations, so they are preserved.
@@ -808,8 +943,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 urlContext,
             ]
         )
-        server_side_tool_invocations: Final = optional_params.get("include_server_side_tool_invocations", False)
-        if gtool_func_declarations and has_search_tools and not server_side_tool_invocations:
+        keeps_search_tools: Final = keep_search_tools_with_functions or optional_params.get(
+            "include_server_side_tool_invocations", False
+        )
+        if gtool_func_declarations and has_search_tools and not keeps_search_tools:
             verbose_logger.warning(
                 "Vertex AI does not support mixing function declarations with "
                 "search tools (googleSearch, enterpriseWebSearch, urlContext, "
@@ -817,10 +954,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "tools and keeping function declarations. To use search tools, "
                 "send a request without function calling tools."
             )
-            googleSearch = None
-            googleSearchRetrieval = None
-            enterpriseWebSearch = None
-            urlContext = None
+            return None, None, None, None
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
@@ -836,15 +970,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: list[dict[str, object]],  # mutable-ok: the tools list the caller sent
         optional_params: dict[str, object],  # mutable-ok: the build adds toolConfig to the request's params
         pin_consts: bool,
+        keep_search_tools_with_functions: bool = False,
     ) -> list[Tools]:  # mutable-ok: mirrors _map_function's return
         tools_have_const: Final = has_const(cast(JsonValue, value))  # cast-ok: tools are JSON request data
         return with_pins_that_fit(
-            partial(self._build_function_tools, value, optional_params, copy_tools=tools_have_const),
+            partial(
+                self._build_function_tools,
+                value,
+                optional_params,
+                copy_tools=tools_have_const,
+                keep_search_tools_with_functions=keep_search_tools_with_functions,
+            ),
             pin_consts and tools_have_const,
         )
 
     def _build_function_tools(
-        self, value: list[dict], optional_params: dict, pin_consts: bool, *, copy_tools: bool
+        self,
+        value: list[dict],
+        optional_params: dict,
+        pin_consts: bool,
+        *,
+        copy_tools: bool,
+        keep_search_tools_with_functions: bool = False,
     ) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
@@ -983,6 +1130,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             enterpriseWebSearch=enterpriseWebSearch,
             urlContext=urlContext,
             optional_params=optional_params,
+            keep_search_tools_with_functions=keep_search_tools_with_functions,
         )
 
         # Function declarations can be grouped together in one Tool
@@ -1411,10 +1559,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         appear before this flag, _resolve_search_tool_conflict would drop search
         tools before the flag is applied.
         """
-        for key in (
-            "include_server_side_tool_invocations",
-            "includeServerSideToolInvocations",
-        ):
+        for key in _SERVER_SIDE_TOOL_INVOCATIONS_KEYS:
             if non_default_params.get(key) is True or optional_params.get(key) is True:
                 optional_params["include_server_side_tool_invocations"] = True
                 return
@@ -1422,7 +1567,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
         return "drops"
 
-    def _schema_pins_fit(self, request_params: Mapping[str, object], model: str) -> bool:
+    def _schema_pins_fit(
+        self, request_params: Mapping[str, object], model: str, keep_search_tools_with_functions: bool
+    ) -> bool:
         tool_params: Final = tuple(
             param
             for param in ("tools", "functions")
@@ -1441,6 +1588,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 cast(list[dict[str, object]], request_params[param]),  # cast-ok: a tools list
                 {},
                 pin_consts=True,
+                keep_search_tools_with_functions=keep_search_tools_with_functions,
             )
             for param in tool_params
         ]
@@ -1468,7 +1616,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         candidate_count: Final = gemini_image_candidate_count(model, candidate_params, drop_params, self._route)
         if isinstance(candidate_count, UnsupportedParamsError) and not allow_unsupported_n:
             raise candidate_count
-        pins_fit: Final = self._schema_pins_fit(typed_request_params, model)
+        keeps_search_tools_with_functions: Final = self._keeps_search_tools_with_functions(
+            model,
+            typed_request_params,
+            cast(Mapping[str, object], optional_params),  # cast-ok: map_openai_params keys request params by name
+        )
+        pins_fit: Final = self._schema_pins_fit(typed_request_params, model, keeps_search_tools_with_functions)
         gemini_sampling_params_warned: bool = False
         for param, value in request_params.items():
             if param == "temperature":
@@ -1543,6 +1696,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     cast(list[dict[str, object]], value),  # cast-ok: the branch checked a non-empty tools list
                     cast(dict[str, object], optional_params),  # cast-ok: the request's params, keyed by name
                     pin_consts=pins_fit,
+                    keep_search_tools_with_functions=keeps_search_tools_with_functions,
                 )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):
@@ -1613,7 +1767,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "AUDIO" not in optional_params["responseModalities"]:
                 optional_params["responseModalities"].append("AUDIO")
 
-        self._drop_search_tools_mixed_with_functions(optional_params)
+        self._drop_search_tools_mixed_with_functions(
+            cast(dict[str, object], optional_params),  # cast-ok: map_openai_params keys request params by name
+            keeps_search_tools_with_functions,
+            drops_search_retrieval=drops_unsupported_params(drop_params),
+        )
 
         return optional_params
 
@@ -1877,7 +2035,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return invocations if invocations else None
 
-    def _extract_audio_response_from_parts(self, parts: list[HttpxPartType]) -> ChatCompletionAudioResponse | None:
+    def _extract_audio_response_from_parts(
+        self, parts: list[HttpxPartType], keeps_requested_audio_format: bool
+    ) -> ChatCompletionAudioResponse | None:
         """Extract audio response from parts if present"""
         for part in parts:
             if "text" in part:
@@ -1893,7 +2053,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                                 transcript = ""  # Gemini doesn't provide transcript
 
                                 return ChatCompletionAudioResponse(
-                                    data=audio_data,
+                                    data=audio_data
+                                    if keeps_requested_audio_format
+                                    else as_raw_pcm16_base64(media_type, audio_data),
                                     expires_at=expires_at,
                                     transcript=transcript,
                                 )
@@ -1909,7 +2071,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     expires_at = int(time.time()) + (24 * 60 * 60)
                     transcript = ""  # Gemini doesn't provide transcript
 
-                    return ChatCompletionAudioResponse(data=data, expires_at=expires_at, transcript=transcript)
+                    return ChatCompletionAudioResponse(
+                        data=data if keeps_requested_audio_format else as_raw_pcm16_base64(mime_type, data),
+                        expires_at=expires_at,
+                        transcript=transcript,
+                    )
 
         return None
 
@@ -2399,8 +2565,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._calculate_web_search_requests(grounding_metadata)
 
     @staticmethod
-    def _set_grounding_usage_counters(usage: Usage, grounding_metadata: Sequence[Mapping[str, object]]) -> None:
-        grounding_requests: Final = calculate_grounding_requests(grounding_metadata)
+    def _set_grounding_usage_counters(
+        usage: Usage,
+        grounding_metadata: Sequence[Mapping[str, object]],
+        tool_call_queries: Sequence[str] = (),
+    ) -> None:
+        grounding_requests: Final = calculate_grounding_requests(grounding_metadata, tool_call_queries)
         details: Final = cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details)
         if grounding_requests.web_search_requests is not None:
             details.web_search_requests = grounding_requests.web_search_requests
@@ -2412,8 +2582,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cls,
         usage: Usage,
         grounding_metadata: Sequence[Mapping[str, object]],
+        tool_call_queries: Sequence[str] = (),
     ) -> None:
-        return cls._set_grounding_usage_counters(usage, grounding_metadata)
+        return cls._set_grounding_usage_counters(usage, grounding_metadata, tool_call_queries)
 
     @staticmethod
     def _create_streaming_choice(
@@ -2625,6 +2796,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
         cumulative_tool_call_index: int = 0,
+        keeps_requested_audio_format: bool = False,
     ) -> tuple[list[dict], list[dict], list, list, int]:
         """
         Helper method to process candidates and extract metadata
@@ -2680,7 +2852,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 ) = VertexGeminiConfig().get_assistant_content_message(parts=candidate["content"]["parts"])
 
                 audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
-                    parts=candidate["content"]["parts"]
+                    parts=candidate["content"]["parts"],
+                    keeps_requested_audio_format=keeps_requested_audio_format,
                 )
                 image_response = list(
                     _final_images(candidate["content"]["parts"])
@@ -2761,6 +2934,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 for key, value in (
                     ("thought_signatures", thought_signatures),
                     ("server_side_tool_invocations", server_side_tool_invocations),
+                    (
+                        "web_search_calls",
+                        list(gemini_web_search_calls(model_response.id, _candidate_web_search_queries(candidate)))
+                        or None,
+                    ),
                     ("continuation_token", client_continuation_token(candidate)),
                 )
                 if value is not None
@@ -2810,6 +2988,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         cumulative_tool_call_index: int = 0,
+        keeps_requested_audio_format: bool = False,
     ) -> tuple[  # mutable-ok: mirrors override contract
         list[dict[str, object]],
         list[dict[str, object]],
@@ -2818,7 +2997,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         int,
     ]:
         return cls._process_candidates(
-            _candidates, model_response, standard_optional_params, cumulative_tool_call_index
+            _candidates,
+            model_response,
+            standard_optional_params,
+            cumulative_tool_call_index,
+            keeps_requested_audio_format,
         )
 
     def transform_response(
@@ -2835,20 +3018,54 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        ## LOGGING
+        typed_request_data: Final = cast(Mapping[str, object], request_data)  # cast-ok: untyped shared signature
+        return self._log_and_transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            logged_input=messages,
+            request_data=typed_request_data,
+            keeps_requested_audio_format=requests_audio_mime_type(typed_request_data),
+        )
+
+    def transform_pass_through_response(
+        self, model: str, raw_response: httpx.Response, logging_obj: LoggingClass
+    ) -> ModelResponse:
+        return self._log_and_transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=logging_obj,
+            logged_input=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
+            request_data={},
+            keeps_requested_audio_format=True,
+        )
+
+    def _log_and_transform_response(
+        self,
+        *,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LoggingClass,
+        logged_input: Sequence[AllMessageValues],
+        request_data: Mapping[str, object],
+        keeps_requested_audio_format: bool,
+    ) -> ModelResponse:
         logging_obj.post_call(
-            input=messages,
+            input=logged_input,
             api_key="",
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-
         return self._transform_google_generate_content_to_openai_model_response(
             completion_response=parse_body(raw_response),
             model_response=model_response,
             model=model,
             logging_obj=logging_obj,
             raw_response=raw_response,
+            keeps_requested_audio_format=keeps_requested_audio_format,
         )
 
     def _transform_google_generate_content_to_openai_model_response(
@@ -2858,6 +3075,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         logging_obj: LoggingClass,
         raw_response: httpx.Response,
+        keeps_requested_audio_format: bool = False,
     ) -> ModelResponse:
         """
         Transforms a Google GenAI generate content response to an OpenAI model response.
@@ -2901,14 +3119,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     safety_ratings,
                     citation_metadata,
                     _,  # cumulative_tool_call_index not needed in non-streaming
-                ) = VertexGeminiConfig._process_candidates(_candidates, model_response, logging_obj.optional_params)
+                ) = VertexGeminiConfig._process_candidates(
+                    _candidates,
+                    model_response,
+                    logging_obj.optional_params,
+                    keeps_requested_audio_format=keeps_requested_audio_format,
+                )
 
             usage: Final = VertexGeminiConfig._calculate_usage(
                 completion_response=completion_response,
                 cache_creation_tokens=_cache_creation_tokens(logging_obj),
             )
 
-            VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
+            VertexGeminiConfig._set_grounding_usage_counters(
+                usage, grounding_metadata, search_tool_call_queries(_parts_of_candidates(_candidates or ()))
+            )
 
             setattr(model_response, "usage", usage)
 
@@ -2962,9 +3187,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         logging_obj: LoggingClass,
         raw_response: httpx.Response,
+        keeps_requested_audio_format: bool = False,
     ) -> ModelResponse:
         return self._transform_google_generate_content_to_openai_model_response(
-            completion_response, model_response, model, logging_obj, raw_response
+            completion_response, model_response, model, logging_obj, raw_response, keeps_requested_audio_format
         )
 
     def _transform_messages(
@@ -3673,6 +3899,7 @@ def _transform_long_decode_hops(
         model=model,
         logging_obj=logging_obj,
         raw_response=first_response,
+        keeps_requested_audio_format=requests_audio_mime_type(request_body),
     )
     merged_usage: Final = getattr(merged, "usage", None)
     if not isinstance(merged_usage, Usage):
@@ -3690,6 +3917,7 @@ class ModelResponseIterator:
         response_headers: dict[str, str] | None = None,
         response: httpx.Response | None = None,
         resume: StreamResume | None = None,
+        returns_provider_audio: bool = False,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
@@ -3707,6 +3935,9 @@ class ModelResponseIterator:
         self.has_seen_tool_calls: bool = False
         self._resume = resume
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
+        self._keeps_requested_audio_format: Final = returns_provider_audio or (
+            resume is not None and requests_audio_mime_type(resume.request_body)
+        )
         self._pending_hop_token: str | None = None
         self._unanswered_hop_token: str | None = None
         self._token_after_unsent_images: str | None = None
@@ -3717,6 +3948,8 @@ class ModelResponseIterator:
         self._initial_prompt_tokens: int | None = None
         self._grounding_offset: tuple[Mapping[str, object], ...] = ()
         self._hop_grounding: tuple[Mapping[str, object], ...] = ()
+        self._search_tool_call_queries: tuple[str, ...] = ()
+        self._web_search_calls_by_choice: Mapping[int, Mapping[str, ResponseFunctionWebSearch]] = MappingProxyType({})
         self._answer_offset: int = 0
         self._hop_answer_bytes: int = 0
         self._held_thought_images: Mapping[int, tuple[ImageURLListItem, ...]] = MappingProxyType({})
@@ -3771,6 +4004,7 @@ class ModelResponseIterator:
             model_response,
             self.logging_obj.optional_params,
             cumulative_tool_call_index=self.cumulative_tool_call_index,
+            keeps_requested_audio_format=self._keeps_requested_audio_format,
         )
 
         # Track whether tool_calls have been seen across streaming chunks.
@@ -3860,7 +4094,9 @@ class ModelResponseIterator:
             cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
         )
 
-        VertexGeminiConfig.set_grounding_usage_counters(usage, self._grounding_through_this_hop(grounding_metadata))
+        VertexGeminiConfig.set_grounding_usage_counters(
+            usage, self._grounding_through_this_hop(grounding_metadata), self._search_tool_call_queries
+        )
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
@@ -3917,6 +4153,11 @@ class ModelResponseIterator:
                     safety_ratings,
                     citation_metadata,
                 ) = self._apply_stream_candidates(_candidates, model_response)
+                self._search_tool_call_queries = (
+                    *self._search_tool_call_queries,
+                    *search_tool_call_queries(_parts_of_candidates(_candidates)),
+                )
+                self._report_web_search_calls_so_far(model_response)
 
             usage: Final = self._marked_stream_usage(
                 self._apply_stream_usage_metadata(processed_chunk, model_response, grounding_metadata)
@@ -3932,6 +4173,36 @@ class ModelResponseIterator:
 
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
+
+    def _report_web_search_calls_so_far(self, model_response: "ModelResponseStream") -> None:
+        searched: Final = frozenset(
+            call.id for call in gemini_web_search_calls(model_response.id, self._search_tool_call_queries)
+        )
+        for choice in model_response.choices:
+            if (fields := self._fields_with_web_search_calls_so_far(choice, searched)) is not None:
+                choice.delta.provider_specific_fields = fields
+
+    def _fields_with_web_search_calls_so_far(
+        self, choice: "StreamingChoices", searched: frozenset[str]
+    ) -> dict[str, object] | None:
+        fields: Final[Mapping[str, object]] = choice.delta.provider_specific_fields or {}
+        arrived: Final = as_object_list(fields.get("web_search_calls"))
+        if not arrived:
+            return None
+        reported: Final = MappingProxyType(
+            {
+                **self._web_search_calls_by_choice.get(choice.index, {}),
+                **{
+                    call.id: call
+                    for call in arrived
+                    if isinstance(call, ResponseFunctionWebSearch) and (not searched or call.id in searched)
+                },
+            }
+        )
+        self._web_search_calls_by_choice = MappingProxyType(
+            {**self._web_search_calls_by_choice, choice.index: reported}
+        )
+        return {**fields, "web_search_calls": list(reported.values())}
 
     def _with_usage_offset(self, chunk: GenerateContentResponseBody) -> GenerateContentResponseBody:
         if "usageMetadata" not in chunk:

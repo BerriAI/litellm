@@ -45,8 +45,8 @@ class TestAnthropicBetaHeadersFiltering:
             self.config = json.load(f)
 
     def get_all_beta_headers(self) -> List[str]:
-        """Get all beta headers from the anthropic provider config."""
-        return list(self.config.get("anthropic", {}).keys())
+        """Get every beta header any provider column names."""
+        return sorted(set().union(*(column for column in self.config.values() if isinstance(column, dict))))
 
     def get_supported_headers(self, provider: str) -> List[str]:
         """Get headers with non-null values for a provider."""
@@ -558,3 +558,14 @@ class TestAnthropicBetaHeadersFiltering:
         headers = {"anthropic-version": "2023-06-01"}
 
         assert update_headers_with_filtered_beta(headers, "bedrock_mantle") == {"anthropic-version": "2023-06-01"}
+
+    @pytest.mark.parametrize("provider", ["bedrock", "bedrock_mantle", "databricks"])
+    def test_platforms_forward_the_server_side_fallback_beta_they_take(self, provider: str) -> None:
+        """A `fallback` content block in the history needs server-side-fallback-2026-06-01, or the platform answers
+        400 "Input tag 'fallback' found using 'type' does not match any of the expected tags". Live probes on
+        2026-11-19 in us-east-1 found Bedrock Invoke and Bedrock Mantle answer 200 to a fallback-block history with
+        server-side-fallback-2026-06-01 and reject server-side-fallback-2026-07-01 with "Unexpected value(s)", and
+        Databricks answered the same way on databricks-claude-haiku-4-5 on 2026-11-23."""
+        assert update_headers_with_filtered_beta(
+            {"anthropic-beta": "server-side-fallback-2026-06-01,server-side-fallback-2026-07-01"}, provider
+        ) == {"anthropic-beta": "server-side-fallback-2026-06-01"}

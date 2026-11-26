@@ -53,7 +53,7 @@ def test_vertex_gemini_edit_preserves_usage_and_traffic_type(traffic_type: str |
         raw_response=httpx.Response(
             200,
             json={
-                "candidates": [],
+                "candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
                 "usageMetadata": {
                     "promptTokenCount": 1131,
                     "candidatesTokenCount": 0,

@@ -795,6 +795,140 @@ class TestUnpackLegacyDefs:
         assert "components" not in out
         assert out["properties"]["r0"]["properties"]["p0"] == {"type": "string"}
 
+    def test_a_defs_ref_is_inlined_from_the_legacy_block_beside_it(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        address: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+        schema: Final = {
+            "type": "object",
+            "properties": {"home": {"$ref": "#/$defs/Address"}},
+            "definitions": {"Address": address},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out["properties"]["home"] == address
+
+    def test_a_boolean_definition_is_inlined_as_the_schema_it_means(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {"anything": {"$ref": "#/definitions/Anything"}, "nothing": {"$ref": "#/definitions/Nothing"}},
+            "definitions": {"Anything": True, "Nothing": False},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out == {"type": "object", "properties": {"anything": {}, "nothing": {"not": {}}}}
+
+    @pytest.mark.parametrize(
+        "legacy_blocks",
+        [
+            {"definitions": 5},
+            {"definitions": {"A": {"type": "string"}}, "components": {"schemas": ["not", "a", "map"]}},
+            {"definitions": {"A": {"type": "string"}}, "components": 5},
+        ],
+        ids=["definitions_is_a_number", "components_schemas_is_a_list", "components_is_a_number"],
+    )
+    def test_a_malformed_legacy_block_is_left_for_the_provider_to_judge(self, legacy_blocks):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {"type": "object", "properties": {"a": {"$ref": "#/definitions/A"}}, **legacy_blocks}
+
+        out: Final = unpack_legacy_defs(copy.deepcopy(schema))
+
+        assert out == schema
+
+    def test_memory_stays_linear_in_schema_size_with_many_definitions(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        n: Final = 2_000
+        schema: Final = {
+            "type": "object",
+            "properties": {f"f{i}": {"$ref": f"#/definitions/T{i}"} for i in range(n)},
+            "definitions": {f"T{i}": {"type": "string"} for i in range(n)},
+        }
+        schema_bytes: Final = len(json.dumps(schema))
+
+        tracemalloc.start()
+        try:
+            out: Final = unpack_legacy_defs(schema)
+            peak_bytes: Final = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+        assert all(out["properties"][f"f{i}"] == {"type": "string"} for i in range(n))
+        assert peak_bytes < 50 * schema_bytes
+
+    def test_nested_definitions_shadow_outer_ones_of_the_same_name(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "outer": {"$ref": "#/definitions/T"},
+                "inner": {
+                    "type": "object",
+                    "properties": {"value": {"$ref": "#/definitions/T"}},
+                    "definitions": {"T": {"type": "integer"}},
+                },
+            },
+            "definitions": {"T": {"type": "string"}},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out["properties"]["outer"] == {"type": "string"}
+        assert out["properties"]["inner"]["properties"]["value"] == {"type": "integer"}
+
+    def test_a_defs_block_that_is_not_a_map_is_ignored(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "item": {
+                    "type": "object",
+                    "properties": {"value": {"$ref": "#/definitions/T"}},
+                    "$defs": ["not", "a", "map"],
+                }
+            },
+        }
+
+        unpack_defs(schema, {"T": {"type": "string"}})
+
+        assert schema["properties"]["item"]["properties"]["value"] == {"type": "string"}
+
+    def test_a_ref_that_is_not_a_string_is_left_as_is(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "odd": {"$ref": 5},
+                "value": {"$ref": "#/definitions/T"},
+            },
+        }
+
+        unpack_defs(schema, {"T": {"type": "string"}})
+
+        assert schema["properties"] == {"odd": {"$ref": 5}, "value": {"type": "string"}}
+
 
 class TestTextCompletionPromptToMessages:
     """`/v1/completions` prompt wrapping, shared by the real-time and batch paths."""
@@ -2283,6 +2417,15 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
+def test_get_str_from_messages_keeps_the_text_a_fallback_block_carries_like_a_text_block() -> None:
+    user_turn: Final = {"role": "user", "content": "Hi"}
+    reply: Final = {"type": "text", "text": "Hello"}
+    with_fallback: Final = [user_turn, {"role": "assistant", "content": [{"type": "fallback", "text": "carried"}, reply]}]
+    with_text: Final = [user_turn, {"role": "assistant", "content": [{"type": "text", "text": "carried"}, reply]}]
+
+    assert get_str_from_messages(with_fallback) == get_str_from_messages(with_text)
+
+
 def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
     marked: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
 
@@ -2636,11 +2779,17 @@ def test_defs_unpacked_prefers_a_ref_targets_own_def_over_an_outer_def_of_the_sa
     assert defs_unpacked(schema) == {"type": "object", "properties": {"x": {"type": "integer"}}}
 
 
-@pytest.mark.parametrize("target", [True, 1, "string", ["a"]])
-def test_defs_unpacked_raises_attribute_error_for_a_ref_to_a_def_that_is_not_an_object(target: object) -> None:
+@pytest.mark.parametrize("target", [1, "string", ["a"]])
+def test_defs_unpacked_raises_attribute_error_for_a_ref_to_a_def_that_is_not_a_schema(target: object) -> None:
     schema: Final = {"type": "object", "properties": {"x": {"$ref": "#/$defs/T"}}, "$defs": {"T": target}}
     with pytest.raises(AttributeError):
         defs_unpacked(schema)
+
+
+@pytest.mark.parametrize(("target", "meaning"), [(True, {}), (False, {"not": {}})])
+def test_defs_unpacked_inlines_a_boolean_def_as_the_schema_it_means(target: bool, meaning: object) -> None:
+    schema: Final = {"type": "object", "properties": {"x": {"$ref": "#/$defs/T"}}, "$defs": {"T": target}}
+    assert defs_unpacked(schema) == {"type": "object", "properties": {"x": meaning}}
 
 
 def test_defs_unpacked_inlines_a_ref_target_alone_unless_asked_to_keep_its_siblings() -> None:
@@ -2718,3 +2867,216 @@ def test_defs_unpacked_counts_the_annotations_next_to_a_ref_against_the_inlining
     }
     with pytest.raises(ValueError, match="byte budget"):
         defs_unpacked(schema, keep_ref_siblings=True)
+
+
+_DROPPED_KEYWORDS: Final = frozenset({"propertyNames", "uniqueItems", "if", "then"})
+
+
+def _keyword_schema():
+    return {
+        "type": "object",
+        "properties": {
+            "answers": {
+                "type": "object",
+                "propertyNames": {"type": "string"},
+                "additionalProperties": {"type": "string"},
+            },
+            "tags": {
+                "type": "array",
+                "uniqueItems": True,
+                "items": {"type": "object", "propertyNames": {"maxLength": 3}},
+            },
+            "choice": {"anyOf": [{"type": "array", "uniqueItems": False}, {"type": "null"}]},
+            "uniqueItems": {"type": "boolean", "default": {"uniqueItems": True}},
+            "if": {"type": "string", "examples": [{"propertyNames": "data"}]},
+        },
+        "if": {"properties": {"tags": {"const": []}}},
+        "then": {"required": ["answers"]},
+        "$defs": {"propertyNames": {"type": "object", "propertyNames": {"pattern": "^a"}}},
+        "patternProperties": {"(?<!x)y": {"type": "array", "uniqueItems": True}},
+        "required": ["answers"],
+    }
+
+
+class TestDropSchemaKeywords:
+    def test_drops_the_keywords_from_every_schema_position_and_keeps_names_and_data(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        schema = _keyword_schema()
+
+        result = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+        assert result == {
+            "type": "object",
+            "properties": {
+                "answers": {"type": "object", "additionalProperties": {"type": "string"}},
+                "tags": {"type": "array", "items": {"type": "object"}},
+                "choice": {"anyOf": [{"type": "array"}, {"type": "null"}]},
+                "uniqueItems": {"type": "boolean", "default": {"uniqueItems": True}},
+                "if": {"type": "string", "examples": [{"propertyNames": "data"}]},
+            },
+            "$defs": {"propertyNames": {"type": "object"}},
+            "patternProperties": {"(?<!x)y": {"type": "array"}},
+            "required": ["answers"],
+        }
+        assert schema == _keyword_schema()
+
+    def test_keeps_a_not_subschema_as_sent_while_dropping_the_keywords_around_it(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        tags_not: Final = {"uniqueItems": True, "items": {"type": "object", "propertyNames": {"maxLength": 3}}}
+        root_not: Final = {"if": {"type": "object"}, "then": {"required": ["tags"]}}
+        schema: Final = {
+            "type": "object",
+            "properties": {"tags": {"type": "array", "uniqueItems": True, "not": tags_not}},
+            "not": root_not,
+        }
+
+        result: Final = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+        assert result == {
+            "type": "object",
+            "properties": {"tags": {"type": "array", "not": tags_not}},
+            "not": root_not,
+        }
+        assert tags_not == {"uniqueItems": True, "items": {"type": "object", "propertyNames": {"maxLength": 3}}}
+
+    def test_drops_every_not_holding_a_reference_once_a_keyword_is_dropped(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        plain_not: Final = {"maxItems": 0}
+        definitions: Final = {"a/b": {"type": "array", "items": {"$ref": "#/components/schemas/Unique"}}}
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "tags": {"type": "array", "uniqueItems": True, "not": {"$ref": "#/components/schemas/Unique"}},
+                "labels": {"type": "array", "not": {"anyOf": [{"maxItems": 1}, {"$ref": "#/$defs/a~1b"}]}},
+                "names": {"type": "array", "not": {"$ref": "#/properties/tags"}},
+                "anchored": {"type": "array", "not": {"$dynamicRef": "#items"}},
+                "recursive": {"type": "array", "not": {"$recursiveRef": "#"}},
+                "nested": {"type": "array", "not": {"not": {"not": {"$ref": "#/components/schemas/Unique"}}}},
+                "owners": {"type": "object", "not": {"dependencies": {"id": {"$ref": "#/components/schemas/Unique"}}}},
+                "plain": {"type": "array", "not": plain_not},
+            },
+            "$defs": definitions,
+            "components": {"schemas": {"Unique": {"type": "array", "uniqueItems": True}}},
+        }
+
+        result: Final = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+        assert result == {
+            "type": "object",
+            "properties": {
+                "tags": {"type": "array"},
+                "labels": {"type": "array"},
+                "names": {"type": "array"},
+                "anchored": {"type": "array"},
+                "recursive": {"type": "array"},
+                "nested": {"type": "array"},
+                "owners": {"type": "object"},
+                "plain": {"type": "array", "not": plain_not},
+            },
+            "$defs": definitions,
+            "components": {"schemas": {"Unique": {"type": "array"}}},
+        }
+
+    def test_keeps_a_not_as_sent_when_its_schema_object_is_also_used_elsewhere(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        shared: Final = {"type": "array", "uniqueItems": True}
+        schema: Final = {"type": "object", "properties": {"tags": shared, "labels": {"not": shared}}}
+
+        result: Final = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+        assert result == {"type": "object", "properties": {"tags": {"type": "array"}, "labels": {"not": shared}}}
+        assert shared == {"type": "array", "uniqueItems": True}
+
+    def test_keeps_a_not_holding_a_reference_when_no_keyword_is_dropped(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        schema: Final = {
+            "type": "object",
+            "properties": {"tags": {"type": "array", "not": {"$ref": "#/$defs/Short"}}},
+            "$defs": {"Short": {"maxItems": 0}},
+        }
+
+        assert drop_schema_keywords(schema, _DROPPED_KEYWORDS) is schema
+
+    def test_drops_the_keywords_from_the_component_schemas_a_ref_reaches(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        parameters: Final = {"p": {"name": "p", "schema": {"type": "array", "uniqueItems": True}}}
+        schema: Final = {
+            "type": "object",
+            "properties": {"v": {"$ref": "#/components/schemas/T"}},
+            "components": {
+                "schemas": {
+                    "T": {"type": "array", "uniqueItems": True, "items": {"type": "object", "propertyNames": {}}},
+                    "Anything": True,
+                },
+                "parameters": parameters,
+            },
+        }
+
+        result: Final = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+        assert result == {
+            "type": "object",
+            "properties": {"v": {"$ref": "#/components/schemas/T"}},
+            "components": {
+                "schemas": {"T": {"type": "array", "items": {"type": "object"}}, "Anything": True},
+                "parameters": parameters,
+            },
+        }
+        assert schema["components"]["schemas"]["T"]["uniqueItems"] is True
+
+    def test_returns_the_same_object_when_no_keyword_is_in_a_schema_position(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        schema: Final = {
+            "type": "object",
+            "properties": {"uniqueItems": {"type": "array", "items": {"type": "string"}}},
+            "$defs": {"if": {"type": "string", "default": "propertyNames"}},
+            "components": {"schemas": {"uniqueItems": {"type": "string"}}, "parameters": {"if": {"name": "if"}}},
+        }
+
+        assert drop_schema_keywords(schema, _DROPPED_KEYWORDS) is schema
+
+
+class TestWithSanitizedSchemaAt:
+    @staticmethod
+    def _drop(schema):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        return drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+    def test_sanitizes_the_schema_under_the_path_and_keeps_its_siblings(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import with_sanitized_schema_at
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "reply", "strict": True, "schema": _keyword_schema()},
+        }
+
+        result = with_sanitized_schema_at(response_format, ("json_schema", "schema"), self._drop)
+
+        assert result == {
+            "type": "json_schema",
+            "json_schema": {"name": "reply", "strict": True, "schema": self._drop(_keyword_schema())},
+        }
+        assert response_format["json_schema"]["schema"] == _keyword_schema()
+
+    @pytest.mark.parametrize(
+        "container",
+        [
+            {"type": "json_object"},
+            {"type": "json_schema", "json_schema": "not-a-mapping"},
+            {"type": "json_schema", "json_schema": {"name": "reply", "schema": None}},
+            {"type": "json_schema", "json_schema": {"name": "reply", "schema": {"type": "object"}}},
+        ],
+        ids=["no-json-schema", "json-schema-not-a-mapping", "schema-not-a-mapping", "nothing-to-drop"],
+    )
+    def test_returns_the_same_container_when_nothing_under_the_path_changes(self, container):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import with_sanitized_schema_at
+
+        assert with_sanitized_schema_at(container, ("json_schema", "schema"), self._drop) is container

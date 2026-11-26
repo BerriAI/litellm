@@ -1,12 +1,15 @@
 import asyncio
 import json
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -15,6 +18,7 @@ from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -1239,6 +1243,40 @@ class TestBuildCompleteStreamingResponseRobustness:
         result = self._build(chunks)
         assert result is not None
         assert result.choices[0].message.content == "Hello"
+
+    @pytest.mark.parametrize(
+        "content_events",
+        [
+            [
+                'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+                'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
+                'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            ],
+            [
+                'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}}',
+                'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\": \\"ls\\"}"}}',
+                'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            ],
+        ],
+        ids=["text", "tool_use"],
+    )
+    @pytest.mark.parametrize("non_object_data_line", ["data: 5", "data: []", 'data: "x"', "data: null"])
+    def test_data_line_that_is_not_a_json_object_is_skipped(
+        self, content_events: list[str], non_object_data_line: str
+    ) -> None:
+        chunks: Final = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            *content_events,
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+        expected: Final = self._build(chunks)
+
+        result: Final = self._build([non_object_data_line, *chunks[:2], non_object_data_line, *chunks[2:]])
+
+        assert result is not None
+        assert result.choices[0].message == expected.choices[0].message
+        assert result.usage == expected.usage
 
     def test_done_in_text_payload_is_not_dropped(self):
         """A valid event whose text content contains '[DONE]' must NOT be skipped."""
@@ -2631,6 +2669,49 @@ class TestRecordPartialUsageForFailure:
         assert usage.prompt_tokens == 52
         assert logging_obj.model_call_details["response_cost"] == 0.0
 
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_stashes_the_same_usage_as_a_dropped_connection(self, events_before_failure: int):
+        received: Final = self._interrupted_chunks()[:events_before_failure]
+        error_frame: Final = self._sse(
+            "error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}}
+        )
+        dropped: Final = self._make_logging_obj()
+        errored: Final = self._make_logging_obj()
+
+        for logging_obj, chunks in ((dropped, received), (errored, [*received, error_frame])):
+            AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+                litellm_logging_obj=logging_obj,
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=chunks,
+            )
+
+        assert (
+            errored.model_call_details["combined_usage_object"] == dropped.model_call_details["combined_usage_object"]
+        )
+        assert errored.model_call_details["response_cost"] == dropped.model_call_details["response_cost"]
+
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_split_into_lines_logs_the_same_usage_as_a_dropped_connection(
+        self, events_before_failure: int
+    ):
+        received: Final = self._interrupted_chunks()[:events_before_failure]
+        error_frame: Final = self._sse(
+            "error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}}
+        )
+        dropped, errored = (
+            AnthropicPassthroughLoggingHandler._build_streaming_response_for_logging(
+                litellm_logging_obj=self._make_logging_obj(),
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=[line for line in chain.from_iterable(chunk.splitlines() for chunk in chunks) if line],
+                model="claude-sonnet-5",
+            )
+            for chunks in (received, [*received, error_frame])
+        )
+
+        assert dropped is not None
+        assert errored is not None
+        assert errored.usage == dropped.usage
+
     def test_leaves_logging_obj_untouched_when_nothing_streamed(self):
         logging_obj = self._make_logging_obj()
 
@@ -3059,6 +3140,177 @@ def test_streamed_messages_end_turn_logs_no_stop_details(mock_logging_obj):
     assert "stop_details" not in provider_fields
 
 
+class _LoggedHiddenParams(TypedDict):
+    additional_headers: ReadOnly[dict[str, object]]
+
+
+class _LoggedPayload(TypedDict):
+    hidden_params: ReadOnly[_LoggedHiddenParams]
+
+
+class _SuccessPayloadRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: Final[asyncio.Queue[_LoggedPayload]] = asyncio.Queue()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.payloads.put_nowait(TypeAdapter(_LoggedPayload).validate_python(kwargs["standard_logging_object"]))
+
+
+def _streamed_messages_logging_obj(
+    callbacks: list[str | Callable[..., object] | CustomLogger],
+) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="stream-rate-limit",
+        function_id="stream-rate-limit",
+        dynamic_async_success_callbacks=callbacks,
+    )
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-4-5-20250929",
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    ("response_headers", "remaining_tokens", "remaining_requests"),
+    [
+        pytest.param(
+            {"anthropic-ratelimit-tokens-remaining": "11999000", "anthropic-ratelimit-requests-remaining": "12999"},
+            11999000,
+            12999,
+            id="anthropic",
+        ),
+        pytest.param(
+            {"x-ratelimit-remaining-tokens": "49900", "x-ratelimit-remaining-requests": "49"},
+            49900,
+            49,
+            id="azure-ai-foundry",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_streamed_messages_call_logs_the_rate_limit_the_provider_reported(
+    all_chunks: list[str], response_headers: dict[str, str], remaining_tokens: int, remaining_requests: int
+):
+    recorder: Final = _SuccessPayloadRecorder()
+    logging_obj: Final = _streamed_messages_logging_obj([recorder])
+    logging_obj.model_call_details["response_headers"] = {**response_headers, "request-id": "req_stream"}
+
+    handled: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5-20250929", "stream": True},
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+    await logging_obj.dispatch_success_handlers(
+        result=handled["result"],
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+        cache_hit=False,
+        prefer_async_handlers=True,
+        **handled["kwargs"],
+    )
+    logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
+
+    assert recorder.payloads.empty()
+    logged_headers: Final = logged["hidden_params"]["additional_headers"]
+    assert logged_headers["x_ratelimit_remaining_tokens"] == remaining_tokens
+    assert logged_headers["x_ratelimit_remaining_requests"] == remaining_requests
+    assert "llm_provider-request-id" not in logged_headers
+
+
+@pytest.mark.parametrize("response_headers", [None, {"x-ratelimit-remaining-tokens": 49900}], ids=["absent", "non-str"])
+def test_a_streamed_messages_call_without_usable_provider_headers_logs_none(
+    all_chunks: list[str], response_headers: object
+):
+    logging_obj: Final = _streamed_messages_logging_obj([])
+    logging_obj.model_call_details["response_headers"] = response_headers
+
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5-20250929", "stream": True},
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+
+    assert isinstance(result["result"], litellm.ModelResponse)
+    assert "x-ratelimit-remaining-tokens" not in (result["result"]._hidden_params.get("additional_headers") or {})
+
+
+@pytest.mark.parametrize(
+    ("rate_limit_headers", "logged_headers"),
+    [
+        pytest.param(
+            {"Anthropic-Ratelimit-Tokens-Remaining": "11999000", "anthropic-ratelimit-requests-remaining": "12999"},
+            {
+                "llm_provider-anthropic-ratelimit-tokens-remaining": "11999000",
+                "llm_provider-anthropic-ratelimit-requests-remaining": "12999",
+                "x-ratelimit-remaining-tokens": "11999000",
+                "x-ratelimit-remaining-requests": "12999",
+            },
+            id="anthropic",
+        ),
+        pytest.param(
+            {"X-RateLimit-Remaining-Tokens": "49900", "x-ratelimit-remaining-requests": "49"},
+            {
+                "llm_provider-x-ratelimit-remaining-tokens": "49900",
+                "llm_provider-x-ratelimit-remaining-requests": "49",
+                "x-ratelimit-remaining-tokens": "49900",
+                "x-ratelimit-remaining-requests": "49",
+            },
+            id="azure-ai-foundry",
+        ),
+    ],
+)
+def test_a_streamed_messages_call_logs_only_the_provider_rate_limit_headers(
+    all_chunks: Sequence[str], rate_limit_headers: Mapping[str, str], logged_headers: Mapping[str, str]
+):
+    logging_obj: Final = _streamed_messages_logging_obj([])
+    logging_obj.model_call_details["response_headers"] = {
+        **rate_limit_headers,
+        "set-cookie": "session=secret",
+        "anthropic-organization-id": "org-1",
+        "anthropic-workspace-id": "wrkspc-1",
+        "request-id": "req_stream",
+        "retry-after": "3",
+    }
+
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5-20250929", "stream": True},
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime(2025, 1, 1),
+        all_chunks=list(all_chunks),
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+
+    additional_headers: Final = result["result"]._hidden_params["additional_headers"]
+    assert "llm_provider-set-cookie" not in additional_headers
+    assert "llm_provider-anthropic-organization-id" not in additional_headers
+    assert additional_headers == logged_headers
+
+
 _BEDROCK_TRACE_PRICING: Final = {
     "bedrock/guardrails": {
         "litellm_provider": "bedrock",
@@ -3119,3 +3371,66 @@ def test_anthropic_passthrough_stream_bills_the_bedrock_guardrail_trace_of_the_m
     (entry,) = _recorded_guardrail_entries(mock_logging_obj)
     assert entry["guardrail_usage"] == {"topicPolicyUnits": 3, "contentPolicyUnits": 3}
     assert entry["guardrail_cost"] == pytest.approx(6 * 0.00015)
+
+
+_UNDECODABLE_DATA_LINES: Final = (
+    "data: " + "[" * 100_000 + "]" * 100_000 + "\n\n",
+    "data: " + '{"a": ' * 100_000 + "1" + "}" * 100_000 + "\n\n",
+)
+
+
+@pytest.mark.parametrize("position", ["before_message_start", "after_message_stop"])
+@pytest.mark.parametrize("undecodable_line", _UNDECODABLE_DATA_LINES, ids=["deep-array", "deep-object"])
+def test_streamed_messages_are_logged_when_an_undecodable_data_line_surrounds_the_stream(
+    position: str, undecodable_line: str
+) -> None:
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_undecodable_line",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [],
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Sunny."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}},
+        {"type": "message_stop"},
+    )
+    stream: Final = [f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events]
+    all_chunks: Final = (
+        [undecodable_line, *stream] if position == "before_message_start" else [*stream, undecodable_line]
+    )
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Weather?"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="undecodable-line-call",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    handled: Final = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/anthropic/v1/messages",
+        request_body={"model": "claude-haiku-5-5", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime.now(),
+        all_chunks=all_chunks,
+        end_time=datetime.now(),
+    )
+
+    assert handled["result"].id == "msg_undecodable_line"
+    assert handled["result"].choices[0].message.content == "Sunny."
+    assert (handled["result"].usage.prompt_tokens, handled["result"].usage.completion_tokens) == (12, 3)
+    assert handled["kwargs"]["response_cost"] > 0

@@ -4,12 +4,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._uuid import uuid
 from litellm.types.llms.openai import (
     OpenAIRealtimeErrorEvent,
+    OpenAIRealtimeInputAudioBufferCleared,
     OpenAIRealtimeInputAudioBufferSpeechEvent,
     OpenAIRealtimeInputAudioTranscriptionCompleted,
     OpenAIRealtimeInputAudioTranscriptionDelta,
@@ -102,8 +104,22 @@ def json_integer(
     return value
 
 
+def uses_server_vad(
+    update: TranscriptionSessionUpdate, backend: str, drop_params: bool, error: ProtocolErrorType
+) -> bool:
+    if update.turn_detection_disabled:
+        return False
+    if update.turn_detection_type in (None, "server_vad") or drop_params:
+        return True
+    raise error(f"{backend} supports server_vad turn detection or null. Set drop_params to use server_vad instead")
+
+
 def new_event_id() -> str:
     return f"event_{uuid.uuid4().hex}"
+
+
+def normalize_transcript_word(word: str) -> str:
+    return "".join(char for char in word if char.isalnum()).casefold()
 
 
 def parse_transcription_session_update(
@@ -224,10 +240,10 @@ def transcription_session_created_event(
     return event
 
 
-def error_event(message: str) -> OpenAIRealtimeErrorEvent:
+def error_event(message: str, error_type: str = "server_error") -> OpenAIRealtimeErrorEvent:
     event: Final[OpenAIRealtimeErrorEvent] = {
         "type": "error",
-        "error": {"type": "server_error", "message": message},
+        "error": {"type": error_type, "message": message},
     }
     return event
 
@@ -239,6 +255,14 @@ def speech_event(
         "type": event_type,
         "event_id": new_event_id(),
         "item_id": item_id,
+    }
+    return event
+
+
+def cleared_event() -> OpenAIRealtimeInputAudioBufferCleared:
+    event: Final[OpenAIRealtimeInputAudioBufferCleared] = {
+        "type": "input_audio_buffer.cleared",
+        "event_id": new_event_id(),
     }
     return event
 
@@ -273,3 +297,26 @@ def completed_event(
 def duration_usage(seconds: float) -> RealtimeInputAudioTranscriptionUsage:
     usage: Final[RealtimeInputAudioTranscriptionDurationUsage] = {"type": "duration", "seconds": seconds}
     return usage
+
+
+def build_realtime_wss_url(api_base: str | None, *, default_url: str, path: str, provider: str) -> str:
+    if api_base is None:
+        return default_url
+    error_message: Final = (
+        f"{provider} api_base must be an absolute wss:// or https:// URL without credentials or a fragment"
+    )
+    try:
+        parsed: Final = urlparse(api_base.strip())
+        hostname: Final = parsed.hostname
+        port: Final = parsed.port
+    except ValueError as error:
+        raise ValueError(f"{error_message} ({error})") from None
+    scheme: Final = "wss" if parsed.scheme == "https" else parsed.scheme
+    if not hostname:
+        raise ValueError(error_message)
+    has_credentials: Final = parsed.username is not None or parsed.password is not None
+    if scheme != "wss" or has_credentials or parsed.fragment:
+        raise ValueError(error_message)
+    host: Final = f"[{hostname}]" if ":" in hostname else hostname
+    netloc: Final = f"{host}:{port}" if port is not None else host
+    return urlunparse((scheme, netloc, path, "", "", ""))

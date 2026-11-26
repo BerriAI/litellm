@@ -6,7 +6,7 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from pathlib import PurePosixPath
 from types import MappingProxyType
@@ -57,22 +57,28 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     OpenAIMessageContentListBlock,
 )
-from litellm.types.llms.vertex_ai import BlobType
+from litellm.types.llms.vertex_ai import BlobType, FunctionResponsePartType, GeminiFileInspectionMetadata
 from litellm.types.llms.vertex_ai import FunctionCall as VertexFunctionCall
 from litellm.types.llms.vertex_ai import FunctionResponse as VertexFunctionResponse
 from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
+    DEFS_MAX_INLINED_BYTES,
+    DefsInliningBudgetExceededError,
     converse_redacted_content,
     convert_content_list_to_str,
     infer_content_type_from_url_and_content,
+    inline_refs_and_drop_defs,
+    inline_refs_outside_root_defs,
     is_encrypted_reasoning_block,
     is_non_content_values_set,
     is_unsignable_thinking_block,
     native_redacted_thinking_data,
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
+    schema_with_root_ref_resolved,
+    schema_without_unreferenced_defs,
 )
 from .image_handling import convert_url_to_base64
 
@@ -225,6 +231,7 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
 
 _OLLAMA_USER_ROLES: Final = frozenset({"user", "tool", "function"})
 _DECODED_JSON: Final = TypeAdapter(object)
+_TOOL_SCHEMA: Final = TypeAdapter(dict[str, object])
 
 
 def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detail: str) -> "litellm.BadRequestError":
@@ -1132,48 +1139,67 @@ def anthropic_messages_pt_xml(messages: list):
 
 def _azure_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
-) -> ChatCompletionToolCallFunctionChunk | None:
+) -> ChatCompletionToolCallFunctionChunk:
     """
     Azure requires 'arguments' to be a string.
     """
-    if function_call_params.get("arguments") is None:
-        function_call_params["arguments"] = ""
-    return function_call_params
+    if function_call_params.get("arguments") is not None:
+        return function_call_params
+    return {**function_call_params, "arguments": ""}
 
 
-def _azure_image_url_helper(content: ChatCompletionImageObject):
-    if isinstance(content["image_url"], str):
-        content["image_url"] = {"url": content["image_url"]}
-    else:
-        content["image_url"] = cast(
-            ChatCompletionImageUrlObject,
-            {k: v for k, v in content["image_url"].items() if k != "format"},
-        )
+def _azure_image_url_helper(content: ChatCompletionImageObject) -> ChatCompletionImageObject:
+    image_url: Final = content["image_url"]
+    if isinstance(image_url, str):
+        return {**content, "image_url": {"url": image_url}}
+    return {
+        **content,
+        "image_url": cast(  # cast-ok: dropping format keeps the required url
+            ChatCompletionImageUrlObject, {k: v for k, v in image_url.items() if k != "format"}
+        ),
+    }
 
 
-def _azure_file_helper(content: ChatCompletionFileObject) -> None:
-    content["file"] = cast(
-        ChatCompletionFileObjectFile,
-        {k: v for k, v in content.get("file", {}).items() if k != "format"},
+def _azure_file_helper(content: ChatCompletionFileObject) -> ChatCompletionFileObject:
+    return {
+        **content,
+        "file": cast(  # cast-ok: dropping format leaves only ChatCompletionFileObjectFile keys
+            ChatCompletionFileObjectFile, {k: v for k, v in content.get("file", {}).items() if k != "format"}
+        ),
+    }
+
+
+def _azure_content_part(part: object) -> object:
+    mapping: Final = as_str_mapping(part)
+    part_type: Final = None if mapping is None else mapping.get("type")
+    if part_type == "image_url":
+        return _azure_image_url_helper(cast(ChatCompletionImageObject, part))  # cast-ok: the type tag says image_url
+    if part_type == "file":
+        return _azure_file_helper(cast(ChatCompletionFileObject, part))  # cast-ok: the type tag says file
+    return part
+
+
+def _azure_message(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] == "assistant":
+        function_call: Final = message.get("function_call")
+        if function_call is None:
+            return message
+        return {**message, "function_call": _azure_tool_call_invoke_helper(function_call)}
+    if message["role"] != "user":
+        return message
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    parts: Final[tuple[object, ...]] = tuple(content)
+    return cast(  # cast-ok: only image_url and file parts change, each to the shape Azure takes
+        AllMessageValues, {**message, "content": [_azure_content_part(part) for part in parts]}
     )
 
 
 def convert_to_azure_openai_messages(
     messages: list[AllMessageValues],
 ) -> list[AllMessageValues]:
-    for m in messages:
-        if m["role"] == "assistant":
-            function_call = m.get("function_call", None)
-            if function_call is not None:
-                m["function_call"] = _azure_tool_call_invoke_helper(function_call)
-
-        if m["role"] == "user" and isinstance(m.get("content"), list):
-            for content in m.get("content", []):
-                if isinstance(content, dict) and content.get("type") == "image_url":
-                    _azure_image_url_helper(cast(ChatCompletionImageObject, content))
-                elif isinstance(content, dict) and content.get("type") == "file":
-                    _azure_file_helper(cast(ChatCompletionFileObject, content))
-    return messages
+    return [_azure_message(message) for message in messages]
 
 
 # ------------------------------------------------------------------------------
@@ -1502,6 +1528,55 @@ def _contains_part_reference(payload: JsonValue) -> bool:
     return any(_is_part_reference(node) for node in itertools.chain.from_iterable(levels))
 
 
+def gemini_files_api_tool_uri(file: Mapping[str, object]) -> str | None:
+    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES
+
+    uri: Final = next(
+        (value for key in ("file_data", "file_id", "file_url") if isinstance(value := file.get(key), str) and value),
+        None,
+    )
+    return uri if isinstance(uri, str) and uri.startswith(GEMINI_FILES_API_URI_PREFIXES) else None
+
+
+def _gemini_files_api_tool_part(file: Mapping[str, object], model: str | None) -> VertexPartType | None:
+    from litellm.llms.vertex_ai.gemini.transformation import process_gemini_media
+
+    uri: Final = gemini_files_api_tool_uri(file)
+    if uri is None:
+        return None
+    format_hint: Final = file.get("format") or file.get("mime_type") or file.get("content_type")
+    return process_gemini_media(uri, format=format_hint if isinstance(format_hint, str) else None, model=model)
+
+
+def _gemini_tool_file_options(
+    content: Mapping[str, object], *, allow_gemini_file_references: bool, model: str | None
+) -> tuple[Mapping[str, object], GeminiFileInspectionMetadata]:
+    from litellm.llms.vertex_ai.gemini.transformation import encode_gemini_file_inspection_metadata
+
+    if not allow_gemini_file_references:
+        return {}, GeminiFileInspectionMetadata()
+    fields: Final = {**content, **(as_str_mapping(content.get("file")) or {})}
+    return fields, encode_gemini_file_inspection_metadata(fields, model=model, custom_llm_provider="gemini")
+
+
+def _gemini_anthropic_tool_image_part(source: object) -> FunctionResponsePartType | None:
+    if not isinstance(source, dict) or source.get("type") != "base64":
+        return None
+    base64_source: Final = cast(  # cast-ok: Anthropic base64 source identified by its type
+        AnthropicContentParamSource, source
+    )
+    try:
+        return {
+            "inline_data": {
+                "data": base64_source.get("data", ""),
+                "mime_type": base64_source.get("media_type", "image/jpeg"),
+            }
+        }
+    except Exception as e:
+        verbose_logger.warning("Failed to process Anthropic image block in tool response: %s", e)
+        return None
+
+
 def keeps_gemini_video(
     mime_type: str | None, *, model: str | None, custom_llm_provider: str, drop_params: bool
 ) -> bool:
@@ -1614,6 +1689,8 @@ def convert_to_gemini_tool_call_result(
     last_message_with_tool_calls: dict | None,
     forward_function_call_id: bool = False,
     *,
+    allow_gemini_file_references: bool = False,
+    supports_media_in_tool_response: bool = True,
     drop_params: bool = False,
     model: str | None = None,
     custom_llm_provider: str | None = None,
@@ -1645,7 +1722,7 @@ def convert_to_gemini_tool_call_result(
     }
     """
     content_str: str = ""
-    inline_data_list: Final[list[BlobType]] = []
+    media_parts: Final[list[FunctionResponsePartType]] = []  # mutable-ok: preserve tool result media order
 
     if "content" in message:
         if isinstance(message["content"], str):
@@ -1659,7 +1736,7 @@ def convert_to_gemini_tool_call_result(
                     if len(mime_rest) == 2 and mime_rest[0].startswith("image/"):
                         # Strip any extra parameters (e.g. ";charset=UTF-8") from the MIME segment
                         clean_mime: Final = mime_rest[0].split(";")[0].strip()
-                        inline_data_list.append(BlobType(data=mime_rest[1], mime_type=clean_mime))
+                        media_parts.append({"inline_data": BlobType(data=mime_rest[1], mime_type=clean_mime)})
                         content_str = ""
                 except Exception as e:
                     verbose_logger.warning("Failed to parse data URL in tool response: %s", e)
@@ -1670,18 +1747,8 @@ def convert_to_gemini_tool_call_result(
                 if content_type == "text":
                     content_str += content.get("text", "")
                 elif content_type == "image":  # pyright: ignore[reportUnnecessaryComparison]  # loose runtime dict
-                    # Anthropic-native image block: {"type": "image", "source": {"type": "base64", ...}}
-                    source = content.get("source", {})
-                    if isinstance(source, dict) and source.get("type") == "base64":
-                        try:
-                            inline_data_list.append(
-                                BlobType(
-                                    data=source.get("data", ""),
-                                    mime_type=source.get("media_type", "image/jpeg"),
-                                )
-                            )
-                        except Exception as e:
-                            verbose_logger.warning("Failed to process Anthropic image block in tool response: %s", e)
+                    if (image_part := _gemini_anthropic_tool_image_part(content.get("source"))) is not None:
+                        media_parts.append(image_part)
                 elif content_type in ("input_image", "image_url"):
                     # Extract image for inline_data (for Computer Use screenshots and tool results)
                     image_url_data = content.get("image_url", "")
@@ -1691,15 +1758,28 @@ def convert_to_gemini_tool_call_result(
                         # Convert image to base64 blob format for Gemini
                         try:
                             image_obj = convert_to_anthropic_image_obj(image_url, format=None)
-                            inline_data_list.append(
-                                BlobType(
-                                    data=image_obj["data"],
-                                    mime_type=image_obj["media_type"],
-                                )
+                            media_parts.append(
+                                {
+                                    "inline_data": BlobType(
+                                        data=image_obj["data"],
+                                        mime_type=image_obj["media_type"],
+                                    )
+                                }
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process image in tool response: %s", e)
                 elif content_type in ("file", "input_file"):  # pyright: ignore[reportUnnecessaryContains]  # loose runtime dict
+                    # Vertex function response parts do not support Gemini file inspection fields.
+                    file_fields, metadata = _gemini_tool_file_options(
+                        content, allow_gemini_file_references=allow_gemini_file_references, model=model
+                    )
+                    if (
+                        allow_gemini_file_references
+                        and (source_part := _gemini_files_api_tool_part(file_fields, model)) is not None
+                        and "file_data" in source_part
+                    ):
+                        media_parts.append({"file_data": source_part["file_data"], **metadata})
+                        continue
                     # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
                     file_data = content.get("file_data", "")
                     if not file_data:
@@ -1716,11 +1796,11 @@ def convert_to_gemini_tool_call_result(
                         # Convert file to base64 blob format for Gemini
                         try:
                             file_obj = convert_to_anthropic_image_obj(file_data, format=None)
-                            inline_data_list.append(
-                                BlobType(
-                                    data=file_obj["data"],
-                                    mime_type=file_obj["media_type"],
-                                )
+                            media_parts.append(
+                                {
+                                    "inline_data": BlobType(data=file_obj["data"], mime_type=file_obj["media_type"]),
+                                    **metadata,
+                                }
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process file in tool response: %s", e)
@@ -1732,7 +1812,7 @@ def convert_to_gemini_tool_call_result(
                         custom_llm_provider=custom_llm_provider or "gemini",
                     )
                 ) is not None:
-                    inline_data_list.append(video_blob)
+                    media_parts.append({"inline_data": video_blob})
     name: str | None = message.get("name", "")
 
     # Recover name from last message with tool calls
@@ -1788,8 +1868,10 @@ def convert_to_gemini_tool_call_result(
 
     # For multimodal function responses, Gemini expects media parts nested
     # inside functionResponse.parts instead of sibling content parts.
-    if inline_data_list:
-        _function_response["parts"] = [{"inline_data": inline_data} for inline_data in inline_data_list]
+    if media_parts:
+        if not supports_media_in_tool_response:
+            return [_part, *(VertexPartType(**part) for part in media_parts)]
+        _function_response["parts"] = media_parts
         return [_part]
 
     return _part
@@ -1809,6 +1891,10 @@ def _replace_invalid_tool_use_id_chars(tool_use_id: str, invalid_chars: re.Patte
 def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     """Anthropic requires tool_use_id to match ^[a-zA-Z0-9_-]+$."""
     return _replace_invalid_tool_use_id_chars(tool_use_id, _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS)
+
+
+def _callers_tool_use_id(tool_use_id: str) -> str:
+    return tool_use_id or _TOOL_USE_ID_FALLBACK
 
 
 def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
@@ -1841,6 +1927,7 @@ def _is_anthropic_document_data_uri(url: str) -> bool:
 def convert_to_anthropic_tool_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     force_base64: bool = False,
+    rename_tool_use_id: Callable[[str], str] = _sanitize_anthropic_tool_use_id,
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -1956,8 +2043,7 @@ def convert_to_anthropic_tool_result(
     if message["role"] == "tool":
         tool_message: Final[ChatCompletionToolMessage] = message
         tool_call_id: str = tool_message["tool_call_id"]
-        # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
-        sanitized_tool_use_id = _sanitize_anthropic_tool_use_id(tool_call_id)
+        sanitized_tool_use_id = rename_tool_use_id(tool_call_id)
 
         # We can't determine from openai message format whether it's a successful or
         # error call result so default to the successful result template
@@ -1970,8 +2056,7 @@ def convert_to_anthropic_tool_result(
     if message["role"] == "function":
         function_message: Final[ChatCompletionFunctionMessage] = message
         tool_call_id = function_message.get("tool_call_id") or str(uuid.uuid4())
-        # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
-        sanitized_tool_use_id = _sanitize_anthropic_tool_use_id(tool_call_id)
+        sanitized_tool_use_id = rename_tool_use_id(tool_call_id)
         anthropic_tool_result = AnthropicMessagesToolResultParam(
             type="tool_result",
             tool_use_id=sanitized_tool_use_id,
@@ -2101,6 +2186,7 @@ def convert_to_anthropic_tool_invoke(
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
+    rename_tool_use_id: Callable[[str], str] = _sanitize_anthropic_tool_use_id,
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2179,7 +2265,7 @@ def convert_to_anthropic_tool_invoke(
         elif is_anthropic_tool_search_use(tool_id, tool_name) and tool_id not in answered_tool_ids:
             continue
         else:
-            sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
+            sanitized_tool_id = rename_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
                 type="tool_use",
                 id=sanitized_tool_id,
@@ -2345,7 +2431,7 @@ _S3_MIME_SUBTYPE_FORMATS: Final = MappingProxyType(
     {"jpg": "jpeg", "quicktime": "mov", "x-matroska": "mkv", "x-flv": "flv", "x-ms-wmv": "wmv", "3gpp": "3gp"}
 )
 _CONVERSE_VIDEO_FORMAT_NAMES: Final = MappingProxyType({"3gp": "three_gp"})
-_EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
+EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
 
 
 def _sanitize_empty_text_content(
@@ -2369,7 +2455,7 @@ def _sanitize_empty_text_content(
     if isinstance(content, str):
         if not content or not content.strip():
             message = cast(AllMessageValues, dict(message))  # Make a copy
-            message["content"] = _EMPTY_TEXT_PLACEHOLDER
+            message["content"] = EMPTY_TEXT_PLACEHOLDER
             verbose_logger.debug(
                 "_sanitize_empty_text_content: Replaced empty text content in %s message", message.get("role")
             )
@@ -2386,7 +2472,7 @@ def _sanitize_empty_text_content(
                 text = block.get("text")
                 if not isinstance(text, str) or not text or not text.strip():
                     new_block = dict(block)
-                    new_block["text"] = _EMPTY_TEXT_PLACEHOLDER
+                    new_block["text"] = EMPTY_TEXT_PLACEHOLDER
                     new_blocks.append(new_block)
                     rewrote_any = True
                     continue
@@ -2751,7 +2837,7 @@ def _tool_result_later_in_turn(
 
 
 def _empty_text_placeholder(message: AllMessageValues) -> AnthropicMessagesTextParam:
-    placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
+    placeholder: Final = AnthropicMessagesTextParam(type="text", text=EMPTY_TEXT_PLACEHOLDER)
     add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=message)
     return placeholder
 
@@ -2775,6 +2861,7 @@ def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
     llm_provider: str,
+    rewrites_tool_use_ids: bool = True,
 ) -> _AnthropicMessageList:
     """
     format messages for anthropic
@@ -2803,6 +2890,7 @@ def anthropic_messages_pt(
     messages = [_sanitize_empty_text_content(m) for m in messages]
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
+    rename_tool_use_id: Final = _sanitize_anthropic_tool_use_id if rewrites_tool_use_ids else _callers_tool_use_id
 
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
@@ -2934,7 +3022,9 @@ def anthropic_messages_pt(
             ) and message_field(user_message_types_block, "tool_call_id") not in replaced_server_tool_answers:
                 # OpenAI's tool message content will always be a string
                 user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
+                    convert_to_anthropic_tool_result(
+                        user_message_types_block, force_base64=force_base64, rename_tool_use_id=rename_tool_use_id
+                    )
                 )
 
             msg_i += 1
@@ -3002,6 +3092,7 @@ def anthropic_messages_pt(
                     web_search_results=_web_search_results_tc,
                     tool_results=_tool_results_tc,
                     answered_tool_ids=client_answered_tool_ids,
+                    rename_tool_use_id=rename_tool_use_id,
                 )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
@@ -3181,6 +3272,7 @@ def anthropic_messages_pt(
                     web_search_results=_web_search_results,
                     tool_results=_tool_results,
                     answered_tool_ids=client_answered_tool_ids,
+                    rename_tool_use_id=rename_tool_use_id,
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates
@@ -5803,8 +5895,8 @@ def _bedrock_tools_pt(
         }
     ]
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
     from litellm.llms.bedrock.common_utils import (
+        bedrock_converse_resolves_tool_schema_defs,
         bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
@@ -5816,7 +5908,9 @@ def _bedrock_tools_pt(
     # maps toolSpec to the native Anthropic tool shape, which has no strict
     # field, even though Anthropic's native API accepts it as a top-level key.
     supports_strict_tools: Final = bool(model and bedrock_converse_supports_strict_tools(model))
+    resolves_schema_defs: Final = bedrock_converse_resolves_tool_schema_defs(model)
     tool_block_list: Final[list[BedrockToolBlock]] = []
+    inlined_bytes = 0  # rebind-ok: the inlining budget is shared by every tool in the request
     for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
         if _is_bedrock_tool_block(tool):
@@ -5851,13 +5945,26 @@ def _bedrock_tools_pt(
         else:
             description = name
 
-        defs = parameters.pop("$defs", {})
-        defs_copy = copy.deepcopy(defs) if isinstance(defs, dict) else {}
-        # Expand $ref references in parameters using the definitions
-        # Note: We don't pre-flatten defs as that causes exponential memory growth
-        # with circular references (see issue #19098). unpack_defs handles nested
-        # refs recursively and correctly detects/skips circular references.
-        unpack_defs(parameters, defs_copy)
+        remaining_inline_bytes = DEFS_MAX_INLINED_BYTES - inlined_bytes
+        tool_schema = _TOOL_SCHEMA.validate_python(parameters)
+        try:
+            if resolves_schema_defs and (defs_keeping_schema := schema_with_root_ref_resolved(tool_schema)) is not None:
+                inlined, tool_inlined_bytes = inline_refs_outside_root_defs(
+                    schema_without_unreferenced_defs(defs_keeping_schema), remaining_inline_bytes
+                )
+                parameters = dict(schema_without_unreferenced_defs(inlined))
+            else:
+                inlined, tool_inlined_bytes = inline_refs_and_drop_defs(tool_schema, remaining_inline_bytes)
+                parameters = dict(inlined)
+        except DefsInliningBudgetExceededError as e:
+            raise litellm.ContextWindowExceededError(
+                message=f"Inlining the $ref definitions of tool '{raw_name}' copies more than "
+                f"{DEFS_MAX_INLINED_BYTES:,} bytes of definitions across the request's tools, "
+                "more than a model context window holds. Reference shared $defs less often or flatten the schema.",
+                model=model,
+                llm_provider="bedrock",
+            ) from e
+        inlined_bytes += tool_inlined_bytes
         normalize_json_schema_custom_types_to_object(parameters)
         if not (isinstance(root_type := parameters.get("type"), str) and root_type in _valid_json_schema_root_types):
             parameters["type"] = "object"

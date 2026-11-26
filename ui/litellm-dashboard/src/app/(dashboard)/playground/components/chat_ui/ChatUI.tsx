@@ -165,6 +165,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     messageTraceId,
     setMessageTraceId,
     responsesSessionId,
+    previousResponseId,
     useApiSessionManagement,
     updateTextUI,
     updateReasoningContent,
@@ -175,6 +176,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     updateSearchResults,
     handleResponseId,
     handleToggleSessionManagement,
+    handleModelChange,
+    handleHistoryResent,
     handleMCPEvent,
     updateImageUI,
     updateEmbeddingsUI,
@@ -980,21 +983,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
             );
           }
         } else if (endpointType === EndpointType.RESPONSES) {
-          // Create chat history for API call - strip out model field and isImage field
-          let apiChatHistory;
-
-          if (useApiSessionManagement && responsesSessionId) {
-            // When using API session management with existing session, only send the new message
-            apiChatHistory = [newUserMessage];
-          } else {
-            // When using UI session management or starting new API session, send full history
-            apiChatHistory = [
-              ...chatHistory
-                .filter((msg) => !msg.isImage && !msg.isAudio)
-                .map(({ role, content }) => ({ role, content })),
-              newUserMessage,
-            ];
-          }
+          const fullChatHistory = [
+            ...chatHistory
+              .filter((msg) => !msg.isImage && !msg.isAudio)
+              .map(({ role, content }) => ({ role, content })),
+            newUserMessage,
+          ];
+          const apiChatHistory = previousResponseId ? [newUserMessage] : fullChatHistory;
 
           await makeOpenAIResponsesRequest(
             apiChatHistory,
@@ -1011,7 +1006,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedPolicies.length > 0 ? selectedPolicies : undefined,
             selectedMCPServers, // Pass the selected servers array
-            useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
+            previousResponseId,
             handleResponseId, // Pass callback to capture new response ID
             handleMCPEvent, // Pass MCP event handler
             codeInterpreter.enabled, // Enable Code Interpreter tool
@@ -1023,6 +1018,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
             streamingEnabled,
             updateTotalLatency,
             customHeaders,
+            () => {
+              handleHistoryResent();
+              return fullChatHistory;
+            },
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -1182,6 +1181,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const onModelChange = (value: string | null) => {
+    if (value !== selectedModel) handleModelChange();
     setSelectedModel(value);
     setShowCustomModelInput(value === "custom");
 

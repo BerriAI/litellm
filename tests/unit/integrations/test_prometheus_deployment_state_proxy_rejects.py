@@ -11,6 +11,7 @@ guardrail block, a provider error) carries no flag and keeps its deployment labe
 
 from typing import Final
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from prometheus_client import REGISTRY
@@ -18,6 +19,7 @@ from prometheus_client import REGISTRY
 from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
 from litellm.exceptions import GuardrailRaisedException, MalformedRequestFieldError
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
@@ -101,6 +103,7 @@ def test_failure_after_routing_still_marks_deployment_partial_outage(failure: Ex
 
     assert _model_id_values(logger.litellm_deployment_state) == {"dep-1"}
     assert _model_id_values(logger.litellm_deployment_failure_responses) == {"dep-1"}
+    assert logger.litellm_deployment_success_responses._metrics == {}
 
 
 def test_malformed_field_rejection_after_routing_leaves_deployment_healthy() -> None:
@@ -113,3 +116,35 @@ def test_malformed_field_rejection_after_routing_leaves_deployment_healthy() -> 
 
     assert logger.litellm_deployment_state._metrics == {}
     assert _model_id_values(logger.litellm_deployment_failure_responses) == {""}
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        ImageRefusalError(
+            message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+            model="gemini-3.1-flash-image",
+            llm_provider="gemini",
+            response=httpx.Response(400, request=httpx.Request("POST", "https://gemini.invalid")),
+            provider_specific_fields={"finish_reason": "IMAGE_SAFETY"},
+        ),
+        UnservedImageError(
+            message="Gemini returned no image, finishReason=STOP",
+            model="gemini-3.1-flash-image",
+            llm_provider="gemini",
+            response=httpx.Response(422, request=httpx.Request("POST", "https://gemini.invalid")),
+        ),
+    ],
+    ids=["refused_prompt", "answer_without_an_image"],
+)
+def test_image_prompt_answered_without_an_image_leaves_deployment_healthy(refusal: Exception) -> None:
+    logger: Final = PrometheusLogger()
+
+    logger.set_llm_deployment_failure_metrics(_attributed_failure_kwargs(refusal, rejected_before_routing=False))
+
+    assert {
+        sample.labels["model_id"]: sample.value for sample in logger.litellm_deployment_state.collect()[0].samples
+    } == {"dep-1": 0.0}
+    assert logger.litellm_deployment_failure_responses._metrics == {}
+    assert _model_id_values(logger.litellm_deployment_success_responses) == {"dep-1"}
+    assert _model_id_values(logger.litellm_deployment_total_requests) == {"dep-1"}
