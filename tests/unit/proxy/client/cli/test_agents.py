@@ -32,6 +32,7 @@ from litellm.proxy.client.cli.commands.agents import (
     run_agent,
     verify_proxy_key,
     verify_subscription_key,
+    OpencodeLaunch,
     with_opencode_private_server,
 )
 from litellm.proxy.client.cli.commands.auth import save_token
@@ -796,6 +797,12 @@ Options:
 """
 
 
+_OPENCODE_2_4_COLORED_RUN_HELP = (
+    "\x1b[1mUSAGE\x1b[0m\n  \x1b[36mopencode run [flags] [<message...>]\x1b[0m\n\n\x1b[1mFLAGS\x1b[0m\n"
+    "  \x1b[32m--standalone\x1b[0m    Run with a private server instead of the background service\n"
+)
+
+
 def _opencode_2_help(command: tuple[str, ...], standalone: bool) -> str:
     usage = " ".join(("opencode", *command)) if command else "opencode <subcommand>"
     flag = "  --standalone      Run with a private server instead of the background service\n" if standalone else ""
@@ -812,28 +819,32 @@ class _FakeOpencode:
         stdout: str | None = None,
         returncode: int = 0,
         error: Exception | None = None,
+        service_env: str = "{}",
     ) -> None:
         self.takes_standalone = takes_standalone | {()}
         self.stdout = stdout
         self.returncode = returncode
         self.error = error
+        self.service_env = service_env
         self.calls: list[tuple[Sequence[str], dict[str, object]]] = []
 
     def __call__(self, command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         self.calls.append((command, kwargs))
         if self.error is not None:
             raise self.error
+        if tuple(command[1:]) == ("service", "get", "env"):
+            return subprocess.CompletedProcess(command, 0, self.service_env, "")
         words = tuple(command[1:-1])
         resolved = next((words[:depth] for depth in (2, 1) if words[:depth] in _OPENCODE_COMMANDS), ())
         stdout = self.stdout if self.stdout is not None else _opencode_2_help(resolved, resolved in self.takes_standalone)
         return subprocess.CompletedProcess(command, self.returncode, stdout, "")
 
 
-def _private_server(
+def _private_launch(
     args: Sequence[str],
     run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
     warn: Callable[[str], None] | None = None,
-) -> tuple[str, ...]:
+) -> OpencodeLaunch:
     return with_opencode_private_server(
         "/usr/local/bin/opencode",
         args,
@@ -841,6 +852,18 @@ def _private_server(
         run=run if run is not None else _FakeOpencode(),
         warn=warn if warn is not None else _unexpected_warning,
     )
+
+
+def _private_server(
+    args: Sequence[str],
+    run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    warn: Callable[[str], None] | None = None,
+) -> tuple[str, ...]:
+    return _private_launch(args, run=run, warn=warn).args
+
+
+def _no_private_server(binary: str, args: Sequence[str], env: Mapping[str, str]) -> OpencodeLaunch:
+    return OpencodeLaunch(tuple(args), {})
 
 
 def _unexpected_warning(message: str) -> NoReturn:
@@ -936,6 +959,44 @@ class TestOpencodePrivateServer:
     def test_opencode_1_launches_unchanged_without_a_warning(self, printed):
         assert _private_server(["run", "hi"], run=_FakeOpencode(stdout=printed)) == ("run", "hi")
 
+    def test_a_help_colored_by_force_color_still_gets_the_flag(self) -> None:
+        run = _FakeOpencode(stdout=_OPENCODE_2_4_COLORED_RUN_HELP)
+        assert _private_server(["run", "hi"], run=run) == ("run", "--standalone", "hi")
+
+    def test_a_help_listing_the_flag_without_a_readable_usage_line_warns(self) -> None:
+        warnings: list[str] = []
+        run = _FakeOpencode(stdout="FLAGS\n  --standalone    Run with a private server\n")
+        assert _private_server(["run", "hi"], run=run, warn=warnings.append) == ("run", "hi")
+        assert len(warnings) == 1
+        assert "USAGE" in warnings[0]
+
+    def test_a_private_server_gets_the_env_set_on_the_service(self) -> None:
+        run = _FakeOpencode(service_env='{"ANTHROPIC_API_KEY": "sk-ant-service"}')
+        launch = _private_launch(["run", "hi"], run=run)
+        assert launch.args == ("run", "--standalone", "hi")
+        assert launch.service_env == {"ANTHROPIC_API_KEY": "sk-ant-service"}
+
+    @pytest.mark.parametrize(
+        ("args", "printed"),
+        [
+            (["service", "status"], None),
+            (["--no-standalone"], None),
+            (["run", "hi"], _OPENCODE_1_HELP),
+        ],
+    )
+    def test_a_launch_left_on_the_shared_service_adds_no_service_env(self, args, printed) -> None:
+        run = _FakeOpencode(stdout=printed, service_env='{"ANTHROPIC_API_KEY": "sk-ant-service"}')
+        assert _private_launch(args, run=run).service_env == {}
+
+    @pytest.mark.parametrize("printed", ["not json sk-ant-service", '{"ANTHROPIC_API_KEY": 1}', '["sk-ant-service"]'])
+    def test_an_unreadable_service_env_warns_without_echoing_it_and_still_launches_privately(self, printed) -> None:
+        warnings: list[str] = []
+        launch = _private_launch(["models"], run=_FakeOpencode(service_env=printed), warn=warnings.append)
+        assert launch == OpencodeLaunch(("models", "--standalone"), {})
+        assert len(warnings) == 1
+        assert "service set env" in warnings[0]
+        assert "sk-ant-service" not in warnings[0]
+
     @pytest.mark.parametrize(
         ("run", "reason"),
         [
@@ -970,7 +1031,8 @@ class TestOpencodePrivateServer:
 
     def test_other_agents_are_never_probed(self):
         run = _FakeOpencode()
-        assert with_opencode_private_server("/usr/local/bin/codex", ["exec", "hi"], {}, run=run) == ("exec", "hi")
+        launch = with_opencode_private_server("/usr/local/bin/codex", ["exec", "hi"], {}, run=run)
+        assert launch == OpencodeLaunch(("exec", "hi"), {})
         assert run.calls == []
 
     def test_a_windows_npm_shim_is_probed_through_cmd(self):
@@ -978,9 +1040,11 @@ class TestOpencodePrivateServer:
 
         def run(command, **kwargs):
             calls.append(command)
-            return subprocess.CompletedProcess(command, 0, _opencode_2_help(("models",), True), "")
+            printed = "{}" if command.endswith('"service" "get" "env""') else _opencode_2_help(("models",), True)
+            return subprocess.CompletedProcess(command, 0, printed, "")
 
-        assert with_opencode_private_server("C:/npm/opencode.cmd", ["models"], {}, run=run) == ("models", "--standalone")
+        launch = with_opencode_private_server("C:/npm/opencode.cmd", ["models"], {}, run=run, warn=_unexpected_warning)
+        assert launch.args == ("models", "--standalone")
         assert isinstance(calls[0], str)
         assert calls[0].startswith("cmd.exe /d /e:on /v:off /s /c ")
         assert "models" in calls[0]
@@ -1896,6 +1960,31 @@ class TestRunAgent:
         assert calls["env"]["OPENCODE_CONFIG_CONTENT"] == '{"provider":{}}'
         assert calls["env"]["OPENAI_API_KEY"] == "sk-key"
 
+    def test_the_service_env_fills_in_under_the_shell_and_lite_env(self) -> None:
+        calls: dict[str, object] = {}
+        service_env = {"ANTHROPIC_API_KEY": "sk-ant-service", "OPENAI_API_KEY": "sk-service", "HOME": "/srv"}
+        run = _FakeOpencode(service_env=json.dumps(service_env))
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["opencode"],
+            base_env={"PATH": "/opt/node/bin", "HOME": "/home/me"},
+            sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
+            private_server=functools.partial(with_opencode_private_server, run=run, warn=_unexpected_warning),
+            which=lambda name: "/opt/node/bin/opencode",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: calls.update(args=tuple(a), env=dict(e)),
+        )
+        assert calls["args"] == ("opencode", "--standalone")
+        assert calls["env"] == {
+            "PATH": "/opt/node/bin",
+            "HOME": "/home/me",
+            "ANTHROPIC_API_KEY": "sk-ant-service",
+            "OPENAI_API_KEY": "sk-key",
+            "OPENAI_BASE_URL": "http://localhost:4000/v1",
+            "OPENCODE_CONFIG_CONTENT": '{"provider":{}}',
+        }
+
     def test_synced_model_config_reaches_the_agent_alongside_profile_env(self):
         calls = {}
         run_agent(
@@ -1905,7 +1994,7 @@ class TestRunAgent:
             base_env={"HOME": "/home/me"},
             sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
             which=lambda name: "/usr/local/bin/opencode",
-            private_server=lambda binary, args, env: tuple(args),
+            private_server=_no_private_server,
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -1930,7 +2019,7 @@ class TestRunAgent:
             base_env={"HOME": "/home/me"},
             sync_models=fake_sync,
             which=lambda name: "/usr/local/bin/opencode",
-            private_server=lambda binary, args, env: tuple(args),
+            private_server=_no_private_server,
             verify=lambda *a: order.append("verify"),
             launcher=lambda p, a, e: order.append("launch"),
         )
@@ -1958,7 +2047,7 @@ class TestRunAgent:
                 base_env={},
                 sync_models=boom,
                 which=lambda name: "/usr/local/bin/opencode",
-                private_server=lambda binary, args, env: tuple(args),
+                private_server=_no_private_server,
                 verify=failing_verify,
                 launcher=lambda *a: None,
             )
@@ -1980,7 +2069,7 @@ class TestRunAgent:
             sync_models=fake_sync,
             warn=warnings.append,
             which=lambda name: "/usr/local/bin/opencode",
-            private_server=lambda binary, args, env: tuple(args),
+            private_server=_no_private_server,
             verify=lambda *a: pytest.fail("--skip-verify must not verify"),
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -1998,7 +2087,7 @@ class TestRunAgent:
             sync_models=lambda *a: ModelSyncSkipped("proxy said no"),
             warn=lambda message: calls.setdefault("warned", message),
             which=lambda name: "/usr/local/bin/opencode",
-            private_server=lambda binary, args, env: tuple(args),
+            private_server=_no_private_server,
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
