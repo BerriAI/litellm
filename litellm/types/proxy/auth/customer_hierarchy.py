@@ -28,6 +28,8 @@ CustomerScopeKey: TypeAlias = Literal[
     "app",
     "app_customer_org",
     "app_customer_member",
+    "app_group",
+    "app_group_customer_org",
 ]
 
 
@@ -67,6 +69,15 @@ def app_budget_limits(
     return (*windows, AppDurationLimit(budget_duration=budget.budget_duration, max_budget=budget.max_budget))
 
 
+class CustomerBudgetWindowUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    budget_duration: str
+    spend: float
+    max_budget: float
+    reset_at: datetime | None = None
+
+
 class CustomerScopeAuth(BaseModel):
     """One level of the customer hierarchy a request runs under, with the limits its budget row grants."""
 
@@ -86,6 +97,11 @@ class CustomerScopeAuth(BaseModel):
     model_tpm_limit: Mapping[str, int] | None = None
     model_rpm_limit: Mapping[str, int] | None = None
     cap_policy: CapPolicy | None = None
+    budget_window_usage: tuple[CustomerBudgetWindowUsage, ...] = Field(
+        default=(),
+        exclude=True,
+        description="What the request's budget window check read, one entry per budget_limits window",
+    )
 
     def accounting_limits(self) -> tuple[BudgetLimit | AppDurationLimit, ...]:
         if self.soft_budget_duration is None or any(
@@ -95,7 +111,7 @@ class CustomerScopeAuth(BaseModel):
         return (*self.budget_limits, AppDurationLimit(budget_duration=self.soft_budget_duration, max_budget=0))
 
 
-_APP_FIELDS: Final = ("app_id", "app_alias", "app_customer_margin")
+_APP_FIELDS: Final = ("app_id", "app_alias", "app_customer_margin", "app_group_id")
 
 
 class CustomerHierarchyAuth(BaseModel):
@@ -110,6 +126,7 @@ class CustomerHierarchyAuth(BaseModel):
     customer_member_id: str | None = None
     customer_member_alias: str | None = None
     app_id: str | None = None
+    app_group_id: str | None = None
     app_alias: str | None = None
     app_customer_margin: float | None = Field(
         default=None, description="The app's own customer surcharge; None uses the gateway-wide one"
@@ -135,6 +152,7 @@ class CustomerHierarchyIds:
     customer_team_id: str | None = None
     customer_member_id: str | None = None
     app_id: str | None = None
+    app_group_id: str | None = None
 
     def entities(self) -> Mapping[str, str | None]:
         return {
@@ -142,6 +160,7 @@ class CustomerHierarchyIds:
             "customer_team_id": self.customer_team_id,
             "customer_org_id": self.customer_org_id,
             **({"app_id": self.app_id} if self.app_id else {}),
+            **({"app_group_id": self.app_group_id} if self.app_group_id else {}),
         }
 
     def spend_entities(self) -> tuple[tuple[Litellm_EntityType, str], ...]:
@@ -150,6 +169,11 @@ class CustomerHierarchyIds:
             (Litellm_EntityType.CUSTOMER_TEAM, self.customer_team_id),
             (Litellm_EntityType.CUSTOMER_MEMBER, self.customer_member_id),
             (Litellm_EntityType.APP, self.app_id),
+            (Litellm_EntityType.APP_GROUP, self.app_group_id),
+            (
+                Litellm_EntityType.APP_GROUP_CUSTOMER_ORG,
+                (f"{self.app_group_id}:{self.customer_org_id}" if self.app_group_id and self.customer_org_id else None),
+            ),
             (
                 Litellm_EntityType.APP_CUSTOMER_ORG,
                 (f"{self.app_id}:{self.customer_org_id}" if self.app_id and self.customer_org_id else None),
@@ -205,6 +229,7 @@ def customer_hierarchy_ids_from_request(
     org_id: Final = _stamped_id(metadata, "org")
     app: Final = metadata.get("user_api_key_app_id")
     app_id: Final = app if isinstance(app, str) and app else None
+    group: Final = metadata.get("user_api_key_app_group_id")
     if org_id is None and app_id is None:
         return None
     return CustomerHierarchyIds(
@@ -212,6 +237,7 @@ def customer_hierarchy_ids_from_request(
         customer_team_id=_stamped_id(metadata, "team"),
         customer_member_id=_stamped_id(metadata, "member"),
         app_id=app_id,
+        app_group_id=group if isinstance(group, str) and group else None,
     )
 
 

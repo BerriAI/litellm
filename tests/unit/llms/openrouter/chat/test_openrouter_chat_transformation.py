@@ -1327,3 +1327,21 @@ async def test_openrouter_sdk_retry_bills_the_failed_attempt() -> None:
     assert payload["prompt_tokens"] == 17
     assert payload["completion_tokens"] == 8
     assert payload["response_cost"] == pytest.approx(0.003)
+
+
+def test_mid_stream_error_chunk_keeps_the_provider_fields() -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.proxy.common_utils.openai_error_payload import relayed_provider_specific_fields
+
+    handler: Final = OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    with pytest.raises(OpenRouterException) as raised:
+        handler.chunk_parser(
+            {"error": {"message": "bad", "code": 400, "param": "temperature", "metadata": {"provider_name": "kept"}}}
+        )
+    with pytest.raises(litellm.BadRequestError) as mapped:
+        exception_type(model="qwen", original_exception=raised.value, custom_llm_provider="openrouter")
+
+    assert mapped.value.param == "temperature"
+    relayed: Final = relayed_provider_specific_fields(mapped.value)
+    assert relayed is not None
+    assert relayed["metadata"] == {"provider_name": "kept"}

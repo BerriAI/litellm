@@ -308,7 +308,7 @@ class MCPPerUserTokenCache:
     async def delete(self, user_id: str, server_id: str) -> None:
         """Invalidate the cached token in Redis, here, and in every peer worker's in-memory layer."""
         try:
-            from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (  # noqa: PLC0415  # proxy import cycle
+            from litellm.proxy.common_utils.cache_invalidation_pubsub import (  # noqa: PLC0415  # proxy import cycle
                 evict_state_and_broadcast,
             )
             from litellm.proxy.proxy_server import mcp_state_cache  # noqa: PLC0415

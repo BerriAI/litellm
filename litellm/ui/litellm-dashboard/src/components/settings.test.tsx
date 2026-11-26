@@ -81,7 +81,7 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Logging & Alerts", level: 1 })).toBeInTheDocument();
     });
   });
 
@@ -89,6 +89,19 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />, { searchParams: { tab: "alerting-types" } });
 
     expect(await screen.findByRole("tab", { name: "Alerting Types" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("opens callback creation from inside the Logging Callbacks tab only", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Settings {...defaultProps} />);
+
+    const panel = screen.getByRole("tabpanel", { name: "Logging Callbacks" });
+    expect(within(panel).getByRole("heading", { name: "Active Logging Callbacks" })).toBeInTheDocument();
+    await user.click(within(panel).getByRole("button", { name: "Add Callback" }));
+    expect(screen.getByRole("dialog", { name: "Add Logging Callback" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("tab", { name: "Alerting Types" }));
+    expect(screen.queryByRole("button", { name: "Add Callback" })).not.toBeInTheDocument();
   });
 
   it("should display additional settings tabs", async () => {
@@ -150,7 +163,7 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Logging & Alerts", level: 1 })).toBeInTheDocument();
     });
 
     await waitFor(() => {
@@ -250,6 +263,12 @@ describe("Settings", () => {
             options: ["http/protobuf", "http/json"],
             required: false,
           },
+          LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS: {
+            type: "boolean",
+            ui_name: "Emit Background Service Spans",
+            default: "true",
+            required: false,
+          },
         },
       },
     ]);
@@ -262,6 +281,24 @@ describe("Settings", () => {
     await user.click(await screen.findByTestId("callback-action-edit"));
     return user;
   };
+
+  it("shows the background service span toggle on by default and saves it off", async () => {
+    const envVar = "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS";
+    mockOtelCallback({ OTEL_ENDPOINT: "http://collector:4318", [envVar]: null });
+    const user = await openOtelEditModal();
+
+    const toggle = await screen.findByRole("switch", { name: "Emit Background Service Spans" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({ environment_variables: expect.objectContaining({ [envVar]: "false" }) }),
+      );
+    });
+  });
 
   it("should post the chosen export protocol when a select dynamic param is saved", async () => {
     mockOtelCallback({ OTEL_ENDPOINT: "http://collector:4318" });
@@ -560,7 +597,7 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Logging & Alerts", level: 1 })).toBeInTheDocument();
     });
 
     expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();

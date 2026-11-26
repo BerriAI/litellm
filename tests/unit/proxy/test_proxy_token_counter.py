@@ -45,6 +45,11 @@ from starlette.types import Message
 import litellm
 from litellm import Router
 from litellm._logging import JsonFormatter, verbose_logger, verbose_proxy_logger
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    ModelCostMapReloaded,
+    install_model_cost_map,
+)
 from litellm.litellm_core_utils.tokenizer import HuggingFace
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
@@ -69,10 +74,11 @@ from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_hand
 from litellm.llms.mistral.count_tokens import handler as mistral_count_tokens_http
 from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
-from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.common_utils.token_count_settings import (
     ProviderCountFailure,
     TokenCountModel,
@@ -188,6 +194,380 @@ async def test_token_counting_model_not_in_model_list():
 
     assert response.tokenizer_type == "openai_tokenizer"  # SHOULD use the OpenAI tokenizer
     assert response.model_used == "special-alias"
+
+
+def _team_scoped_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "groq/global-backend", "api_key": "sk-test"},
+                "model_info": {"id": "global-deployment"},
+            },
+            {
+                "model_name": "model_name_team-a_1",
+                "litellm_params": {"model": "groq/team-a-backend", "api_key": "sk-test"},
+                "model_info": {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": "shared-model"},
+            },
+            {
+                "model_name": "model_name_team-b_2",
+                "litellm_params": {"model": "groq/team-b-backend", "api_key": "sk-test"},
+                "model_info": {"id": "team-b-deployment", "team_id": "team-b", "team_public_model_name": "team-only-model"},
+            },
+            {
+                "model_name": "model_name_team-c_3",
+                "litellm_params": {"model": "groq/team-c-backend", "api_key": "sk-test"},
+                "model_info": {"id": "team-c-deployment", "team_id": "team-c", "team_public_model_name": "shared-model"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "model", "expected_model_used"),
+    [
+        (UserAPIKeyAuth(team_id="team-a"), "shared-model", "team-a-backend"),
+        (UserAPIKeyAuth(team_id="team-c"), "shared-model", "team-c-backend"),
+        (UserAPIKeyAuth(team_id="team-b"), "team-only-model", "team-b-backend"),
+        (UserAPIKeyAuth(team_id="team-b"), "shared-model", "global-backend"),
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), "team-only-model", "team-b-backend"),
+        (UserAPIKeyAuth(team_id="team-b", aliases={"opus": "team-only-model"}), "opus", "team-b-backend"),
+        (UserAPIKeyAuth(team_id="team-b", team_model_aliases={"fast": "team-only-model"}), "fast", "team-b-backend"),
+        (
+            UserAPIKeyAuth(team_id="team-b", router_settings={"model_group_alias": {"big": "team-only-model"}}),
+            "big",
+            "team-b-backend",
+        ),
+        (UserAPIKeyAuth(team_id="team-a"), "legacy-name", "team-a-backend"),
+        (None, "shared-model", "global-backend"),
+    ],
+)
+async def test_count_runs_on_the_deployment_the_callers_team_routes_to(
+    monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth | None, model: str, expected_model_used: str
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _team_scoped_router())
+    monkeypatch.setattr(litellm, "model_alias_map", {"legacy-name": "shared-model"})
+
+    response = await count_request_tokens(
+        request=TokenCountRequest(model=model, messages=[{"role": "user", "content": "hello"}]), caller=caller
+    )
+
+    assert response.model_used == expected_model_used
+
+
+@pytest.mark.asyncio
+async def test_count_refuses_a_saved_alias_target_the_key_may_not_call(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _team_scoped_router())
+
+    with pytest.raises(ProxyException) as refused:
+        await count_request_tokens(
+            request=TokenCountRequest(model="public-model", messages=[{"role": "user", "content": "hello"}]),
+            caller=UserAPIKeyAuth(
+                models=["public-model"], router_settings={"model_group_alias": {"public-model": "shared-model"}}
+            ),
+        )
+
+    assert str(refused.value.code) == "403"
+
+
+def _tag_routed_router(tag_routing_prefix: str, model_name: str = "tagged-model") -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": "groq/default-backend", "api_key": "sk-test", "tags": ["default"]},
+                "model_info": {"id": "default-deployment"},
+            },
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": "groq/team-x-backend", "api_key": "sk-test", "tags": ["team-x"]},
+                "model_info": {"id": "team-x-deployment"},
+            },
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": "groq/claude-code-backend",
+                    "api_key": "sk-test",
+                    "tag_regex": ["^User-Agent: claude-cli/"],
+                },
+                "model_info": {"id": "claude-code-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+        tag_routing_prefix=tag_routing_prefix,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tag_routing_prefix", ["", "route:"])
+@pytest.mark.parametrize(
+    ("caller", "expected_model_used"),
+    [
+        (UserAPIKeyAuth(metadata={"tags": ["team-x"]}), "team-x-backend"),
+        (UserAPIKeyAuth(team_id="team-x", team_metadata={"tags": ["team-x"]}), "team-x-backend"),
+        (UserAPIKeyAuth(project_metadata={"tags": ["team-x"]}), "team-x-backend"),
+        (UserAPIKeyAuth(), "default-backend"),
+    ],
+)
+async def test_count_runs_on_the_deployment_the_callers_inherited_tags_route_to(
+    monkeypatch: pytest.MonkeyPatch, tag_routing_prefix: str, caller: UserAPIKeyAuth, expected_model_used: str
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tag_routed_router(tag_routing_prefix))
+
+    response = await count_request_tokens(
+        request=TokenCountRequest(model="tagged-model", messages=[{"role": "user", "content": "hello"}]),
+        caller=caller,
+    )
+
+    assert response.model_used == expected_model_used
+
+
+def _router_settings_scoped_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "scoped-model",
+                "litellm_params": {
+                    "model": "groq/default-backend",
+                    "api_key": "sk-test",
+                    "tags": ["default"],
+                    "order": 1,
+                    "weight": 100,
+                },
+                "model_info": {"id": "default-deployment"},
+            },
+            {
+                "model_name": "scoped-model",
+                "litellm_params": {
+                    "model": "groq/team-x-backend",
+                    "api_key": "sk-test",
+                    "tags": ["team-x"],
+                    "order": 1,
+                    "weight": 0,
+                },
+                "model_info": {"id": "team-x-deployment"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_model_used"),
+    [
+        (UserAPIKeyAuth(metadata={"tags": ["team-x"]}), "default-backend"),
+        (
+            UserAPIKeyAuth(metadata={"tags": ["team-x"]}, router_settings={"enable_tag_filtering": True}),
+            "team-x-backend",
+        ),
+        (
+            UserAPIKeyAuth(
+                router_settings={"weights": {"scoped-model": {"default-deployment": 0, "team-x-deployment": 100}}}
+            ),
+            "team-x-backend",
+        ),
+    ],
+    ids=("no-settings", "key-enables-tag-filtering", "key-weights"),
+)
+async def test_count_routes_with_the_callers_router_settings(
+    monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth, expected_model_used: str
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _router_settings_scoped_router())
+
+    response = await count_request_tokens(
+        request=TokenCountRequest(model="scoped-model", messages=[{"role": "user", "content": "hello"}]),
+        caller=caller,
+    )
+
+    assert response.model_used == expected_model_used
+
+
+
+def _rpm_capped_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "capped-model",
+                "litellm_params": {"model": "groq/capped-backend", "api_key": "sk-test", "rpm": 1},
+                "model_info": {"id": "capped-deployment"},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["capped-model", "capped-deployment"], ids=("model-group", "deployment-id"))
+async def test_a_count_under_the_callers_usage_based_strategy_leaves_the_deployments_rpm_to_inference(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    router: Final = _rpm_capped_router()
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    response: Final = await count_request_tokens(
+        request=TokenCountRequest(model=model, messages=[{"role": "user", "content": "hello"}]),
+        caller=UserAPIKeyAuth(router_settings={"routing_strategy": "usage-based-routing-v2"}),
+    )
+    picked: Final = await router.select(model, {"routing_strategy": "usage-based-routing-v2"})
+
+    assert response.model_used == "capped-backend"
+    assert picked["model_info"]["id"] == "capped-deployment"
+
+
+async def _count_on_utils_route(
+    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
+) -> object:
+    return await token_counter(
+        request=TokenCountRequest(model="shared-model", messages=[{"role": "user", "content": "hello"}]),
+        http_request=_json_request({}, "python-httpx/0.28.1", headers),
+        fastapi_response=Response(),
+        user_api_key_dict=caller,
+    )
+
+
+async def _count_on_messages_route(
+    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
+) -> object:
+    body: Final = {"model": "shared-model", "messages": [{"role": "user", "content": "hello"}]}
+    return await anthropic_count_tokens(_json_request(body, "python-httpx/0.28.1", headers), Response(), caller)
+
+
+async def _count_on_responses_route(
+    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
+) -> object:
+    from litellm.proxy.response_api_endpoints.endpoints import responses_input_tokens
+
+    return await responses_input_tokens(
+        request=_json_request({"model": "shared-model", "input": "hello"}, "python-httpx/0.28.1", headers),
+        fastapi_response=Response(),
+        general_settings=MappingProxyType({}),
+        token_counter=count_request_tokens,
+        llm_router=litellm.proxy.proxy_server.llm_router,
+        user_api_key_dict=caller,
+        response_id_security=None,
+        managed_files=None,
+    )
+
+
+async def _count_on_google_route(
+    caller: UserAPIKeyAuth, headers: Mapping[str, str] = MappingProxyType({})
+) -> object:
+    from litellm.proxy.google_endpoints.endpoints import google_count_tokens
+
+    body: Final = {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}
+    return await google_count_tokens(
+        _json_request(body, "python-httpx/0.28.1", headers), "shared-model", Response(), caller
+    )
+
+
+_EVERY_COUNT_ROUTE: Final = pytest.mark.parametrize(
+    "count_on_route",
+    [_count_on_utils_route, _count_on_messages_route, _count_on_responses_route, _count_on_google_route],
+    ids=["utils", "messages", "responses", "google"],
+)
+
+
+@pytest.mark.asyncio
+@_EVERY_COUNT_ROUTE
+async def test_every_count_route_counts_on_the_callers_team_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    count_on_route: Callable[[UserAPIKeyAuth], Coroutine[None, None, object]],
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _team_scoped_router())
+
+    await count_on_route(UserAPIKeyAuth(team_id="team-a"))
+
+    assert tuple(line["model_id"] for line in token_count_log_lines()) == ("team-a-deployment",)
+
+
+@pytest.mark.asyncio
+@_EVERY_COUNT_ROUTE
+async def test_every_count_route_counts_on_the_deployment_the_request_tags_header_routes_to(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    count_on_route: Callable[[UserAPIKeyAuth, Mapping[str, str]], Coroutine[None, None, object]],
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tag_routed_router("", model_name="shared-model"))
+
+    await count_on_route(UserAPIKeyAuth(), {"x-litellm-tags": "team-x"})
+
+    assert tuple(line["model_id"] for line in token_count_log_lines()) == ("team-x-deployment",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_agent", "expected_model_id"),
+    [("claude-cli/2.1.299 (external, cli)", "claude-code-deployment"), ("python-httpx/0.28.1", "default-deployment")],
+)
+async def test_messages_count_tokens_counts_on_the_deployment_the_user_agent_tag_regex_routes_to(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    user_agent: str,
+    expected_model_id: str,
+):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tag_routed_router("", model_name="shared-model"))
+    body: Final = {"model": "shared-model", "messages": [{"role": "user", "content": "hello"}]}
+
+    await anthropic_count_tokens(_json_request(body, user_agent), Response(), UserAPIKeyAuth())
+
+    assert tuple(line["model_id"] for line in token_count_log_lines()) == (expected_model_id,)
+
+
+def _affinity_router(pre_call_check: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "pinned-model",
+                "litellm_params": {"model": f"groq/backend-{deployment_id}", "api_key": "sk-test"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("deployment-1", "deployment-2", "deployment-3", "deployment-4")
+        ],
+        optional_pre_call_checks=[pre_call_check],
+    )
+
+
+_PINNED_SESSION: Final = "2f1c9d4e-7b3a-4c61-9e0f-5d8a2b6c4e17"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pre_call_check", "session_id", "session_headers", "session_body"),
+    [
+        ("deployment_affinity", None, {}, {}),
+        ("session_affinity", _PINNED_SESSION, {"x-claude-code-session-id": _PINNED_SESSION}, {}),
+        ("session_affinity", _PINNED_SESSION, {"baggage": f"user.id=42,session.id={_PINNED_SESSION}"}, {}),
+        ("session_affinity", _PINNED_SESSION, {}, {"litellm_session_id": _PINNED_SESSION}),
+        ("session_affinity", _PINNED_SESSION, {}, {"metadata": {"user_id": f"user_abc_account__session_{_PINNED_SESSION}"}}),
+    ],
+)
+async def test_messages_count_tokens_counts_on_the_deployment_inference_pinned_for_the_caller(
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    pre_call_check: str,
+    session_id: str | None,
+    session_headers: Mapping[str, str],
+    session_body: Mapping[str, object],
+):
+    router: Final = _affinity_router(pre_call_check)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    caller: Final = UserAPIKeyAuth(api_key="sk-pinned-caller", user_id="pinned-user")
+    inference: Final = await router.acompletion(
+        model="pinned-model",
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="ok",
+        metadata={
+            "user_api_key_hash": LiteLLMProxyRequestSetup.get_logged_api_key(caller),
+            **({"session_id": session_id} if session_id else {}),
+        },
+    )
+    body: Final = {"model": "pinned-model", "messages": [{"role": "user", "content": "hello"}], **session_body}
+
+    for _ in range(8):
+        await anthropic_count_tokens(_json_request(body, "claude-cli/2.1.299", session_headers), Response(), caller)
+
+    assert {line["model_id"] for line in token_count_log_lines()} == {inference._hidden_params["model_id"]}
 
 
 @pytest.mark.asyncio
@@ -447,6 +827,8 @@ async def test_anthropic_messages_count_tokens_endpoint():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        caller=None,
+        request_routing=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -530,6 +912,8 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        caller=None,
+        request_routing=None,
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -710,6 +1094,7 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
                     "model_info": {},
                 }
             )
+            mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
 
             # Set ANTHROPIC_API_KEY for the test
             with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
@@ -772,6 +1157,7 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
                         "model_info": {},
                     }
                 )
+                mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
 
                 client = TestClient(app)
 
@@ -832,6 +1218,7 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
                         "model_info": {},
                     }
                 )
+                mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
 
                 client = TestClient(app)
 
@@ -1165,6 +1552,7 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
                 "model_info": {},
             }
         )
+        mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
         litellm.proxy.proxy_server.llm_router = mock_router
 
         with pytest.raises(ProxyException) as exc_info:
@@ -1212,6 +1600,7 @@ async def test_proxy_token_counter_error_raises_exception_when_disabled():
 
     mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
+    mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
 
@@ -1276,6 +1665,7 @@ async def test_proxy_token_counter_error_raises_when_enabled():
 
     mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
+    mock_router.get_routable_deployments = MagicMock(return_value=[mock_router.async_get_available_deployment.return_value])
 
     setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
 
@@ -1353,6 +1743,8 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        caller=None,
+        request_routing=None,
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1413,6 +1805,8 @@ async def test_anthropic_endpoint_403_permission_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        caller=None,
+        request_routing=None,
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1473,6 +1867,8 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         litellm_call_id=None,
         client_oauth_token=None,
         count_options=None,
+        caller=None,
+        request_routing=None,
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -1497,7 +1893,9 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         proxy_server.count_request_tokens = original_token_counter
 
 
-def _json_request(body: Mapping[str, object], user_agent: str) -> Request:
+def _json_request(
+    body: Mapping[str, object], user_agent: str, headers: Mapping[str, str] = MappingProxyType({})
+) -> Request:
     payload: Final = json.dumps(body).encode()
 
     async def receive() -> Message:
@@ -1509,7 +1907,11 @@ def _json_request(body: Mapping[str, object], user_agent: str) -> Request:
             "method": "POST",
             "path": "/v1/messages/count_tokens",
             "query_string": b"",
-            "headers": [(b"content-type", b"application/json"), (b"user-agent", user_agent.encode())],
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"user-agent", user_agent.encode()),
+                *((name.encode(), value.encode()) for name, value in headers.items()),
+            ],
         },
         receive,
     )
@@ -1695,6 +2097,254 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_t
     assert response["input_tokens"] == 7
     sent: Final = json.loads(route.calls.last.request.content)
     assert sent["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "build ok"}]
+
+
+def _prompt_beside(text_block: Mapping[str, JsonValue]) -> list[dict[str, JsonValue]]:
+    return [{"role": "user", "content": [{"type": "text", "text": "run the build"}, dict(text_block)]}]
+
+
+_CLEAN_PROMPT: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": [{"type": "text", "text": "run the build"}]}
+]
+
+_BLANK_BEFORE_NULL_PROMPT: Final[list[dict[str, JsonValue]]] = [
+    {
+        "role": "user",
+        "content": [{"type": "text", "text": ""}, {"type": "text", "text": None}, {"type": "text", "text": "run the build"}],
+    }
+]
+
+
+async def _body_sent_to_anthropic_count(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], deployment_params: Mapping[str, object]
+) -> Mapping[str, JsonValue]:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-count",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "api_key": "sk-ant-test",
+                    **deployment_params,
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock:
+        route: Final = respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 7})
+        )
+        response: Final = await anthropic_count_tokens(
+            _json_request({"model": "claude-count", **body}, "python-httpx/0.28.1"), Response(), UserAPIKeyAuth()
+        )
+
+    assert response["input_tokens"] == 7
+    return json.loads(route.calls.last.request.content)
+
+
+async def _messages_sent_to_anthropic_count(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], deployment_params: Mapping[str, object]
+) -> JsonValue:
+    return (await _body_sent_to_anthropic_count(monkeypatch, body, deployment_params))["messages"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text_block",
+    ({"type": "text", "text": ""}, {"type": "text", "text": " \n"}, {"type": "text"}),
+    ids=("empty", "blank", "missing"),
+)
+async def test_anthropic_count_tokens_on_a_claude_deployment_strips_empty_user_text_like_inference(
+    monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, JsonValue]
+) -> None:
+    sent: Final = await _messages_sent_to_anthropic_count(monkeypatch, {"messages": _prompt_beside(text_block)}, {})
+
+    assert sent == _CLEAN_PROMPT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5), ids=("null", "number"))
+@pytest.mark.parametrize(
+    ("request_params", "deployment_params"),
+    (({"drop_params": True}, {}), ({}, {"drop_params": True})),
+    ids=("body", "deployment"),
+)
+async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_user_text_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    text: JsonValue,
+    request_params: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, JsonValue],
+) -> None:
+    sent: Final = await _messages_sent_to_anthropic_count(
+        monkeypatch, {"messages": _prompt_beside({"type": "text", "text": text}), **request_params}, deployment_params
+    )
+
+    assert sent == _CLEAN_PROMPT
+
+
+_SYSTEM_TEXT: Final[dict[str, JsonValue]] = {"type": "text", "text": "Answer in one word"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5), ids=("null", "number"))
+@pytest.mark.parametrize(
+    ("request_params", "deployment_params"),
+    (({"drop_params": True}, {}), ({}, {"drop_params": True})),
+    ids=("body", "deployment"),
+)
+async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_system_text_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    text: JsonValue,
+    request_params: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, JsonValue],
+) -> None:
+    non_string: Final[dict[str, JsonValue]] = {"type": "text", "text": text}
+
+    dropped: Final = await _body_sent_to_anthropic_count(
+        monkeypatch,
+        {"messages": _CLEAN_PROMPT, "system": [non_string, _SYSTEM_TEXT], **request_params},
+        deployment_params,
+    )
+    emptied: Final = await _body_sent_to_anthropic_count(
+        monkeypatch, {"messages": _CLEAN_PROMPT, "system": [non_string], **request_params}, deployment_params
+    )
+
+    assert dropped["system"] == [_SYSTEM_TEXT]
+    assert dropped["messages"] == emptied["messages"] == _CLEAN_PROMPT
+    assert emptied.get("system") is None
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_messages_inference_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
+
+    history: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": "run the build"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
+    ]
+
+    sent: Final = await _messages_sent_to_anthropic_count(monkeypatch, {"messages": history}, {})
+
+    assert sent == normalize_native_messages(history)
+    assert sent != history
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_without_a_count_api_counts_a_non_string_user_text_as_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dropped: Final = await _count_on_a_model_without_a_count_api(
+        monkeypatch,
+        {"model": "mistral-tool-result", "drop_params": True, "messages": _prompt_beside({"type": "text", "text": 5})},
+    )
+    clean: Final = await _count_on_a_model_without_a_count_api(
+        monkeypatch, {"model": "mistral-tool-result", "messages": _CLEAN_PROMPT}
+    )
+
+    assert isinstance(dropped, dict) and isinstance(clean, dict)
+    assert dropped["input_tokens"] == clean["input_tokens"]
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ("", " \n"), ids=("empty", "blank"))
+async def test_anthropic_count_tokens_counts_a_request_with_only_blank_user_text_as_sent(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+
+    assert await _messages_sent_to_anthropic_count(monkeypatch, {"messages": messages}, {}) == messages
+
+
+_EMPTIED_MESSAGES_ERROR: Final = "messages: no message has content left after dropping empty or non-string text blocks"
+
+
+def _non_string_text_error(field: str) -> str:
+    return f"{field}: Input should be a valid string"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "request_params", "error"),
+    (
+        (
+            [{"role": "user", "content": [{"type": "text", "text": None}]}],
+            {"drop_params": True},
+            _EMPTIED_MESSAGES_ERROR,
+        ),
+        (
+            _prompt_beside({"type": "text", "text": None}),
+            {},
+            _non_string_text_error("messages.0.content.1.text"),
+        ),
+        (_BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text")),
+        (
+            _CLEAN_PROMPT,
+            {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+            _non_string_text_error("system.1.text"),
+        ),
+        (
+            _prompt_beside({"type": "text", "text": None}),
+            {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+            _non_string_text_error("messages.0.content.1.text"),
+        ),
+    ),
+    ids=(
+        "only-null-dropped",
+        "null-beside-text",
+        "blank-before-null",
+        "null-system-text",
+        "null-user-text-before-null-system-text",
+    ),
+)
+@pytest.mark.parametrize(
+    "model",
+    (
+        "anthropic/claude-sonnet-5-5",
+        "openai/gpt-5.6",
+        "gemini/gemini-3.8-flash",
+        "mistral/mistral-small-latest",
+    ),
+)
+async def test_anthropic_count_tokens_answers_the_inference_400_before_any_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    messages: list[dict[str, JsonValue]],
+    request_params: Mapping[str, JsonValue],
+    error: str,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[{"model_name": "emptied-count", "litellm_params": {"model": model, "api_key": "sk-test"}}]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock(assert_all_called=False) as upstream_mock:
+        upstream: Final = upstream_mock.route().mock(
+            return_value=httpx.Response(200, json={"input_tokens": 7, "totalTokens": 7})
+        )
+        response: Final = await anthropic_count_tokens(
+            _json_request({"model": "emptied-count", "messages": messages, **request_params}, "python-httpx/0.28.1"),
+            Response(),
+            UserAPIKeyAuth(),
+        )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body))["error"] == {"type": "invalid_request_error", "message": error}
+    assert upstream.call_count == 0
 
 
 def _weather_tool(description: str) -> dict[str, object]:
@@ -2993,14 +3643,107 @@ _FILL_FORM: Final = {
         "required": list(_FORM_FIELDS),
     },
 }
+_DEPLOYMENT_TOOLS: Final = (
+    {
+        "name": "configure_deployment",
+        "description": (
+            "Configure a model deployment with routing, limits, retries, fallbacks and observability settings for a "
+            "production gateway"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Deployment name"},
+                "provider": {
+                    "type": "string",
+                    "enum": ["openai", "azure", "anthropic", "bedrock", "vertex_ai", "xai"],
+                    "description": "Upstream provider",
+                },
+                "limits": {
+                    "type": "object",
+                    "description": "Rate limits",
+                    "properties": {
+                        "rpm": {"type": "integer", "description": "Requests per minute"},
+                        "tpm": {"type": "integer", "description": "Tokens per minute"},
+                        "max_parallel": {"type": "integer", "description": "Max parallel requests"},
+                    },
+                },
+                "retries": {
+                    "type": "object",
+                    "description": "Retry policy",
+                    "properties": {
+                        "count": {"type": "integer"},
+                        "backoff_seconds": {"type": "number"},
+                        "retry_on": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Error classes to retry",
+                        },
+                    },
+                },
+                "fallbacks": {
+                    "type": "array",
+                    "description": "Ordered fallback deployments",
+                    "items": {
+                        "type": "object",
+                        "properties": {"model": {"type": "string"}, "weight": {"type": "number"}},
+                    },
+                },
+                "observability": {
+                    "type": "object",
+                    "properties": {
+                        "log_requests": {"type": "boolean"},
+                        "callbacks": {"type": "array", "items": {"type": "string"}},
+                        "sample_rate": {"type": "number", "description": "Fraction of requests to trace"},
+                    },
+                },
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "Free-form tags"},
+            },
+            "required": ["name", "provider"],
+        },
+    },
+    {
+        "name": "search_docs",
+        "description": "Search the internal documentation",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "limit": {"type": "integer", "description": "Max results"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "send_email",
+        "description": "Send an email to a recipient",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient address"},
+                "subject": {"type": "string", "description": "Subject line"},
+                "body": {"type": "string", "description": "Plain text body"},
+            },
+            "required": ["to", "subject", "body"],
+        },
+    },
+)
 _WEATHER_SYSTEM: Final = "You are a helpful assistant that answers weather questions briefly."
 _AZURE_GROK_4_1: Final = "azure_ai/grok-4-1-fast-reasoning"
 _FIREWORKS_DEEPSEEK_V4_1: Final = "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash"
 _XAI_GROK_4_3: Final = "xai/grok-4.3"
+_AZURE_GROK_4_1_NON_REASONING: Final = "azure_ai/grok-4-1-fast-non-reasoning"
+_AZURE_GROK_4_3: Final = "azure_ai/grok-4.3"
+_VERTEX_GROK_4_3: Final = "vertex_ai/xai/grok-4.3"
+_MANTLE_GROK_4_3: Final = "bedrock_mantle/xai.grok-4.3"
+_PERPLEXITY_GROK_4_3: Final = "perplexity/xai/grok-4.3"
 _NATIVE_RESPONSES_BASE: Final = {
     _AZURE_GROK_4_1: "https://unused.services.ai.azure.com/models",
+    _AZURE_GROK_4_1_NON_REASONING: "https://unused.services.ai.azure.com/models",
     _FIREWORKS_DEEPSEEK_V4_1: "https://unused.invalid",
     _XAI_GROK_4_3: "https://unused.invalid",
+    _PERPLEXITY_GROK_4_3: "https://unused.invalid",
+    _VERTEX_GROK_4_3: "https://unused.invalid",
 }
 
 
@@ -3018,10 +3761,23 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
     return tuple({**_GET_WEATHER, "name": f"get_weather_{index}"} for index in range(count))
 
 
+_MAX_TOKENS_OVER_A_FLAT_HOST_BILL: Final = 4
+
+
+@pytest.fixture
+def checked_in_cost_map() -> None:
+    assert isinstance(
+        install_model_cost_map(GetModelCostMap.read_local_model_cost_map_bytes()), ModelCostMapReloaded
+    )
+
+
 # usage.input_tokens plus cache_read_input_tokens that POST /v1/messages billed for these requests with the user turn
 # "What is the weather in Paris?" through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and
-# xAI grok-4.3 on 2026-10-29, and usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
-# 2026-10-30
+# xAI grok-4.3 on 2026-10-29, usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
+# 2026-10-30, and usage.input_tokens that POST /v1/messages billed through xAI grok-4.3-latest, Kyma grok-4.3, Azure AI
+# Foundry grok-4-1-fast-non-reasoning and grok-4.3, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3 on 2026-11-17,
+# except the request with no tools through Azure AI Foundry grok-4.3, billed on 2026-11-21
+@pytest.mark.usefixtures("checked_in_cost_map")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -3049,6 +3805,32 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
         ("deepseek/deepseek-v4-pro", None, (_GET_WEATHER,), 367),
         ("deepseek/deepseek-v4-pro", None, _THREE_TOOLS, 493),
         ("deepseek/deepseek-v4-pro", _WEATHER_SYSTEM, (_GET_WEATHER,), 378),
+        ("xai/grok-4.3-latest", None, (), 199),
+        ("xai/grok-4.3-latest", None, (_GET_WEATHER,), 283),
+        ("xai/grok-4.3-latest", None, _THREE_TOOLS, 402),
+        ("xai/grok-4.3-latest", None, (_FILL_FORM,), 530),
+        ("xai/grok-4.3-latest", _WEATHER_SYSTEM, (_GET_WEATHER,), 297),
+        ("kyma/grok-4.3", None, (), 199),
+        ("kyma/grok-4.3", None, (_GET_WEATHER,), 283),
+        ("kyma/grok-4.3", None, _THREE_TOOLS, 402),
+        ("kyma/grok-4.3", None, (_FILL_FORM,), 530),
+        ("kyma/grok-4.3", _WEATHER_SYSTEM, (_GET_WEATHER,), 297),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (), 175),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (_GET_WEATHER,), 369),
+        (_AZURE_GROK_4_1_NON_REASONING, None, _THREE_TOOLS, 457),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (_FILL_FORM,), 562),
+        (_AZURE_GROK_4_1_NON_REASONING, _WEATHER_SYSTEM, (_GET_WEATHER,), 380),
+        (_AZURE_GROK_4_3, None, (), 11),
+        (_AZURE_GROK_4_3, None, (_GET_WEATHER,), 96),
+        (_AZURE_GROK_4_3, None, _THREE_TOOLS, 215),
+        (_AZURE_GROK_4_3, None, (_FILL_FORM,), 343),
+        (_AZURE_GROK_4_3, _WEATHER_SYSTEM, (_GET_WEATHER,), 110),
+        (_VERTEX_GROK_4_3, None, (), 342),
+        (_VERTEX_GROK_4_3, None, (_GET_WEATHER,), 441),
+        (_VERTEX_GROK_4_3, None, _THREE_TOOLS, 560),
+        (_VERTEX_GROK_4_3, None, (_FILL_FORM,), 688),
+        (_VERTEX_GROK_4_3, _WEATHER_SYSTEM, (_GET_WEATHER,), 455),
+        (_MANTLE_GROK_4_3, None, (), 37),
     ],
 )
 async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
@@ -3081,11 +3863,13 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
     )
 
     assert counted.count_source == "local_estimate"
-    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
 
 
 # usage.input_tokens that POST /v1/responses billed for these requests with the input "What is the weather in Paris?"
-# through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29
+# through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29, and
+# through Azure AI Foundry grok-4-1-fast-non-reasoning, Perplexity xai/grok-4.3 and Vertex AI xai/grok-4.3 on 2026-11-17
+@pytest.mark.usefixtures("checked_in_cost_map")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -3097,6 +3881,11 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
         (_AZURE_GROK_4_1, _WEATHER_SYSTEM, (_GET_WEATHER,), 170),
         (_FIREWORKS_DEEPSEEK_V4_1, None, (_GET_WEATHER,), 304),
         (_XAI_GROK_4_3, None, (_GET_WEATHER,), 283),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (), 181),
+        (_PERPLEXITY_GROK_4_3, None, (), 218),
+        (_VERTEX_GROK_4_3, None, (), 342),
+        (_VERTEX_GROK_4_3, None, (_GET_WEATHER,), 441),
+        (_VERTEX_GROK_4_3, None, _THREE_TOOLS, 560),
     ],
 )
 async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_shipped_framing(
@@ -3130,7 +3919,7 @@ async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_s
     )
 
     assert counted.count_source == "local_estimate"
-    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
 
 
 def _single_deployment_router(litellm_params: dict[str, object], model_info: dict[str, object]) -> Router:
@@ -3219,6 +4008,65 @@ async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_
     )
 
     assert billed_prompt_tokens <= counted <= billed_prompt_tokens * 1.02
+
+
+# usage.input_tokens that POST /v1/messages billed through Bedrock Mantle xai.grok-4.3, and POST /v1/responses through
+# Perplexity xai/grok-4.3 and Azure AI Foundry grok-4-1-fast-non-reasoning, on 2026-11-17 for the input "What is the
+# weather in Paris?" with these tools. Each host bills more hidden tokens per tool as the schema grows, so one flat
+# tool framing per host lands from 0 to 175 tokens over these bills on Mantle, 102 on Perplexity and 74 on Azure
+@pytest.mark.usefixtures("checked_in_cost_map")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "responses", "tools", "billed_prompt_tokens", "most_over"),
+    [
+        (_MANTLE_GROK_4_3, False, (_GET_WEATHER,), 114, 180),
+        (_MANTLE_GROK_4_3, False, _THREE_TOOLS, 256, 180),
+        (_MANTLE_GROK_4_3, False, (_FILL_FORM,), 424, 180),
+        (_MANTLE_GROK_4_3, False, _DEPLOYMENT_TOOLS, 789, 180),
+        (_PERPLEXITY_GROK_4_3, True, (_GET_WEATHER,), 308, 110),
+        (_PERPLEXITY_GROK_4_3, True, _THREE_TOOLS, 442, 110),
+        (_PERPLEXITY_GROK_4_3, True, (_FILL_FORM,), 555, 110),
+        (_PERPLEXITY_GROK_4_3, True, _DEPLOYMENT_TOOLS, 913, 110),
+        (_AZURE_GROK_4_1_NON_REASONING, True, (_GET_WEATHER,), 178, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, _THREE_TOOLS, 276, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, (_FILL_FORM,), 371, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, _DEPLOYMENT_TOOLS, 614, 80),
+    ],
+)
+async def test_a_host_whose_tool_prompt_grows_with_the_schema_counts_at_or_a_bounded_amount_over_the_bill(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    responses: bool,
+    tools: tuple[dict[str, object], ...],
+    billed_prompt_tokens: int,
+    most_over: int,
+):
+    router: Final = _single_deployment_router(
+        {"model": model, "api_base": _NATIVE_RESPONSES_BASE.get(model, "https://unused.invalid")}, {}
+    )
+    sent_tools: Final = tuple(_responses_function(tool) for tool in tools) if responses else tools
+
+    counted: Final = await _count_with_router(monkeypatch, router, sent_tools, responses)
+
+    assert (
+        billed_prompt_tokens <= counted <= billed_prompt_tokens + most_over
+    ), f"{model} counted {counted} for a request billed {billed_prompt_tokens}"
+
+
+@pytest.mark.usefixtures("checked_in_cost_map")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [(), (_GET_WEATHER,), _THREE_TOOLS])
+async def test_the_govcloud_mantle_grok_row_counts_like_the_commercial_row(
+    monkeypatch: pytest.MonkeyPatch, tools: tuple[dict[str, object], ...]
+):
+    govcloud: Final = _single_deployment_router(
+        {"model": "bedrock_mantle/us-gov-west-1/xai.grok-4.3", "api_base": "https://unused.invalid"}, {}
+    )
+    commercial: Final = _single_deployment_router({"model": _MANTLE_GROK_4_3, "api_base": "https://unused.invalid"}, {})
+
+    assert await _count_with_router(monkeypatch, govcloud, tools, False) == await _count_with_router(
+        monkeypatch, commercial, tools, False
+    )
 
 
 # POST /v1/responses billed the same usage.input_tokens with strict unset and false on 2026-10-29, 283 for one tool
@@ -3945,6 +4793,46 @@ async def test_framing_still_applies_while_the_deployment_is_cooling_down(monkey
     assert cooling.count_source == "local_estimate"
 
 
+@pytest.mark.asyncio
+async def test_a_cooling_team_deployment_frames_with_its_own_settings_not_a_same_named_global_one(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "shared-framed",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-unused-global"},
+                "model_info": {"id": "global-framed", "token_count_framing": 7},
+            },
+            {
+                "model_name": "model_name_team-a_1",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-unused-team"},
+                "model_info": {
+                    "id": "team-a-framed",
+                    "team_id": "team-a",
+                    "team_public_model_name": "shared-framed",
+                    "token_count_framing": 100,
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="team-a-framed",
+        original_exception=Exception("rate limited"),
+        exception_status=429,
+        cooldown_time=60,
+    )
+    messages: Final = [{"role": "user", "content": "hello there"}]
+
+    cooling: Final = await count_request_tokens(
+        request=TokenCountRequest(model="shared-framed", messages=messages), caller=UserAPIKeyAuth(team_id="team-a")
+    )
+
+    assert cooling.count_source == "local_estimate"
+    assert cooling.total_tokens - 100 == litellm.token_counter(model="shared-framed", messages=messages)
+
+
 _GEMINI_TOOL_OUTPUT: Final = "line of a long file that the agent read earlier. " * 180
 
 
@@ -4007,7 +4895,7 @@ def _gemini_deployment(model_name: str, litellm_params: Mapping[str, JsonValue])
 
 
 async def _count_through_the_messages_endpoint(
-    router: Router, request_options: Mapping[str, JsonValue]
+    router: Router, request_options: Mapping[str, JsonValue], caller: UserAPIKeyAuth | None = None
 ) -> tuple[object, tuple[bytes, ...]]:
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
@@ -4032,7 +4920,7 @@ async def _count_through_the_messages_endpoint(
             return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
         ),
     ):
-        response: Final = await anthropic_count_tokens(mock_request, Response(), MagicMock())
+        response: Final = await anthropic_count_tokens(mock_request, Response(), caller or MagicMock())
     return response, peer.request_bodies
 
 
@@ -4155,6 +5043,48 @@ async def test_gemini_messages_count_tokens_keeps_tool_results_when_a_routable_d
 
     assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
     assert sent_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == 3
+
+
+def _team_and_global_gemini_router(team_drops_context_management: bool) -> Router:
+    drops: Final[dict[str, JsonValue]] = {"additional_drop_params": ["context_management"]}
+    return Router(
+        model_list=[
+            _gemini_deployment("gemini-agent", {} if team_drops_context_management else drops),
+            {
+                **_gemini_deployment("model_name_team-a_1", drops if team_drops_context_management else {}),
+                "model_info": {"id": "team-a-gemini", "team_id": "team-a", "team_public_model_name": "gemini-agent"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_drops_context_management", "team_id", "expected_tool_outputs_sent"),
+    (
+        (True, "team-a", 3),
+        (True, "team-b", 1),
+        (False, "team-a", 1),
+        (False, "team-b", 3),
+    ),
+    ids=(
+        "team-deployment-drops-for-its-team",
+        "team-deployment-drop-skips-other-teams",
+        "global-drop-skips-the-team-with-its-own-deployment",
+        "global-drop-applies-to-teams-on-the-global-deployment",
+    ),
+)
+async def test_gemini_messages_count_tokens_reads_the_context_management_opt_out_from_the_callers_deployments(
+    team_drops_context_management: bool, team_id: str, expected_tool_outputs_sent: int
+) -> None:
+    response, sent_bodies = await _count_through_the_messages_endpoint(
+        _team_and_global_gemini_router(team_drops_context_management),
+        {"model": "gemini-agent"},
+        UserAPIKeyAuth(team_id=team_id),
+    )
+
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert sent_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == expected_tool_outputs_sent
 
 
 @pytest.mark.asyncio
@@ -4867,7 +5797,7 @@ async def test_messages_count_tokens_sends_the_edited_messages_to_a_bridged_prov
 
 
 @pytest.mark.asyncio
-async def test_messages_count_tokens_sends_a_body_with_only_empty_text_to_the_bridged_provider_count_api(
+async def test_messages_count_tokens_counts_only_empty_text_on_a_bridged_provider_count_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     empty_turn: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"type": "text", "text": ""}]}
@@ -5963,6 +6893,30 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
 
 
+@pytest.mark.asyncio
+async def test_responses_count_on_claude_rejects_a_previous_response_id_with_no_stored_turns_on_that_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", SimpleNamespace(db=_SpendLogsTable(())))
+    with pytest.raises(ProxyException) as rejected:
+        await _claude_count(
+            monkeypatch,
+            {},
+            {
+                "input": "And in 1999?",
+                "previous_response_id": "chatcmpl-lost",
+                ADDRESSED_RESPONSE_ID_FIELD: "resp_client_form",
+            },
+        )
+
+    assert (rejected.value.code, rejected.value.type, rejected.value.param) == (
+        "400",
+        "invalid_request_error",
+        "previous_response_id",
+    )
+    assert "'resp_client_form' not found" in rejected.value.message
+
+
 _MULTILINGUAL_TEXT: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
 
 
@@ -6082,7 +7036,10 @@ _LLAMA_3_HUB_TOKENIZER: Final = "Xenova/llama-3-tokenizer"
 
 async def _token_counter_route(request: TokenCountRequest) -> TokenCountResponse:
     return await token_counter(
-        request=request, http_request=_json_request({}, "python-httpx/0.28.1"), fastapi_response=Response()
+        request=request,
+        http_request=_json_request({}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
 
 
@@ -6553,31 +7510,33 @@ _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(
 )
 
 
-def _utils_token_counter(
-    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, JsonValue], headers: Mapping[str, str]
+def _post_count(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    deployment: Mapping[str, JsonValue],
+    body: Mapping[str, JsonValue],
+    headers: Mapping[str, str],
 ) -> httpx.Response:
     from fastapi.testclient import TestClient
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import app
 
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server,
-        "llm_router",
-        Router(
-            model_list=[
-                {
-                    "model_name": "count-log-gpt",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
-                    "model_info": {"id": "count-log-utils-deployment"},
-                }
-            ]
-        ),
-    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", Router(model_list=[dict(deployment)]))
     monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-test"))
-    return TestClient(app, raise_server_exceptions=False).post(
-        "/utils/token_counter", json=dict(body), headers=dict(headers)
-    )
+    return TestClient(app, raise_server_exceptions=False).post(path, json=dict(body), headers=dict(headers))
+
+
+
+def _utils_token_counter(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, JsonValue], headers: Mapping[str, str]
+) -> httpx.Response:
+    deployment: Final[Mapping[str, JsonValue]] = {
+        "model_name": "count-log-gpt",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+        "model_info": {"id": "count-log-utils-deployment"},
+    }
+    return _post_count(monkeypatch, "/utils/token_counter", deployment, body, headers)
 
 
 def test_utils_token_counter_logs_one_line_with_the_callers_call_id_model_and_count(
@@ -6628,6 +7587,119 @@ def test_utils_token_counter_without_messages_logs_the_400_it_answers(
             "status_code": 400,
         },
     )
+
+
+@pytest.mark.parametrize("nested", [False, True], ids=["user-content", "tool-result"])
+def test_utils_token_counter_answers_400_naming_a_content_block_the_local_counter_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]], nested: bool
+) -> None:
+    block: Final[JsonValue] = {"type": "future_block", "data": "opaque"}
+    content: Final[JsonValue] = (
+        [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
+    )
+
+    response: Final = _utils_token_counter(
+        monkeypatch,
+        {"model": "count-log-gpt", "messages": [{"role": "user", "content": content}]},
+        {"x-litellm-call-id": "count-log-utils-unreadable"},
+    )
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "messages", "400"), error
+    assert error["message"] == "The token counter can't count content blocks of type future_block", error
+    assert [line["status_code"] for line in token_count_log_lines()] == [400]
+
+
+def test_utils_token_counter_answers_400_naming_a_malformed_server_tool_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    block: Final[JsonValue] = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srv_1",
+        "content": [{"url": "https://example.invalid"}],
+    }
+
+    response: Final = _utils_token_counter(
+        monkeypatch, {"model": "count-log-gpt", "messages": [{"role": "user", "content": [block]}]}, {}
+    )
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", "messages"), error
+    assert error["message"].startswith(
+        "The token counter can't read the content field of a web_search_tool_result block: "
+    ), error
+
+
+_FUTURE_BLOCK: Final = MappingProxyType({"type": "future_block", "data": "opaque"})
+
+
+@pytest.mark.parametrize(
+    ("fields", "param"),
+    [
+        ({"system": [dict(_FUTURE_BLOCK)], "messages": [{"role": "user", "content": "hi"}]}, "system"),
+        ({"system": "Be brief.", "messages": [{"role": "user", "content": [dict(_FUTURE_BLOCK)]}]}, "messages"),
+        (
+            {
+                "system": [{"type": "text", "text": "Be brief."}],
+                "messages": [{"role": "user", "content": [dict(_FUTURE_BLOCK)]}],
+            },
+            None,
+        ),
+        (
+            {
+                "messages": [{"role": "user", "content": [dict(_FUTURE_BLOCK)]}],
+                "contents": [{"role": "user", "parts": [{"text": "Be brief."}]}],
+            },
+            "messages",
+        ),
+    ],
+    ids=["block-in-system", "block-in-messages", "blocks-in-both-fields", "contents-sent-beside-messages"],
+)
+def test_utils_token_counter_points_param_only_at_the_one_field_that_can_hold_the_block(
+    monkeypatch: pytest.MonkeyPatch, fields: Mapping[str, JsonValue], param: str | None
+) -> None:
+    response: Final = _utils_token_counter(monkeypatch, {"model": "count-log-gpt", **fields}, {})
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", param), error
+
+
+def test_utils_token_counter_keeps_500_for_a_known_block_it_fails_to_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    response: Final = _utils_token_counter(
+        monkeypatch, {"model": "count-log-gpt", "messages": [{"role": "user", "content": [{"type": "image"}]}]}, {}
+    )
+
+    assert response.status_code == 500, response.text
+
+
+_INPUT_AUDIO: Final = MappingProxyType({"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}})
+
+
+@pytest.mark.parametrize(
+    ("fields", "param"),
+    [
+        ({"input": [{"role": "user", "content": [dict(_INPUT_AUDIO)]}]}, "input"),
+        ({"input": "hi", "instructions": [dict(_INPUT_AUDIO)]}, "instructions"),
+    ],
+    ids=["block-in-input", "block-in-instructions"],
+)
+def test_responses_input_tokens_points_param_at_the_field_holding_a_block_the_local_counter_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, fields: Mapping[str, JsonValue], param: str
+) -> None:
+    deployment: Final[Mapping[str, JsonValue]] = {
+        "model_name": "count-local-vllm",
+        "litellm_params": {"model": "hosted_vllm/zai-org/GLM-5.3", "api_base": "http://127.0.0.1:9/v1"},
+    }
+
+    response: Final = _post_count(
+        monkeypatch, "/v1/responses/input_tokens", deployment, {"model": "count-local-vllm", **fields}, {}
+    )
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", param), error
+    assert error["message"] == "The token counter can't count content blocks of type input_audio", error
 
 
 def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
@@ -7256,6 +8328,7 @@ async def _utils_route_count(tool_choice: Mapping[str, JsonValue], model: str = 
         ),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
     return response.total_tokens
 
@@ -7539,11 +8612,13 @@ async def test_utils_token_counter_counts_a_bare_prompt_with_a_tool_choice_like_
         request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION, tool_choice="required"),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
     prompt_alone: Final = await token_counter(
         request=TokenCountRequest(model="no-count-api", prompt=_TOOL_CHOICE_QUESTION),
         http_request=_json_request({}, "python-httpx/0.28.1"),
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
 
     assert (with_choice.error, with_choice.total_tokens) == (False, prompt_alone.total_tokens)

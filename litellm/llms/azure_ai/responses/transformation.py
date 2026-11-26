@@ -1,6 +1,6 @@
 import json
 from collections.abc import Collection, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, NoReturn
+from typing import TYPE_CHECKING, ClassVar, Final, NoReturn
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -19,6 +19,7 @@ from litellm.llms.azure_ai.common_utils import (
     with_foundry_project_scope,
     without_api_version,
 )
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     CustomToolKey,
     convert_custom_tool_to_function_tool,
@@ -231,6 +232,8 @@ def _stamp_routed_model(model: str, response: ResponsesAPIResponse) -> None:
 
 
 class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
+    error_exception_class: ClassVar[type[BaseLLMException]] = BaseLLMException
+
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.AZURE_AI
@@ -247,7 +250,9 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
         return AzureAIGPT5Config.effort_resolves_to_none(model, effort)
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: Mapping[str, object], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         params: Final = litellm_params or GenericLiteLLMParams()
         api_base: Final = AzureFoundryModelInfo.get_api_base(params.api_base)
         on_project: Final = api_base is not None and bool(foundry_project_root(httpx.URL(api_base)))
@@ -313,7 +318,7 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
     def supports_native_websocket(self) -> bool:
         return False
 
-    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: object) -> str:
         resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
         if resolved_base is None:
             raise ValueError(

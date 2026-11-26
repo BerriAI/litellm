@@ -81,8 +81,8 @@ locals {
   # job has its own narrower env list — see migrations_env_secrets below).
   shared_env_secrets = concat(
     [
-      { name = "LITELLM_MASTER_KEY", secret = google_secret_manager_secret.master_key.id, version = "latest" },
-      { name = "DATABASE_PASSWORD", secret = google_secret_manager_secret.db_password.id, version = "latest" },
+      { name = "LITELLM_MASTER_KEY", secret = local.master_key_secret_id, version = "latest" },
+      { name = "DATABASE_PASSWORD", secret = local.db_password_secret_id, version = "latest" },
     ],
     var.litellm_license == "" ? [] : [
       { name = "LITELLM_LICENSE", secret = google_secret_manager_secret.license[0].id, version = "latest" },
@@ -103,7 +103,7 @@ locals {
     for k, v in var.backend_extra_env : { name = k, value = v }
   ]
 
-  backend_default_env_kv = [
+  model_store_env_kv = [
     { name = "STORE_MODEL_IN_DB", value = "true" },
   ]
   gateway_extra_secret_kv = [
@@ -169,7 +169,17 @@ locals {
     { name = "LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS", value = tostring(var.collector_drain_timeout_seconds) },
   ] : []
 
-  gateway_env_kv      = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env, local.metrics_env_kv, local.gateway_pool_env, local.collector_env_kv)
+  gateway_env_kv = concat(
+    local.shared_env_kv,
+    [for e in local.model_store_env_kv : e if !contains(concat(keys(var.gateway_extra_env), keys(var.gateway_extra_secrets)), e.name)],
+    local.gateway_otel_env_kv,
+    local.billing_metrics_env_kv,
+    local.gateway_extra_env_kv,
+    local.proxy_config_env,
+    local.metrics_env_kv,
+    local.gateway_pool_env,
+    local.collector_env_kv,
+  )
   gateway_env_secrets = concat(local.shared_env_secrets, local.otel_env_secrets, local.billing_metrics_env_secrets, local.gateway_extra_secret_kv)
 
   collector_env_kv_all = concat(
@@ -199,7 +209,7 @@ locals {
   ]
 
   migrations_env_secrets = [
-    { name = "DATABASE_PASSWORD", secret = google_secret_manager_secret.db_password.id, version = "latest" },
+    { name = "DATABASE_PASSWORD", secret = local.db_password_secret_id, version = "latest" },
   ]
 }
 
@@ -207,11 +217,12 @@ locals {
 resource "google_cloud_run_v2_service" "gateway" {
   count = var.create_runtime ? 1 : 0
 
-  name                = "${local.name}-gateway"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels              = local.labels
-  deletion_protection = false
+  name                 = "${local.name}-gateway"
+  location             = var.region
+  ingress              = var.private_ingress == null ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  invoker_iam_disabled = var.private_ingress != null
+  labels               = local.labels
+  deletion_protection  = false
 
   lifecycle {
     precondition {
@@ -221,7 +232,7 @@ resource "google_cloud_run_v2_service" "gateway" {
   }
 
   template {
-    service_account                  = google_service_account.runtime.email
+    service_account                  = local.runtime_service_account_email
     max_instance_request_concurrency = var.gateway_max_instance_request_concurrency
 
     vpc_access {
@@ -477,14 +488,15 @@ resource "google_cloud_run_v2_service" "gateway" {
 resource "google_cloud_run_v2_service" "backend" {
   count = var.create_runtime ? 1 : 0
 
-  name                = "${local.name}-backend"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels              = local.labels
-  deletion_protection = false
+  name                 = "${local.name}-backend"
+  location             = var.region
+  ingress              = var.private_ingress == null ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  invoker_iam_disabled = var.private_ingress != null
+  labels               = local.labels
+  deletion_protection  = false
 
   template {
-    service_account                  = google_service_account.runtime.email
+    service_account                  = local.runtime_service_account_email
     max_instance_request_concurrency = var.backend_max_instance_request_concurrency
 
     vpc_access {
@@ -514,7 +526,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env, local.metrics_env_kv)
+        for_each = concat(local.shared_env_kv, local.model_store_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env, local.metrics_env_kv)
         content {
           name  = env.value.name
           value = env.value.value
@@ -596,14 +608,22 @@ resource "google_cloud_run_v2_service" "backend" {
 resource "google_cloud_run_v2_service" "ui" {
   count = var.create_runtime ? 1 : 0
 
-  name                = "${local.name}-ui"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels              = local.labels
-  deletion_protection = false
+  name                 = "${local.name}-ui"
+  location             = var.region
+  ingress              = var.private_ingress == null ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  invoker_iam_disabled = var.private_ingress != null
+  labels               = local.labels
+  deletion_protection  = false
+
+  lifecycle {
+    precondition {
+      condition     = lower(local.planned_ui_account_email) != lower(local.planned_runtime_account_email)
+      error_message = "The Cloud Run UI and LiteLLM runtime must use distinct service accounts."
+    }
+  }
 
   template {
-    service_account                  = google_service_account.ui_runtime[0].email
+    service_account                  = var.ui_service_account_email == null ? google_service_account.ui_runtime[0].email : var.ui_service_account_email
     max_instance_request_concurrency = var.ui_max_instance_request_concurrency
 
     scaling {
@@ -645,7 +665,7 @@ resource "google_cloud_run_v2_service" "ui" {
 # (LITELLM_MASTER_KEY); these IAM bindings just open up Cloud Run's invoker
 # gate so the LB request makes it to the container.
 resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   project  = var.project_id
   location = google_cloud_run_v2_service.gateway[0].location
@@ -655,7 +675,7 @@ resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   project  = var.project_id
   location = google_cloud_run_v2_service.backend[0].location
@@ -665,7 +685,7 @@ resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   project  = var.project_id
   location = google_cloud_run_v2_service.ui[0].location
@@ -685,7 +705,7 @@ resource "google_cloud_run_v2_job" "migrations" {
 
   template {
     template {
-      service_account = google_service_account.runtime.email
+      service_account = local.runtime_service_account_email
 
       vpc_access {
         connector = google_vpc_access_connector.this[0].id

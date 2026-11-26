@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from functools import lru_cache
 from typing import Final, TypeVar
 
@@ -14,13 +14,13 @@ def lru_cache_wrapper(
 
     def decorator(f: Callable[..., T]) -> Callable[..., T]:
         @lru_cache(maxsize=maxsize)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Hashable, **kwargs: Hashable):
             try:
                 return ("success", f(*args, **kwargs))
             except Exception as e:
                 return ("error", e)
 
-        def wrapped(*args, **kwargs):
+        def wrapped(*args: Hashable, **kwargs: Hashable):
             result: Final = wrapper(*args, **kwargs)
             if result[0] == "error":
                 raise result[1]

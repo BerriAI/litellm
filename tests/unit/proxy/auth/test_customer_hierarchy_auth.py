@@ -17,6 +17,9 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_ORG_ALIAS_HEADER,
     CUSTOMER_TEAM_ID_HEADER,
     AmbiguousOrganizationAlias,
+    CustomerBudgetExceededError,
+    CustomerIdentityHeaderNames,
+    check_customer_hierarchy_access,
     check_customer_hierarchy_budget,
     check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
@@ -708,7 +711,9 @@ def test_jwt_app_with_custom_customer_headers_respects_claim_precedence(
         },
         claims,
         jwt_settings,
-        general_settings={"customer_org_alias_header": "X-Tenant-ID", "customer_member_id_header": "X-User-ID"},
+        names=CustomerIdentityHeaderNames.from_settings(
+            {"customer_org_alias_header": "X-Tenant-ID", "customer_member_id_header": "X-User-ID"}
+        ),
     )
     assert identity == expected
 
@@ -718,16 +723,14 @@ def test_configured_customer_header_does_not_fall_back_to_the_standard_header() 
         {CUSTOMER_ORG_ALIAS_HEADER: "org", CUSTOMER_MEMBER_ID_HEADER: "member"},
         None,
         LiteLLM_JWTAuth(),
-        general_settings={"customer_member_id_header": "X-User-ID"},
+        names=CustomerIdentityHeaderNames.from_settings({"customer_member_id_header": "X-User-ID"}),
     ) == CustomerRequestIdentity(customer_org_alias="org")
 
 
 def test_an_issuer_specific_customer_mapping_alone_stops_header_fallback() -> None:
     settings: Final = LiteLLM_JWTAuth(
         issuers=[
-            JWTIssuerConfig(
-                issuer="https://issuer.test", audience="litellm", customer_member_id_jwt_field="member"
-            )
+            JWTIssuerConfig(issuer="https://issuer.test", audience="litellm", customer_member_id_jwt_field="member")
         ]
     )
     assert (
@@ -1037,6 +1040,80 @@ async def test_either_customer_cap_blocks_while_the_other_has_capacity(exhausted
     assert error.value.entity_id == member.entity_id
     assert error.value.current_cost == exhausted.max_budget
     assert exhausted_duration in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_window_is_rejected_with_the_reading_of_every_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hierarchy: Final = customer_hierarchy_from_member_row(
+        _row(
+            template={
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": "12mo", "max_budget": 100},
+                ]
+            }
+        ),
+        NOW,
+    )
+    store: Final = FakeSpendCounters().store()
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    member: Final = hierarchy.scopes[-1]
+    monthly, yearly = customer_window_counters(member.key, member.entity_id, member.budget_limits, now=NOW)
+    await store.set(monthly.counter_key, 10.0)
+    await store.set(yearly.counter_key, 25.0)
+
+    with pytest.raises(CustomerBudgetExceededError) as rejected:
+        await check_customer_hierarchy_access(hierarchy, None, None, "/v1/chat/completions", now=NOW)
+
+    assert [
+        (window.budget_duration, window.spend, window.max_budget, window.reset_at)
+        for window in rejected.value.customer_hierarchy.scopes[-1].budget_window_usage
+    ] == [("1mo", 10.0, 10.0, monthly.reset_at), ("12mo", 25.0, 100.0, yearly.reset_at)]
+    assert monthly.reset_at is not None and yearly.reset_at is not None
+
+    await store.set(monthly.counter_key, 3.0)
+    admitted: Final = await check_customer_hierarchy_access(hierarchy, None, None, "/v1/chat/completions", now=NOW)
+    assert [(window.budget_duration, window.spend) for window in admitted.scopes[-1].budget_window_usage] == [
+        ("1mo", 3.0),
+        ("12mo", 25.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_cap_is_refused_as_a_budget_error_when_a_later_window_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hierarchy: Final = customer_hierarchy_from_member_row(
+        _row(
+            template={
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": "12mo", "max_budget": 100},
+                ]
+            }
+        ),
+        NOW,
+    )
+    store: Final = FakeSpendCounters().store()
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    member: Final = hierarchy.scopes[-1]
+    monthly, _ = customer_window_counters(member.key, member.entity_id, member.budget_limits, now=NOW)
+    await store.set(monthly.counter_key, 10.0)
+
+    with pytest.raises(CustomerBudgetExceededError) as rejected:
+        await check_customer_hierarchy_access(hierarchy, None, None, "/v1/chat/completions", now=NOW)
+    assert [window.budget_duration for window in rejected.value.customer_hierarchy.scopes[-1].budget_window_usage] == [
+        "1mo"
+    ]
+
+    await store.set(monthly.counter_key, 3.0)
+    with pytest.raises(ProxyException) as unavailable:
+        await check_customer_hierarchy_access(hierarchy, None, None, "/v1/chat/completions", now=NOW)
+    assert unavailable.value.code == "503"
 
 
 @pytest.mark.asyncio

@@ -25,16 +25,15 @@ export default function ChatAccountMenu({
   onLogout: () => void;
 }) {
   const { t } = useTranslation();
-  const { userEmail, userId } = useChatShell();
-  const identity = userEmail || userId;
-  const name = navAccountDisplayName(userEmail, userId);
+  const { userEmail, userId, userAlias } = useChatShell();
+  const name = navAccountDisplayName(userEmail, userId, userAlias);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
           <Button
             variant="ghost"
-            aria-label={t("chat.shell.accountMenu", { identity })}
+            aria-label={t("chat.shell.accountMenu", { identity: name })}
             className={cn(
               "h-auto w-full gap-2.5 rounded-lg hover:bg-sidebar-accent",
               collapsed ? "justify-center px-0 py-1" : "justify-start px-2 py-1.5",
@@ -55,8 +54,8 @@ export default function ChatAccountMenu({
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" className="w-60">
-        <div className="truncate px-2 py-2 text-xs text-muted-foreground" title={identity}>
-          {identity}
+        <div className="truncate px-2 py-2 text-xs text-muted-foreground" title={name}>
+          {name}
         </div>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={onSettings}>

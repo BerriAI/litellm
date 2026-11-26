@@ -1,5 +1,6 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated, Final
 
 from fastapi import Depends, Request
@@ -39,6 +40,26 @@ async def audited_write(
     audit: Annotated[AuditLog, Depends(get_audit_log)],
 ) -> AsyncIterator[Principal]:
     denial: Final = _write_denial(principal, frozenset(Scope(scope) for scope in security_scopes.scopes))
+    async with _audit_write(request, principal, audit, denial):
+        yield principal
+
+
+async def audited_fleet_write(
+    request: Request,
+    security_scopes: SecurityScopes,
+    principal: Annotated[Principal, Depends(get_principal)],
+    audit: Annotated[AuditLog, Depends(get_audit_log)],
+) -> AsyncIterator[Principal]:
+    required: Final = frozenset(Scope(scope) for scope in security_scopes.scopes)
+    denial: Final = forbidden("Missing fleet write scope.") if principal.missing_scopes(required) else None
+    async with _audit_write(request, principal, audit, denial):
+        yield principal
+
+
+@asynccontextmanager
+async def _audit_write(
+    request: Request, principal: Principal, audit: AuditLog, denial: ErrorBody | None
+) -> AsyncGenerator[None]:
     if denial is not None:
         audit.record(
             principal.subject,
@@ -56,7 +77,7 @@ async def audited_write(
     try:
         if reservation is None:
             raise ControlPlaneException(service_unavailable("Audit sink backpressure, try again shortly."))
-        yield principal
+        yield
     except ControlPlaneException as error:
         audit.record(
             principal.subject,

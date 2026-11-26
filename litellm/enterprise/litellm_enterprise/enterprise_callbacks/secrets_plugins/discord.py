@@ -15,7 +15,7 @@ class DiscordDetector(RegexBasedDetector):
         return "Discord Client Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Discord API key
             re.compile(

@@ -30,9 +30,22 @@ _MAX_SCANNED_BYTES: Final = 65536
 _UNOWNED_THREAD_MESSAGE: Final = (
     "message thread not found for this key. Send the full conversation to start a new thread"
 )
+_UNOWNED_DIAGNOSTICS_BODY: Final = json.dumps(
+    {
+        "type": "error",
+        "error": {
+            "type": "permission_error",
+            "message": (
+                "diagnostics.previous_message_id names a message another key created. "
+                "Send previous_message_id null to start a new comparison"
+            ),
+        },
+    }
+)
 
 _MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_CACHED_VALUE: Final = TypeAdapter(object)
 
 
 class _FirstClaimStore(Protocol):
@@ -155,6 +168,50 @@ def _sends_thread(data: Mapping[str, object]) -> bool:
     return any(thread is not None for thread in _threads(data))
 
 
+def _diagnostics(data: Mapping[str, object]) -> tuple[object, object]:
+    extra_body: Final = _as_mapping(data.get("extra_body")) or {}
+    return data.get("diagnostics"), extra_body.get("diagnostics")
+
+
+def _records_owner(data: Mapping[str, object]) -> bool:
+    return _sends_thread(data) or any(diagnostics is not None for diagnostics in _diagnostics(data))
+
+
+def _compared_message_id(diagnostics: object) -> str | None:
+    fields: Final = _as_mapping(diagnostics)
+    message_id: Final = None if fields is None else fields.get("previous_message_id")
+    return message_id if isinstance(message_id, str) and message_id else None
+
+
+def _compared_message_ids(data: Mapping[str, object]) -> tuple[str, ...]:
+    compared: Final = (_compared_message_id(diagnostics) for diagnostics in _diagnostics(data))
+    return tuple(message_id for message_id in compared if message_id is not None)
+
+
+def _restarted_comparison(diagnostics: object, forgotten: frozenset[str]) -> object:
+    fields: Final = _as_mapping(diagnostics)
+    if fields is None or _compared_message_id(fields) not in forgotten:
+        return diagnostics
+    return {**fields, "previous_message_id": None}
+
+
+def _with_forgotten_comparisons_restarted(
+    data: Mapping[str, object], forgotten: frozenset[str]
+) -> Mapping[str, object]:
+    """Starts a fresh comparison in place of one naming a message this proxy has no owner for, so the turn is
+    still answered without comparing against a message the caller may not own."""
+    extra_body: Final = _as_mapping(data.get("extra_body"))
+    restarted_extra_body: Final[Mapping[str, object]] = (
+        {}
+        if extra_body is None or "diagnostics" not in extra_body
+        else {"extra_body": {**extra_body, "diagnostics": _restarted_comparison(extra_body["diagnostics"], forgotten)}}
+    )
+    restarted_top_level: Final[Mapping[str, object]] = (
+        {"diagnostics": _restarted_comparison(data["diagnostics"], forgotten)} if "diagnostics" in data else {}
+    )
+    return {**data, **restarted_top_level, **restarted_extra_body}
+
+
 def _continued_message_ids(data: Mapping[str, object]) -> tuple[str, ...]:
     continued: Final = (continued_message_id(thread) for thread in _threads(data))
     return tuple(message_id for message_id in continued if message_id is not None)
@@ -240,25 +297,38 @@ class MessageThreadOwnership(CustomLogger):
         data: Mapping[str, object],
         call_type: CallTypesLiteral,
     ) -> dict[str, object] | None:  # mutable-ok: the proxy swaps in a pre-call hook's result only when it is a dict
-        previous_message_ids: Final = _continued_message_ids(data)
+        owner: Final = _owner(user_api_key_dict)
+        pass_through: Final = call_type == _PASS_THROUGH_CALL_TYPE
+        compared: Final = tuple(
+            [
+                (message_id, await self._binding(message_id, user_api_key_dict))
+                for message_id in _compared_message_ids(data)
+            ]
+        )
+        if any(binding is not None and binding.owner != owner for _, binding in compared):
+            raise HTTPException(status_code=403, detail=_UNOWNED_DIAGNOSTICS_BODY)
+        forgotten: Final = frozenset(
+            message_id for message_id, binding in compared if binding is None and not pass_through
+        )
+        scoped: Final = _with_forgotten_comparisons_restarted(data, forgotten) if forgotten else data
+        rescoped: Final = dict(scoped) if forgotten else None
+        previous_message_ids: Final = _continued_message_ids(scoped)
         if not previous_message_ids:
-            return None
+            return rescoped
         bindings: Final = tuple(
             [await self._binding(message_id, user_api_key_dict) for message_id in previous_message_ids]
         )
-        owner: Final = _owner(user_api_key_dict)
-        pass_through: Final = call_type == _PASS_THROUGH_CALL_TYPE
         if not all(_may_continue(binding, owner, pass_through) for binding in bindings):
             raise HTTPException(status_code=404, detail=message_thread_not_found_body(_UNOWNED_THREAD_MESSAGE))
         anthropic_beta: Final = next(
             (binding.anthropic_beta for binding in bindings if binding is not None and binding.anthropic_beta), None
         )
         if anthropic_beta is None or pass_through:
-            return None
+            return rescoped
         return {
-            **data,
-            "extra_headers": _with_anthropic_beta(data.get("extra_headers"), anthropic_beta),
-            **_provider_headers_with_anthropic_beta(data.get("provider_specific_header"), anthropic_beta),
+            **scoped,
+            "extra_headers": _with_anthropic_beta(scoped.get("extra_headers"), anthropic_beta),
+            **_provider_headers_with_anthropic_beta(scoped.get("provider_specific_header"), anthropic_beta),
         }
 
     async def async_post_call_success_hook(
@@ -267,7 +337,7 @@ class MessageThreadOwnership(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:
-        message_id: Final = _response_message_id(response) if _sends_thread(data) else None
+        message_id: Final = _response_message_id(response) if _records_owner(data) else None
         if message_id is not None:
             await self._record_owner(message_id, user_api_key_dict, _sent_anthropic_beta(data))
         return response
@@ -278,7 +348,7 @@ class MessageThreadOwnership(CustomLogger):
         response: AsyncIterable[object],
         request_data: Mapping[str, object],
     ) -> AsyncGenerator[object, None]:
-        scanner: Final = _StreamedMessageIdScanner(finished=not _sends_thread(request_data))
+        scanner: Final = _StreamedMessageIdScanner(finished=not _records_owner(request_data))
         async for chunk in response:
             yield chunk
             if not scanner.finished and (message_id := scanner.scan(chunk)) is not None:
@@ -286,8 +356,10 @@ class MessageThreadOwnership(CustomLogger):
 
     @with_service_target("message_thread_owners")
     async def _binding(self, message_id: str, user_api_key_dict: "UserAPIKeyAuth") -> _ThreadBinding | None:
-        cached: Final[object] = await self._owners.async_get_cache(
-            key=_owner_key(message_id), litellm_parent_otel_span=user_api_key_dict.parent_otel_span
+        cached: Final = _CACHED_VALUE.validate_python(
+            await self._owners.async_get_cache(
+                key=_owner_key(message_id), litellm_parent_otel_span=user_api_key_dict.parent_otel_span
+            )
         )
         return _as_binding(cached)
 

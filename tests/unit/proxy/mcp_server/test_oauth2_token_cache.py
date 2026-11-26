@@ -413,7 +413,7 @@ async def test_per_user_token_delete_evicts_locally_and_broadcasts_to_peer_worke
             proxy_server, "mcp_state_cache", local_cache
         ),
         patch(  # test-quality-ok: the redis publisher is module-level; asserting the broadcast without a redis
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
             new=publish,
         ),
     ):

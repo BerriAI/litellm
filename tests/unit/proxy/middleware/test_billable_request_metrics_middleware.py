@@ -19,6 +19,8 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+from litellm.constants import OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX
+from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.db.gateway_request_tracking import GatewayRequestAccumulator
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableCategory,
@@ -29,6 +31,7 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
+from litellm.rust_bridge._native import billable_route_passthrough_prefixes
 from litellm.types.proxy.gateway_requests import GatewayRequestCounts, GatewayRequestKey
 
 
@@ -201,8 +204,8 @@ def test_classify_non_billable_returns_none(path: str):
 
 
 @pytest.mark.usefixtures("configured_eu_jev_route")
-def test_a_pass_through_configured_at_the_eu_jev_decision_path_is_not_billed() -> None:
-    assert classify_billable_request("/eu_jev/v1/systemone") is None
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_is_still_billed() -> None:
+    assert classify_billable_request("/eu_jev/v1/systemone") == (BillableCategory.LLM, "/eu_jev/v1/systemone")
 
 
 @pytest.mark.parametrize(
@@ -255,6 +258,18 @@ def test_chat_completions_not_misclassified_as_plain_completions():
     """The /chat/completions suffix must win over /completions so the route label is correct."""
     category, route = classify_billable_request("/v1/chat/completions")
     assert route == "/chat/completions"
+
+
+def test_rust_passthrough_prefixes_track_the_mapped_pass_through_routes():
+    """
+    The Rust classifier hardcodes the provider pass-through prefixes, so a provider added to
+    LiteLLMRoutes.mapped_pass_through_routes must be added there too or it stops billing.
+    /langfuse forwards observability traffic and /opensearch bills only index searches.
+    """
+    non_billable: Final = {"/langfuse", OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}
+    expected: Final = set(LiteLLMRoutes.mapped_pass_through_routes.value) - non_billable
+
+    assert set(billable_route_passthrough_prefixes()) == expected
 
 
 # ── _extract_model_id ─────────────────────────────────────────────────────────

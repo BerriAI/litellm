@@ -2145,6 +2145,55 @@ class TestBackgroundStreamingTerminalEvents:
         assert final_call.kwargs["error"] == expected_error
 
     @pytest.mark.asyncio
+    async def test_a_request_refused_before_streaming_polls_failed_with_its_reason(self):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            previous_response_not_found,
+        )
+
+        refusal: Final = previous_response_not_found(("resp_unknown",), "claude-sonnet-4-6", "anthropic")
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_refused", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(side_effect=refusal)
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"]["code"] == "previous_response_not_found"
+        assert final_call.kwargs["error"]["message"].startswith("Previous response with id 'resp_unknown' not found.")
+
+    @pytest.mark.asyncio
+    async def test_any_other_failure_before_streaming_keeps_its_background_error_shape(self):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        failure: Final = RateLimitError(message="slow down", llm_provider="openai", model="gpt-5.4-mini")
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_rate_limited", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(side_effect=failure)
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"] == {
+            "type": "internal_error",
+            "message": str(failure),
+            "code": "background_streaming_error",
+        }
+
+    @pytest.mark.asyncio
     async def test_a_non_streamed_success_response_still_polls_completed(self):
         from fastapi.responses import JSONResponse
 
@@ -2653,6 +2702,44 @@ class TestStreamUntilCancelled:
         assert reported["request_data"] is kwargs["data"]
         assert reported["user_api_key_dict"] is kwargs["user_api_key_dict"]
         assert reported["dispatched_call_type"] == "aresponses"
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_whose_stream_teardown_already_billed_the_call_reports_no_second_disconnect(self) -> None:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.response_polling.background_streaming import background_streaming_task
+
+        logging_obj: Final = Logging(
+            model="claude-haiku-5-5",
+            messages=[],
+            stream=True,
+            call_type="aresponses",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="bg-cancel-billed",
+            function_id="bg-cancel-billed",
+        )
+
+        upstream_cancelled: Final = asyncio.Event()
+
+        async def upstream_whose_teardown_bills_the_partial(**_: object) -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                logging_obj.model_call_details["has_dispatched_final_stream_success"] = True
+                upstream_cancelled.set()
+                raise
+
+        handler: Final = _streaming_polling_handler(status="cancelled")
+        kwargs: Final = _make_background_streaming_kwargs("poll_cancelled_after_teardown_billed", handler)
+        kwargs["data"]["litellm_logging_obj"] = logging_obj
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = upstream_whose_teardown_bills_the_partial
+            await asyncio.wait_for(background_streaming_task(**kwargs), timeout=5)
+
+        assert upstream_cancelled.is_set()
+        kwargs["proxy_logging_obj"].post_call_failure_hook.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_cancel_during_a_blocked_state_write_closes_the_upstream_stream(self) -> None:
