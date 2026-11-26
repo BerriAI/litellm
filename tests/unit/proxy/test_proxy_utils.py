@@ -3850,7 +3850,7 @@ async def test_refused_messages_stream_still_bills_its_failure_when_the_client_d
     class FailureHookRecorder(CustomLogger):
         async def async_post_call_failure_hook(
             self,
-            request_data: dict,
+            request_data: dict[str, object],
             original_exception: Exception,
             user_api_key_dict: UserAPIKeyAuth,
             traceback_str: str | None = None,
@@ -3929,8 +3929,8 @@ async def test_refused_messages_stream_still_bills_its_failure_when_the_client_d
 
     class SlowLogMasking(CustomGuardrail):
         async def async_logging_hook(
-            self, kwargs: dict, result: object, call_type: str
-        ) -> tuple[dict, object]:
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
             masking_started.set()
             await masking_released.wait()
             return kwargs, result
@@ -3997,11 +3997,15 @@ async def test_refused_messages_stream_still_logs_its_masked_failure_when_one_lo
     masked_by: Final[list[str | None]] = []
 
     class UnreachableLogMasking(CustomGuardrail):
-        async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+        async def async_logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
             raise ConnectionError("masking service unreachable")
 
     class LogMasking(CustomGuardrail):
-        async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+        async def async_logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
             masked_by.append(self.guardrail_name)
             return kwargs, result
 
