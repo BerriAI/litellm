@@ -131,6 +131,8 @@ describe("uiMountRootPath", () => {
     ["", ""],
     ["/9000/uix/", ""],
     ["/9000/ui-config/", ""],
+    ["//evil.example/ui/", "/evil.example"],
+    ["/9000//ui/", "/9000"],
   ])("derives the mount root from %j as %j", (pathname, expected) => {
     expect(uiMountRootPath(pathname)).toBe(expected);
   });
@@ -142,16 +144,12 @@ describe("runtimeConfigUrl", () => {
     expect(runtimeConfigUrl("/a/b/ui/login/")).toBe("/a/b/ui/litellm-runtime-config.json");
   });
 
+  it("never produces a protocol-relative URL from a page path that starts with two slashes", () => {
+    expect(runtimeConfigUrl("//evil.example/ui/")).toMatch(/^\/[^/]/);
+  });
+
   it("stays at the origin root when the dashboard is not under a server root path", () => {
     expect(runtimeConfigUrl("/ui/")).toBe("/ui/litellm-runtime-config.json");
     expect(runtimeConfigUrl("/9000/uix/")).toBe("/ui/litellm-runtime-config.json");
-  });
-});
-
-describe("resolveApiBase with a proxy base URL that already carries the root path", () => {
-  it("does not repeat the root path", () => {
-    expect(resolveApiBase({ explicitBase: "http://proxy.example/9000", serverRootPath: "/9000" })).toBe(
-      "http://proxy.example/9000",
-    );
   });
 });

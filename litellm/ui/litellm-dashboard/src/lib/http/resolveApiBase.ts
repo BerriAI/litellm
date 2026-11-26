@@ -47,7 +47,7 @@ export const resolveRequestUrl = (path: string, { registeredBase, pageOrigin }: 
 };
 
 export const uiMountRootPath = (pathname: string): string => {
-  const segments = pathname.split("/");
+  const segments = pathname.replace(/\/{2,}/g, "/").split("/");
   const uiIndex = segments.indexOf("ui");
   if (uiIndex === -1) return "";
   return normalizeRootPath(segments.slice(0, uiIndex).join("/"));
