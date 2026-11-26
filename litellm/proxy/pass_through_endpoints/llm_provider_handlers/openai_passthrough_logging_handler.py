@@ -31,7 +31,6 @@ from litellm.proxy.pass_through_endpoints.background_response_polling import POL
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
     BasePassthroughLoggingHandler,
 )
-from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import PassthroughEndpointRouter
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -244,6 +243,8 @@ def pricing_deployment_id(model: str | None, declared_provider: object, url_rout
     """
     if declared_provider != LlmProviders.OPENAI.value or model is None:
         return None
+    from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import PassthroughEndpointRouter
+
     return PassthroughEndpointRouter().get_openai_pricing_deployment_id(model=model, called_url=url_route)
 
 
