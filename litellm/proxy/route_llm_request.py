@@ -941,12 +941,19 @@ async def route_request(
     user_model: str | None,
     route_type: RouteType,
     user_api_key_dict: UserAPIKeyAuth | None = None,
+    *,
+    will_be_dispatched: bool = True,
 ) -> Awaitable[object]:
     """
-    Common helper to route the request
+    Common helper to route the request. Pass ``will_be_dispatched=False`` to only learn whether ``data`` can be
+    routed, which leaves deployment rate limits uncounted.
     """
     enforce_total_timeout_scope(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
-    admitted: Final = await _serve_latest_alias_from_versioned_model_group(data, llm_router, route_type)
+    admitted: Final = (
+        await _serve_latest_alias_from_versioned_model_group(data, llm_router, route_type)
+        if will_be_dispatched
+        else None
+    )
     try:
         return await _route_request_with_registry_read_through(
             data, llm_router, user_model, route_type, user_api_key_dict

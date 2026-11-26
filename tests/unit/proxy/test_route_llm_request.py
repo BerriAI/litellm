@@ -3751,6 +3751,22 @@ async def test_a_rerouted_latest_alias_request_counts_against_the_rpm_of_the_lat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("settings", _DEPLOYMENT_LIMIT_ENFORCERS)
+async def test_validating_a_latest_alias_as_a_fallback_leaves_the_rpm_of_the_latest_deployment_uncounted(
+    settings: Mapping[str, object],
+) -> None:
+    from litellm.proxy.auth.auth_checks import is_valid_fallback_model
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router, _ = _latest_alias_router_with_limits({"rpm": 1}, **settings)
+    for _ in range(3):
+        assert await is_valid_fallback_model(model="latest", llm_router=router, user_model=None)
+    dispatched: Final = {"model": "latest", "metadata": {}}
+    await _serve_latest_alias_from_versioned_model_group(dispatched, router)
+    assert dispatched["model"] == "pinned"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("settings", _DEPLOYMENT_LIMIT_ENFORCERS)
 async def test_tokens_of_a_rerouted_latest_alias_request_count_against_the_tpm_of_the_latest_deployment(
     settings: Mapping[str, object],
 ) -> None:

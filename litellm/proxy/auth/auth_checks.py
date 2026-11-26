@@ -7047,6 +7047,7 @@ async def is_valid_fallback_model(
         llm_router=llm_router,
         user_model=user_model,
         route_type="acompletion",  # route type shouldn't affect the fallback model check
+        will_be_dispatched=False,
     )
 
     return True
