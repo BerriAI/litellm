@@ -547,7 +547,7 @@ class GigaChatConfig(BaseConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         """Return GigaChat error class."""
         return GigaChatError(

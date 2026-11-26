@@ -16,6 +16,7 @@ from litellm.llms.gemini.common_utils import (
     map_gemini_image_tools_params,
     map_openai_image_params_to_gemini,
 )
+from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import (
     transform_gemini_image_usage,
 )
@@ -107,14 +108,14 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         final_api_key: Final[str | None] = api_key or get_secret_str("GEMINI_API_KEY")
         if not final_api_key:
             raise ValueError("GEMINI_API_KEY is not set")
@@ -240,6 +241,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             web_search_requests: Final = get_gemini_image_web_search_requests(response_object)
             if web_search_requests and model_response.usage is not None:
                 setattr(model_response.usage, "web_search_requests", web_search_requests)
+            if not model_response.data:
+                raise empty_image_response_error(response_object, model, "gemini", raw_response, model_response)
         else:
             # Original Imagen format - predictions with generated images
             predictions: Final = _JSON_OBJECTS.validate_python(

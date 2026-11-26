@@ -54,7 +54,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"] = "request",
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -118,7 +118,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
 
     @staticmethod
     async def _resolve_end_user_object_permission(
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> LiteLLM_ObjectPermissionTable | None:
         """
         Resolve the end user's object_permission via the cached auth lookup.

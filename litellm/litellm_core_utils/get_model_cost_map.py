@@ -104,7 +104,7 @@ class GetModelCostMap:
         return GetModelCostMap.read_local_model_cost_map_bytes().decode("utf-8")
 
     @staticmethod
-    def load_local_model_cost_map() -> dict:
+    def load_local_model_cost_map() -> dict[str, object]:
         """Load the local backup model cost map bundled with the package."""
         return _BUNDLED_DOCUMENT_ADAPTER.validate_json(GetModelCostMap.read_local_model_cost_map_bytes())
 
@@ -494,8 +494,8 @@ def fetch_registration_document(url: str) -> dict[str, dict[str, object]] | None
 
 
 def _finalize_model_cost_map(  # pyright: ignore[reportUnusedFunction]  # main's private name, downstream code calls it
-    model_cost: dict,  # mutable-ok: main's signature, pops the rules block
-) -> dict:
+    model_cost: dict[str, object],  # mutable-ok: main's signature, pops the rules block
+) -> dict[str, object]:
     """Compat for main's callers. Use ``model_cost_inputs.install``."""
     match NativeModelCostMap.finalize(json.dumps(model_cost).encode()):
         case NativeRejected(reason=reason):

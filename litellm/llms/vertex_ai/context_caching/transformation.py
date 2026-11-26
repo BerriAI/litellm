@@ -5,7 +5,7 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -164,34 +164,53 @@ def cached_block_ttl(messages: Sequence[AllMessageValues]) -> str | None:
     )
 
 
+def _the_next_turn_reads_only_the_system_run(
+    messages: Sequence[AllMessageValues], marked: _MarkedBlock, block_start: int, block_cached_end: int
+) -> bool:
+    return all(is_system_message(message) for message in messages[block_cached_end:]) and any(
+        not is_system_message(message) for message in messages[marked.leading_run_end : block_start]
+    )
+
+
 def separate_cached_messages(
     messages: list[AllMessageValues],
+    cache_accepts: Callable[[Sequence[AllMessageValues]], bool],
     supports_system_message: bool = True,
 ) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
     """
     Returns the messages that go into the cachedContent and the remaining messages.
 
-    The cached set is the leading run of system messages plus the first continuous block of cached
-    messages, since generateContent rejects a system_instruction beside a cachedContent. Every other
-    system message comes back in the remaining messages already converted to a user turn in place, so a
-    reminder added each turn changes neither the cached set nor its cache key. A later system run that starts
-    or ends the cached block stays out of the cached set too, since the cache would put it ahead of the turns
-    it follows, or let a block that ends on a model turn reach the cache only because a reminder follows it.
-    A model without system message support gets its later system messages back as they are, so the request
-    renders them the way it does without a cache.
+    Gemini reads a cachedContent as a prefix of contents, so the cached set is the whole conversation prefix
+    ending at the first continuous block of cached messages, the leading run of system messages included,
+    since generateContent rejects a system_instruction beside a cachedContent. A later system message inside
+    that prefix stays in its place and becomes a user turn there. A later system run that ends the cached
+    block stays out of the cached set, since it would let a block that ends on a model turn reach the cache
+    only because a reminder follows it, and a block made only of such a run caches the leading system run
+    alone, so a reminder added each turn changes neither the cached set nor its cache key. A block that would
+    leave only system messages uncached caches the leading system run alone too when an unmarked turn comes
+    before the block, since a client that marks each newest turn never reads a cache of the whole conversation
+    again, while it reads the system run every turn. Otherwise the whole marked prefix is cached, so a repeat
+    of the same request reads it. A prefix the cache does not accept caches the leading system run alone, and
+    its turns go out uncached. The remaining messages come back with their system messages already converted
+    to user turns in place. A model without system message support gets its later system messages back as they
+    are, so the request renders them the way it does without a cache.
     """
     marked: Final = _marked_block(messages)
     if marked is None:
         return [], messages
 
     block_start: Final = _cached_block_start(messages, marked.leading_run_end, marked.block.start, marked.block.stop)
-    cached_block: Final = range(
-        block_start, _cached_block_end(messages, marked.leading_run_end, block_start, marked.block.stop)
+    block_end: Final = _cached_block_end(messages, marked.leading_run_end, block_start, marked.block.stop)
+    block_cached_end: Final = (
+        max(marked.leading_run_end, block_end) if block_start < block_end else marked.leading_run_end
     )
-    goes_in_cache: Final = tuple(idx < marked.leading_run_end or idx in cached_block for idx in range(len(messages)))
-    remaining_messages: Final = tuple(message for message, cached in zip(messages, goes_in_cache) if not cached)
+    caches_the_system_run_alone: Final = not cache_accepts(
+        messages[:block_cached_end]
+    ) or _the_next_turn_reads_only_the_system_run(messages, marked, block_start, block_cached_end)
+    cached_end: Final = marked.leading_run_end if caches_the_system_run_alone else block_cached_end
+    remaining_messages: Final = messages[cached_end:]
     return (
-        [message for message, cached in zip(messages, goes_in_cache) if cached],
+        messages[:cached_end],
         list(
             place_mid_conversation_system(remaining_messages, supports_mid_conversation_system=False)
             if supports_system_message
@@ -236,6 +255,7 @@ def transform_openai_messages_to_gemini_context_caching(
     vertex_project: str | None,
     vertex_location: str | None,
     drop_params: bool = False,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> CachedContentRequestBody:
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
 
@@ -250,7 +270,7 @@ def transform_openai_messages_to_gemini_context_caching(
     transformed_messages: Final = gemini_convert_messages_with_history(
         messages=new_messages,
         model=model,
-        litellm_params={"drop_params": drop_params},
+        litellm_params={**(litellm_params or {}), "drop_params": drop_params},
         custom_llm_provider=custom_llm_provider,
         ends_request=False,
     )

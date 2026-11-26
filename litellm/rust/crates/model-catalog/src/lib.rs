@@ -10,8 +10,8 @@
 //! - `Catalog`: the parsed map. `Catalog::parse` takes the JSON body and returns `Loaded<Catalog>`,
 //!   keeping every entry in file order with its raw fields and collecting row and alias errors.
 //! - `ModelEntry`: one model. `ModelEntry::fields` is the raw JSON object, so unknown fields are
-//!   never lost; `ModelEntry::model` is the optional typed `Model` with attributes, prices,
-//!   adjustments and capabilities. Invalid rows retain their raw fields without a typed model.
+//!   never lost. `Model::from_fields` lowers it into the typed `Model` with attributes, prices,
+//!   adjustments and capabilities, or the errors that make the row invalid.
 //! - Aliases: an entry may list `aliases`; each alias resolves to its canonical key. Problems
 //!   found while indexing them (bad lists, collisions) are kept in `Loaded::errors` instead of
 //!   failing the document.

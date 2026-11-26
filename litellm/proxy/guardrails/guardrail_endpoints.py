@@ -1482,13 +1482,18 @@ async def patch_guardrail(
         )
 
         guardrail_name = result.get("guardrail_name", "Unknown")
+        changes_logging_only_settings: Final = bool(
+            {"logging_only_scope", "logging_only_continue_on_input_failure"} & set(requested_litellm_params)
+        )
+        changes_tool_description_scan_mode: Final = (
+            bool({"mode", "scan_tool_descriptions_as_text"} & set(requested_litellm_params))
+            and litellm_params.scan_tool_descriptions_as_text is True
+        )
 
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
-                reject_invalid_logging_only_scope=bool(
-                    {"logging_only_scope", "logging_only_continue_on_input_failure"} & set(requested_litellm_params)
-                ),
+                reject_invalid_logging_only_scope=changes_logging_only_settings or changes_tool_description_scan_mode,
             )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id

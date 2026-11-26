@@ -75,7 +75,7 @@ class BedrockFilesHandler(BaseAWSLLM):
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
-        optional_params: dict,
+        optional_params: dict[str, object],
         timeout: float | httpx.Timeout,
         max_retries: int | None,
     ) -> HttpxBinaryResponseContent:
@@ -142,7 +142,7 @@ class BedrockFilesHandler(BaseAWSLLM):
         _is_async: bool,
         file_content_request: FileContentRequest,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: dict[str, object],
         timeout: float | httpx.Timeout,
         max_retries: int | None,
     ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:

@@ -122,12 +122,15 @@ impl CacheInvalidation {
         }
         let in_flight = self.in_flight.clone();
         let waiting = self.pending.clone();
-        Some(self.runtime.spawn(async move {
-            if let Ok(_permit) = in_flight.acquire_owned().await {
-                publish.await;
-            }
-            waiting.fetch_sub(1, Ordering::AcqRel);
-        }))
+        Some(litellm_call_scope::spawn_in_call_on(
+            &self.runtime,
+            async move {
+                if let Ok(_permit) = in_flight.acquire_owned().await {
+                    publish.await;
+                }
+                waiting.fetch_sub(1, Ordering::AcqRel);
+            },
+        ))
     }
 }
 

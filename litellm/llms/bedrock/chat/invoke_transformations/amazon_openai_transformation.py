@@ -104,8 +104,8 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
         request_data: dict,
         api_base: str,
         api_key: str | None = None,
@@ -132,10 +132,10 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform the request to OpenAI Chat Completions format for Bedrock imported models.
 

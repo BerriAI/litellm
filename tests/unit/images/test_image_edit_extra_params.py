@@ -5,15 +5,20 @@ Regression tests for https://github.com/BerriAI/litellm/issues/36493
 (e.g. seed) and the extra_body escape hatch, unlike /v1/images/generations.
 """
 
-from typing import Final
+from collections.abc import Mapping
+from email.parser import BytesParser
+from email.policy import HTTP
+from typing import Final, cast
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\nfakepng"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 def _capture_image_edit_request(captured):
@@ -287,3 +292,181 @@ async def test_aimage_edit_forwards_extra_body():
     assert fields["quality_level"] == "high"
     assert "extra_body" not in fields
     assert response.data
+
+
+_IMAGE_REFERENCES: Final = ({"image_url": "https://images.example/tree.png"}, {"file_id": "file-abc123"})
+_DATA_URL_REFERENCE: Final = ({"image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="},)
+_MASK_REFERENCE: Final = {"image_url": "https://images.example/mask.png"}
+_MARKUP_REFERENCE: Final = {"image_url": "data:image/png;base64,bWFya3Vw"}
+
+
+def _sent_json_body(captured: Mapping[str, object]) -> dict[str, object]:
+    content_type: Final = cast(str, captured["content_type"])
+    assert content_type.split(";")[0].strip() == "application/json", (content_type, captured["body"])
+    return _JSON_OBJECT.validate_json(cast(bytes, captured["body"]))
+
+
+def _multipart_file_parts(content_type: str, body: bytes) -> tuple[tuple[str, bytes], ...]:
+    parsed: Final = BytesParser(policy=HTTP).parsebytes(f"content-type: {content_type}\r\n\r\n".encode() + body)
+    return tuple(
+        (cast(str, part.get_param("name", header="content-disposition")), cast(bytes, part.get_payload(decode=True)))
+        for part in parsed.iter_parts()
+        if part.get_filename() is not None
+    )
+
+
+@pytest.mark.asyncio
+async def test_aimage_edit_sends_image_and_mask_references_to_openai_unchanged() -> None:
+    """regression: image and mask references with no uploaded file reach OpenAI as the same application/json body."""
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+
+    response: Final = await litellm.aimage_edit(
+        image=None,
+        images=[dict(reference) for reference in _IMAGE_REFERENCES],
+        mask=dict(_MASK_REFERENCE),
+        model="openai/gpt-image-1",
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+    )
+
+    assert _sent_json_body(captured) == {
+        "model": "gpt-image-1",
+        "prompt": "add a hat",
+        "images": list(_IMAGE_REFERENCES),
+        "mask": _MASK_REFERENCE,
+    }
+    assert [image.b64_json for image in response.data] == ["aW1n"]
+
+
+@pytest.mark.asyncio
+async def test_aimage_edit_sends_markup_and_output_fields_to_openai_as_json_values() -> None:
+    """regression: markup and the other edit fields keep their JSON shape and types in a reference edit."""
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+
+    await litellm.aimage_edit(
+        image=None,
+        images=[dict(reference) for reference in _DATA_URL_REFERENCE],
+        markup=dict(_MARKUP_REFERENCE),
+        model="openai/gpt-image-1",
+        prompt="add a hat",
+        n=2,
+        quality="high",
+        size="1024x1024",
+        output_format="webp",
+        background="transparent",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+    )
+
+    assert _sent_json_body(captured) == {
+        "model": "gpt-image-1",
+        "prompt": "add a hat",
+        "images": list(_DATA_URL_REFERENCE),
+        "markup": _MARKUP_REFERENCE,
+        "n": 2,
+        "quality": "high",
+        "size": "1024x1024",
+        "output_format": "webp",
+        "background": "transparent",
+    }
+
+
+def test_image_edit_sends_image_references_to_openai_as_a_json_body() -> None:
+    """regression: the sync SDK call sends image references to OpenAI as application/json, the list unchanged."""
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+    )
+
+    response: Final = litellm.image_edit(
+        images=[dict(reference) for reference in _DATA_URL_REFERENCE],
+        model="openai/gpt-image-1",
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+    )
+
+    assert _sent_json_body(captured) == {
+        "model": "gpt-image-1",
+        "prompt": "add a hat",
+        "images": list(_DATA_URL_REFERENCE),
+    }
+    assert [image.b64_json for image in response.data] == ["aW1n"]
+
+
+@pytest.mark.asyncio
+async def test_aimage_edit_sends_image_references_to_an_azure_deployment_as_a_json_body() -> None:
+    """regression: an Azure deployment gets image references and a mask reference as application/json."""
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+
+    response: Final = await litellm.aimage_edit(
+        image=None,
+        images=[dict(reference) for reference in _IMAGE_REFERENCES],
+        mask=dict(_MASK_REFERENCE),
+        model="azure/image-edit-deployment",
+        prompt="add a hat",
+        api_key="azure-test-key",
+        api_base="https://resource.example.openai.azure.com",
+        api_version="2025-04-01-preview",
+        client=client,
+    )
+
+    assert _sent_json_body(captured) == {
+        "prompt": "add a hat",
+        "images": list(_IMAGE_REFERENCES),
+        "mask": _MASK_REFERENCE,
+    }
+    assert [image.b64_json for image in response.data] == ["aW1n"]
+
+
+@pytest.mark.asyncio
+async def test_aimage_edit_with_an_uploaded_file_still_reaches_openai_as_multipart() -> None:
+    """guard: an uploaded image keeps going to OpenAI as multipart with its bytes in an image[] part."""
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+
+    await litellm.aimage_edit(
+        image=PNG_BYTES,
+        model="openai/gpt-image-1",
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+    )
+
+    content_type: Final = cast(str, captured["content_type"])
+    assert content_type.startswith("multipart/form-data"), content_type
+    assert _multipart_file_parts(content_type, cast(bytes, captured["body"])) == (("image[]", PNG_BYTES),)
+    assert _multipart_text_fields(content_type, cast(bytes, captured["body"])) == {
+        "model": "gpt-image-1",
+        "prompt": "add a hat",
+    }
+
+
+@pytest.mark.asyncio
+async def test_aimage_edit_with_image_references_and_an_uploaded_mask_stays_multipart() -> None:
+    """guard: an uploaded mask file keeps the edit multipart, with the mask bytes in their own part."""
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+
+    await litellm.aimage_edit(
+        image=None,
+        images=[dict(reference) for reference in _IMAGE_REFERENCES],
+        mask=PNG_BYTES,
+        model="openai/gpt-image-1",
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+    )
+
+    content_type: Final = cast(str, captured["content_type"])
+    assert content_type.startswith("multipart/form-data"), content_type
+    assert _multipart_file_parts(content_type, cast(bytes, captured["body"])) == (("mask", PNG_BYTES),)
