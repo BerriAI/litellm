@@ -983,7 +983,7 @@ async def _arealtime(
     user: Final = kwargs.get("user", None)
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-    litellm_params_dict: Final = {**get_litellm_params(**kwargs), CallTypes.arealtime.value: True}
+    litellm_params_dict: Final[dict[str, object]] = {**get_litellm_params(**kwargs), CallTypes.arealtime.value: True}
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,

@@ -1035,6 +1035,14 @@ class _FailureRun:
     for_async_request: bool
 
 
+class _Copyable(Protocol):
+    def copy(self) -> object: ...
+
+
+def _is_dict(value: object) -> bool:
+    return isinstance(value, dict)
+
+
 def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
@@ -1752,9 +1760,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def update_from_kwargs(
         self,
-        kwargs: dict,
-        litellm_params: dict | None = None,
-        optional_params: dict | None = None,
+        kwargs: Mapping[str, object],
+        litellm_params: dict[str, object] | None = None,
+        optional_params: dict[str, object] | None = None,
         model: str | None = None,
         user: object = None,
         **additional_params: object,
@@ -1766,12 +1774,14 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         base_litellm_params: Final[dict[str, object]] = {}
 
-        if isinstance(kwargs.get("metadata"), dict):
-            base_litellm_params["metadata"] = kwargs["metadata"].copy()
-        if "litellm_metadata" in kwargs and isinstance(kwargs["litellm_metadata"], dict):
-            base_litellm_params["litellm_metadata"] = kwargs["litellm_metadata"]
+        metadata: Final = kwargs.get("metadata")
+        if _is_dict(metadata):
+            base_litellm_params["metadata"] = require_attributes(metadata, _Copyable, "copy").copy()
+        litellm_metadata: Final = kwargs.get("litellm_metadata")
+        if _is_dict(litellm_metadata):
+            base_litellm_params["litellm_metadata"] = litellm_metadata
             if "metadata" not in base_litellm_params:
-                base_litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
+                base_litellm_params["metadata"] = require_attributes(litellm_metadata, _Copyable, "copy").copy()
 
         if litellm_params:
             # Merge metadata carefully — don't overwrite the merged metadata
@@ -6093,14 +6103,14 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             if callback == "logfire" and logfireLogger is not None:
                 verbose_logger.debug("reaches logfire for failure logging!")
-                kwargs = {}  # rebind-ok: each integration branch binds its own
+                logfire_kwargs: dict[str, object] = {}
                 for k, v in self._model_call_details_view.items():
                     if k != "original_response":  # copy.deepcopy raises errors as this could be a coroutine
-                        kwargs[k] = v
-                kwargs["exception"] = exception
+                        logfire_kwargs[k] = v
+                logfire_kwargs["exception"] = exception
 
                 logfireLogger.log_event(
-                    kwargs=kwargs,
+                    kwargs=logfire_kwargs,
                     response_obj=result,
                     start_time=start_time,
                     end_time=end_time,
