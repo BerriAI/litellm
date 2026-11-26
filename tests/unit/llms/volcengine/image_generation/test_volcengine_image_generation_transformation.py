@@ -2,7 +2,9 @@ import json
 from typing import Final
 
 import httpx
+import openai
 import pytest
+import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -198,6 +200,28 @@ def test_generation_resolves_an_api_base_to_the_images_route(api_base: str | Non
     )
 
     assert captured["url"] == expected_url
+
+
+@respx.mock
+def test_a_supplied_openai_client_sends_generation_with_its_own_key_and_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_BASE", raising=False)
+    monkeypatch.delenv("VOLCENGINE_API_BASE", raising=False)
+    route: Final = respx.post("https://gateway.example/api/v3/images/generations").mock(
+        return_value=httpx.Response(200, json=ARK_RESPONSE)
+    )
+
+    litellm.image_generation(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        client=openai.OpenAI(api_key="client-key", base_url="https://gateway.example/api/v3"),
+    )
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["authorization"] == "Bearer client-key"
 
 
 @pytest.mark.parametrize(
