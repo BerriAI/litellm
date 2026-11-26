@@ -59,6 +59,7 @@ from litellm.types.utils import all_litellm_params
 if TYPE_CHECKING:
     from a2a.compat.v0_3.types import MessageSendParams
 
+    from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
     from litellm.types.agents import AgentResponse
 
 router: Final = APIRouter()
@@ -386,8 +387,8 @@ def _jsonrpc_body(response: _JsonRpcResponse) -> dict[str, object]:
 
 
 async def _forward_jsonrpc(
-    agent_url: str,
-    body: dict[str, object],
+    agent_url: object,
+    body: Mapping[str, object],
     extra_headers: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -398,7 +399,7 @@ async def _forward_jsonrpc(
         llm_provider=httpxSpecialProvider.A2A,
         params={"timeout": 60.0},
     )
-    resp: Final = await handler.post(agent_url, json=body, headers=headers)
+    resp: Final = await handler.post(_httpx_url(agent_url), json=body, headers=headers)
     try:
         result: Final = _jsonrpc_body(resp)
     except Exception:
@@ -489,24 +490,14 @@ def _sse_streaming_response(generator: AsyncGenerator[str, None]) -> StreamingRe
     )
 
 
-async def _forward_jsonrpc_sse(
-    agent_url: object,
-    body: Mapping[str, object],
+def _wrap_jsonrpc_sse_stream(
+    event_source: AsyncGenerator[object, None],
+    *,
     request_id: str | int | None = None,
-    extra_headers: Mapping[str, str] | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-    request_data: dict[str, object] | None = None,
-    served_version: A2AVersion = "0.3",
+    request_data: dict[str, object] | None = None,  # mutable-ok: matches ProxyBaseLLMRequestProcessing hook contract
 ) -> StreamingResponse:
-    event_source: Final = _a2a_sse_event_source(
-        agent_url,
-        body,
-        request_id=request_id,
-        extra_headers=extra_headers,
-        served_version=served_version,
-    )
-
     def _serialize_chunk(chunk: object) -> str:
         return f"data: {json.dumps(chunk)}\n\n"
 
@@ -551,6 +542,100 @@ async def _forward_jsonrpc_sse(
         generator = _passthrough()
 
     return _sse_streaming_response(generator)
+
+
+def _http_status_error_event(
+    exc: httpx.HTTPStatusError,
+    request_id: str | int | None,
+) -> Mapping[str, object]:
+    from litellm.types.agents import normalize_a2a_jsonrpc_response
+
+    try:
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(exc.response.content))
+        parsed_map: Final = as_str_mapping(parsed)
+        if parsed_map is not None and "error" in parsed_map:
+            return normalize_a2a_jsonrpc_response(dict(parsed_map), request_id=request_id)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, httpx.ResponseNotRead):
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {"code": -32603, "message": exc.response.reason_phrase or str(exc)},
+        }
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": -32603, "message": exc.response.reason_phrase or str(exc)},
+    }
+
+
+def _normalize_provider_stream_event(
+    event: Mapping[str, object],
+    served_version: A2AVersion,
+    request_id: str | int | None,
+) -> Mapping[str, object]:
+    from litellm.types.agents import normalize_a2a_jsonrpc_response
+
+    event_fields: Final = as_str_mapping(event)
+    if event_fields is None:
+        return event
+    if "error" in event_fields:
+        return normalize_a2a_jsonrpc_response(dict(event_fields), request_id=request_id)
+    return normalize_stream_event(dict(event_fields), served_version, request_id=request_id)
+
+
+async def _provider_a2a_sse_event_source(
+    provider_config: "BaseA2AProviderConfig",
+    method: str,
+    request_id: str | int | None,
+    params: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    agent_extra_headers: Mapping[str, str] | None = None,
+    served_version: A2AVersion = "0.3",
+) -> AsyncGenerator[object, None]:
+    """Stream an upstream A2A SSE response from a native JSON-RPC provider."""
+    try:
+        async for event in provider_config.handle_jsonrpc_streaming(
+            method=method,
+            request_id=request_id,
+            params=params,
+            litellm_params=litellm_params,
+            agent_extra_headers=agent_extra_headers,
+        ):
+            yield _normalize_provider_stream_event(event, served_version, request_id)
+    except litellm.BadRequestError as e:
+        yield {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {"code": -32602, "message": e.message},
+        }
+    except httpx.HTTPStatusError as e:
+        yield _http_status_error_event(e, request_id)
+
+
+async def _forward_jsonrpc_sse(
+    agent_url: object,
+    body: Mapping[str, object],
+    request_id: str | int | None = None,
+    extra_headers: Mapping[str, str] | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    request_data: dict[str, object] | None = None,
+    served_version: A2AVersion = "0.3",
+) -> StreamingResponse:
+    event_source: Final = _a2a_sse_event_source(
+        agent_url,
+        body,
+        request_id=request_id,
+        extra_headers=extra_headers,
+        served_version=served_version,
+    )
+    return _wrap_jsonrpc_sse_stream(
+        event_source,
+        request_id=request_id,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_dict=user_api_key_dict,
+        request_data=request_data,
+    )
 
 
 async def _handle_stream_message(
@@ -772,6 +857,260 @@ async def get_agent_card(
     except Exception as e:
         verbose_proxy_logger.exception("Error getting agent card: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_TASK_JSONRPC_METHODS: Final = frozenset(
+    {
+        "tasks/get",
+        "tasks/list",
+        "tasks/cancel",
+        "tasks/pushNotificationConfig/set",
+        "tasks/pushNotificationConfig/get",
+        "tasks/pushNotificationConfig/list",
+        "tasks/pushNotificationConfig/delete",
+        "agent/getAuthenticatedExtendedCard",
+    }
+)
+
+
+def _resolve_native_jsonrpc_provider(
+    custom_llm_provider: object,
+    model: object,
+) -> "BaseA2AProviderConfig | None":
+    from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
+
+    provider_config: Final = A2AProviderConfigManager.get_provider_config(
+        custom_llm_provider,
+        model=model,
+    )
+    if provider_config is not None and provider_config.supports_jsonrpc():
+        return provider_config
+    return None
+
+
+def _validate_push_notification_params(params: object) -> None:
+    if not is_str_keyed_dict(params):
+        raise HTTPException(
+            status_code=400,
+            detail="params must be an object",
+        )
+    push_config: Final = params.get("pushNotificationConfig", {})
+    if not is_str_keyed_dict(push_config):
+        raise HTTPException(
+            status_code=400,
+            detail="pushNotificationConfig must be an object",
+        )
+    for callback_url in (params.get("url"), push_config.get("url")):
+        if not callback_url:
+            continue
+        if not isinstance(callback_url, str):
+            raise HTTPException(
+                status_code=400,
+                detail="Push notification URL must be a string",
+            )
+        _validate_push_notification_url(callback_url)
+
+
+_INTERFACE_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _finalize_task_jsonrpc_result(
+    result: Mapping[str, object],
+    *,
+    method: str,
+    agent_id: str,
+    request: Request,
+    served_version: A2AVersion,
+) -> dict[str, object]:  # mutable-ok: matches normalize_jsonrpc_response return type
+    result_dict: Final = dict(result)
+    if method == "agent/getAuthenticatedExtendedCard":
+        card: Final = as_str_mapping(result_dict.get("result"))
+        if card is not None:
+            proxy_url: Final = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
+            # Rewrite the upstream agent URL in both 0.3 (top-level `url`)
+            # and 1.0 (`supportedInterfaces[0].url`) wire formats so that
+            # downstream clients never see the upstream internal address.
+            raw_interfaces: Final = card.get("supportedInterfaces")
+            interface_items: Final = (
+                _INTERFACE_ITEMS.validate_python(raw_interfaces) if isinstance(raw_interfaces, list) else None
+            )
+            first_interface: Final = as_str_mapping(interface_items[0]) if interface_items else None
+            updated_interfaces: Final = (
+                [{**first_interface, "url": proxy_url}, *interface_items[1:]]
+                if interface_items is not None and first_interface is not None
+                else raw_interfaces
+            )
+            rewritten_card: Final[dict[str, object]] = {  # mutable-ok: normalize_agent_card expects JsonDict
+                **card,
+                **({"url": proxy_url} if "url" in card else {}),
+                **({"supportedInterfaces": updated_interfaces} if updated_interfaces is not None else {}),
+            }
+            return {**result_dict, "result": normalize_agent_card(rewritten_card, served_version)}
+        return result_dict
+    return normalize_jsonrpc_response(result_dict, served_version, method=method)
+
+
+def _with_inbound_runtime_session_id(
+    litellm_params: Mapping[str, object],
+    custom_llm_provider: object,
+    inbound_runtime_session_id: str | None,
+) -> Mapping[str, object]:
+    if not custom_llm_provider or not inbound_runtime_session_id:
+        return litellm_params
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2A_RUNTIME_SESSION_ID_PARAM,
+    )
+
+    return {
+        **litellm_params,
+        A2A_RUNTIME_SESSION_ID_PARAM: inbound_runtime_session_id,
+    }
+
+
+async def _dispatch_task_jsonrpc(
+    *,
+    method: str,
+    request_id: str | int | None,
+    normalized_params: object,
+    agent_url: object,
+    agent_extra_headers: Mapping[str, str] | None,
+    native_jsonrpc_provider: "BaseA2AProviderConfig | None",
+    provider_litellm_params: Mapping[str, object],
+) -> Mapping[str, object]:
+    if native_jsonrpc_provider is not None:
+        provider_params: Final = normalized_params if is_str_keyed_dict(normalized_params) else {}
+        return await native_jsonrpc_provider.handle_jsonrpc(
+            method=method,
+            request_id=request_id,
+            params=provider_params,
+            api_base=agent_url if isinstance(agent_url, str) else None,
+            litellm_params=provider_litellm_params,
+            agent_extra_headers=agent_extra_headers,
+        )
+    forward_body: Final[Mapping[str, object]] = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+        "params": normalized_params,
+    }
+    return await _forward_jsonrpc(agent_url, forward_body, extra_headers=agent_extra_headers)
+
+
+async def _handle_task_jsonrpc_method(
+    *,
+    method: str,
+    request_id: str | int | None,
+    params: object,
+    agent_id: str,
+    agent_url: object,
+    request: Request,
+    served_version: A2AVersion,
+    agent_extra_headers: Mapping[str, str] | None,
+    native_jsonrpc_provider: "BaseA2AProviderConfig | None",
+    provider_litellm_params: Mapping[str, object],
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_auth_for_call: UserAPIKeyAuth,
+    data: dict[str, object],  # mutable-ok: matches proxy_logging_obj post_call_success_hook contract
+) -> JSONResponse:
+    if native_jsonrpc_provider is None and not agent_url:
+        return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
+
+    normalized_params: Final = (
+        normalize_request_params(params, served_version, method=method) if is_str_keyed_dict(params) else params
+    )
+    if method == "tasks/pushNotificationConfig/set":
+        _validate_push_notification_params(normalized_params)
+
+    result_map: Final = await _dispatch_task_jsonrpc(
+        method=method,
+        request_id=request_id,
+        normalized_params=normalized_params,
+        agent_url=agent_url,
+        agent_extra_headers=agent_extra_headers,
+        native_jsonrpc_provider=native_jsonrpc_provider,
+        provider_litellm_params=provider_litellm_params,
+    )
+    finalized_result: Final = _finalize_task_jsonrpc_result(
+        result_map,
+        method=method,
+        agent_id=agent_id,
+        request=request,
+        served_version=served_version,
+    )
+    from litellm.types.agents import LiteLLMSendMessageResponse
+
+    raw_response: Final = LiteLLMSendMessageResponse.from_dict(finalized_result, request_id=request_id)
+    hooked_response: Final = await proxy_logging_obj.post_call_success_hook(
+        user_api_key_dict=user_api_key_auth_for_call,
+        data=data,
+        response=raw_response,
+    )
+    return JSONResponse(
+        content=(
+            hooked_response.model_dump(mode="json", exclude_none=True)
+            if hasattr(hooked_response, "model_dump")
+            else hooked_response
+        )
+    )
+
+
+async def _handle_resubscribe_method(
+    *,
+    request_id: str | int | None,
+    params: object,
+    agent_id: str,
+    agent_url: object,
+    served_version: A2AVersion,
+    agent_extra_headers: Mapping[str, str] | None,
+    native_jsonrpc_provider: "BaseA2AProviderConfig | None",
+    provider_litellm_params: Mapping[str, object],
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_auth_for_call: UserAPIKeyAuth,
+    data: dict[str, object],  # mutable-ok: matches _wrap_jsonrpc_sse_stream contract
+) -> StreamingResponse | JSONResponse:
+    if native_jsonrpc_provider is None and not agent_url:
+        return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
+
+    normalized_params: Final = (
+        normalize_request_params(params, served_version, method="tasks/resubscribe")
+        if is_str_keyed_dict(params)
+        else params
+    )
+    if native_jsonrpc_provider is not None:
+        provider_params: Final = normalized_params if is_str_keyed_dict(normalized_params) else {}
+        event_source: Final = _provider_a2a_sse_event_source(
+            native_jsonrpc_provider,
+            method="tasks/resubscribe",
+            request_id=request_id,
+            params=provider_params,
+            litellm_params=provider_litellm_params,
+            agent_extra_headers=agent_extra_headers,
+            served_version=served_version,
+        )
+        return _wrap_jsonrpc_sse_stream(
+            event_source,
+            request_id=request_id,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=user_api_key_auth_for_call,
+            request_data=data,
+        )
+
+    forward_body: Final[Mapping[str, object]] = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tasks/resubscribe",
+        "params": normalized_params,
+    }
+    return await _forward_jsonrpc_sse(
+        agent_url,
+        forward_body,
+        request_id=request_id,
+        extra_headers=agent_extra_headers,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_dict=user_api_key_auth_for_call,
+        request_data=data,
+        served_version=served_version,
+    )
 
 
 @jsonrpc_router.post(
@@ -1019,6 +1358,16 @@ async def invoke_agent_a2a(
             backend_auth_header=backend_auth.header,
         )
         forwarded_litellm_params: Final = backend_auth.litellm_params
+        provider_litellm_params: Final = _with_inbound_runtime_session_id(
+            forwarded_litellm_params,
+            custom_llm_provider,
+            normalized.get("x-amzn-bedrock-agentcore-runtime-session-id"),
+        )
+
+        native_jsonrpc_provider: Final = _resolve_native_jsonrpc_provider(
+            custom_llm_provider,
+            model=provider_litellm_params.get("model"),
+        )
 
         # Merge agent-level guardrails into data so post_call_success_hook and
         # _handle_stream_message both pick them up.  A2A agents use model
@@ -1062,7 +1411,7 @@ async def invoke_agent_a2a(
                 model=f"a2a_agent/{agent_name}",
                 request=a2a_request,
                 api_base=agent_url,
-                litellm_params=forwarded_litellm_params,
+                litellm_params=provider_litellm_params,
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
@@ -1102,7 +1451,7 @@ async def invoke_agent_a2a(
                 api_base=agent_url,
                 request_id=request_id if request_id is not None else "",
                 params=params,
-                litellm_params=forwarded_litellm_params,
+                litellm_params=dict(provider_litellm_params),
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
@@ -1113,98 +1462,36 @@ async def invoke_agent_a2a(
                 proxy_logging_obj=proxy_logging_obj,
                 served_version=served_version,
             )
-        elif method in {
-            "tasks/get",
-            "tasks/list",
-            "tasks/cancel",
-            "tasks/pushNotificationConfig/set",
-            "tasks/pushNotificationConfig/get",
-            "tasks/pushNotificationConfig/list",
-            "tasks/pushNotificationConfig/delete",
-            "agent/getAuthenticatedExtendedCard",
-        }:
-            if not agent_url:
-                return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            if is_str_keyed_dict(params):
-                params = normalize_request_params(params, served_version, method=method)
-            if method == "tasks/pushNotificationConfig/set":
-                if not is_str_keyed_dict(params):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="params must be an object",
-                    )
-                push_config: Final = params.get("pushNotificationConfig", {})
-                if not is_str_keyed_dict(push_config):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="pushNotificationConfig must be an object",
-                    )
-                for callback_url in (params.get("url"), push_config.get("url")):
-                    if not callback_url:
-                        continue
-                    if not isinstance(callback_url, str):
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Push notification URL must be a string",
-                        )
-                    _validate_push_notification_url(callback_url)
-            forward_body: dict[str, object] = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": method,
-                "params": params,
-            }
-            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=agent_extra_headers)
-            if method == "agent/getAuthenticatedExtendedCard":
-                card: Final = result.get("result")
-                if isinstance(card, dict):
-                    proxy_url: Final = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
-                    # Rewrite the upstream agent URL in both 0.3 (top-level `url`)
-                    # and 1.0 (`supportedInterfaces[0].url`) wire formats so that
-                    # downstream clients never see the upstream internal address.
-                    if "url" in card:
-                        card["url"] = proxy_url
-                    interfaces: Final = card.get("supportedInterfaces")
-                    if isinstance(interfaces, list) and interfaces:
-                        interfaces[0]["url"] = proxy_url
-                    result["result"] = normalize_agent_card(card, served_version)
-            else:
-                result = normalize_jsonrpc_response(result, served_version, method=method)
-            from litellm.types.agents import LiteLLMSendMessageResponse
-
-            response = LiteLLMSendMessageResponse.from_dict(result, request_id=request_id)
-            response = await proxy_logging_obj.post_call_success_hook(
-                user_api_key_dict=user_api_key_auth_for_call,
+        elif method in _TASK_JSONRPC_METHODS:
+            return await _handle_task_jsonrpc_method(
+                method=method,
+                request_id=request_id,
+                params=params,
+                agent_id=agent_id,
+                agent_url=agent_url,
+                request=request,
+                served_version=served_version,
+                agent_extra_headers=agent_extra_headers,
+                native_jsonrpc_provider=native_jsonrpc_provider,
+                provider_litellm_params=provider_litellm_params,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_auth_for_call=user_api_key_auth_for_call,
                 data=data,
-                response=response,
-            )
-            return JSONResponse(
-                content=(
-                    response.model_dump(mode="json", exclude_none=True) if hasattr(response, "model_dump") else response
-                )
             )
 
         elif method == "tasks/resubscribe":
-            resubscribe_url: Final[object] = agent_url
-            if not resubscribe_url:
-                return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            if is_str_keyed_dict(params):
-                params = normalize_request_params(params, served_version, method=method)
-            forward_body = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": method,
-                "params": params,
-            }
-            return await _forward_jsonrpc_sse(
-                resubscribe_url,
-                forward_body,
+            return await _handle_resubscribe_method(
                 request_id=request_id,
-                extra_headers=agent_extra_headers,
-                proxy_logging_obj=proxy_logging_obj,
-                user_api_key_dict=user_api_key_auth_for_call,
-                request_data=data,
+                params=params,
+                agent_id=agent_id,
+                agent_url=agent_url,
                 served_version=served_version,
+                agent_extra_headers=agent_extra_headers,
+                native_jsonrpc_provider=native_jsonrpc_provider,
+                provider_litellm_params=provider_litellm_params,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_auth_for_call=user_api_key_auth_for_call,
+                data=data,
             )
 
         else:

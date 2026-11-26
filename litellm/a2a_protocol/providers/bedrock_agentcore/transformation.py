@@ -11,6 +11,7 @@ from typing import Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+    A2A_RUNTIME_SESSION_ID_PARAM,
     A2A_USER_API_KEY_HASH_PARAM,
 )
 from litellm.a2a_protocol.utils import (
@@ -98,10 +99,20 @@ def _request_scoped_runtime_session_id(
     params: Mapping[str, object],
     litellm_params: Mapping[str, object],
 ) -> str | None:
-    context_id: Final = get_session_id_from_a2a_params(params)
-    if not isinstance(context_id, str) or not context_id:
+    message_context_id: Final = get_session_id_from_a2a_params(params)
+    inbound_session_id: Final = litellm_params.get(A2A_RUNTIME_SESSION_ID_PARAM)
+    top_level_context_id: Final = params.get("contextId")
+    raw_session_id: Final = next(
+        (
+            candidate
+            for candidate in (message_context_id, inbound_session_id, top_level_context_id)
+            if isinstance(candidate, str) and candidate
+        ),
+        None,
+    )
+    if raw_session_id is None:
         return None
-    return scope_session_to_principal(context_id, _calling_key_hash(litellm_params))
+    return scope_session_to_principal(raw_session_id, _calling_key_hash(litellm_params))
 
 
 def _validate_runtime_session_id(session_id: str, model: str) -> str:
@@ -110,9 +121,10 @@ def _validate_runtime_session_id(session_id: str, model: str) -> str:
     raise BadRequestError(
         message=(
             f"Invalid AgentCore runtime session id {session_id!r}: AWS requires "
-            f"{RUNTIME_SESSION_ID_MIN_LENGTH}-{RUNTIME_SESSION_ID_MAX_LENGTH} characters. It is built from the A2A "
-            "message.contextId (prefixed with a 16-hex-char hash of the calling key and '-') when set, "
-            "otherwise from the agent's configured runtimeSessionId."
+            f"{RUNTIME_SESSION_ID_MIN_LENGTH}-{RUNTIME_SESSION_ID_MAX_LENGTH} characters. It is built from "
+            "message.contextId, X-Amzn-Bedrock-AgentCore-Runtime-Session-Id, or params.contextId (prefixed with "
+            "a 16-hex-char hash of the calling key and '-') when set, otherwise from the agent's configured "
+            "runtimeSessionId."
         ),
         model=model,
         llm_provider="bedrock",
@@ -136,9 +148,9 @@ class BedrockAgentCoreA2ATransformation:
 
     @staticmethod
     def get_url_and_signed_request(
-        request_id: str,
+        request_id: str | int | None,
         params: Mapping[str, object],
-        litellm_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         method: str = "message/send",
         stream: bool = False,
         agent_extra_headers: Mapping[str, str] | None = None,
@@ -148,7 +160,7 @@ class BedrockAgentCoreA2ATransformation:
 
         Args:
             request_id: A2A JSON-RPC request ID
-            params: A2A MessageSendParams
+            params: A2A JSON-RPC params
             litellm_params: Agent's litellm_params (model, api_key, etc.)
             method: JSON-RPC method name (default: "message/send")
             stream: Whether this is a streaming request
@@ -161,8 +173,10 @@ class BedrockAgentCoreA2ATransformation:
                 spoofing the AgentCore runtime user id or other SigV4 metadata. Use
                 ``api_key`` / ``runtimeUserId`` / ``runtimeSessionId`` in litellm_params
                 (not ``agent_extra_headers``) to override those values. The runtime
-                session id is taken from ``params["message"]["contextId"]`` (scoped to
-                the calling key) when present, then ``runtimeSessionId``, else generated.
+                session id is taken from ``params["message"]["contextId"]``, the inbound
+                ``X-Amzn-Bedrock-AgentCore-Runtime-Session-Id`` header, or top-level
+                ``params["contextId"]`` (scoped to the calling key) when present, then
+                ``runtimeSessionId``, else generated.
 
         Returns:
             Tuple of (url, signed_headers, signed_body_bytes)
@@ -172,8 +186,11 @@ class BedrockAgentCoreA2ATransformation:
         model: Final = _agentcore_model_name(litellm_params)
         agentcore_model: Final = model.removeprefix("bedrock/")
 
-        # Build optional_params from litellm_params (everything except model and custom_llm_provider)
-        optional_params: Final = {k: v for k, v in litellm_params.items() if k not in ("model", "custom_llm_provider")}
+        # Build optional_params from litellm_params (excluding routing and internal bridge keys)
+        excluded_keys: Final = frozenset(
+            {"model", "custom_llm_provider", A2A_USER_API_KEY_HASH_PARAM, A2A_RUNTIME_SESSION_ID_PARAM}
+        )
+        optional_params: Final = {k: v for k, v in litellm_params.items() if k not in excluded_keys}
 
         configured_api_base: Final = optional_params.get("api_base")
         configured_api_key: Final = optional_params.get("api_key")

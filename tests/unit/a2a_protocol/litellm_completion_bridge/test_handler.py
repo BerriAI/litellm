@@ -7,6 +7,7 @@ import respx
 
 import litellm
 from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+    A2A_RUNTIME_SESSION_ID_PARAM,
     A2A_USER_API_KEY_HASH_PARAM,
     A2ACompletionBridgeHandler,
     agent_completion_kwargs,
@@ -65,6 +66,7 @@ def test_agent_completion_kwargs_drops_model_provider_and_agent_only_keys() -> N
             "agent_id": "id-1",
             "agent_card_params": {"url": WORKSPACE},
             A2A_USER_API_KEY_HASH_PARAM: "hash",
+            A2A_RUNTIME_SESSION_ID_PARAM: "runtime-session-id-12345678901234567890",
         }
     )
     assert dict(kwargs) == {"api_base": WORKSPACE, "api_key": "pat-1"}

@@ -3,7 +3,7 @@ Base configuration for A2A protocol providers.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 
 
 class BaseA2AProviderConfig(ABC):
@@ -13,6 +13,36 @@ class BaseA2AProviderConfig(ABC):
     Each provider should implement this interface to define how to handle
     A2A requests for their specific agent type.
     """
+
+    def supports_jsonrpc(self) -> bool:
+        """Return True when this provider supports arbitrary A2A JSON-RPC methods."""
+        return False
+
+    async def handle_jsonrpc(
+        self,
+        method: str,
+        request_id: str | int | None,
+        params: Mapping[str, object],
+        api_base: str | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
+    ) -> Mapping[str, object]:
+        """Handle a non-streaming A2A JSON-RPC request."""
+        raise NotImplementedError(f"{type(self).__name__} does not support generic JSON-RPC method {method!r}")
+
+    async def handle_jsonrpc_streaming(
+        self,
+        method: str,
+        request_id: str | int | None,
+        params: Mapping[str, object],
+        api_base: str | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[Mapping[str, object]]:
+        """Handle a streaming A2A JSON-RPC request."""
+        raise NotImplementedError(f"{type(self).__name__} does not support streaming JSON-RPC method {method!r}")
+        if False:  # pragma: no cover
+            yield {}
 
     @abstractmethod
     async def handle_non_streaming(
