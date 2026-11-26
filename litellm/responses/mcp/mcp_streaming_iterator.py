@@ -161,10 +161,7 @@ async def create_mcp_list_tools_events(
         verbose_logger.debug("Created %s MCP discovery events", len(events))
 
     except Exception as e:
-        verbose_logger.error("Error creating MCP list tools events: %s", e)
-        import traceback
-
-        traceback.print_exc()
+        verbose_logger.exception("Error creating MCP list tools events: %s", e)
 
         # Emit failed event on error
         failed_event: Final = MCPListToolsFailedEvent(
@@ -836,10 +833,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.phase = "finished"
 
         except Exception as e:
-            verbose_logger.error("Error creating initial response iterator: %s", e)
-            import traceback
-
-            traceback.print_exc()
+            verbose_logger.exception("Error creating initial response iterator: %s", e)
             self.base_iterator = None
             self._initial_creation_error = e
             self._stream_error = e
@@ -1001,13 +995,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._tool_results_for_response = self.collected_response
 
         except Exception as e:
-            verbose_logger.error("Error in tool execution: %s", e)
-            if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
+            is_guardrail_block: Final = LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e)
+            verbose_logger.error("Error in tool execution: %s", e, exc_info=not is_guardrail_block)
+            if is_guardrail_block:
                 self._stream_error = e
                 return
-            import traceback
-
-            traceback.print_exc()
             self.tool_results = []
             self._tool_results_for_response = self.collected_response
 
@@ -1083,10 +1075,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self._round_billing.record_billed_rounds(follow_up_response)
 
         except Exception as e:
-            verbose_logger.error("Error creating follow-up iterator: %s", e)
-            import traceback
-
-            traceback.print_exc()
+            verbose_logger.exception("Error creating follow-up iterator: %s", e)
             self.base_iterator = None
             self._stream_error = e
 

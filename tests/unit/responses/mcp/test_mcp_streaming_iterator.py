@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 from contextlib import nullcontext
@@ -10,6 +11,7 @@ from fastapi import HTTPException
 from mcp.types import CallToolResult, TextContent
 
 import litellm  # noqa: F401 - ensures litellm.responses.main is registered in sys.modules
+from litellm._logging import turn_on_json
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 from litellm.responses.mcp.mcp_streaming_iterator import (
@@ -343,6 +345,27 @@ async def test_follow_up_call_failure_emits_terminal_error_event(monkeypatch):
     assert len(error_events) == 1
     assert error_events[0].error.type == "mcp_gateway_error"
     assert "boom from provider" in error_events[0].error.message
+
+
+@pytest.mark.asyncio
+async def test_follow_up_call_failure_logs_one_json_record_with_its_traceback(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """With JSON logs on, a failed follow-up call logs one JSON record carrying the traceback, never a plain
+    multi-line traceback on stderr that a log shipper would split into one error per line."""
+    turn_on_json()
+    _mock_mcp_environment(monkeypatch)
+    monkeypatch.setattr(responses_main_module, "aresponses", AsyncMock(side_effect=RuntimeError("boom from provider")))
+    iterator: Final = _make_iterator(
+        [_output_item_added_chunk(), _completed_chunk([_function_call("call_1", "read_wiki_contents")])]
+    )
+    capfd.readouterr()
+
+    _ = [chunk async for chunk in iterator]
+
+    records: Final = [json.loads(line) for line in capfd.readouterr().err.splitlines() if line.strip()]
+    failures: Final = [record for record in records if str(record["message"]).startswith("Error creating follow-up")]
+    assert [str(record["stacktrace"]).endswith("RuntimeError: boom from provider") for record in failures] == [True]
 
 
 @pytest.mark.asyncio

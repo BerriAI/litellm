@@ -8,7 +8,8 @@ import os
 import re
 import sys
 import threading
-from collections.abc import Iterator, Mapping
+import traceback
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
 from types import FrameType, MappingProxyType, TracebackType
@@ -905,12 +906,20 @@ class CorrelationPlainFormatter(logging.Formatter):
 _ExcInfo: TypeAlias = tuple[type[BaseException], BaseException, TracebackType | None]
 
 
+def _raise_site(exc_info: _ExcInfo | None) -> tuple[str, int]:
+    frames: Final = traceback.extract_tb(exc_info[2]) if exc_info is not None else traceback.StackSummary()
+    if not frames:
+        return "", 0
+    return frames[-1].filename, frames[-1].lineno or 0
+
+
 def _exception_record(message: str, exc_info: _ExcInfo | None) -> logging.LogRecord:
+    pathname, lineno = _raise_site(exc_info)
     return logging.LogRecord(
         name="LiteLLM",
         level=logging.ERROR,
-        pathname="",
-        lineno=0,
+        pathname=pathname,
+        lineno=lineno,
         msg=message,
         args=(),
         exc_info=exc_info,
@@ -940,15 +949,33 @@ def _thread_message(args: threading.ExceptHookArgs) -> str:
     return f"Exception in thread {thread_name}"
 
 
+def _process_hook_record(record: logging.LogRecord) -> bool:
+    return _process_record(
+        record, base64_limit=_get_max_base64_length_stdout_log(), text_limit=0, redact=_ENABLE_SECRET_REDACTION
+    )
+
+
+def _json_stream_handler(
+    formatter: Formatter, process: logging.Filter | Callable[[logging.LogRecord], bool]
+) -> LevelRoutingStreamHandler:
+    json_handler: Final = LevelRoutingStreamHandler()
+    json_handler.setFormatter(formatter)
+    json_handler.addFilter(process)
+    json_handler.addFilter(_secret_filter)
+    json_handler.addFilter(_correlation_filter)
+    json_handler.setLevel(logging.WARNING)
+    return json_handler
+
+
+def _is_python_last_resort(last_resort: logging.Handler | None) -> bool:
+    return type(last_resort).__module__ == "logging" and type(last_resort).__qualname__ == "_StderrHandler"
+
+
 # Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter: Formatter):
-    # Create a handler with JSON formatting for exceptions
-    error_handler: Final = LevelRoutingStreamHandler()
-    error_handler.setFormatter(formatter)
-    error_handler.addFilter(_diagnostic_filter)
-    error_handler.addFilter(_secret_filter)
-    error_handler.addFilter(_correlation_filter)
-    error_handler.setLevel(logging.WARNING)
+    error_handler: Final = _json_stream_handler(formatter, _process_hook_record)
+    python_unraisablehook: Final = sys.__unraisablehook__
+    is_finalizing: Final = sys.is_finalizing
 
     # Setup excepthook for uncaught exceptions
     def json_excepthook(
@@ -957,12 +984,14 @@ def _setup_json_exception_handlers(formatter: Formatter):
         error_handler.handle(_exception_record(str(exc_value), (exc_type, exc_value, exc_traceback)))
 
     def json_unraisablehook(unraisable: "sys.UnraisableHookArgs") -> None:
-        error_handler.handle(
-            _exception_record(
-                _unraisable_message(unraisable),
-                _exc_info(unraisable.exc_type, unraisable.exc_value, unraisable.exc_traceback),
-            )
+        if is_finalizing():
+            python_unraisablehook(unraisable)
+            return
+        record: Final = _exception_record(
+            _unraisable_message(unraisable),
+            _exc_info(unraisable.exc_type, unraisable.exc_value, unraisable.exc_traceback),
         )
+        contextvars.Context().run(error_handler.handle, record)
 
     def json_thread_excepthook(args: threading.ExceptHookArgs) -> None:
         if args.exc_type is SystemExit:
@@ -971,10 +1000,14 @@ def _setup_json_exception_handlers(formatter: Formatter):
             _exception_record(_thread_message(args), _exc_info(args.exc_type, args.exc_value, args.exc_traceback))
         )
 
-    sys.excepthook = json_excepthook
-    sys.unraisablehook = json_unraisablehook
-    threading.excepthook = json_thread_excepthook
-    logging.lastResort = error_handler
+    if sys.excepthook is sys.__excepthook__:
+        sys.excepthook = json_excepthook
+    if sys.unraisablehook is sys.__unraisablehook__:
+        sys.unraisablehook = json_unraisablehook
+    if threading.excepthook is threading.__excepthook__:
+        threading.excepthook = json_thread_excepthook
+    if _is_python_last_resort(logging.lastResort):
+        logging.lastResort = _json_stream_handler(formatter, _diagnostic_filter)
 
     # Configure asyncio exception handler if possible
     try:
