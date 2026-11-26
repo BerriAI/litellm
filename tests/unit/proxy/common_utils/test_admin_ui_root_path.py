@@ -1,4 +1,3 @@
-import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,8 +20,10 @@ from litellm.proxy.common_utils.admin_ui_root_path import (
 CONFIG_PLACEHOLDER: Final = "/litellm/.well-known/litellm-ui-config"
 ASSET_PLACEHOLDER: Final = "/litellm-asset-prefix"
 FAVICON_BYTES: Final = bytes(range(256)) + b"/litellm-asset-prefix\xff\xfe"
-APP_JS: Final = (
-    f'a="{ASSET_PLACEHOLDER}";b=`${{r}}{CONFIG_PLACEHOLDER}`;c="{CONFIG_PLACEHOLDER}";d="{ASSET_PLACEHOLDER}/_next";e="{ASSET_PLACEHOLDER}/.well-known/litellm-ui-config"'
+APP_JS: Final = f'a="{ASSET_PLACEHOLDER}";b=`${{r}}{CONFIG_PLACEHOLDER}`;c="{CONFIG_PLACEHOLDER}";d="{ASSET_PLACEHOLDER}/_next";e="{ASSET_PLACEHOLDER}/.well-known/litellm-ui-config"'
+EXPECTED_FOO_LITELLM_APP_JS: Final = (
+    'a="/foo/litellm";b=`${r}/foo/litellm/.well-known/litellm-ui-config`;c="/foo/litellm/.well-known/litellm-ui-config";'
+    'd="/foo/litellm/_next";e="/foo/litellm/.well-known/litellm-ui-config"'
 )
 
 
@@ -41,15 +42,9 @@ def _build_source(root: Path) -> Path:
 
 
 def _snapshot(directory: Path) -> dict[str, bytes]:
-    return {path.relative_to(directory).as_posix(): path.read_bytes() for path in directory.rglob("*") if path.is_file()}
-
-
-def _expected_render(source_bytes: bytes, root: str) -> bytes:
-    return re.sub(
-        rb"/litellm-asset-prefix|/litellm/\.well-known/litellm-ui-config",
-        lambda m: root.encode() if m.group(0) == b"/litellm-asset-prefix" else root.encode() + b"/.well-known/litellm-ui-config",
-        source_bytes,
-    )
+    return {
+        path.relative_to(directory).as_posix(): path.read_bytes() for path in directory.rglob("*") if path.is_file()
+    }
 
 
 def _rendered_directory(result: UIRenderResult) -> Path:
@@ -113,10 +108,10 @@ def test_concurrent_workers_render_the_same_complete_directory(tmp_path: Path):
     directories: Final = {_rendered_directory(result) for result, _ in outcomes}
     assert len(directories) == 1
     expected_render: Final = {
-        "index.html": _expected_render(_snapshot(source)["index.html"], "/foo/litellm"),
-        "login/index.html": _expected_render(_snapshot(source)["login.html"], "/foo/litellm"),
-        "_next/static/chunks/app.js": _expected_render(APP_JS.encode(), "/foo/litellm"),
-        "favicon.ico": _expected_render(FAVICON_BYTES, "/foo/litellm"),
+        "index.html": b'<script src="/foo/litellm/_next/static/chunks/app.js"></script>',
+        "login/index.html": b'<link href="/foo/litellm/_next/login.css">',
+        "_next/static/chunks/app.js": EXPECTED_FOO_LITELLM_APP_JS.encode(),
+        "favicon.ico": bytes(range(256)) + b"/foo/litellm\xff\xfe",
     }
     assert all(snapshot == expected_render for _, snapshot in outcomes)
     assert [path.name for path in (parent / RENDERED_UI_DIRNAME).iterdir()] == [next(iter(directories)).name]
@@ -132,11 +127,7 @@ def test_root_path_ending_in_litellm_is_not_prefixed_twice(tmp_path: Path):
 
     app_js: Final = (first / "_next" / "static" / "chunks" / "app.js").read_text()
     assert first == second
-    assert "/foo/litellm/.well-known/litellm-ui-config" in app_js
-    assert "/foo/foo" not in app_js
-    assert "/foo/litellm/foo" not in app_js
-    assert app_js.count("/foo/litellm/.well-known/litellm-ui-config") == 3
-    assert "/foo/litellm/foo" not in app_js
+    assert app_js == EXPECTED_FOO_LITELLM_APP_JS
     assert _snapshot(source) == source_before
 
 
