@@ -16,7 +16,6 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, Protocol, TypeAlias
@@ -147,7 +146,10 @@ from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_organization_budget_state,
     carry_team_member_budget_state,
 )
-from litellm.proxy.spend_tracking.team_member_budget import TeamMemberBudget
+from litellm.proxy.spend_tracking.team_member_budget import (
+    resolve_effective_team_member_budget,
+    team_member_budget,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
@@ -2115,23 +2117,6 @@ async def get_team_member_default_budget(
     )
 
     return budget
-
-
-def resolve_effective_team_member_budget(
-    member_budget: LiteLLM_BudgetTable | None,
-    team_default_budget: LiteLLM_BudgetTable | None,
-    now: datetime,
-    membership: LiteLLM_TeamMembership | None = None,
-) -> float | None:
-    if member_budget is not None and member_budget.max_budget is not None:
-        if membership is not None:
-            return membership.effective_budget_with_rollover(now)
-        return member_budget.effective_max_budget(now)
-    if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
-        return None
-    return team_default_budget.max_budget + (
-        member_budget.active_temp_budget_increase(now) if member_budget is not None else 0.0
-    )
 
 
 async def resolve_default_end_user_budget(
@@ -7541,14 +7526,11 @@ async def _check_team_member_budget(
             and isinstance(default_budget_id, str)
             else None
         )
-        team_member_budget: Final = resolve_effective_team_member_budget(
-            member_budget=member_budget_row,
-            team_default_budget=team_default_budget,
-            now=now,
-            membership=loaded_membership,
+        member_budget: Final = team_member_budget(
+            membership=loaded_membership, team_default_budget=team_default_budget, now=now
         )
 
-        if team_member_budget is not None:
+        if member_budget is not None:
             from litellm.proxy.proxy_server import fail_closed_budget_enforcement_enabled, get_current_spend
 
             if loaded_membership is None and fail_closed_budget_enforcement_enabled():
@@ -7560,22 +7542,15 @@ async def _check_team_member_budget(
             team_member_spend: Final = await get_current_spend(
                 counter_key=team_member_counter(valid_token.user_id, team_object.team_id),
                 fallback_spend=stored_member_spend,
-                max_budget=team_member_budget,
+                max_budget=member_budget.max_budget,
             )
-            carry_team_member_budget_state(
-                valid_token,
-                TeamMemberBudget(
-                    max_budget=team_member_budget,
-                    budget_reset_at=loaded_membership.budget_reset_at() if loaded_membership is not None else None,
-                ),
-                spend=team_member_spend,
-            )
+            carry_team_member_budget_state(valid_token, member_budget, spend=team_member_spend)
 
             native: Final = _native_budget_decision(
                 {
                     "check": "team_member",
                     "spend": team_member_spend,
-                    "max_budget": team_member_budget,
+                    "max_budget": member_budget.max_budget,
                     "user_id": valid_token.user_id,
                     "team_id": team_object.team_id,
                 }
@@ -7592,7 +7567,7 @@ async def _check_team_member_budget(
                 user_email=user_object.user_email if user_object is not None else None,
                 proxy_logging_obj=proxy_logging_obj,
                 spend=team_member_spend,
-                max_budget=team_member_budget,
+                max_budget=member_budget.max_budget,
             )
 
             if native.refused:

@@ -12,15 +12,28 @@ class TeamMemberBudget:
     budget_reset_at: datetime | None
 
 
+def resolve_effective_team_member_budget(
+    member_budget: LiteLLM_BudgetTable | None,
+    team_default_budget: LiteLLM_BudgetTable | None,
+    now: datetime,
+    membership: LiteLLM_TeamMembership | None = None,
+) -> float | None:
+    if member_budget is not None and member_budget.max_budget is not None:
+        if membership is not None:
+            return membership.effective_budget_with_rollover(now)
+        return member_budget.effective_max_budget(now)
+    if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
+        return None
+    return team_default_budget.max_budget + (
+        member_budget.active_temp_budget_increase(now) if member_budget is not None else 0.0
+    )
+
+
 def team_member_budget(
     membership: LiteLLM_TeamMembership | None,
     team_default_budget: LiteLLM_BudgetTable | None,
     now: datetime,
 ) -> TeamMemberBudget | None:
-    from litellm.proxy.auth.auth_checks import (  # noqa: PLC0415  # auth_checks imports this module
-        resolve_effective_team_member_budget,
-    )
-
     max_budget: Final = resolve_effective_team_member_budget(
         member_budget=membership.litellm_budget_table if membership is not None else None,
         team_default_budget=team_default_budget,
