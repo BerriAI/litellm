@@ -198,9 +198,8 @@ def test_an_out_of_order_answer_stays_with_its_question_when_another_is_missing(
     ]
 
 
-
-def test_twenty_thousand_answers_returned_in_reverse_are_put_back_in_question_order_quickly() -> None:
-    question_count: Final = 20_000
+def test_forty_thousand_answers_returned_in_reverse_are_put_back_in_question_order_quickly() -> None:
+    question_count: Final = 40_000
     ir: Final = _openai_ir(
         {
             "input": "The screen is cracked.",
@@ -221,7 +220,8 @@ def test_twenty_thousand_answers_returned_in_reverse_are_put_back_in_question_or
 
     response: Final = ir_to_openai_response(parsed, ir, "requested")
     assert [answer.model_dump(mode="json") for answer in response.answers] == list(answers)
-    assert elapsed < 2.0
+    assert elapsed < 5.0
+
 
 _TWO_UNNAMED_QUESTIONS: Final[Mapping[str, object]] = {
     "input": "The screen is cracked.",
