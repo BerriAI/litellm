@@ -26,8 +26,10 @@ from litellm.constants import (
     REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
     REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
     REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     REDIS_SPEND_LOGS_BUFFER_KEY,
     REDIS_SPEND_LOGS_BUFFER_MAX_ROWS,
+    REDIS_SPEND_LOGS_PARK_BATCH_MAX_BYTES,
     REDIS_TOOL_DISCOVERY_BUFFER_KEY,
     REDIS_UPDATE_BUFFER_KEY,
     REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
@@ -62,7 +64,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendUpdateQueue,
     to_wire_payload,
 )
-from litellm.proxy.db.spend_log_batching import SpendLogRow
+from litellm.proxy.db.spend_log_batching import SpendLogRow, spend_log_write_batches
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.caching import (
     RedisPipelineLpopOperation,
@@ -701,16 +703,35 @@ class RedisUpdateBuffer:
         rows: Sequence[SpendLogRow],
         max_rows: int = REDIS_SPEND_LOGS_BUFFER_MAX_ROWS,
     ) -> bool:
-        """Park spend-log rows in Redis so they outlive this pod, dropping the oldest past ``max_rows``."""
+        """Park spend-log rows in Redis so they outlive this pod, dropping the oldest past ``max_rows``.
+
+        Rows go out in slices bounded by ``REDIS_SPEND_LOGS_PARK_BATCH_MAX_BYTES``
+        and by the dequeue count, one RPUSH+LTRIM per slice. Redis runs each
+        command to completion before serving any other client, so parking a
+        whole in-memory queue in one RPUSH stalls every client of that Redis for
+        as long as it takes to copy tens of megabytes. Slicing bounds each stall
+        to one slice.
+
+        A slice that fails after earlier ones landed returns False, so the
+        caller keeps every row in memory and the landed rows exist twice. That
+        is the safe direction: the spend-log writes skip a request already
+        written, while a row neither parked nor kept would be lost.
+        """
         if self.redis_cache is None or len(rows) == 0 or not self.should_commit_spend_updates_to_redis():
             return False
         try:
-            buffer_size: Final = await self.redis_cache.async_rpush_and_trim(
-                key=REDIS_SPEND_LOGS_BUFFER_KEY,
-                values=tuple(_encode_spend_log_row(row) for row in rows),
-                max_len=max_rows,
-            )
-            overflow: Final = buffer_size - max_rows
+            redis_cache: Final = self.redis_cache
+            buffer_sizes: Final = [
+                await redis_cache.async_rpush_and_trim(
+                    key=REDIS_SPEND_LOGS_BUFFER_KEY,
+                    values=tuple(_encode_spend_log_row(row) for row in batch),
+                    max_len=max_rows,
+                )
+                for batch in spend_log_write_batches(
+                    rows, REDIS_SPEND_LOGS_PARK_BATCH_MAX_BYTES, REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT
+                )
+            ]
+            overflow: Final = sum(max(0, size - max_rows) for size in buffer_sizes)
             if overflow > 0:
                 verbose_proxy_logger.error(
                     "Spend tracking - Redis spend log buffer is at its %d row cap; dropped the %d oldest spend logs",
