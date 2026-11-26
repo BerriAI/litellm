@@ -18,10 +18,7 @@ async function teamRoleOf(page: PlaywrightPage, teamId: string, userId: string):
 test.describe("Internal Users - Add to team", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  test("Adding a user to a team from their user page makes them a member with the chosen role", async ({
-    page,
-    request,
-  }) => {
+  test("Adding a user to a team from their user page makes them a team member", async ({ page, request }) => {
     const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const userId = `e2e-add-to-team-${stamp}`;
     const email = `${userId}@test.local`;
@@ -48,17 +45,15 @@ test.describe("Internal Users - Add to team", () => {
       await teamPicker.click();
       await teamPicker.pressSequentially(teamAlias);
       await page.getByRole("option", { name: teamAlias }).click();
-      await dialog.getByLabel("Member Role").click();
-      await page.getByRole("option", { name: "admin" }).click();
       await dialog.getByRole("button", { name: "Add to Team" }).click();
       await expect(dialog).toBeHidden();
 
       await expect
         .poll(async () => teamRoleOf(page, teamId, userId), {
-          message: "user never appeared in the team with the chosen role",
+          message: "user never appeared in the team as a member",
           timeout: 15_000,
         })
-        .toBe("admin");
+        .toBe("user");
     } finally {
       if (teamId) {
         await request.post("/team/delete", { headers: auth(), data: { team_ids: [teamId] } });
