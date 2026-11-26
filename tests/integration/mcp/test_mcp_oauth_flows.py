@@ -1,10 +1,12 @@
 import base64
+import concurrent.futures
 import hashlib
 import json
 import os
 import re
 import secrets
 import textwrap
+import threading
 import time
 import uuid
 from collections.abc import Iterator, Mapping
@@ -2359,10 +2361,11 @@ def test_standard_pattern_discovery_ignores_forwarded_headers_from_an_untrusted_
 @contextmanager
 def _sdk_scope_peer() -> Iterator[McpPeer]:
     import queue
-    from mcp.server.mcpserver import MCPServer
-    from mcp.server.transport_security import TransportSecuritySettings
+
     from integration._support.asgi import asgi_server
     from integration._support.mcp import _capturing
+    from mcp.server.mcpserver import MCPServer
+    from mcp.server.transport_security import TransportSecuritySettings
 
     service = MCPServer("scope-operations")
 
@@ -2549,3 +2552,380 @@ def test_managed_step_up_advertises_sdk_compatible_metadata_and_bound_permission
             if request.body and json.loads(request.body).get("method") == "tools/call"
         )
         assert len(attempts) == 1, "denied operation was retried"
+
+
+def _user_credential_row_count(user_id: str, server_id: str) -> int:
+    rows: Final = read_rows(
+        'SELECT 1 AS present FROM "LiteLLM_MCPUserCredentials" WHERE user_id = %s AND server_id = %s',
+        (user_id, server_id),
+    )
+    return len(rows)
+
+
+def _short_lived_issue(monkeypatch: pytest.MonkeyPatch, *, include_expiry: bool) -> None:
+    original_issue: Final = AuthorizationServer.issue
+
+    def issue(instance: AuthorizationServer, grant: str, client_id: str, subject: str, scope: str) -> dict[str, object]:
+        body: Final = dict(original_issue(instance, grant, client_id, subject, scope))
+        if include_expiry and grant == "authorization_code":
+            body["expires_in"] = 1
+        else:
+            body.pop("expires_in", None)
+        return body
+
+    monkeypatch.setattr(AuthorizationServer, "issue", issue)
+
+
+@contextmanager
+def _live_token_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpPeer, Wire]]:
+    with scripted_peer(ScriptedTool("add", lambda params: text_result(str(params["arguments"]["a"] + params["arguments"]["b"])))) as inner:
+        def enforce(request: Request) -> Reply:
+            body: Final = json.loads(request.body) if request.body else {}
+            if body.get("method") == "tools/call":
+                token: Final = request.headers.get("authorization", "").removeprefix("Bearer ")
+                if not auth.is_live(token):
+                    return Reply(status=401, body=b'{"error":"invalid token"}', headers={"WWW-Authenticate": "Bearer"})
+            forwarded: Final = httpx.request(
+                request.method, inner.url, content=request.body, headers=dict(request.headers)
+            )
+            return Reply(
+                status=forwarded.status_code,
+                body=forwarded.content,
+                content_type=forwarded.headers.get("content-type", "application/json"),
+            )
+
+        with wire_server(enforce) as wire:
+            yield McpPeer(wire.url + "/mcp", inner.calls), wire
+
+
+@contextmanager
+def _paired_token_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpPeer, Wire]]:
+    with scripted_peer(ScriptedTool("add", lambda params: text_result(str(params["arguments"]["a"] + params["arguments"]["b"])))) as inner:
+        condition: Final = threading.Condition()
+        rejected: list[str] = []
+
+        def enforce(request: Request) -> Reply:
+            body: Final = json.loads(request.body) if request.body else {}
+            if body.get("method") == "tools/call":
+                token: Final = request.headers.get("authorization", "").removeprefix("Bearer ")
+                if not auth.is_live(token):
+                    with condition:
+                        rejected.append(token)
+                        if len(rejected) < 2:
+                            condition.wait_for(lambda: len(rejected) >= 2, timeout=10)
+                        else:
+                            condition.notify_all()
+                    return Reply(status=401, body=b'{"error":"invalid token"}', headers={"WWW-Authenticate": "Bearer"})
+            forwarded: Final = httpx.request(
+                request.method, inner.url, content=request.body, headers=dict(request.headers)
+            )
+            return Reply(
+                status=forwarded.status_code,
+                body=forwarded.content,
+                content_type=forwarded.headers.get("content-type", "application/json"),
+            )
+
+        with wire_server(enforce) as wire:
+            yield McpPeer(wire.url + "/mcp", inner.calls), wire
+
+
+def _complete_per_user_oauth(
+    gateway: Gateway,
+    scenario: Scenario,
+    peer: McpPeer,
+    auth: AuthorizationServer,
+    alias: str,
+    user_id: str,
+) -> tuple[str, str, dict[str, object]]:
+    identity: Final = _register_oauth(
+        scenario,
+        peer,
+        auth,
+        alias,
+        auth_type="oauth2",
+        oauth2_flow="authorization_code",
+        credentials={"client_id": "ac-client", "client_secret": "ac-secret", "scopes": ["tools.call"]},
+    )
+    key: Final = scenario.key(user_id=user_id, object_permission={"mcp_servers": [identity]})
+    registered: Final = gateway.client.post(
+        f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+    )
+    assert registered.status_code in (200, 201), registered.text
+    client_id: Final = str(_response_object(registered)["client_id"])
+    pkce: Final = _Pkce(secrets.token_urlsafe(32))
+    code, _ = _authorize_through_gateway(gateway, auth, alias, key, client_id, pkce)
+    redeemed: Final = _redeem(gateway, alias, key, client_id, code, pkce)
+    assert redeemed.status_code == 200, redeemed.text
+    return identity, key, redeemed.json()
+
+
+def test_valid_access_token_is_reused_without_another_token_endpoint_call(gateway: Gateway) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "valid" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        peer.drain()
+        auth.drain()
+
+        first: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
+        second: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert auth.token_requests() == ()
+        assert _authorizations(peer) == (f"Bearer {_issued_token(issued)}".encode(),) * 2
+
+
+def test_expired_access_token_with_a_valid_refresh_grant_is_refreshed_transparently(
+    gateway: Gateway, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _short_lived_issue(monkeypatch, include_expiry=True)
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "fresh" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        original_access: Final = _issued_token(issued)
+        peer.drain()
+        auth.drain()
+        config: Final = tmp_path / "no_redis.yaml"
+        config.write_text(
+            "general_settings:\n"
+            "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+            "  database_url: os.environ/DATABASE_URL\n"
+            "  store_model_in_db: true\n"
+        )
+        with owned_proxy(gateway, tmp_path, {}, config=config, remove_environment=("REDIS_HOST", "REDIS_PORT")) as cold:
+            response: Final = call_tool(cold, key, identity, f"{alias}-add", ADD)
+        assert response.status_code == 200, response.text
+        assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
+        seen: Final = _authorizations(peer)
+        assert len(seen) == 1 and seen[0] is not None and seen[0] != f"Bearer {original_access}".encode()
+        assert _user_credential_row_count(user_id, identity) == 1
+
+
+def test_expired_access_with_a_transient_refresh_failure_preserves_the_grant_and_is_retryable(
+    gateway: Gateway, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _short_lived_issue(monkeypatch, include_expiry=True)
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "busy" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, _issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        peer.drain()
+        auth.drain()
+        auth.refresh_failures = 1
+        config: Final = tmp_path / "no_redis.yaml"
+        config.write_text(
+            "general_settings:\n"
+            "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+            "  database_url: os.environ/DATABASE_URL\n"
+            "  store_model_in_db: true\n"
+        )
+        with owned_proxy(gateway, tmp_path, {}, config=config, remove_environment=("REDIS_HOST", "REDIS_PORT")) as cold:
+            caller: Final = McpCaller(cold, key, "server_mcp", alias)
+            failed: Final = caller.list_tools()
+            assert failed.status == 200, failed.raw
+            assert failed.error is not None and '"http_status": 503' in failed.error, failed.raw
+            assert _user_credential_row_count(user_id, identity) == 1
+            assert tool_calls(peer.drain()) == ()
+            recovered: Final = caller.list_tools()
+        assert recovered.status == 200, recovered.raw
+        assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token", "refresh_token"]
+        assert _user_credential_row_count(user_id, identity) == 1
+
+
+def test_expired_access_with_dead_refresh_grant_is_revoked_and_challenges_for_reauth(
+    gateway: Gateway, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _short_lived_issue(monkeypatch, include_expiry=True)
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "dead" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, _issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        assert _user_credential_row_count(user_id, identity) == 1
+        peer.drain()
+        auth.drain()
+        with auth.lock:
+            auth.refresh_tokens.clear()
+        config: Final = tmp_path / "no_redis.yaml"
+        config.write_text(
+            "general_settings:\n"
+            "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+            "  database_url: os.environ/DATABASE_URL\n"
+            "  store_model_in_db: true\n"
+        )
+        with owned_proxy(gateway, tmp_path, {}, config=config, remove_environment=("REDIS_HOST", "REDIS_PORT")) as cold:
+            outcome: Final = McpCaller(cold, key, "server_mcp", alias).list_tools()
+        assert outcome.status == 401, outcome.raw
+        assert _user_credential_row_count(user_id, identity) == 0
+        assert tool_calls(peer.drain()) == ()
+        assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
+
+
+def test_upstream_401_refreshes_once_and_retries_with_the_rotated_token(
+    gateway: Gateway
+) -> None:
+    with oauth_server() as auth, _live_token_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
+        alias: Final = "react" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        original_access: Final = _issued_token(issued)
+        with auth.lock:
+            auth.revoked.add(original_access)
+        peer.drain()
+        wire.drain()
+        auth.drain()
+
+        outcome: Final = McpCaller(gateway, key, "mcp").call(f"{alias}-add", ADD)
+        assert outcome.status == 200, outcome.raw
+        attempts: Final = tuple(
+            request for request in wire.drain() if request.body and json.loads(request.body).get("method") == "tools/call"
+        )
+        assert len(attempts) == 2, attempts
+        assert attempts[0].headers.get("authorization") == f"Bearer {original_access}"
+        retried_token: Final = attempts[1].headers.get("authorization", "").removeprefix("Bearer ")
+        assert retried_token != original_access and auth.is_live(retried_token)
+        assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
+        assert _user_credential_row_count(user_id, identity) == 1
+
+
+def test_invalid_refresh_client_preserves_the_grant_and_never_challenges_the_user(
+    gateway: Gateway,
+) -> None:
+    with oauth_server() as auth, _live_token_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
+        alias: Final = "conf" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        with auth.lock:
+            auth.revoked.add(_issued_token(issued))
+            auth.clients["ac-client"] = "rotated-secret"
+        peer.drain()
+        wire.drain()
+        auth.drain()
+
+        response: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
+        assert response.status_code == 500, response.text
+        assert "www-authenticate" not in response.headers
+        assert _user_credential_row_count(user_id, identity) == 1
+        assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
+
+        with auth.lock:
+            auth.clients["ac-client"] = "ac-secret"
+        recovered: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
+        assert recovered.status_code == 200, recovered.text
+        assert _user_credential_row_count(user_id, identity) == 1
+
+
+def test_two_replicas_coordinate_one_refresh_after_the_same_token_is_rejected(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with oauth_server() as auth, _paired_token_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
+        alias: Final = "race" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        original_access: Final = _issued_token(issued)
+        with auth.lock:
+            auth.revoked.add(original_access)
+        peer.drain()
+        wire.drain()
+        auth.drain()
+        config: Final = tmp_path / "shared.yaml"
+        config.write_text(
+            "general_settings:\n"
+            "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+            "  database_url: os.environ/DATABASE_URL\n"
+            "  store_model_in_db: true\n"
+        )
+        with (
+            owned_proxy(
+                gateway, tmp_path / "first", {}, config=config, database_setup=(), state=OwnedState.SHARED_WITH_WORKER
+            ) as first,
+            owned_proxy(
+                gateway, tmp_path / "second", {}, config=config, database_setup=(), state=OwnedState.SHARED_WITH_WORKER
+            ) as second,
+        ):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                calls: Final = tuple(
+                    executor.submit(call_tool, proxy, key, identity, f"{alias}-add", ADD) for proxy in (first, second)
+                )
+                responses: Final = tuple(call.result(timeout=30) for call in calls)
+        assert [response.status_code for response in responses] == [200, 200], [response.text for response in responses]
+        attempts: Final = tuple(
+            request for request in wire.drain() if request.body and json.loads(request.body).get("method") == "tools/call"
+        )
+        assert len(attempts) == 4, attempts
+        assert sum(request.headers.get("authorization") == f"Bearer {original_access}" for request in attempts) == 2
+        refreshed: Final = {
+            request.headers.get("authorization", "").removeprefix("Bearer ")
+            for request in attempts
+            if request.headers.get("authorization") != f"Bearer {original_access}"
+        }
+        assert len(refreshed) == 1 and auth.is_live(next(iter(refreshed)))
+        assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
+        assert _user_credential_row_count(user_id, identity) == 1
+
+
+def test_reauth_during_a_stale_rejection_is_not_deleted_by_that_rejection(gateway: Gateway) -> None:
+    with oauth_server() as auth, _live_token_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
+        alias: Final = "race" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        with auth.lock:
+            auth.revoked.add(_issued_token(issued))
+            auth.refresh_tokens.clear()
+        release: Final = threading.Event()
+        auth.refresh_invalid_grant_release = release
+        peer.drain()
+        wire.drain()
+        auth.drain()
+        results: Final = []
+
+        def rejected_call() -> None:
+            results.append(call_tool(gateway, key, identity, f"{alias}-add", ADD))
+
+        caller: Final = threading.Thread(target=rejected_call)
+        caller.start()
+        assert auth.refresh_invalid_grant_started.wait(10), "stale refresh did not reach the token endpoint"
+
+        registered: Final = gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        code, _ = _authorize_through_gateway(gateway, auth, alias, key, client_id, pkce)
+        reauthed: Final = _redeem(gateway, alias, key, client_id, code, pkce)
+        assert reauthed.status_code == 200, reauthed.text
+        release.set()
+        caller.join(10)
+        assert not caller.is_alive(), "stale rejected call did not finish"
+        response: Final = results[0]
+        assert response.status_code == 200, response.text
+        assert _user_credential_row_count(user_id, identity) == 1
+
+        recovered: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
+        assert recovered.status_code == 200, recovered.text
+        assert sorted(request["grant_type"] for request in auth.token_requests()) == ["authorization_code", "refresh_token"]
+
+
+def test_transient_refresh_failure_preserves_the_grant_and_is_retryable(
+    gateway: Gateway
+) -> None:
+    with oauth_server() as auth, _live_token_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
+        alias: Final = "busy" + uuid.uuid4().hex[:8]
+        user_id: Final = scenario.user()
+        identity, key, issued = _complete_per_user_oauth(gateway, scenario, peer, auth, alias, user_id)
+        with auth.lock:
+            auth.revoked.add(_issued_token(issued))
+        peer.drain()
+        wire.drain()
+        auth.drain()
+        auth.refresh_failures = 1
+
+        response: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
+        assert response.status_code == 503, response.text
+        assert _user_credential_row_count(user_id, identity) == 1
+        assert tool_calls(peer.drain()) == ()
+        assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
+
+        recovered: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
+        assert recovered.status_code == 200, recovered.text

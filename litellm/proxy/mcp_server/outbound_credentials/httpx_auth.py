@@ -10,10 +10,15 @@ violation: the request is httpx2's object, and these carry no state of their own
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
+from typing import Final
 
 import httpx2
 from pydantic import SecretStr
+
+from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
+from litellm.proxy.mcp_server.outbound_credentials.types import CredError, HeaderCarrier
 
 
 class NoOpAuth(httpx2.Auth):
@@ -39,3 +44,39 @@ class StaticHeaderAuth(httpx2.Auth):
     def auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:
         request.headers[self.header_name] = self._header_value.get_secret_value()
         yield request
+
+
+PER_USER_OAUTH_RECOVERY_EXTENSION: Final = "litellm.mcp.per_user_oauth_recovery"
+
+
+class PerUserOAuthBearerAuth(httpx2.Auth):
+    def __init__(
+        self,
+        access_token: str,
+        refresh_now: Callable[[str], Awaitable[Result[OAuthToken, CredError]]],
+        carrier: HeaderCarrier,
+    ) -> None:
+        self.header_name = carrier.header_name
+        self._carrier = carrier
+        self._access_token = SecretStr(access_token)
+        self._refresh_now = refresh_now
+
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        token: Final = self._access_token.get_secret_value()
+        name, value = self._carrier.header(token)
+        request.headers[name] = value
+        response: Final = yield request
+        if response.status_code != 401:
+            return
+        match await self._refresh_now(token):
+            case Error(err):
+                response.extensions[PER_USER_OAUTH_RECOVERY_EXTENSION] = err
+                return
+            case Ok(fresh):
+                self._access_token = SecretStr(fresh.access_token)
+                fresh_name, fresh_value = self._carrier.header(fresh.access_token)
+                request.headers[fresh_name] = fresh_value
+                yield request
+
+    def sync_auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:
+        raise RuntimeError("PerUserOAuthBearerAuth only supports async httpx2 clients")

@@ -26,6 +26,9 @@ class AuthorizationServer:
     access_tokens: dict[str, dict[str, str]] = field(default_factory=dict)
     refresh_tokens: dict[str, dict[str, str]] = field(default_factory=dict)
     revoked: set[str] = field(default_factory=set)
+    refresh_failures: int = 0
+    refresh_invalid_grant_started: threading.Event = field(default_factory=threading.Event)
+    refresh_invalid_grant_release: threading.Event | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
     mint: Callable[[str], str] | None = None
 
@@ -166,8 +169,28 @@ def oauth_server(
                 return _json(200, server.issue("authorization_code", client_id, "integration-user", issued["scope"]))
             if grant == "refresh_token":
                 with server.lock:
-                    known: Final = server.refresh_tokens.pop(form.get("refresh_token", ""), None)
+                    expected_refresh_secret: Final = server.clients.get(client_id)
+                if expected_refresh_secret is not None and expected_refresh_secret != client_secret:
+                    return _json(
+                        401, {"error": "invalid_client", "error_description": "refresh client authentication failed"}
+                    )
+                with server.lock:
+                    if server.refresh_failures > 0:
+                        server.refresh_failures -= 1
+                        known = None
+                        transient_failure = True
+                    else:
+                        known = server.refresh_tokens.pop(form.get("refresh_token", ""), None)
+                        transient_failure = False
+                if transient_failure:
+                    return _json(
+                        500, {"error": "temporarily_unavailable", "error_description": "scripted token endpoint outage"}
+                    )
                 if known is None:
+                    server.refresh_invalid_grant_started.set()
+                    release: Final = server.refresh_invalid_grant_release
+                    if release is not None:
+                        release.wait(10)
                     return _json(400, {"error": "invalid_grant", "error_description": "unknown refresh token"})
                 return _json(200, server.issue("refresh_token", known["client_id"], known["subject"], known["scope"]))
             if grant == "client_credentials":

@@ -4,10 +4,13 @@ import pytest
 
 from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
+    AuthorizationCodeTokenSuccess,
+    AuthorizationCodeTokenUnreachable,
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
+from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
 
 
 class _Server:
@@ -45,7 +48,9 @@ def _endpoint(body, sink=None):
     async def post(url, form, headers):
         if sink is not None:
             sink.append((url, form, headers))
-        return body
+        if body is None:
+            return AuthorizationCodeTokenUnreachable(detail="test endpoint unavailable")
+        return AuthorizationCodeTokenSuccess(body=body)
 
     return post
 
@@ -60,10 +65,11 @@ def _recording_persist(sink):
         scopes: tuple[str, ...] | None,
         cimd_client_id: str | None = None,
         refreshed_from: str | None = None,
-    ) -> None:
+    ) -> bool:
         sink.append(
             (user_id, server_id, access_token, refresh_token, expires_in, scopes)
         )
+        return True
 
     return persist
 
@@ -97,10 +103,10 @@ async def test_refreshes_persists_and_returns_typed_token():
         "alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt")
     )
 
-    assert token is not None
-    assert token.access_token == "new-at"
-    assert token.refresh_token == "new-rt"
-    assert token.expires_at == 1000.0 + 3600  # clock + expires_in -> epoch
+    assert isinstance(token, Ok)
+    assert token.ok.access_token == "new-at"
+    assert token.ok.refresh_token == "new-rt"
+    assert token.ok.expires_at == 1000.0 + 3600  # clock + expires_in -> epoch
     # the rotated triple is persisted for (user, server) with parsed scopes
     assert persisted == [("alice", "srv", "new-at", "new-rt", 3600, ("a", "b"))]
     # the grant carried the refresh_token + client credentials in the body (client_secret_post default)
@@ -132,7 +138,7 @@ async def test_client_secret_basic_sends_authorization_header_not_body():
         "alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt")
     )
 
-    assert token is not None
+    assert isinstance(token, Ok)
     _url, form, headers = posted[0]
     expected = "Basic " + base64.b64encode(b"cid:sec").decode()
     assert headers["Authorization"] == expected
@@ -148,7 +154,7 @@ async def test_client_secret_basic_without_secret_is_a_failed_refresh():
     posted = []
     server = _Server(client_secret=None, token_endpoint_auth_method="client_secret_basic")
     refresher = _refresher(server=server, body={"access_token": "x"}, post_sink=posted)
-    assert await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt")) is None
+    assert isinstance(await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt")), Error)
     assert posted == []  # never hit the IdP
 
 
@@ -156,26 +162,18 @@ async def test_client_secret_basic_without_secret_is_a_failed_refresh():
 async def test_no_refresh_token_is_not_refreshable():
     posted = []
     refresher = _refresher(body={"access_token": "x"}, post_sink=posted)
-    assert (
-        await refresher.refresh("alice", "srv", OAuthToken(access_token="old")) is None
-    )
+    assert isinstance(await refresher.refresh("alice", "srv", OAuthToken(access_token="old")), Error)
     assert posted == []  # never hit the IdP
 
 
 @pytest.mark.asyncio
 async def test_unknown_server_or_no_token_url_yields_none():
-    assert (
-        await _refresher(server=None).refresh(
-            "a", "s", OAuthToken("old", refresh_token="rt")
-        )
-        is None
+    assert isinstance(
+        await _refresher(server=None).refresh("a", "s", OAuthToken("old", refresh_token="rt")), Error
     )
     no_url = _Server(token_url=None)
-    assert (
-        await _refresher(server=no_url).refresh(
-            "a", "s", OAuthToken("old", refresh_token="rt")
-        )
-        is None
+    assert isinstance(
+        await _refresher(server=no_url).refresh("a", "s", OAuthToken("old", refresh_token="rt")), Error
     )
 
 
@@ -185,9 +183,7 @@ async def test_grant_failure_does_not_persist():
     refresher = _refresher(
         body=None, persist_sink=persisted
     )  # token_endpoint signals failure
-    assert (
-        await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt")) is None
-    )
+    assert isinstance(await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt")), Error)
     assert persisted == []
 
 
@@ -195,9 +191,7 @@ async def test_grant_failure_does_not_persist():
 async def test_response_without_access_token_does_not_persist():
     persisted = []
     refresher = _refresher(body={"expires_in": 60}, persist_sink=persisted)
-    assert (
-        await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt")) is None
-    )
+    assert isinstance(await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt")), Error)
     assert persisted == []
 
 
@@ -208,11 +202,11 @@ async def test_unrotated_refresh_token_is_carried_forward():
     token = await refresher.refresh(
         "a", "s", OAuthToken("old", refresh_token="keep-rt")
     )
-    assert token is not None
+    assert isinstance(token, Ok)
     assert (
-        token.refresh_token == "keep-rt"
+        token.ok.refresh_token == "keep-rt"
     )  # response omitted refresh_token -> reuse the old one
-    assert token.expires_at is None  # no expires_in -> no known expiry
+    assert token.ok.expires_at is None  # no expires_in -> no known expiry
     assert persisted[0][3] == "keep-rt"
 
 
@@ -224,9 +218,9 @@ async def test_unrecorded_scope_is_carried_forward(prior_scopes):
     token = await refresher.refresh(
         "a", "s", OAuthToken("old", refresh_token="rt", scopes=prior_scopes)
     )
-    assert token is not None
+    assert isinstance(token, Ok)
     # response omitted "scope" -> the user's recorded grant is preserved, not dropped
-    assert token.scopes == prior_scopes
+    assert token.ok.scopes == prior_scopes
     assert persisted[0][5] == prior_scopes
 
 
@@ -238,7 +232,7 @@ async def test_refresh_sends_upstream_resource_when_set_explicitly():
     server = _Server(upstream_resource="https://api.example.com/mcp")
     refresher = _refresher(server=server, body={"access_token": "new-at"}, post_sink=posted)
     token = await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt"))
-    assert token is not None
+    assert isinstance(token, Ok)
     _url, form, _headers = posted[0]
     assert form["resource"] == "https://api.example.com/mcp"
 
@@ -249,7 +243,7 @@ async def test_refresh_sends_upstream_resource_auto_derived_from_url():
     server = _Server(upstream_resource="auto", url="https://mcp.example.com/mcp")
     refresher = _refresher(server=server, body={"access_token": "new-at"}, post_sink=posted)
     token = await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt"))
-    assert token is not None
+    assert isinstance(token, Ok)
     _url, form, _headers = posted[0]
     assert form["resource"] == "https://mcp.example.com/mcp"
 
@@ -259,7 +253,7 @@ async def test_refresh_omits_resource_when_unset():
     posted = []
     refresher = _refresher(body={"access_token": "new-at"}, post_sink=posted)
     token = await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt"))
-    assert token is not None
+    assert isinstance(token, Ok)
     _url, form, _headers = posted[0]
     assert "resource" not in form
 
@@ -275,8 +269,8 @@ async def test_returned_scope_overrides_prior_when_present(scope, expected):
     token = await refresher.refresh(
         "a", "s", OAuthToken("old", refresh_token="rt", scopes=("read", "write"))
     )
-    assert token is not None
-    assert token.scopes == expected
+    assert isinstance(token, Ok)
+    assert token.ok.scopes == expected
     assert persisted[0][5] == expected
 
 
@@ -294,8 +288,8 @@ async def test_refresh_uses_admin_entered_token_url_when_issuer_yield_empties_re
         "alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt")
     )
 
-    assert token is not None
-    assert token.access_token == "new-at"
+    assert isinstance(token, Ok)
+    assert token.ok.access_token == "new-at"
     assert posted[0][0] == "https://idp.example.com/token"
 
 
@@ -306,14 +300,14 @@ async def test_identity_rejection_never_persists_or_returns_refreshed_token():
     from fastapi import HTTPException
 
     validator = AsyncMock(side_effect=HTTPException(status_code=403, detail="oauth_principal_mismatch"))
-    persist = AsyncMock()
+    persist = AsyncMock(return_value=True)
     refresher = AuthorizationCodeRefresher(
         _lookup(_Server()),
         _endpoint({"access_token": "foreign-token", "id_token": "foreign-identity"}),
         persist,
         identity_validator=validator,
     )
-    assert await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt")) is None
+    assert isinstance(await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt")), Error)
     persist.assert_not_awaited()
 
 
@@ -322,7 +316,7 @@ async def test_verified_refresh_preserves_binding_proof_in_storage():
     from unittest.mock import AsyncMock
 
     validator = AsyncMock(return_value="verified-binding")
-    persist = AsyncMock()
+    persist = AsyncMock(return_value=True)
     refresher = AuthorizationCodeRefresher(
         _lookup(_Server()),
         _endpoint({"access_token": "new", "refresh_token": "rotated"}),
@@ -330,9 +324,9 @@ async def test_verified_refresh_preserves_binding_proof_in_storage():
         identity_validator=validator,
     )
     token = await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt"))
-    assert token.access_token == "new"
-    assert token.refresh_token == "rotated"
-    assert token.identity_binding_proof == "verified-binding"
+    assert token.ok.access_token == "new"
+    assert token.ok.refresh_token == "rotated"
+    assert token.ok.identity_binding_proof == "verified-binding"
     assert persist.await_args.kwargs["identity_binding_proof"] == "verified-binding"
 
 
@@ -362,8 +356,8 @@ async def test_cimd_refresh_on_fresh_replica_preserves_user_and_client_identity(
         post_sink=posted,
         persist_sink=persisted,
     ).refresh("alice", "srv", OAuthToken(access_token="old-at", refresh_token="old-rt"))
-    assert refreshed is not None
-    assert refreshed.access_token == "new-at"
+    assert isinstance(refreshed, Ok)
+    assert refreshed.ok.access_token == "new-at"
     assert posted == [
         (
             "https://idp.example.com/token",
@@ -395,13 +389,14 @@ async def test_saved_cimd_identity_refreshes_without_discovery(monkeypatch):
     async def persist(user_id, server_id, access_token, refresh_token, expires_in, scopes, **metadata):
         assert (user_id, server_id, access_token) == ("alice", "srv", "new")
         assert metadata["cimd_client_id"] == identity
+        return True
 
     async def post(url, form, headers):
         assert url == "https://idp.example.com/token"
         assert form["client_id"] == identity
         assert "client_secret" not in form
         assert "Authorization" not in headers
-        return {"access_token": "new", "refresh_token": "rotated"}
+        return AuthorizationCodeTokenSuccess(body={"access_token": "new", "refresh_token": "rotated"})
 
     server = MCPServer(
         server_id="srv", name="srv", transport="http", auth_type="oauth2", oauth2_flow="authorization_code",
@@ -410,7 +405,55 @@ async def test_saved_cimd_identity_refreshes_without_discovery(monkeypatch):
     token = await V2PerUserTokenStore(read_credential).fetch("alice", "srv")
     assert token is not None
     refreshed = await AuthorizationCodeRefresher(lambda _: server, post, persist).refresh("alice", "srv", token)
-    assert refreshed is not None
-    assert refreshed.access_token == "new"
-    assert refreshed.refresh_token == "rotated"
-    assert refreshed.cimd_client_id == identity
+    assert isinstance(refreshed, Ok)
+    assert refreshed.ok.access_token == "new"
+    assert refreshed.ok.refresh_token == "rotated"
+    assert refreshed.ok.cimd_client_id == identity
+
+
+@pytest.mark.asyncio
+async def test_invalid_grant_revokes_only_the_failed_credential_generation():
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeTokenDenied
+
+    revoked = []
+
+    async def endpoint(url, form, headers):
+        return AuthorizationCodeTokenDenied(
+            status_code=400, body={"error": "invalid_grant"}, detail="token endpoint returned HTTP 400"
+        )
+
+    async def revoke(user_id, server_id, access_token, refresh_token):
+        revoked.append((user_id, server_id, access_token, refresh_token))
+
+    refresher = AuthorizationCodeRefresher(
+        _lookup(_Server()), endpoint, _recording_persist([]), revoke=revoke
+    )
+    outcome = await refresher.refresh("alice", "srv", OAuthToken("old-at", refresh_token="dead-rt"))
+    assert isinstance(outcome, Error)
+    assert outcome.error.tag == "unauthorized"
+    assert revoked == [("alice", "srv", "old-at", "dead-rt")]
+
+
+@pytest.mark.asyncio
+async def test_transient_and_client_refresh_failures_never_revoke_the_grant():
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeTokenDenied
+
+    revoked = []
+
+    async def revoke(user_id, server_id, access_token, refresh_token):
+        revoked.append((user_id, server_id, access_token, refresh_token))
+
+    for status, body, expected in (
+        (500, {"error": "temporarily_unavailable"}, "upstream_unavailable"),
+        (401, {"error": "invalid_client"}, "misconfigured"),
+    ):
+        async def endpoint(url, form, headers, status=status, body=body):
+            return AuthorizationCodeTokenDenied(status_code=status, body=body, detail="denied")
+
+        refresher = AuthorizationCodeRefresher(
+            _lookup(_Server()), endpoint, _recording_persist([]), revoke=revoke
+        )
+        outcome = await refresher.refresh("alice", "srv", OAuthToken("old-at", refresh_token="rt"))
+        assert isinstance(outcome, Error)
+        assert outcome.error.tag == expected
+    assert revoked == []

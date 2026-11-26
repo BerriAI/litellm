@@ -18,7 +18,12 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeVar, cast
+
+from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
+from litellm.proxy.mcp_server.outbound_credentials.types import CredError
+
+_RefreshOutcome = TypeVar("_RefreshOutcome")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -47,6 +52,12 @@ class OAuthToken:
     def __repr__(self) -> str:
         has_refresh: Final = self.refresh_token is not None
         return f"OAuthToken(access_token=***, expires_at={self.expires_at!r}, has_refresh_token={has_refresh}, scopes={self.scopes!r})"
+
+
+class OAuthTokenResolutionError(Exception):
+    def __init__(self, error: CredError) -> None:
+        super().__init__(str(error))
+        self.error = error
 
 
 class TokenStoreUnavailable(Exception):
@@ -82,6 +93,14 @@ class InvalidatableOAuthTokenStore(OAuthTokenStore, Protocol):
     async def invalidate(self, user_id: str, server_id: str) -> None: ...
 
 
+class ReactiveOAuthTokenStore(InvalidatableOAuthTokenStore, Protocol):
+    async def peek(self, user_id: str, server_id: str) -> OAuthToken | None: ...
+
+    async def refresh_now(
+        self, user_id: str, server_id: str, failed_access_token: str
+    ) -> Result[OAuthToken, CredError]: ...
+
+
 class TokenRefresher(Protocol):
     """Mints a fresh token from an expired one and persists it, returning the new token.
 
@@ -95,7 +114,7 @@ class TokenRefresher(Protocol):
     are not derivable from ``token``, so the seam threads them alongside it.
     """
 
-    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None: ...
+    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Result[OAuthToken, CredError]: ...
 
 
 class TokenCacheBackend(Protocol):
@@ -195,6 +214,24 @@ class CachedOAuthTokenStore:
         stale "not authorized" None cannot mask the change."""
         await self._backend.delete(user_id, server_id)
 
+    async def peek(self, user_id: str, server_id: str) -> OAuthToken | None:
+        cached: Final = await self._backend.get(user_id, server_id)
+        if cached is not None:
+            return cached
+        if isinstance(self._inner, RefreshingTokenStore):
+            return await self._inner.peek(user_id, server_id)
+        return await self._inner.fetch(user_id, server_id)
+
+    async def refresh_now(
+        self, user_id: str, server_id: str, failed_access_token: str
+    ) -> Result[OAuthToken, CredError]:
+        await self.invalidate(user_id, server_id)
+        if not isinstance(self._inner, RefreshingTokenStore):
+            return Error(CredError.of_misconfigured("per-user OAuth token store cannot force a refresh"))
+        outcome: Final = await self._inner.refresh_now(user_id, server_id, failed_access_token)
+        await self.invalidate(user_id, server_id)
+        return outcome
+
 
 class RefreshCoordinator(Protocol):
     """Ensures one refresh runs per ``(user_id, server_id)`` at a time. Concurrent callers either
@@ -207,9 +244,9 @@ class RefreshCoordinator(Protocol):
         self,
         user_id: str,
         server_id: str,
-        refresh: Callable[[], Awaitable[OAuthToken | None]],
-        reread: Callable[[], Awaitable[OAuthToken | None]],
-    ) -> OAuthToken | None: ...
+        refresh: Callable[[], Awaitable[_RefreshOutcome]],
+        reread: Callable[[], Awaitable[_RefreshOutcome]],
+    ) -> _RefreshOutcome: ...
 
 
 class InProcessRefreshCoordinator:
@@ -222,21 +259,21 @@ class InProcessRefreshCoordinator:
     def __init__(self) -> None:
         # In-flight refreshes, one task per (user, server); each entry is removed by the task's
         # done-callback, so the map is bounded by concurrent refreshes, not by distinct keys seen.
-        self._inflight: dict[tuple[str, str], asyncio.Future[OAuthToken | None]] = {}
+        self._inflight: dict[tuple[str, str], asyncio.Future[object]] = {}
 
     async def run(
         self,
         user_id: str,
         server_id: str,
-        refresh: Callable[[], Awaitable[OAuthToken | None]],
-        reread: Callable[[], Awaitable[OAuthToken | None]],
-    ) -> OAuthToken | None:
+        refresh: Callable[[], Awaitable[_RefreshOutcome]],
+        reread: Callable[[], Awaitable[_RefreshOutcome]],
+    ) -> _RefreshOutcome:
         key: Final = (user_id, server_id)
-        task = self._inflight.get(key)
+        task = cast(asyncio.Future[_RefreshOutcome] | None, self._inflight.get(key))
         if task is None:
             # The task is detached from the caller, so a cancelled caller does not abort the refresh.
             task = asyncio.ensure_future(refresh())
-            self._inflight[key] = task
+            self._inflight[key] = cast(asyncio.Future[object], task)
             task.add_done_callback(lambda _t, k=key: self._inflight.pop(k, None))
         return await task
 
@@ -279,25 +316,85 @@ class RefreshingTokenStore:
         if token is None or not self._is_expired(token):
             return token
 
-        async def refresh_latest_token() -> OAuthToken | None:
+        async def refresh_latest_token() -> Result[OAuthToken, CredError]:
             latest_token: Final = await self._inner.fetch(user_id, server_id)
-            if latest_token is None or not self._is_expired(latest_token):
-                return latest_token
-            refreshed: Final = await self._refresher.refresh(user_id, server_id, latest_token)
-            return refreshed if refreshed is not None else await reread_fresh_token()
+            if latest_token is None:
+                return Error(
+                    CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server.")
+                )
+            if not self._is_expired(latest_token):
+                return Ok(latest_token)
+            match await self._refresher.refresh(user_id, server_id, latest_token):
+                case Ok(refreshed):
+                    return Ok(refreshed)
+                case Error(err):
+                    reread: Final = await self._reread_fresh_token(user_id, server_id)
+                    return reread if isinstance(reread, Ok) else Error(err)
 
-        async def reread_fresh_token() -> OAuthToken | None:
-            # A loser re-reads what the winner persisted. If the winner's refresh failed, the store
-            # still holds the expired token; surface None (-> challenge) like the winner did rather
-            # than the stale bearer the upstream would 401.
+        outcome: Final = await self._coordinator.run(
+            user_id,
+            server_id,
+            refresh=refresh_latest_token,
+            reread=lambda: self._reread_fresh_token(user_id, server_id),
+        )
+        if isinstance(outcome, Ok):
+            return outcome.ok
+        if outcome.error.tag == "unauthorized":
+            return None
+        raise OAuthTokenResolutionError(outcome.error)
+
+    async def _reread_fresh_token(self, user_id: str, server_id: str) -> Result[OAuthToken, CredError]:
+        latest_token: Final = await self._inner.fetch(user_id, server_id)
+        if latest_token is not None and not self._is_expired(latest_token):
+            return Ok(latest_token)
+        if latest_token is None or latest_token.refresh_token is None:
+            return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
+        return Error(CredError.of_upstream_unavailable("OAuth token refresh did not complete; retry the request."))
+
+    async def peek(self, user_id: str, server_id: str) -> OAuthToken | None:
+        return await self._inner.fetch(user_id, server_id)
+
+    async def refresh_now(
+        self, user_id: str, server_id: str, failed_access_token: str
+    ) -> Result[OAuthToken, CredError]:
+        async def refresh_failed_token() -> Result[OAuthToken, CredError]:
             latest_token: Final = await self._inner.fetch(user_id, server_id)
-            if latest_token is None or self._is_expired(latest_token):
-                return None
-            return latest_token
+            if latest_token is None:
+                return Error(
+                    CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server.")
+                )
+            if latest_token.access_token != failed_access_token:
+                if not self._is_expired(latest_token):
+                    return Ok(latest_token)
+                return Error(
+                    CredError.of_upstream_unavailable("OAuth credential changed while the request was in flight.")
+                )
+            match await self._refresher.refresh(user_id, server_id, latest_token):
+                case Ok(refreshed):
+                    return Ok(refreshed)
+                case Error(err):
+                    reread: Final = await self._reread_fresh_token(user_id, server_id)
+                    if isinstance(reread, Ok) and reread.ok.access_token != failed_access_token:
+                        return reread
+                    return Error(err)
+
+        async def reread_replacement() -> Result[OAuthToken, CredError]:
+            latest_token: Final = await self._inner.fetch(user_id, server_id)
+            if (
+                latest_token is not None
+                and latest_token.access_token != failed_access_token
+                and not self._is_expired(latest_token)
+            ):
+                return Ok(latest_token)
+            if latest_token is None or latest_token.refresh_token is None:
+                return Error(
+                    CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server.")
+                )
+            return Error(CredError.of_upstream_unavailable("OAuth token refresh did not complete; retry the request."))
 
         return await self._coordinator.run(
             user_id,
             server_id,
-            refresh=refresh_latest_token,
-            reread=reread_fresh_token,
+            refresh=refresh_failed_token,
+            reread=reread_replacement,
         )
