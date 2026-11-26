@@ -97,7 +97,7 @@ from litellm.types.proxy.carried_budget_state import (
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.ldap_sync import LDAPSyncSettings
-from litellm.types.proxy.request_tag_mappings import RequestTagMapping
+from litellm.types.proxy.request_tag_mappings import RequestPatternTagMapping, RequestTagMapping
 from litellm.types.proxy.skill_scanning import SkillScannerConfig
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
@@ -2667,6 +2667,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
         None,
         description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
+    )
+
+    request_pattern_tag_mappings: Sequence[RequestPatternTagMapping] | None = Field(
+        None,
+        description=(
+            "Map matching request headers or string body fields to existing budgeted tags. "
+            "Patterns are case-sensitive shell wildcards (*, ? and character classes). Header names are "
+            "case-insensitive. Body fields use dot notation. All matching tags apply, sharing each tag's budget."
+        ),
     )
 
     @field_validator("request_tag_mappings")

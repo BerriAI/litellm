@@ -25,3 +25,12 @@ class RequestTagMapping(BaseModel):
         elif self.tag_prefix is None or self.tag is not None:
             raise ValueError("An any-value mapping requires tag_prefix and cannot set tag")
         return self
+
+
+class RequestPatternTagMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: Literal["header", "body"]
+    field: str = Field(min_length=1, max_length=256)
+    pattern: str = Field(min_length=1, max_length=512)
+    tag: str = Field(min_length=1, max_length=256)
