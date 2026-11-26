@@ -2013,7 +2013,9 @@ def sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     return _replace_invalid_tool_use_id_chars(tool_use_id, _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS)
 
 
-def _callers_tool_use_id(tool_use_id: str) -> str:
+def _callers_tool_use_id(tool_use_id: object) -> str:
+    if not isinstance(tool_use_id, str):
+        raise TypeError(f"expected a string tool_use_id, got {type(tool_use_id).__name__}")
     return tool_use_id or _TOOL_USE_ID_FALLBACK
 
 

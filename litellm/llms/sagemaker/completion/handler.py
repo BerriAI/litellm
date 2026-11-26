@@ -43,6 +43,7 @@ from ..embedding.transformation import SagemakerEmbeddingConfig
 from .transformation import SagemakerConfig
 
 if TYPE_CHECKING:
+    from botocore.awsrequest import HTTPHeaders
     from botocore.credentials import Credentials
 
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -346,7 +347,7 @@ class SagemakerLLM(BaseAWSLLM):
     def make_sync_call(
         self,
         api_base: str,
-        headers: dict,
+        headers: "Mapping[str, object] | HTTPHeaders",
         data: str,
         logging_obj: LiteLLMLoggingObj,
         client: HTTPHandler | None = None,
@@ -369,7 +370,7 @@ class SagemakerLLM(BaseAWSLLM):
     async def make_async_call(
         self,
         api_base: str,
-        headers: dict,
+        headers: "Mapping[str, object] | HTTPHeaders",
         data: str,
         logging_obj: LiteLLMLoggingObj,
         client: AsyncHTTPHandler | None = None,
