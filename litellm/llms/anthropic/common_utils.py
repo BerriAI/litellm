@@ -68,7 +68,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import OPENAI_RESPONSE_HEADERS, LlmProviders
 
 _MessageT = TypeVar("_MessageT")
 
@@ -2535,21 +2535,25 @@ def normalize_cache_control_in_anthropic_payload(
     return {key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()}
 
 
-def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
-    openai_headers: Final = {}
-    if "anthropic-ratelimit-requests-limit" in headers:
-        openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]
-    if "anthropic-ratelimit-requests-remaining" in headers:
-        openai_headers["x-ratelimit-remaining-requests"] = headers["anthropic-ratelimit-requests-remaining"]
-    if "anthropic-ratelimit-tokens-limit" in headers:
-        openai_headers["x-ratelimit-limit-tokens"] = headers["anthropic-ratelimit-tokens-limit"]
-    if "anthropic-ratelimit-tokens-remaining" in headers:
-        openai_headers["x-ratelimit-remaining-tokens"] = headers["anthropic-ratelimit-tokens-remaining"]
+_ANTHROPIC_RATELIMIT_TO_OPENAI_HEADERS: Final = MappingProxyType(
+    {
+        "anthropic-ratelimit-requests-limit": "x-ratelimit-limit-requests",
+        "anthropic-ratelimit-requests-remaining": "x-ratelimit-remaining-requests",
+        "anthropic-ratelimit-tokens-limit": "x-ratelimit-limit-tokens",
+        "anthropic-ratelimit-tokens-remaining": "x-ratelimit-remaining-tokens",
+    }
+)
 
-    llm_response_headers: Final = {"{}-{}".format("llm_provider", k): v for k, v in headers.items()}
 
-    additional_headers: Final = {**llm_response_headers, **openai_headers}
-    return additional_headers
+def process_anthropic_headers(headers: httpx.Headers | Mapping[str, str]) -> dict[str, str]:
+    llm_response_headers: Final = {f"llm_provider-{name}": value for name, value in headers.items()}
+    provider_openai_headers: Final = {name: value for name, value in headers.items() if name in OPENAI_RESPONSE_HEADERS}
+    mapped_openai_headers: Final = {
+        openai_name: headers[anthropic_name]
+        for anthropic_name, openai_name in _ANTHROPIC_RATELIMIT_TO_OPENAI_HEADERS.items()
+        if anthropic_name in headers
+    }
+    return {**llm_response_headers, **provider_openai_headers, **mapped_openai_headers}
 
 
 def _anthropic_model_entry(

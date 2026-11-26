@@ -161,9 +161,10 @@ impl MessagesRoute {
                 provider_name,
             ));
         }
+        let headers = header_pairs(&response);
         let text = response.text().await.map_err(network)?;
         log_response_body(&text);
-        context.response_received(&text).await?;
+        context.response_received(&text, headers).await?;
         decode_response(config, &identity.model, &text)
             .map(|message| MessagesCallResponse::Complete(Box::new(message)))
     }
@@ -232,16 +233,20 @@ fn decode_response(
         .map_err(Error::from)
 }
 
+fn header_pairs(response: &reqwest::Response) -> Vec<(String, String)> {
+    response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
+        .collect()
+}
+
 fn streaming_response(
     response: reqwest::Response,
     decoder: Option<StreamDecoder>,
     provider: &'static str,
 ) -> MessagesCallResponse {
-    let headers = response
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
-        .collect();
+    let headers = header_pairs(&response);
     let chunks = match decoder {
         None => futures_util::stream::try_unfold(response, move |mut response| async move {
             let chunk = response.chunk().await.map_err(network)?;

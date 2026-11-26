@@ -76,6 +76,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     get_provider_response_headers_from_hidden_params,
+    get_recorded_rate_limit_headers,
     is_expected_client_error,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
@@ -4803,7 +4804,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 completion_response=pydantic_result.model_dump(),
                 raw_response=httpx.Response(
                     status_code=200,
-                    headers={},
+                    headers=get_recorded_rate_limit_headers(self.model_call_details),
                 ),
                 model_response=litellm.ModelResponse(id=provider_response_id),
                 json_mode=None,

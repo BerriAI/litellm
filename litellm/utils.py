@@ -88,6 +88,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
+    attribute_or_none,
     bind_budget_reservation_to_callbacks,
     normalize_drop_params,
     unbind_budget_reservation_from_callbacks,
@@ -8006,8 +8007,9 @@ def register_prompt_template(
 
 
 def _text_choice(chat_choice: StreamingChoices) -> TextChoices:
-    text_choices: Final = TextChoices()
     delta: Final = chat_choice["delta"]
+    reasoning_details: Final = attribute_or_none(attribute_or_none(chat_choice, "delta"), "reasoning_details")
+    text_choices: Final = TextChoices(reasoning_details=reasoning_details) if reasoning_details else TextChoices()
     text_choices["text"] = delta["content"]
     text_choices["reasoning_content"] = delta.get("reasoning_content")
     text_choices["index"] = chat_choice["index"]

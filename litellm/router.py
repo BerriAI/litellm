@@ -87,6 +87,7 @@ from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
+    attribute_or_none,
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -563,6 +564,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
             or delta.get("reasoning_content")
             or delta.get("thinking_blocks")
             or delta.get("reasoning_items")
+            or attribute_or_none(delta, "reasoning_details")
             or delta.get("audio")
             or delta.get("images")
             or delta.get("annotations")

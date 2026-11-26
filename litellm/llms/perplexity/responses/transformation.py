@@ -23,7 +23,7 @@ from litellm.types.utils import LlmProviders
 
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Ref: https://docs.perplexity.ai/api-reference/responses-post"""
         return [
             "max_output_tokens",
@@ -31,6 +31,8 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             "temperature",
             "top_p",
             "tools",
+            "tool_choice",
+            "parallel_tool_calls",
             "reasoning",
             "instructions",
             "models",
