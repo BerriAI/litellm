@@ -195,6 +195,7 @@ from litellm.types.litellm_params import (
     prompt_template_applied,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.router import GenericLiteLLMParams, validate_litellm_params_strictly
 from litellm.types.utils import (
     AgenticLoopParams,
@@ -4223,22 +4224,23 @@ def _complete_vertex_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
+    project_alias: Final[str | None] = optional_params.pop("vertex_ai_project", None)  # pyright: ignore[reportUnknownVariableType]  # optional_params is an untyped dict
     vertex_ai_project: Final = (
         optional_params.pop("vertex_project", None)
-        or optional_params.pop("vertex_ai_project", None)
+        or project_alias
         or litellm.vertex_project
         or get_secret("VERTEXAI_PROJECT")
     )
+    location_alias: Final[str | None] = optional_params.pop("vertex_ai_location", None)  # pyright: ignore[reportUnknownVariableType]  # optional_params is an untyped dict
     vertex_ai_location: Final = (
         optional_params.pop("vertex_location", None)
-        or optional_params.pop("vertex_ai_location", None)
+        or location_alias
         or litellm.vertex_location
         or get_secret("VERTEXAI_LOCATION")
     )
+    credentials_alias: Final[VERTEX_CREDENTIALS_TYPES | None] = optional_params.pop("vertex_ai_credentials", None)  # pyright: ignore[reportUnknownVariableType]  # optional_params is an untyped dict
     vertex_credentials: Final = (
-        optional_params.pop("vertex_credentials", None)
-        or optional_params.pop("vertex_ai_credentials", None)
-        or get_secret("VERTEXAI_CREDENTIALS")
+        optional_params.pop("vertex_credentials", None) or credentials_alias or get_secret("VERTEXAI_CREDENTIALS")
     )
 
     api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
@@ -7857,23 +7859,28 @@ def embedding(
             )
 
         elif custom_llm_provider == "vertex_ai":
+            project_alias: Final[str | None] = optional_params.pop("vertex_ai_project", None)  # pyright: ignore[reportUnknownVariableType]  # optional_params is an untyped dict
             vertex_ai_project: Final = (
                 optional_params.pop("vertex_project", None)
-                or optional_params.pop("vertex_ai_project", None)
+                or project_alias
                 or litellm.vertex_project
                 or get_secret_str("VERTEXAI_PROJECT")
                 or get_secret_str("VERTEX_PROJECT")
             )
+            location_alias: Final[str | None] = optional_params.pop("vertex_ai_location", None)  # pyright: ignore[reportUnknownVariableType]  # optional_params is an untyped dict
             vertex_ai_location: Final = (
                 optional_params.pop("vertex_location", None)
-                or optional_params.pop("vertex_ai_location", None)
+                or location_alias
                 or litellm.vertex_location
                 or get_secret_str("VERTEXAI_LOCATION")
                 or get_secret_str("VERTEX_LOCATION")
             )
+            credentials_alias: Final[VERTEX_CREDENTIALS_TYPES | None] = optional_params.pop(  # pyright: ignore[reportUnknownVariableType]  # optional_params is an untyped dict
+                "vertex_ai_credentials", None
+            )
             vertex_credentials: Final = (
                 optional_params.pop("vertex_credentials", None)
-                or optional_params.pop("vertex_ai_credentials", None)
+                or credentials_alias
                 or get_secret_str("VERTEXAI_CREDENTIALS")
                 or get_secret_str("VERTEX_CREDENTIALS")
             )

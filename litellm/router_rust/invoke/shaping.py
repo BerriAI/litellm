@@ -38,6 +38,9 @@ from litellm.litellm_core_utils.reasoning_effort_capability import deployment_re
 from litellm.litellm_core_utils.request_timeout_resolver import get_service_tier_timeout
 from litellm.litellm_core_utils.routing_common_utils import (
     deployment_model_id_pin,
+    deployment_sets_litellm_param,
+    drop_list_keeping_deployment_settings,
+    drop_listed_deployment_settings,
     metadata_defaults_under_request,
     request_user_api_key_auth,
 )
@@ -203,21 +206,13 @@ def merge_tools_from_deployment(
         )
 
 
-def _deployment_sets_litellm_param(deployment_params: Mapping[str, object], key: str) -> bool:
-    value: Final = deployment_params.get(key)
-    if value is None:
-        return False
-    field: Final = LiteLLM_Params.model_fields.get(key)
-    return field is None or value != field.default  # pyright: ignore[reportAny]  # litellm's untyped helpers and request values
-
-
 def _forwarded_alias_marker_keys_the_deployment_sets(
     deployment_params: Mapping[str, object], forwarded_keys: object
 ) -> tuple[str, ...]:
     if not isinstance(forwarded_keys, tuple):
         return ()
     keys: Final[tuple[object, ...]] = forwarded_keys  # pyright: ignore[reportUnknownVariableType]  # the router's own marker
-    return tuple(key for key in keys if isinstance(key, str) and _deployment_sets_litellm_param(deployment_params, key))
+    return tuple(key for key in keys if isinstance(key, str) and deployment_sets_litellm_param(deployment_params, key))
 
 
 # --- reasoning effort -------------------------------------------------------------------------
@@ -704,12 +699,16 @@ def update_kwargs_with_deployment(
 ) -> None:
     """``_update_kwargs_with_deployment``, in place on the attempt's kwargs."""
     deployment_params: Final = as_dict(deployment.get("litellm_params"))
-    for key in _forwarded_alias_marker_keys_the_deployment_sets(
-        deployment_params, kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+    defaults: Final = shaping.default_litellm_params
+    router_drop_list: Final = defaults.get("additional_drop_params")
+    for key in (
+        *_forwarded_alias_marker_keys_the_deployment_sets(
+            deployment_params, kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+        ),
+        *drop_listed_deployment_settings(deployment_params, router_drop_list),
     ):
         kwargs.pop(key, None)
     kwargs.pop("daily_reset_time", None)
-    defaults: Final = shaping.default_litellm_params
     merge_tools_from_deployment(deployment_params, kwargs, defaults)
 
     model_info: Mapping[str, object] = as_dict(  # rebind-ok: rebound as the Python router rebinds it
@@ -812,6 +811,13 @@ def update_kwargs_with_deployment(
             STREAM_USAGE_INJECTED_FIELD
         ] = True
     update_kwargs_with_default_litellm_params(shaping, kwargs, metadata_variable_name, caller_only_keys)
+    spared_drop_list: Final = drop_list_keeping_deployment_settings(
+        deployment_params,
+        kwargs.get("additional_drop_params", deployment_params.get("additional_drop_params")),
+        router_drop_list,
+    )
+    if spared_drop_list is not None:
+        kwargs["additional_drop_params"] = list(spared_drop_list)  # rebind-ok: the request kwargs are shaped in place
     pinned_model_id: Final = deployment_model_id_pin(deployment_params)
     if pinned_model_id is not None:
         kwargs["model_id"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them

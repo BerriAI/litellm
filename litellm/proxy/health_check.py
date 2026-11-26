@@ -31,7 +31,11 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
-from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
+from litellm.litellm_core_utils.routing_common_utils import (
+    deployment_model_id_pin,
+    drop_list_keeping_deployment_settings,
+    is_model_capability_field,
+)
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependency,
     classify_strategy_router_model,
@@ -701,9 +705,12 @@ async def _run_model_health_check(model: dict):
         model_info, litellm_params
     )
     timeout: Final = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
-    probe_params: Final = (
-        {**litellm_params, "model_info": {"mode": model_info["mode"]}} if "mode" in model_info else litellm_params
-    )
+    probe_view: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params)
+    probe_params: Final = {
+        **probe_view,
+        **probe_drop_list_override(probe_view),
+        **({"model_info": {"mode": model_info["mode"]}} if "mode" in model_info else {}),
+    }
 
     return await run_with_timeout(
         litellm.ahealth_check(
@@ -933,6 +940,13 @@ def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict[str,
 
 _PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def probe_drop_list_override(probe_params: Mapping[str, object]) -> Mapping[str, object]:
+    kept_drop_list: Final = drop_list_keeping_deployment_settings(
+        probe_params, probe_params.get("additional_drop_params")
+    )
+    return MappingProxyType({} if kept_drop_list is None else {"additional_drop_params": list(kept_drop_list)})
 
 
 def _same_health_check_model(deployment_model: str | None, probe_params: Mapping[str, object]) -> bool:

@@ -2986,3 +2986,20 @@ async def test_evicted_credentials_finish_refresh_without_being_readmitted(
         assert (target, "target") not in vertex._credentials_project_mapping
         assert vertex.get_access_token(target, "target") == (f"token-{limit + 2}", "target")
         assert len(vertex._credentials_project_mapping) == limit
+
+
+@pytest.mark.parametrize(
+    ("getter", "canonical", "alias"),
+    [
+        (VertexBase.get_vertex_ai_project, "vertex_project", "vertex_ai_project"),
+        (VertexBase.get_vertex_ai_location, "vertex_location", "vertex_ai_location"),
+        (VertexBase.get_vertex_ai_credentials, "vertex_credentials", "vertex_ai_credentials"),
+    ],
+)
+def test_a_vertex_getter_takes_both_spellings_out_of_the_params_and_prefers_the_canonical_one(
+    getter: Callable[[dict[str, object]], str | None], canonical: str, alias: str
+) -> None:
+    params: Final[dict[str, object]] = {canonical: "canonical-value", alias: "alias-value", "temperature": 0.2}
+
+    assert getter(params) == "canonical-value"
+    assert params == {"temperature": 0.2}

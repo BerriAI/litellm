@@ -1338,26 +1338,29 @@ class VertexBase:
 
     @staticmethod
     def get_vertex_ai_project(litellm_params: dict) -> str | None:
+        project_alias: Final[str | None] = litellm_params.pop("vertex_ai_project", None)  # pyright: ignore[reportUnknownVariableType]  # litellm_params is an untyped dict
         return (
             litellm_params.pop("vertex_project", None)
-            or litellm_params.pop("vertex_ai_project", None)
+            or project_alias
             or litellm.vertex_project
             or get_secret_str("VERTEXAI_PROJECT")
         )
 
     @staticmethod
     def get_vertex_ai_credentials(litellm_params: dict) -> str | None:
+        credentials_alias: Final[str | None] = litellm_params.pop("vertex_ai_credentials", None)  # pyright: ignore[reportUnknownVariableType]  # litellm_params is an untyped dict
         return (
             litellm_params.pop("vertex_credentials", None)
-            or litellm_params.pop("vertex_ai_credentials", None)
+            or credentials_alias
             or get_secret_str("VERTEXAI_CREDENTIALS")
         )
 
     @staticmethod
     def get_vertex_ai_location(litellm_params: dict) -> str | None:
+        location_alias: Final[str | None] = litellm_params.pop("vertex_ai_location", None)  # pyright: ignore[reportUnknownVariableType]  # litellm_params is an untyped dict
         return (
             litellm_params.pop("vertex_location", None)
-            or litellm_params.pop("vertex_ai_location", None)
+            or location_alias
             or litellm.vertex_location
             or get_secret_str("VERTEXAI_LOCATION")
             or get_secret_str("VERTEX_LOCATION")

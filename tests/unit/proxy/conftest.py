@@ -4,6 +4,7 @@ import _hashlib
 import asyncio
 import hashlib
 import importlib
+import json
 import logging
 import os
 import sys
@@ -16,6 +17,7 @@ from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import responses
 import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -195,6 +197,36 @@ def configured_eu_jev_route() -> Iterator[None]:
 def configured_eu_jev_route_with_trailing_slash() -> Iterator[None]:
     with _eu_jev_route_configured_at("/eu_jev/v1/systemone/"):
         yield
+
+
+VERTEX_CLAUDE_REPLY: Final = {
+    "id": "msg_vertex_region",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-5-5",
+    "content": [{"type": "text", "text": "Hi"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 3, "output_tokens": 1},
+}
+
+
+@pytest.fixture
+def vertex_credentials() -> Iterator[str]:
+    token_uri: Final = "https://oauth2.googleapis.com/token"
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as google_token_endpoint:
+        google_token_endpoint.post(
+            token_uri, json={"access_token": "region-access-token", "expires_in": 3600, "token_type": "Bearer"}
+        )
+        yield json.dumps(
+            {
+                "type": "authorized_user",
+                "client_id": "region-client",
+                "client_secret": "region-client-secret",
+                "refresh_token": "region-refresh-token",
+                "token_uri": token_uri,
+            }
+        )
 
 
 @pytest.fixture

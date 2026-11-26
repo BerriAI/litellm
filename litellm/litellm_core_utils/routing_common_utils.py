@@ -14,7 +14,8 @@ import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, iter_items
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
@@ -62,6 +63,67 @@ def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
     return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
+
+
+def deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object], key: str) -> bool:
+    value: Final = deployment_litellm_params.get(key)
+    if value is None:
+        return False
+    field: Final = LiteLLM_Params.model_fields.get(key)
+    return field is None or value != field.default  # pyright: ignore[reportAny]  # pydantic types a field default as Any
+
+
+def _with_its_credential_values(deployment_litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    credential_name: Final = deployment_litellm_params.get("litellm_credential_name")
+    credential: Final = (
+        CredentialAccessor.find_credential(credential_name) if isinstance(credential_name, str) else None
+    )
+    if credential is None:
+        return deployment_litellm_params
+    return {
+        **deployment_litellm_params,
+        **{
+            key: value
+            for key, value in credential.credential_values.items()
+            if deployment_litellm_params.get(key) is None
+        },
+    }
+
+
+def _listed_names(drop_list: object) -> tuple[str, ...]:
+    if drop_list.__class__ not in (list, tuple):
+        return ()
+    return tuple(name for name in iter_items(drop_list) if isinstance(name, str))
+
+
+def drop_listed_deployment_settings(
+    deployment_litellm_params: Mapping[str, object], router_drop_list: object = None
+) -> frozenset[str]:
+    named: Final = frozenset(
+        name
+        for name in chain(
+            _listed_names(deployment_litellm_params.get("additional_drop_params")), _listed_names(router_drop_list)
+        )
+        if name in PROVIDER_SCOPED_CREDENTIAL_PARAMS
+    )
+    if not named:
+        return frozenset()
+    params: Final = _with_its_credential_values(deployment_litellm_params)
+    provider: Final = provider_for_generic_call(params)
+    return frozenset(
+        name
+        for name in named
+        if provider in PROVIDER_SCOPED_CREDENTIAL_PARAMS[name] and deployment_sets_litellm_param(params, name)
+    )
+
+
+def drop_list_keeping_deployment_settings(
+    deployment_litellm_params: Mapping[str, object], drop_list: object, router_drop_list: object = None
+) -> tuple[str, ...] | None:
+    kept: Final = drop_listed_deployment_settings(deployment_litellm_params, router_drop_list)
+    if not kept or drop_list.__class__ not in (list, tuple):
+        return None
+    return tuple(name for name in iter_items(drop_list) if isinstance(name, str) and name not in kept)
 
 
 _ROUTER_OWNED_METADATA_KEYS: Final = frozenset({"caching_groups", "redis_namespace"})
@@ -560,13 +622,20 @@ _VERTEX_PROVIDERS: Final = frozenset(
 PROVIDER_SCOPED_CREDENTIAL_PARAMS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {
         "aws_access_key_id": _AWS_PROVIDERS,
+        "aws_bedrock_runtime_endpoint": _AWS_PROVIDERS,
+        "aws_external_id": _AWS_PROVIDERS,
         "aws_profile_name": _AWS_PROVIDERS,
         "aws_region_name": _AWS_PROVIDERS,
         "aws_role_name": _AWS_PROVIDERS,
         "aws_secret_access_key": _AWS_PROVIDERS,
         "aws_session_name": _AWS_PROVIDERS,
+        "aws_session_tags": _AWS_PROVIDERS,
         "aws_session_token": _AWS_PROVIDERS,
+        "aws_sts_endpoint": _AWS_PROVIDERS,
         "aws_web_identity_token": _AWS_PROVIDERS,
+        "vertex_ai_credentials": _VERTEX_PROVIDERS,
+        "vertex_ai_location": _VERTEX_PROVIDERS,
+        "vertex_ai_project": _VERTEX_PROVIDERS,
         "vertex_credentials": _VERTEX_PROVIDERS,
         "vertex_location": _VERTEX_PROVIDERS,
         "vertex_project": _VERTEX_PROVIDERS,

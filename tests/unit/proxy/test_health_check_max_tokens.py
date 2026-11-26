@@ -17,10 +17,12 @@ from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
     _is_strategy_router_deployment,
     _resolve_health_check_max_tokens,
+    perform_health_check,
     resolve_health_check_mode,
     update_litellm_params_for_health_check,
 )
 from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
+from tests.unit.proxy.conftest import VERTEX_CLAUDE_REPLY
 
 
 @pytest.mark.asyncio
@@ -1642,3 +1644,30 @@ async def test_run_model_health_check_reports_why_a_string_configurable_clientsi
 
     assert "configurable_clientside_auth_params" in result["error"]
     invoke_endpoint.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_health_check_probes_the_region_a_deployment_sets_and_also_drop_lists(
+    respx_mock: respx.MockRouter, httpx_transport: None, vertex_credentials: str
+) -> None:
+    vertex_route: Final = respx_mock.post(host__regex=r"aiplatform").respond(json=VERTEX_CLAUDE_REPLY)
+
+    healthy, unhealthy, _ = await perform_health_check(
+        model_list=[
+            {
+                "model_name": "claude-eu",
+                "litellm_params": {
+                    "model": "vertex_ai/claude-haiku-5-5",
+                    "vertex_project": "region-project",
+                    "vertex_location": "eu",
+                    "vertex_credentials": vertex_credentials,
+                    "additional_drop_params": ["store", "vertex_location"],
+                },
+                "model_info": {"id": "claude-eu-id"},
+            }
+        ]
+    )
+
+    assert (len(healthy), unhealthy) == (1, [])
+    assert vertex_route.calls.last.request.url.host == "aiplatform.eu.rep.googleapis.com"
+    assert "/locations/eu/" in vertex_route.calls.last.request.url.path
