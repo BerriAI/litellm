@@ -1,15 +1,18 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
+use std::sync::Arc;
 
 use encoding_rs::Encoding;
 use indexmap::{IndexMap, IndexSet};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::bundled::BUNDLED_REGISTRY;
 use crate::error::{Error, Loaded, Rejects, Repr, pointer_child, pointer_for_key};
 use crate::fallback::{CapabilityRules, FallbackGeneralizations, FallbackRule};
 use crate::model::Model;
 use crate::store::{Rows, Store};
+use crate::view::CatalogView;
 use crate::wire::{EntryWire, Fields};
 
 const SAMPLE_SPEC: &str = "sample_spec";
@@ -25,7 +28,6 @@ pub struct IntegrityLimits {
 #[derive(Clone, Debug)]
 pub struct ModelEntry {
     fields: Fields,
-    model: Option<Model>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -137,14 +139,19 @@ impl ModelEntry {
     pub fn fields(&self) -> &Fields {
         &self.fields
     }
-
-    pub fn model(&self) -> Option<&Model> {
-        self.model.as_ref()
-    }
 }
 
 impl Catalog {
     pub fn parse(body: &[u8]) -> Result<Loaded<Self>, Error> {
+        Self::parse_rows(body, read_row)
+    }
+
+    /// The bundled registry, which CI validates. Rows are indexed but not lowered, so row problems are not collected
+    pub fn bundled() -> Result<Loaded<Self>, Error> {
+        Self::parse_rows(BUNDLED_REGISTRY, read_trusted_row)
+    }
+
+    fn parse_rows(body: &[u8], read: fn(&Fields) -> RowRead) -> Result<Loaded<Self>, Error> {
         let document = match text_after_byte_order_mark(body) {
             Some(text) => serde_json::from_str::<Fields>(&text),
             None => serde_json::from_slice::<Fields>(body),
@@ -171,7 +178,7 @@ impl Catalog {
                     continue;
                 }
             };
-            let row = read_row(&fields);
+            let row = read(&fields);
             problems.extend(
                 row.problems
                     .into_iter()
@@ -189,13 +196,7 @@ impl Catalog {
             if let Some(aliases) = row.aliases {
                 alias_lists.push((name.clone(), aliases));
             }
-            entries.insert(
-                name,
-                ModelEntry {
-                    fields,
-                    model: row.model,
-                },
-            );
+            entries.insert(name, ModelEntry { fields });
         }
         if entries.is_empty() {
             return Err(Error::new("", Repr::Empty));
@@ -417,16 +418,6 @@ impl Catalog {
         (catalog, removed_errors)
     }
 
-    pub fn unrecognized(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.rows().entries.iter().flat_map(|(name, entry)| {
-            entry
-                .model
-                .iter()
-                .flat_map(|model| &model.unrecognized)
-                .map(move |key| (name.as_str(), key.as_str()))
-        })
-    }
-
     pub fn lookup(&self, key: &str) -> Option<ModelMatch<'_>> {
         let rows = self.rows();
         let found = self.store.find_key(key)?;
@@ -493,8 +484,26 @@ impl Catalog {
     }
 }
 
+/// The Rust host's document, which has no registrations. A row is lowered each time it is priced
+impl CatalogView for Catalog {
+    fn contains(&self, key: &str) -> bool {
+        self.rows().contains(key)
+    }
+
+    fn find_key(&self, name: &str) -> Option<String> {
+        self.store.find_key(name)
+    }
+
+    fn fields(&self, key: &str) -> Option<Arc<Fields>> {
+        self.get(key).cloned().map(Arc::new)
+    }
+
+    fn registered_fields(&self, _key: &str) -> BTreeSet<String> {
+        BTreeSet::new()
+    }
+}
+
 struct RowRead {
-    model: Option<Model>,
     aliases: Option<Vec<String>>,
     alias_of: Option<String>,
     problems: Vec<Error>,
@@ -508,7 +517,6 @@ fn read_row(fields: &Fields) -> RowRead {
             .filter(|key| *key != "alias_of")
             .map(|key| Error::from_key(key, Repr::AliasRowField));
         return RowRead {
-            model: None,
             aliases: None,
             alias_of: Some(target),
             problems: wire.problems.into_iter().chain(other_fields).collect(),
@@ -516,18 +524,25 @@ fn read_row(fields: &Fields) -> RowRead {
     }
     let aliases = wire.attributes.aliases.clone();
     let timezone_error = unknown_timezone(&wire);
-    let (model, problems) = match Model::try_from(wire) {
-        Ok(model) => (Some(model), timezone_error.into_iter().collect()),
-        Err(mut errors) => {
-            errors.extend(timezone_error);
-            (None, errors)
-        }
-    };
+    let problems = Model::try_from(wire)
+        .err()
+        .unwrap_or_default()
+        .into_iter()
+        .chain(timezone_error)
+        .collect();
     RowRead {
-        model,
         aliases,
         alias_of: None,
         problems,
+    }
+}
+
+fn read_trusted_row(fields: &Fields) -> RowRead {
+    let read = |key: &str| fields.get(key).filter(|value| !value.is_null());
+    RowRead {
+        aliases: read("aliases").and_then(|value| Vec::<String>::deserialize(value).ok()),
+        alias_of: read("alias_of").and_then(|value| String::deserialize(value).ok()),
+        problems: Vec::new(),
     }
 }
 
@@ -616,7 +631,7 @@ mod tests {
         assert_eq!(rejected.len(), 1);
         assert!(catalog.lookup("bad").is_none());
         let good = catalog.lookup("good").unwrap();
-        assert!(good.entry.model().is_some());
+        assert!(Model::from_fields(good.entry.fields()).is_ok());
         assert_eq!(
             good.entry.field("custom_metadata"),
             Some(&Value::Bool(true))

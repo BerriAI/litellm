@@ -63,7 +63,7 @@ class CBFTransformer:
             filtered_data = data
             zero_requests_dropped = 0
 
-        cbf_data: Final = []
+        cbf_data: Final[list[CBFRecord]] = []
         czrn_dropped_count = 0
         filtered_count: Final = len(filtered_data)
 

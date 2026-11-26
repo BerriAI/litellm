@@ -7,11 +7,14 @@ import contextvars
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import asdict
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final, Literal
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import respx
+from starlette.websockets import WebSocket
 
 import litellm
 from litellm import Router
@@ -1178,13 +1181,14 @@ class TestModelRateLimitingCheckIOTokens:
         assert usage.get_local(otpm_key) == 2
 
     @pytest.mark.asyncio
-    async def test_io_and_tpm_rpm_limits_both_enforced_with_warning(self, caplog):
+    async def test_io_and_tpm_rpm_limits_both_enforced_with_warning(self, caplog, monkeypatch):
         import logging
 
-        from litellm.utils import get_utc_datetime
-
+        monkeypatch.setattr(
+            "litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime", lambda: _TURN_AT
+        )
         usage = _memory_usage()
-        check = ModelRateLimitingCheck(usage=usage)
+        check = ModelRateLimitingCheck(usage=usage, clock=lambda: _TURN_AT)
         model_id = "io-mixed-id"
         deployment_name = "bedrock_mantle/anthropic.claude-opus-4-7"
         deployment = {
@@ -1197,7 +1201,7 @@ class TestModelRateLimitingCheckIOTokens:
             "model_name": "opus",
         }
 
-        minute = get_utc_datetime().strftime("%H-%M")
+        minute = _TURN_AT.strftime("%H-%M")
         rpm = UsageCounter.for_deployment(model_id, deployment_name, "rpm", minute)
         itpm_key = _io(model_id, deployment_name, "itpm", minute)
         usage.increment_local(CounterIncrement(rpm, 5, 60))
@@ -1655,6 +1659,8 @@ async def test_success_settles_a_reservation_held_only_in_litellm_params_metadat
 
 
 _TURN_AT: Final = datetime(2026, 1, 1, 12, 34, 56, tzinfo=timezone.utc)
+_EMPTY_TURN: Final[Mapping[str, object]] = MappingProxyType({})
+_EMPTY_TURN_TOKENS: Final = MappingProxyType({"itpm": 1, "otpm": 0})
 _ACTUAL_TOKENS: Final = {"itpm": 5, "otpm": 2}
 
 
@@ -1680,8 +1686,10 @@ async def test_turn_admission_refuses_once_the_minutes_tokens_reach_the_limit(ki
     usage: Final = _memory_usage()
     usage.increment_local(CounterIncrement(_turn_key(kind), used, 60))
 
-    with pytest.raises(litellm.RateLimitError, match=f"{kind.upper()} limit=100, current usage={used}"):
-        await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT)
+    with pytest.raises(
+        litellm.RateLimitError, match=f"{kind.upper()} limit=100, current usage={used + _EMPTY_TURN_TOKENS[kind]}"
+    ):
+        await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT, _EMPTY_TURN)
 
 
 @pytest.mark.asyncio
@@ -1693,7 +1701,7 @@ async def test_an_admitted_turn_reserves_nothing_and_counts_its_actual_tokens(ki
     usage.increment_local(CounterIncrement(_turn_key(kind), used, 60))
     actual: Final = _ACTUAL_TOKENS
 
-    reservation: Final = await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT)
+    reservation: Final = await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT, _EMPTY_TURN)
     counter_key: Final = _counter_in(reservation[ITPM_COUNTER_KEY if kind == "itpm" else OTPM_COUNTER_KEY])
     assert usage.get_local(counter_key) == used
     await async_io_token_reconcile_success(
@@ -1714,7 +1722,7 @@ async def test_an_admitted_turn_reserves_nothing_and_counts_its_actual_tokens(ki
 async def test_a_turn_without_io_token_counters_is_admitted_with_nothing_to_settle(
     deployment: dict[str, object],
 ) -> None:
-    assert await async_admit_io_token_turn(_memory_usage(), deployment, _TURN_AT) == {}
+    assert await async_admit_io_token_turn(_memory_usage(), deployment, _TURN_AT, _EMPTY_TURN) == {}
 
 
 @pytest.mark.asyncio
@@ -1748,8 +1756,10 @@ async def test_a_turn_is_refused_on_this_instance_s_count_when_reading_the_share
 ) -> None:
     usage: Final = usage_store(FakeUsageHandle(local={_turn_key(kind): 100}, redis={}, redis_down=True))
 
-    with pytest.raises(litellm.RateLimitError, match=f"{kind.upper()} limit=100, current usage=100"):
-        await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT)
+    with pytest.raises(
+        litellm.RateLimitError, match=f"{kind.upper()} limit=100, current usage={100 + _EMPTY_TURN_TOKENS[kind]}"
+    ):
+        await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT, _EMPTY_TURN)
 
 
 @pytest.mark.asyncio
@@ -1763,7 +1773,7 @@ async def test_a_turn_finishing_in_the_next_minute_counts_its_actual_tokens_on_t
         lambda: datetime(2026, 1, 1, 12, 35, 10, tzinfo=timezone.utc),
     )
     usage: Final = _memory_usage()
-    reservation: Final = await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT)
+    reservation: Final = await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT, _EMPTY_TURN)
 
     await _deliver_success(
         ModelRateLimitingCheck(usage=usage),
@@ -1785,7 +1795,7 @@ async def test_a_turn_is_admitted_once_the_shared_counter_drops_below_the_limit_
 ) -> None:
     usage: Final = usage_store(FakeUsageHandle(local={_turn_key(kind): 100}, redis={_turn_key(kind): 99}))
 
-    admitted: Final = await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT)
+    admitted: Final = await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT, _EMPTY_TURN)
 
     assert _counter_in(admitted[ITPM_COUNTER_KEY if kind == "itpm" else OTPM_COUNTER_KEY]) == _turn_key(kind)
 
@@ -1826,7 +1836,7 @@ async def test_a_turn_counts_only_its_uncached_responses_input_toward_itpm(respo
     usage: Final = _memory_usage()
     usage.increment_local(CounterIncrement(_turn_key("itpm"), 10, 60))
 
-    reservation: Final = await async_admit_io_token_turn(usage, _turn_deployment("itpm"), _TURN_AT)
+    reservation: Final = await async_admit_io_token_turn(usage, _turn_deployment("itpm"), _TURN_AT, _EMPTY_TURN)
     await async_io_token_reconcile_success(usage, _proxy_success_kwargs(reservation), responses_reply)
 
     assert usage.get_local(_turn_key("itpm")) == 10 + 50 - 30
@@ -1835,9 +1845,11 @@ async def test_a_turn_counts_only_its_uncached_responses_input_toward_itpm(respo
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["itpm", "otpm"])
 async def test_a_later_turn_is_refused_when_another_instance_filled_the_shared_minute(kind: str) -> None:
-    with pytest.raises(litellm.RateLimitError, match=f"{kind.upper()} limit=100, current usage=100"):
+    with pytest.raises(
+        litellm.RateLimitError, match=f"{kind.upper()} limit=100, current usage={100 + _EMPTY_TURN_TOKENS[kind]}"
+    ):
         await async_admit_io_token_turn(
-            usage_store(FakeUsageHandle(redis={_turn_key(kind): 100})), _turn_deployment(kind), _TURN_AT
+            usage_store(FakeUsageHandle(redis={_turn_key(kind): 100})), _turn_deployment(kind), _TURN_AT, _EMPTY_TURN
         )
 
 
@@ -1848,9 +1860,201 @@ async def test_a_later_turn_is_admitted_on_this_instance_s_count_when_the_shared
 ) -> None:
     usage: Final = usage_store(FakeUsageHandle(local={_turn_key(kind): 99}, redis={}, breaker_open=True))
 
-    admitted: Final = await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT)
+    admitted: Final = await async_admit_io_token_turn(usage, _turn_deployment(kind), _TURN_AT, _EMPTY_TURN)
 
     assert _counter_in(admitted[ITPM_COUNTER_KEY if kind == "itpm" else OTPM_COUNTER_KEY]) == _turn_key(kind)
+
+
+_ITPM_350_DEPLOYMENT: Final = {
+    "litellm_params": {"model": "openai/gpt-5-mini", "itpm": 350},
+    "model_info": {"id": "ws-itpm-350"},
+}
+_ITPM_350_KEY: Final = _io("ws-itpm-350", "openai/gpt-5-mini", "itpm", "12-34")
+_INPUT_PAST_40_TOKENS: Final = "Write one plain sentence about how the ocean tides follow the moon. " * 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("used", "admitted"), [(99, True), (100, False)])
+async def test_a_warmup_turn_is_not_refused_for_its_own_input(used: int, admitted: bool) -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_turn_key("itpm"), used, 60))
+    warmup: Final = {"input": _INPUT_PAST_40_TOKENS * 4, "generate": False}
+
+    if admitted:
+        await async_admit_io_token_turn(usage, _turn_deployment("itpm"), _TURN_AT, warmup)
+        return
+    with pytest.raises(litellm.RateLimitError):
+        await async_admit_io_token_turn(usage, _turn_deployment("itpm"), _TURN_AT, warmup)
+
+
+def _socket_deployment(deployment_id: str) -> dict[str, object]:
+    return {"litellm_params": {"model": "openai/gpt-5-mini", "itpm": 100}, "model_info": {"id": deployment_id}}
+
+
+_SOCKET_TURN: Final = {
+    "websocket": WebSocket({"type": "websocket"}, AsyncMock(), AsyncMock()),
+    "first_message": "{}",
+    "input": _INPUT_PAST_40_TOKENS,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("used_a", "used_b", "request_kwargs", "kept"),
+    [
+        (90, 0, _SOCKET_TURN, ["b"]),
+        (90, 90, _SOCKET_TURN, ["a", "b"]),
+        (100, 90, _SOCKET_TURN, ["a"]),
+        (90, 0, {"input": _INPUT_PAST_40_TOKENS}, ["a", "b"]),
+        (90, 0, {"first_message": "x", "input": _INPUT_PAST_40_TOKENS}, ["a", "b"]),
+        (90, 0, {"websocket": "x", "first_message": "x", "input": _INPUT_PAST_40_TOKENS}, ["a", "b"]),
+        (90, 0, {**_SOCKET_TURN, "previous_response_id": "resp_1"}, ["a", "b"]),
+        (90, 0, {**_SOCKET_TURN, "generate": False}, ["a", "b"]),
+    ],
+)
+async def test_a_socket_turn_is_routed_to_a_deployment_with_room_for_it(
+    used_a: int, used_b: int, request_kwargs: Mapping[str, object], kept: list[str]
+) -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_io("a", "openai/gpt-5-mini", "itpm", "12-34"), used_a, 60))
+    usage.increment_local(CounterIncrement(_io("b", "openai/gpt-5-mini", "itpm", "12-34"), used_b, 60))
+    check: Final = ModelRateLimitingCheck(usage=usage, clock=lambda: _TURN_AT)
+
+    remaining: Final = await check.async_filter_deployments(
+        "g", [_socket_deployment("a"), _socket_deployment("b")], None, dict(request_kwargs)
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in remaining] == kept
+
+
+async def _itpm_350_refusal(
+    usage: RouterUsageStore, request: Mapping[str, object], *, opens_responses_socket: bool
+) -> str:
+    set_io_token_rate_limit_request_kwargs(
+        {**request, "metadata": {}},
+        opens_responses_socket=opens_responses_socket,
+        metadata_channel="metadata",
+    )
+    with pytest.raises(litellm.RateLimitError) as refusal:
+        await async_io_token_pre_call_check(usage, dict(_ITPM_350_DEPLOYMENT))
+    return str(refusal.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
+async def test_a_socket_open_whose_input_would_pass_the_itpm_limit_is_refused_with_the_http_message() -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
+    http_refusal: Final = await _itpm_350_refusal(usage, {"input": _INPUT_PAST_40_TOKENS}, opens_responses_socket=False)
+
+    socket_refusal: Final = await _itpm_350_refusal(
+        usage, {"input": _INPUT_PAST_40_TOKENS}, opens_responses_socket=True
+    )
+
+    assert socket_refusal == http_refusal
+    assert float(socket_refusal.split("ITPM limit=350, current usage=")[1]) > 350
+    assert usage.get_local(_ITPM_350_KEY) == 310
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
+async def test_a_socket_open_whose_input_fits_under_the_itpm_limit_is_admitted_reserving_nothing() -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
+    socket_open: Final[dict[str, object]] = {"input": "hi", "metadata": {}}
+    set_io_token_rate_limit_request_kwargs(socket_open, opens_responses_socket=True, metadata_channel="metadata")
+
+    assert await async_io_token_pre_call_check(usage, dict(_ITPM_350_DEPLOYMENT)) == _ITPM_350_DEPLOYMENT
+    assert usage.get_local(_ITPM_350_KEY) == 310
+
+
+def _typed_user_message(text: str) -> dict[str, object]:
+    return {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
+async def test_an_http_request_whose_string_list_input_would_pass_the_itpm_limit_is_refused_like_its_string() -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
+    string_refusal: Final = await _itpm_350_refusal(
+        usage, {"input": _INPUT_PAST_40_TOKENS}, opens_responses_socket=False
+    )
+
+    string_list_refusal: Final = await _itpm_350_refusal(
+        usage, {"input": [_INPUT_PAST_40_TOKENS]}, opens_responses_socket=False
+    )
+
+    assert string_list_refusal == string_refusal
+    assert usage.get_local(_ITPM_350_KEY) == 310
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
+async def test_a_conversation_item_list_larger_than_itpm_is_not_refused_on_http_or_a_socket_turn() -> None:
+    usage: Final = _memory_usage()
+    conversation: Final = {"input": [_typed_user_message(_INPUT_PAST_40_TOKENS * 100)]}
+    set_io_token_rate_limit_request_kwargs(
+        {**conversation, "metadata": {}}, opens_responses_socket=False, metadata_channel="metadata"
+    )
+
+    assert await async_io_token_pre_call_check(usage, dict(_ITPM_350_DEPLOYMENT)) == _ITPM_350_DEPLOYMENT
+    turn: Final = await async_admit_io_token_turn(usage, _ITPM_350_DEPLOYMENT, _TURN_AT, conversation)
+
+    assert _counter_in(turn[ITPM_COUNTER_KEY]) == _ITPM_350_KEY
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
+@pytest.mark.parametrize(
+    "extra_field",
+    [
+        pytest.param({"prompt": "x"}, id="prompt"),
+        pytest.param({"messages": [{"role": "user", "content": "x"}]}, id="messages"),
+    ],
+)
+async def test_an_extra_frame_field_does_not_shrink_a_socket_turn_s_input_estimate(
+    extra_field: Mapping[str, object],
+) -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
+    http_refusal: Final = await _itpm_350_refusal(usage, {"input": _INPUT_PAST_40_TOKENS}, opens_responses_socket=False)
+
+    with pytest.raises(litellm.RateLimitError) as turn_refusal:
+        await async_admit_io_token_turn(
+            usage, _ITPM_350_DEPLOYMENT, _TURN_AT, {"input": _INPUT_PAST_40_TOKENS, **extra_field}
+        )
+
+    assert str(turn_refusal.value) == http_refusal
+
+
+_TURN_WITH_A_LARGE_INPUT_AND_OUTPUT_CAP: Final[Mapping[str, object]] = MappingProxyType(
+    {"input": _INPUT_PAST_40_TOKENS * 10, "max_output_tokens": 1000}
+)
+
+
+@pytest.mark.asyncio
+async def test_an_otpm_limited_turn_below_the_limit_is_admitted_whatever_its_input_and_output_cap() -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_turn_key("otpm"), 99, 60))
+
+    admitted: Final = await async_admit_io_token_turn(
+        usage, _turn_deployment("otpm"), _TURN_AT, _TURN_WITH_A_LARGE_INPUT_AND_OUTPUT_CAP
+    )
+
+    assert _counter_in(admitted[OTPM_COUNTER_KEY]) == _turn_key("otpm")
+    assert usage.get_local(_turn_key("otpm")) == 99
+
+
+@pytest.mark.asyncio
+async def test_an_otpm_limited_turn_at_the_limit_is_refused_reporting_only_the_minutes_count() -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_turn_key("otpm"), 100, 60))
+
+    with pytest.raises(litellm.RateLimitError, match=r"OTPM limit=100, current usage=100(\.0)?$"):
+        await async_admit_io_token_turn(
+            usage, _turn_deployment("otpm"), _TURN_AT, _TURN_WITH_A_LARGE_INPUT_AND_OUTPUT_CAP
+        )
 
 
 _HELD_DEPLOYMENT: Final = {
@@ -2198,7 +2402,7 @@ async def test_a_stashed_reservation_counts_under_mains_redis_keys() -> None:
         "model_info": {"id": "dep-1"},
     }
 
-    reservation: Final = await async_admit_io_token_turn(usage, deployment, _TURN_AT)
+    reservation: Final = await async_admit_io_token_turn(usage, deployment, _TURN_AT, _EMPTY_TURN)
     await async_io_token_reconcile_success(usage, _proxy_success_kwargs(reservation), _reply_using(5, 2))
 
     assert usage.snapshot() == {

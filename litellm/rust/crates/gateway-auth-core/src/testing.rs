@@ -10,13 +10,14 @@ use serde_json::Value;
 use crate::{
     AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
     authn::{
-        jwt::{KeyMappingRow, KeyMappingWrite, MappedJwt, MappedKey},
+        jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
         key::{CachedTeam, KeyRecord, Keyed},
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
-            RegisteredAgent, TeamRead, User, UserLookup, UserRead,
+            RegisteredAgent, Team, TeamRead, User, UserLookup, UserRead,
         },
         key::Owner,
     },
@@ -57,6 +58,7 @@ pub(crate) struct ScriptedHost {
     /// Host calls that fail, by the name they record under.
     pub(crate) failing: HashMap<&'static str, Error>,
     pub(crate) teams: HashMap<&'static str, Result<TeamRead<String>, Error>>,
+    pub(crate) team_rosters: HashMap<&'static str, Vec<&'static str>>,
     pub(crate) aliases: HashMap<&'static str, Result<AliasRead<String>, Error>>,
     pub(crate) membership_fails: bool,
     /// Team rows whose model access the host allows.
@@ -83,6 +85,8 @@ pub(crate) struct ScriptedHost {
     pub(crate) delegated_team: Option<&'static str>,
     /// The JWT `finish_jwt` last finished an auto-registered key for.
     pub(crate) finished_mapping: Mutex<Option<MappedJwt<String>>>,
+    /// Stored credentials by name.
+    pub(crate) credentials: HashMap<&'static str, Params>,
     pub(crate) calls: Mutex<Vec<String>>,
 }
 
@@ -103,6 +107,14 @@ fn keyed(record: &KeyRecord, label: &str) -> Keyed<String> {
     }
 }
 
+/// The key the script records a claim's mapping under.
+fn mapping_key(claim: MappedClaim<'_>) -> String {
+    match claim.issuer.filter(|issuer| !issuer.is_empty()) {
+        None => format!("jwt_key_mapping:{}:{}", claim.field, claim.value),
+        Some(issuer) => format!("jwt_key_mapping:{issuer}:{}:{}", claim.field, claim.value),
+    }
+}
+
 impl ScriptedHost {
     fn record(&self, call: impl Into<String>) {
         self.calls.lock().unwrap().push(call.into());
@@ -112,6 +124,20 @@ impl ScriptedHost {
     fn step(&self, name: &'static str, call: impl Into<String>) -> Result<(), Error> {
         self.record(call);
         self.failing.get(name).cloned().map_or(Ok(()), Err)
+    }
+
+    fn cached(&self, key: &str) -> Result<Option<Value>, Error> {
+        self.record(format!("get {key}"));
+        Ok(self.json_cache.lock().unwrap().get(key).cloned())
+    }
+
+    fn cache(&self, key: &str, value: &Value, ttl: Duration) -> Result<(), Error> {
+        self.record(format!("set {key} {}", ttl.as_secs_f64()));
+        self.json_cache
+            .lock()
+            .unwrap()
+            .insert(key.to_owned(), value.clone());
+        Ok(())
     }
 
     pub(crate) fn calls(&self) -> Vec<String> {
@@ -178,6 +204,10 @@ impl AuthHost for ScriptedHost {
     async fn with_team(&self, key: &String, team: &String) -> Result<String, Error> {
         self.step("with_team", format!("with_team {key} {team}"))?;
         Ok(format!("{key}+team"))
+    }
+    async fn credential(&self, name: &str) -> Result<Option<Params>, Error> {
+        self.step("credential", format!("credential {name}"))?;
+        Ok(self.credentials.get(name).cloned())
     }
     async fn db_key(&self, _: &KeyHash, end_user: &String) -> Result<Option<Keyed<String>>, Error> {
         self.step("db_key", format!("db_key {end_user}"))?;
@@ -264,21 +294,27 @@ impl AuthHost for ScriptedHost {
         self.record(format!("userinfo {endpoint} {}", token.expose()));
         Ok(self.userinfo.clone())
     }
-    async fn cached_json(&self, key: &str) -> Result<Option<Value>, Error> {
-        self.record(format!("get {key}"));
-        Ok(self.json_cache.lock().unwrap().get(key).cloned())
+    async fn cached_document(&self, key: &str) -> Result<Option<Value>, Error> {
+        self.cached(key)
     }
-    async fn cache_json(&self, key: &str, value: &Value, ttl: Duration) -> Result<(), Error> {
-        self.record(format!("set {key} {}", ttl.as_secs_f64()));
-        self.json_cache
-            .lock()
-            .unwrap()
-            .insert(key.to_owned(), value.clone());
-        Ok(())
+    async fn cache_document(&self, key: &str, value: &Value, ttl: Duration) -> Result<(), Error> {
+        self.cache(key, value, ttl)
     }
-    async fn forget_json(&self, key: &str) -> Result<(), Error> {
+    async fn cached_key_mapping(&self, claim: MappedClaim<'_>) -> Result<Option<Value>, Error> {
+        self.cached(&mapping_key(claim))
+    }
+    async fn cache_key_mapping(
+        &self,
+        claim: MappedClaim<'_>,
+        value: &Value,
+        ttl: Duration,
+    ) -> Result<(), Error> {
+        self.cache(&mapping_key(claim), value, ttl)
+    }
+    async fn forget_key_mapping(&self, claim: MappedClaim<'_>) -> Result<(), Error> {
+        let key = mapping_key(claim);
         self.record(format!("forget {key}"));
-        self.json_cache.lock().unwrap().remove(key);
+        self.json_cache.lock().unwrap().remove(&key);
         Ok(())
     }
 
@@ -298,6 +334,22 @@ impl AuthHost for ScriptedHost {
             .get(alias)
             .cloned()
             .unwrap_or(Ok(AliasRead::Absent))
+    }
+    async fn bind_team_member(
+        &self,
+        mut team: Team<String>,
+        user_id: &str,
+    ) -> Result<Team<String>, Error> {
+        if let Some(roster) = self.team_rosters.get(team.team_id.as_str()) {
+            self.record(format!("bind_team_member {} {user_id}", team.team_id));
+            team.members = roster
+                .iter()
+                .filter(|id| **id == user_id)
+                .map(ToString::to_string)
+                .collect();
+            team.row = format!("{} {user_id}", team.row);
+        }
+        Ok(team)
     }
     async fn granting_team(&self, team_id: &str) -> Result<TeamRead<String>, Error> {
         self.record(format!("granting_team {team_id}"));

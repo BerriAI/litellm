@@ -12,12 +12,14 @@ import sys
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Final
+from typing import Annotated, Final, Literal
 
 import anyio
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
@@ -1111,7 +1113,11 @@ class _FailureRecorder(CustomLogger):
         self.failures: tuple[object, ...] = ()
 
     async def async_log_failure_event(
-        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
     ) -> None:
         self.failures = (*self.failures, kwargs.get("exception"))
 
@@ -1253,3 +1259,381 @@ def test_closing_a_sync_stream_while_another_task_reads_ends_that_read_without_r
     assert provider_stream.closed
     assert not provider_stream.read_after_close
     assert failure_recorder.failures == ()
+
+
+_RESPONSE_COMPLETED: Final = (
+    b'data: {"type": "response.completed", "response": {"id": "resp_1", "status": "completed", "output": []}}\n\n'
+)
+_PARALLEL_CALLS: Final = (
+    ("fc_a", "call_98145f1b9bdb40fc82c5b2415ed291a5", "read_file", '{"path": "notes/a.md"}'),
+    ("fc_b", "call_0c8a1d2e3f4b5a6978695a4b3c2d1e0f", "run_command", '{"cmd": ["ls", "-la"]}'),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCallStreamShape:
+    argument_deltas: tuple[str, ...] = ()
+    deltas_carry_item_id: bool = True
+    sends_arguments_done: bool = True
+    output_item_done_carries_arguments: bool = True
+
+
+def _halves(arguments: str) -> tuple[str, ...]:
+    return (arguments[: len(arguments) // 2], arguments[len(arguments) // 2 :])
+
+
+class _ToolCallProviderStream(httpx.AsyncByteStream):
+    def __init__(
+        self,
+        shape: _ToolCallStreamShape,
+        split_arguments: Callable[[str], tuple[str, ...]],
+        created: bytes = _RESPONSE_CREATED,
+        hangs_before_completing: bool = False,
+    ) -> None:
+        self._shape: Final = shape
+        self._split_arguments: Final = split_arguments
+        self._created: Final = created
+        self._hangs_before_completing: Final = hangs_before_completing
+
+    def call_events(
+        self, output_index: int, item_id: str, call_id: str, name: str, arguments: str
+    ) -> Iterator[Mapping[str, object]]:
+        item: Final = {"type": "function_call", "id": item_id, "call_id": call_id, "name": name}
+        yield {
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": {**item, "arguments": "", "status": "in_progress"},
+        }
+        for piece in self._split_arguments(arguments):
+            yield {
+                "type": "response.function_call_arguments.delta",
+                "output_index": output_index,
+                "delta": piece,
+                **({"item_id": item_id} if self._shape.deltas_carry_item_id else {}),
+            }
+        if self._shape.sends_arguments_done:
+            yield {
+                "type": "response.function_call_arguments.done",
+                "output_index": output_index,
+                "item_id": item_id,
+                "arguments": arguments,
+            }
+        yield {
+            "type": "response.output_item.done",
+            "output_index": output_index,
+            "item": {
+                **item,
+                "arguments": arguments if self._shape.output_item_done_carries_arguments else "",
+                "status": "completed",
+            },
+        }
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._created
+        for output_index, call in enumerate(_PARALLEL_CALLS):
+            for event in self.call_events(output_index, *call):
+                yield f"data: {json.dumps(event)}\n\n".encode()
+        if self._hangs_before_completing:
+            await asyncio.Event().wait()
+        yield _RESPONSE_COMPLETED
+
+
+def _delta(chunk: Mapping[str, object], key: str) -> object:
+    delta: Final = chunk["delta"]
+    assert isinstance(delta, Mapping)
+    return delta[key]
+
+
+def _streamed_tool_uses(provider_stream: _ToolCallProviderStream) -> tuple[tuple[str, str, str | None], ...]:
+    async def _run() -> list[Mapping[str, object]]:
+        upstream: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_that_records_failures(_FailureRecorder()),
+        )
+        return [chunk async for chunk in AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m")]
+
+    events: Final = tuple(
+        _BLOCK_EVENT.validate_python(chunk) for chunk in asyncio.run(_run()) if chunk["type"] in _BLOCK_EVENT_TYPES
+    )
+    return tuple(
+        (event.content_block.id, event.content_block.name, _input_before_block_stop(events, event.index))
+        for event in events
+        if isinstance(event, _BlockStart)
+    )
+
+
+class _ToolUseBlock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: str
+    name: str
+
+
+class _BlockStart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_start"]
+    index: int
+    content_block: _ToolUseBlock
+
+
+class _InputJsonDelta(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    partial_json: str
+
+
+class _BlockDelta(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_delta"]
+    index: int
+    delta: _InputJsonDelta
+
+
+class _BlockStop(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_stop"]
+    index: int
+
+
+_BlockEvent = Annotated[_BlockStart | _BlockDelta | _BlockStop, Field(discriminator="type")]
+_BLOCK_EVENT: Final[TypeAdapter[_BlockEvent]] = TypeAdapter(_BlockEvent)
+_BLOCK_EVENT_TYPES: Final = frozenset({"content_block_start", "content_block_delta", "content_block_stop"})
+
+
+def _input_before_block_stop(events: tuple[_BlockEvent, ...], index: int) -> str | None:
+    stop: Final = next(
+        (pos for pos, event in enumerate(events) if isinstance(event, _BlockStop) and event.index == index), None
+    )
+    if stop is None:
+        return None
+    return "".join(
+        event.delta.partial_json for event in events[:stop] if isinstance(event, _BlockDelta) and event.index == index
+    )
+
+
+def _no_deltas(arguments: str) -> tuple[str, ...]:
+    return ()
+
+
+def _one_empty_delta(arguments: str) -> tuple[str, ...]:
+    return ("",)
+
+
+@pytest.mark.parametrize(
+    ("shape", "split_arguments"),
+    [
+        (_ToolCallStreamShape(), _no_deltas),
+        (_ToolCallStreamShape(sends_arguments_done=False), _no_deltas),
+        (_ToolCallStreamShape(output_item_done_carries_arguments=False), _no_deltas),
+        (_ToolCallStreamShape(output_item_done_carries_arguments=False), _one_empty_delta),
+        (_ToolCallStreamShape(), _halves),
+        (_ToolCallStreamShape(sends_arguments_done=False), _halves),
+        (_ToolCallStreamShape(deltas_carry_item_id=False), _halves),
+    ],
+    ids=[
+        "done_events_only",
+        "output_item_done_only",
+        "arguments_done_only",
+        "empty_delta_then_arguments_done",
+        "deltas_then_done_events",
+        "deltas_then_output_item_done",
+        "deltas_without_item_id",
+    ],
+)
+def test_each_parallel_tool_use_streams_its_arguments_exactly_once(
+    shape: _ToolCallStreamShape, split_arguments: Callable[[str], tuple[str, ...]]
+):
+    tool_uses: Final = _streamed_tool_uses(_ToolCallProviderStream(shape, split_arguments))
+
+    assert tool_uses == tuple((call_id, name, arguments) for _, call_id, name, arguments in _PARALLEL_CALLS)
+
+
+_CREATED_TOOL_RESPONSE_EVENT: Final[Mapping[str, object]] = {
+    "type": "response.created",
+    "sequence_number": 0,
+    "response": {
+        "id": "resp_tools",
+        "object": "response",
+        "created_at": 1700000000.0,
+        "model": "gpt-5.4-nano",
+        "status": "in_progress",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+    },
+}
+
+
+async def _read_until_blocks_close(sse: AnthropicResponsesSSEByteStream, open_blocks: int) -> None:
+    if open_blocks == 0:
+        return
+    frame: Final = await sse.__anext__()
+    await _read_until_blocks_close(sse, open_blocks - (b'"content_block_stop"' in frame))
+
+
+def _output_tokens_billed_on_disconnect(
+    shape: _ToolCallStreamShape, split_arguments: Callable[[str], tuple[str, ...]]
+) -> int | None:
+    async def _disconnect_after_the_tool_calls() -> int | None:
+        upstream: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(
+                200,
+                stream=_ToolCallProviderStream(
+                    shape,
+                    split_arguments,
+                    created=f"data: {json.dumps(_CREATED_TOOL_RESPONSE_EVENT)}\n\n".encode(),
+                    hangs_before_completing=True,
+                ),
+            ),
+            model="gpt-5.4-nano",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_that_records_failures(_FailureRecorder()),
+            request_data={"model": "gpt-5.4-nano", "input": "read the notes and list the files"},
+            custom_llm_provider="openai",
+        )
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        await _read_until_blocks_close(sse, len(_PARALLEL_CALLS))
+        partial: Final = sse.partial_response_on_disconnect()
+        await sse.aclose()
+        return partial.response.usage.output_tokens if partial is not None and partial.response.usage else None
+
+    return asyncio.run(_disconnect_after_the_tool_calls())
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        _ToolCallStreamShape(),
+        _ToolCallStreamShape(sends_arguments_done=False),
+        _ToolCallStreamShape(output_item_done_carries_arguments=False),
+    ],
+    ids=["done_events_only", "output_item_done_only", "arguments_done_only"],
+)
+def test_a_disconnect_after_done_only_tool_calls_bills_the_arguments_the_client_received(shape: _ToolCallStreamShape):
+    billed_for_done_only: Final = _output_tokens_billed_on_disconnect(shape, _no_deltas)
+    billed_for_deltas: Final = _output_tokens_billed_on_disconnect(_ToolCallStreamShape(), _halves)
+
+    assert billed_for_deltas
+    assert billed_for_done_only == billed_for_deltas
+
+
+def test_an_mcp_call_streams_as_its_tool_use_and_result_blocks_before_the_answer() -> None:
+    call: Final = {
+        "type": "mcp_call",
+        "id": "mcp_0abc",
+        "server_label": "docs",
+        "name": "read_wiki_structure",
+        "arguments": '{"repoName": "BerriAI/litellm"}',
+        "output": "1 Overview",
+        "error": None,
+    }
+
+    chunks: Final = _process_all(
+        [
+            {"type": "response.output_item.added", "item": {**call, "arguments": "", "output": None}},
+            {"type": "response.mcp_call_arguments.delta", "item_id": "mcp_0abc", "delta": '{"repoName"'},
+            {"type": "response.output_item.done", "item": call},
+            {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+            {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Overview"},
+            {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+        ]
+    )
+
+    assert chunks == [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "mcp_tool_use",
+                "id": "mcp_0abc",
+                "name": "read_wiki_structure",
+                "server_name": "docs",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"repoName": "BerriAI/litellm"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcp_0abc",
+                "is_error": False,
+                "content": [{"type": "text", "text": "1 Overview"}],
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Overview"}},
+        {"type": "content_block_stop", "index": 2},
+    ]
+
+
+class TestClientToolSearchStream:
+    @staticmethod
+    def _search_turn() -> list[object]:
+        done_item: Final = {
+            "type": "tool_search_call",
+            "id": "tsc_1",
+            "call_id": "call_search",
+            "execution": "client",
+            "arguments": {"query": "weather forecast"},
+            "status": "completed",
+        }
+        return [
+            {"type": "response.created"},
+            {
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "call_id": "call_search",
+                    "execution": "client",
+                    "arguments": {},
+                    "status": "in_progress",
+                },
+            },
+            {"type": "response.output_item.done", "item": done_item},
+            {"type": "response.completed", "response": SimpleNamespace(output=[done_item], status="completed")},
+        ]
+
+    @staticmethod
+    def _drain(events: list[object], tool_search_name: str | None) -> list[Mapping[str, object]]:
+        async def _gen() -> AsyncIterator[object]:
+            for event in events:
+                yield event
+
+        async def _run() -> list[Mapping[str, object]]:
+            wrapper: Final = AnthropicResponsesStreamWrapper(
+                responses_stream=_gen(), model="m", tool_search_name=tool_search_name
+            )
+            return [chunk async for chunk in wrapper]
+
+        return asyncio.run(_run())
+
+    def test_search_call_streams_as_one_search_tool_use_and_stops_for_the_tool(self):
+        chunks: Final = self._drain(self._search_turn(), "ToolSearch")
+
+        assert [c["content_block"] for c in chunks if c["type"] == "content_block_start"] == [
+            {"type": "tool_use", "id": "call_search", "name": "ToolSearch", "input": {}}
+        ]
+        streamed_input: Final = "".join(
+            str(_delta(c, "partial_json"))
+            for c in chunks
+            if c["type"] == "content_block_delta" and _delta(c, "type") == "input_json_delta"
+        )
+        assert json.loads(streamed_input) == {"query": "weather forecast"}
+        assert [c["type"] for c in chunks if c["type"] == "content_block_stop"] == ["content_block_stop"]
+        assert [_delta(c, "stop_reason") for c in chunks if c["type"] == "message_delta"] == ["tool_use"]
+
+    def test_search_call_is_not_a_tool_use_without_a_client_search_tool(self):
+        chunks: Final = self._drain(self._search_turn(), None)
+
+        assert not [c for c in chunks if c["type"] == "content_block_start"]
+        assert [_delta(c, "stop_reason") for c in chunks if c["type"] == "message_delta"] == ["end_turn"]

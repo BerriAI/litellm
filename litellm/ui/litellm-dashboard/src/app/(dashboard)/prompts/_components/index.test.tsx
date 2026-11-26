@@ -90,6 +90,7 @@ describe("PromptsPanel toolbar", () => {
   it("should offer both create actions to a proxy admin", async () => {
     renderPanel("Admin");
 
+    expect(screen.getByRole("heading", { level: 1, name: "Prompts" })).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: /add new prompt/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /upload \.prompt file/i })).toBeEnabled();
   });

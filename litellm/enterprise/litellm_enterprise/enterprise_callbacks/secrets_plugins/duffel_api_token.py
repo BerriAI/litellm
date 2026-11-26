@@ -15,7 +15,7 @@ class DuffelApiTokenDetector(RegexBasedDetector):
         return "Duffel API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Duffel API Token
             re.compile(r"""(?i)duffel_(test|live)_[a-z0-9_\-=]{43}"""),

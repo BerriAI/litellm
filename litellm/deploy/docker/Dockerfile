@@ -14,6 +14,21 @@ ARG PGBOUNCER_SHA256=afd25dd61ee6775d37b40629b87ce08736b3e6955f3057bb212e410fbf2
 
 FROM $UV_IMAGE AS uvbin
 
+FROM $LITELLM_BUILD_IMAGE AS prisma-openssl-builder
+ARG OPENSSL_VERSION=3.5.9
+ARG OPENSSL_SHA256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+USER root
+RUN apk add --no-cache build-base perl curl
+WORKDIR /build
+RUN curl -fsSL -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz" && \
+    echo "${OPENSSL_SHA256}  openssl.tar.gz" | sha256sum -c - && \
+    tar xzf openssl.tar.gz --strip-components=1 && \
+    ./Configure --prefix=/opt/prisma-openssl --openssldir=/opt/prisma-openssl/ssl shared no-tests && \
+    make -s -j"$(nproc)" build_libs && \
+    mkdir -p /runtime/usr/lib /runtime/opt/prisma-openssl/ssl && \
+    install -m 0755 libssl.so.3 libcrypto.so.3 /runtime/usr/lib/ && \
+    ln -s /etc/ssl/cert.pem /etc/ssl/certs /runtime/opt/prisma-openssl/ssl/
+
 FROM $LITELLM_BUILD_IMAGE AS pgbouncer-builder
 ARG PGBOUNCER_VERSION
 ARG PGBOUNCER_SHA256
@@ -39,7 +54,6 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 WORKDIR /ui
 
 COPY litellm/ui/litellm-dashboard/package.json litellm/ui/litellm-dashboard/package-lock.json ./
-COPY litellm/ui/litellm-dashboard/vendor/ ./vendor/
 RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
 
 COPY litellm/ui/litellm-dashboard/ ./
@@ -156,10 +170,12 @@ USER root
 RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
 
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash openssl libssl3 tzdata nodejs python-3.13 libsndfile libatomic libevent nginx && break; \
+      apk add --no-cache bash openssl-4.0 '!libssl3' '!libcrypto3' tzdata nodejs python-3.13 libsndfile libatomic libevent nginx && break; \
       [ "$i" = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
       sleep 5; \
     done
+COPY --from=prisma-openssl-builder /runtime/ /
+RUN ldconfig
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app

@@ -9,6 +9,7 @@ so reads return the stored values verbatim.
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.credentials import CredentialItem
 from litellm.repositories.base_repository import DbRecord, record_to_dict
 from litellm.repositories.prisma_protocols import TableActions
@@ -42,8 +43,9 @@ class CredentialsRepository:
 
     @property
     def prisma_client(self) -> _PrismaClientView:
-        client: Final[_PrismaClientView] = _CredentialsTableRepository(self._prisma_client).prisma_client
-        return client
+        if self._prisma_client is None:
+            raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
+        return require_attributes(self._prisma_client, _PrismaClientView, "db")
 
     @property
     def table(self) -> "_CredentialsTable":

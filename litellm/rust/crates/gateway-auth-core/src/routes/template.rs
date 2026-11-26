@@ -4,8 +4,8 @@ use litellm_starlette::{Convertor, Param, RouteTemplate};
 
 /// A route template matched as `RouteChecks._route_matches_pattern` matches it: every parameter
 /// takes one or more characters up to a `/`, whatever its convertor, and a `{name:path}` one or
-/// more of any character, or of any but `:` when the template has a `:` after it. Literal text is
-/// compared exactly.
+/// more of any character, or zero or more when the template has a `:` after it.
+/// Literal text is compared exactly.
 #[derive(Debug)]
 pub(super) struct Template(RouteTemplate);
 
@@ -16,22 +16,22 @@ impl Template {
 
     pub(super) fn matches(&self, route: &str) -> bool {
         self.0.matches_with(route, |param, rest| {
-            let limit = match param {
+            let (shortest, limit) = match param {
                 Param {
                     convertor: Convertor::Path,
                     colon_after: true,
-                } => rest.find(':').unwrap_or(rest.len()),
+                } => (0, rest.len()),
                 Param {
                     convertor: Convertor::Path,
                     colon_after: false,
-                } => rest.len(),
-                Param { .. } => rest.find('/').unwrap_or(rest.len()),
+                } => (1, rest.len()),
+                Param { .. } => (1, rest.find('/').unwrap_or(rest.len())),
             };
             Box::new(
                 rest.char_indices()
                     .map(|(index, _)| index)
                     .chain([rest.len()])
-                    .filter(move |index| *index >= 1 && *index <= limit),
+                    .filter(move |index| *index >= shortest && *index <= limit),
             )
         })
     }
@@ -99,20 +99,25 @@ mod tests {
         "/v1/mcp/server/a:b",
         true
     )]
-    #[case::path_stops_before_the_templates_colon(
+    #[case::path_takes_colons_before_the_templates_colon(
         "/models/{model_name:path}:generateContent",
         "/models/a:b:generateContent",
-        false
+        true
     )]
-    #[case::path_never_swallows_another_verb(
+    #[case::path_takes_another_verb_before_its_own(
         "/models/{model_name:path}:countTokens",
+        "/models/a:generateContent:countTokens",
+        true
+    )]
+    #[case::path_still_ends_in_the_templates_verb(
+        "/models/{model_name:path}:generateContent",
         "/models/a:generateContent:countTokens",
         false
     )]
-    #[case::path_before_colon_needs_a_char(
+    #[case::path_before_colon_may_be_empty(
         "/models/{model_name:path}:generateContent",
         "/models/:generateContent",
-        false
+        true
     )]
     #[case::literal_after_param(
         "/claude-code/plugins/{plugin_name}/archive/{digest}.zip",

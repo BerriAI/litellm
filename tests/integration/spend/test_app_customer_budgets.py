@@ -3,13 +3,19 @@ import uuid
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from datetime import datetime
+from itertools import product
 from math import isclose
+from pathlib import Path
 from typing import Final
 
 import httpx
+import psycopg
 import pytest
+import yaml
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.types.proxy.management_endpoints.app_groups import AppGroup
 from litellm.types.proxy.management_endpoints.apps import (
     AppDefinition,
     AppResource,
@@ -20,10 +26,11 @@ from tests.integration._support.client import (
     JSON_OBJECT,
     Gateway,
     Scenario,
+    delete_key_if_present,
     eventually,
     string_value,
 )
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import CONFIGURATION, owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
 _APPS: Final = "/management/v1/apps"
@@ -44,7 +51,15 @@ def app_gateway(
     resource_type: Final = TypeAdapter(AppResourceType).validate_python(
         request.param  # pyright: ignore[reportAny]  # pytest parameters are untyped and validated at this boundary
     )
-    with owned_proxy(session_gateway, directory, {}, workers=2) as candidate:
+    config: Final = directory / "config.yaml"
+    base: Final = CONFIGURATION.validate_python(
+        yaml.safe_load((Path(__file__).parents[1] / "proxy_config.yaml").read_text())
+    )
+    general: Final = CONFIGURATION.validate_python(base["general_settings"])
+    _ = config.write_text(
+        yaml.safe_dump({**base, "general_settings": {**general, "customer_budget_response_headers": True}})
+    )
+    with owned_proxy(session_gateway, directory, {}, config=config, workers=2) as candidate:
         unset: Final = candidate.request("GET", f"{_APPS}/definition")
         assert AppDefinition.model_validate_json(unset.content).resource_type is None
         configured: Final = candidate.request("PUT", f"{_APPS}/definition", {"resource_type": resource_type.value})
@@ -132,7 +147,13 @@ def _customer(scenario: Scenario) -> Customer:
     return Customer(organization, organization, member, other)
 
 
-def _app(scenario: Scenario, model: str, name: str) -> tuple[str, str]:
+def _rotatable_key(scenario: Scenario, **fields: JsonValue) -> str:
+    key: Final = string_value(scenario.gateway.post("/key/generate", fields)["key"])
+    scenario.cleanups.callback(delete_key_if_present, scenario.gateway, key)
+    return key
+
+
+def _app(scenario: Scenario, model: str, name: str, *, rotatable: bool = False) -> tuple[str, str]:
     alias: Final = f"{name}-{uuid.uuid4().hex}"
     definition: Final = scenario.gateway.request("GET", f"{_APPS}/definition")
     resource_type: Final = AppDefinition.model_validate_json(definition.content).resource_type
@@ -142,7 +163,13 @@ def _app(scenario: Scenario, model: str, name: str) -> tuple[str, str]:
         if resource_type is AppResourceType.PROJECT
         else None
     )
-    key: Final = scenario.key(team_id=team, project_id=project, models=[model], key_alias=alias)
+    key_fields: Final[dict[str, JsonValue]] = {
+        "team_id": team,
+        "project_id": project,
+        "models": [model],
+        "key_alias": alias,
+    }
+    key: Final = _rotatable_key(scenario, **key_fields) if rotatable else scenario.key(**key_fields)
     discovered: Final = scenario.gateway.request("GET", f"{_APPS}/resources")
     assert discovered.status_code == 200, discovered.text
     resources: Final = TypeAdapter(tuple[AppResource, ...]).validate_json(discovered.content)
@@ -167,12 +194,12 @@ def _budget(gateway: Gateway, app_id: str, customer: Customer, maximum: float) -
     assert response.status_code == 200, response.text
 
 
-def _profile(gateway: Gateway) -> str:
-    current: Final = BudgetGroups.model_validate_json(gateway.request("GET", _PROFILES).content)
+def _profile(gateway: Gateway, catalog: str = _PROFILES) -> str:
+    current: Final = BudgetGroups.model_validate_json(gateway.request("GET", catalog).content)
     name: Final = f"profile-{uuid.uuid4().hex}"
     response: Final = gateway.request(
         "PATCH",
-        _PROFILES,
+        catalog,
         {
             "expected_revision": current.budget_groups_revision,
             "default_budget_template": None,
@@ -185,6 +212,41 @@ def _profile(gateway: Gateway) -> str:
     assert response.status_code == 200, response.text
     groups: Final = BudgetGroups.model_validate_json(response.content)
     return next(group.budget_id for group in groups.default_budgets if group.name == name)
+
+
+@pytest.mark.parametrize("scope", ("member", "organization"))
+def test_member_template_assignment_and_app_update_both_commit(app_gateway: Gateway, scope: str) -> None:
+    with app_gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=2) as pool:
+        customer: Final = _customer(scenario)
+        app_id, _ = _app(scenario, "all-proxy-models", "member-template")
+        profile: Final = _profile(app_gateway, "/management/v1/app_customer_member_budget_groups")
+        path, field = (
+            (f"customer_members/{customer.member}", "budget_id")
+            if scope == "member"
+            else (f"customer_organizations/{customer.organization}", "customer_member_budget_id")
+        )
+        assert app_gateway.database_url is not None
+        with psycopg.connect(app_gateway.database_url) as blocking:
+            blocking.execute(
+                'SELECT 1 FROM "LiteLLM_Config" WHERE param_name = %s FOR UPDATE', ("customer_app_definition",)
+            )
+            waiters: Final = lambda: app_gateway.rows(
+                "WITH RECURSIVE blocked(pid) AS (SELECT pid FROM pg_stat_activity "
+                "WHERE %s::int = ANY(pg_blocking_pids(pid)) UNION SELECT a.pid FROM pg_stat_activity a "
+                "JOIN blocked b ON b.pid = ANY(pg_blocking_pids(a.pid))) SELECT count(*)::int AS waiting FROM blocked",
+                (str(blocking.info.backend_pid),),
+            )[0]["waiting"]
+            updating: Final = pool.submit(
+                app_gateway.request, "PATCH", f"{_APPS}/{app_id}", {"default_customer_member_budget_id": profile}
+            )
+            eventually(waiters, lambda count: count == 1)
+            assigning: Final = pool.submit(app_gateway.request, "PUT", f"{_APPS}/{app_id}/{path}", {field: profile})
+            eventually(waiters, lambda count: count == 2)
+            blocking.commit()
+        for response in (updating.result(timeout=15), assigning.result(timeout=15)):
+            assert response.status_code == 200, response.text
+        saved: Final = app_gateway.request("GET", f"{_APPS}/{app_id}/{path}")
+        assert saved.status_code == 200 and JSON_OBJECT.validate_json(saved.content)[field] == profile, saved.text
 
 
 def _chat(
@@ -335,6 +397,109 @@ def test_app_and_global_customer_budgets_enforce_independently_and_account_once(
         assert not tuple(request for request in wire.drain() if request.method == "POST")
 
 
+def _streamed(request: Request) -> Reply:
+    if b'"stream"' not in request.body:
+        return _reply(request)
+    chunk: Final = {"id": "chatcmpl-stream", "object": "chat.completion.chunk", "created": 1700000000, "model": "s"}
+    events: Final = (
+        {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None}]},
+        {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {**chunk, "choices": [], "usage": {"prompt_tokens": 20, "completion_tokens": 20, "total_tokens": 40}},
+    )
+    return Reply(
+        content_type="text/event-stream",
+        chunks=(*(f"data: {json.dumps(event)}\n\n".encode() for event in events), b"data: [DONE]\n\n"),
+    )
+
+
+def _budget_headers(response: httpx.Response, level: str) -> dict[str, str]:
+    prefix: Final = f"x-litellm-app-customer-{level}-"
+    return {name.removeprefix(prefix): value for name, value in response.headers.items() if name.startswith(prefix)}
+
+
+def test_responses_report_each_app_customer_budget_window_before_and_at_the_cap(app_gateway: Gateway) -> None:
+    with wire_server(_streamed) as wire, app_gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            api_base=f"{wire.url}/v1",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+        customer: Final = _customer(scenario)
+        app_id, key = _app(scenario, model, "headers")
+        configured: Final = app_gateway.request(
+            "PUT",
+            f"{_APPS}/{app_id}/customer_organizations/{customer.organization}",
+            {
+                "budget_override": {
+                    "budget_limits": [
+                        {"budget_duration": "1d", "max_budget": 0.1},
+                        {"budget_duration": "30d", "max_budget": 5},
+                    ]
+                },
+                "customer_member_budget": {"max_budget": 10},
+            },
+        )
+        assert configured.status_code == 200, configured.text
+
+        def spent(minimum: float) -> None:
+            eventually(
+                lambda: app_gateway.rows(
+                    'SELECT spend FROM "LiteLLM_AppCustomerOrgTable" WHERE app_id=%s AND customer_org_id=%s',
+                    (app_id, customer.organization),
+                ),
+                lambda rows: len(rows) == 1 and _spend(rows[0]) >= minimum,
+                seconds=70,
+            )
+
+        def windows(response: httpx.Response) -> dict[str, float]:
+            organization: Final = _budget_headers(response, "org")
+            assert {
+                f"{field}-{duration}"
+                for field, duration in product(
+                    ("spend", "max-budget", "remaining-budget", "budget-reset-at"), ("1d", "30d")
+                )
+            } == set(organization), response.headers
+            return {name: float(value) for name, value in organization.items() if "reset-at" not in name}
+
+        def expected(spend: float) -> dict[str, float]:
+            return {
+                "spend-1d": spend,
+                "max-budget-1d": 0.1,
+                "remaining-budget-1d": max(0.1 - spend, 0.0),
+                "spend-30d": spend,
+                "max-budget-30d": 5.0,
+                "remaining-budget-30d": 5.0 - spend,
+            }
+
+        first: Final = _chat(app_gateway, key, model, customer)
+        assert first.status_code == 200, first.text
+        assert windows(first) == expected(0.0)
+        assert _budget_headers(first, "member") == {"spend": "0.0", "max-budget": "10.0", "remaining-budget": "10.0"}
+        spent(_COST)
+
+        streamed: Final = app_gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "stream"}], "stream": True},
+            key=key,
+            headers={
+                "x-litellm-customer-org-alias": customer.alias,
+                "x-litellm-customer-member-id": customer.member,
+            },
+        )
+        assert streamed.status_code == 200 and "text/event-stream" in streamed.headers["content-type"], streamed.text
+        assert windows(streamed) == pytest.approx(expected(_COST))
+        spent(2 * _COST)
+
+        refused: Final = _chat(app_gateway, key, model, customer)
+        _blocked(refused)
+        assert windows(refused) == pytest.approx(expected(2 * _COST))
+        assert float(_budget_headers(refused, "member")["spend"]) == pytest.approx(2 * _COST)
+        assert datetime.fromisoformat(_budget_headers(refused, "org")["budget-reset-at-1d"]) < datetime.fromisoformat(
+            _budget_headers(refused, "org")["budget-reset-at-30d"]
+        )
+
+
 def test_member_override_blocks_only_that_member_within_its_app(
     app_gateway: Gateway,
 ) -> None:
@@ -380,7 +545,7 @@ def test_rotating_a_virtual_key_keeps_its_customer_app_budget_and_spend(
             output_cost_per_token=0.002,
         )
         customer: Final = _customer(scenario)
-        app_id, key = _app(scenario, model, "rotating")
+        app_id, key = _app(scenario, model, "rotating", rotatable=True)
         _budget(app_gateway, app_id, customer, 0.05)
         assert _chat(app_gateway, key, model, customer).status_code == 200
         eventually(
@@ -402,3 +567,120 @@ def test_rotating_a_virtual_key_keeps_its_customer_app_budget_and_spend(
             (app_id, customer.organization),
         )
         assert isclose(_spend(stored[0]), _COST)
+
+
+def _group(scenario: Scenario, budget: Mapping[str, JsonValue]) -> str:
+    from psycopg import sql
+
+    response: Final = scenario.gateway.request(
+        "POST", "/management/v1/app_groups", {"name": f"group-{uuid.uuid4().hex}", "budget": dict(budget)}
+    )
+    assert response.status_code == 201, response.text
+    identity: Final = string_value(JSON_OBJECT.validate_json(response.content)["app_group_id"])
+
+    def cleanup() -> None:
+        assert scenario.gateway.database_url is not None
+        with psycopg.connect(scenario.gateway.database_url) as connection:
+            connection.execute(
+                sql.SQL('UPDATE "LiteLLM_AppTable" SET app_group_id=NULL WHERE app_group_id=%s'), (identity,)
+            )
+            connection.execute(sql.SQL('DELETE FROM "LiteLLM_AppGroupTable" WHERE app_group_id=%s'), (identity,))
+
+    scenario.cleanups.callback(cleanup)
+    return identity
+
+
+def _group_spend(gateway: Gateway, group_id: str, expected: float) -> None:
+    rows: Final = eventually(
+        lambda: gateway.rows('SELECT spend FROM "LiteLLM_AppGroupTable" WHERE app_group_id=%s', (group_id,)),
+        lambda values: len(values) == 1 and _spend(values[0]) >= expected,
+        seconds=70,
+    )
+    assert _spend(rows[0]) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("duration", (None, "1mo"))
+def test_app_group_customer_and_app_caps_apply_independently_across_workers(
+    app_gateway: Gateway,
+    duration: str | None,
+) -> None:
+    with wire_server(_reply) as wire, app_gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            api_base=f"{wire.url}/v1", input_cost_per_token=0.001, output_cost_per_token=0.002
+        )
+        customer: Final = _customer(scenario)
+        other: Final = _customer(scenario)
+        group: Final = _group(scenario, {"max_budget": 10, "budget_duration": duration})
+        chat, chat_key = _app(scenario, model, "chat")
+        search, search_key = _app(scenario, model, "search")
+        for app_id in (chat, search):
+            bound: Final = app_gateway.request("PATCH", f"{_APPS}/{app_id}", {"app_group_id": group})
+            assert bound.status_code == 200, bound.text
+        child: Final = app_gateway.request(
+            "PATCH", f"{_APPS}/{chat}", {"budget": {"max_budget": 0.05, "budget_duration": duration}}
+        )
+        assert child.status_code == 200, child.text
+        pair: Final = app_gateway.request(
+            "PUT",
+            f"/management/v1/app_groups/{group}/customer_organizations/{customer.organization}",
+            {"budget": {"max_budget": 0.11, "budget_duration": duration}},
+        )
+        assert pair.status_code == 200, pair.text
+        assert app_gateway.request("GET", "/management/v1/app_groups", key=chat_key).status_code in (401, 403)
+        assert _chat(app_gateway, chat_key, model, customer).status_code == 200
+        _group_spend(app_gateway, group, _COST)
+        _blocked_on_every_worker(app_gateway, chat_key, model, customer)
+        assert _chat(app_gateway, search_key, model, customer).status_code == 200
+        _group_spend(app_gateway, group, 2 * _COST)
+        _blocked_on_every_worker(app_gateway, search_key, model, customer)
+        assert _chat(app_gateway, search_key, model, other).status_code == 200
+        _group_spend(app_gateway, group, 3 * _COST)
+        lowered: Final = app_gateway.request(
+            "PATCH", f"/management/v1/app_groups/{group}", {"budget": {"max_budget": 0.17, "budget_duration": duration}}
+        )
+        assert lowered.status_code == 200, lowered.text
+        updated: Final = AppGroup.model_validate_json(lowered.content)
+        assert updated.budget is not None and updated.budget.max_budget == 0.17
+        assert updated.budget_usage[0].spend == pytest.approx(3 * _COST)
+        wire.drain()
+        _blocked_on_every_worker(app_gateway, search_key, model, other)
+        assert not tuple(request for request in wire.drain() if request.method == "POST")
+        readback: Final = JSON_OBJECT.validate_json(
+            app_gateway.request("GET", f"/management/v1/app_groups/{group}").content
+        )
+        assert float(str(readback["spend"])) == pytest.approx(3 * _COST)
+
+
+def test_moving_an_app_preserves_historical_group_usage(app_gateway: Gateway) -> None:
+    from datetime import datetime, timezone
+
+    with wire_server(_reply) as wire, app_gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            api_base=f"{wire.url}/v1", input_cost_per_token=0.001, output_cost_per_token=0.002
+        )
+        customer: Final = _customer(scenario)
+        first: Final = _group(scenario, {"max_budget": 10})
+        second: Final = _group(scenario, {"max_budget": 10})
+        app_id, key = _app(scenario, model, "moving")
+        for group in (first, second):
+            bound: Final = app_gateway.request("PATCH", f"{_APPS}/{app_id}", {"app_group_id": group})
+            assert bound.status_code == 200, bound.text
+            assert _chat(app_gateway, key, model, customer).status_code == 200
+            _group_spend(app_gateway, group, _COST)
+        day: Final = datetime.now(timezone.utc).date().isoformat()
+        for group in (first, second):
+            response: Final = app_gateway.client.get(
+                "/management/v1/customer_organizations/daily/activity/aggregated",
+                headers={"Authorization": f"Bearer {app_gateway.key}"},
+                params={
+                    "customer_org_id": customer.organization,
+                    "app_group_id": group,
+                    "start_date": day,
+                    "end_date": day,
+                },
+            )
+            assert response.status_code == 200, response.text
+            metadata: Final = JSON_OBJECT.validate_python(JSON_OBJECT.validate_json(response.content)["metadata"])
+            assert float(str(metadata["total_spend"])) == pytest.approx(_COST)
+        totals: Final = app_gateway.rows('SELECT spend FROM "LiteLLM_AppTable" WHERE app_id=%s', (app_id,))
+        assert _spend(totals[0]) == pytest.approx(2 * _COST)

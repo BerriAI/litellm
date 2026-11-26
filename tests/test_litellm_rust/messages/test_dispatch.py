@@ -262,18 +262,16 @@ BEDROCK_INVOKE_MODEL: Final = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v
 @pytest.mark.parametrize(
     ("model", "target"),
     (
-        pytest.param(BEDROCK_INVOKE_MODEL, Target.BEDROCK_INVOKE, id="invoke"),
+        pytest.param(BEDROCK_INVOKE_MODEL, Target.MESSAGES, id="invoke"),
         pytest.param(
-            "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0", Target.BEDROCK_INVOKE, id="explicit-invoke"
+            "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0", Target.MESSAGES, id="explicit-invoke"
         ),
-        pytest.param(
-            "bedrock/us-west-2/us.anthropic.claude-sonnet-4-5-20250929-v1:0", Target.BEDROCK_INVOKE, id="regional"
-        ),
+        pytest.param("bedrock/us-west-2/us.anthropic.claude-sonnet-4-5-20250929-v1:0", Target.MESSAGES, id="regional"),
         pytest.param("bedrock/claude_platform/claude-sonnet-4-5", Target.MESSAGES, id="claude-platform"),
-        pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", Target.BEDROCK_MANTLE, id="mantle"),
-        pytest.param("bedrock_mantle/anthropic.claude-sonnet-5", Target.BEDROCK_MANTLE, id="bedrock-mantle"),
+        pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", Target.MESSAGES, id="mantle"),
+        pytest.param("bedrock_mantle/anthropic.claude-sonnet-5", Target.MESSAGES, id="bedrock-mantle"),
         pytest.param(
-            "bedrock_mantle/us-east-1/anthropic.claude-sonnet-5", Target.BEDROCK_MANTLE, id="bedrock-mantle-regional"
+            "bedrock_mantle/us-east-1/anthropic.claude-sonnet-5", Target.MESSAGES, id="bedrock-mantle-regional"
         ),
         pytest.param("bedrock_mantle/openai.gpt-oss-120b", Target.CHAT_COMPLETIONS, id="bedrock-mantle-non-claude"),
         pytest.param(
@@ -282,7 +280,7 @@ BEDROCK_INVOKE_MODEL: Final = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v
         pytest.param("bedrock/us.meta.llama3-2-11b-instruct-v1:0", Target.CHAT_COMPLETIONS, id="non-claude"),
     ),
 )
-def test_only_claude_on_bedrock_invoke_model_reaches_a_bedrock_invoke_target_rule(model: str, target: Target) -> None:
+def test_only_claude_bedrock_messages_routes_reach_the_messages_target(model: str, target: Target) -> None:
     python_result: Final = response(model)
     native_result: Final = response(model)
 
@@ -295,11 +293,21 @@ def test_only_claude_on_bedrock_invoke_model_reaches_a_bedrock_invoke_target_rul
         python=python,
         binding=messages_binding(lambda request: native_result),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, targets=frozenset({Target.BEDROCK_INVOKE})),),
+        rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, targets=frozenset({Target.MESSAGES})),),
     )
 
     assert dispatch.messages_target(model, None, None, None) is target
-    assert result is (native_result if target is Target.BEDROCK_INVOKE else python_result)
+    assert result is (native_result if target is Target.MESSAGES else python_result)
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-6.2-sol", "azure/gpt-6.1-sol"])
+def test_count_tokens_routes_a_native_deferred_tools_deployment_the_way_its_messages_call_goes(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+
+    assert dispatch.messages_target(model, None, {"deferred_tools": "native"}, None) is Target.RESPONSES
+    assert dispatch.messages_target(model, None, None, None) is Target.CHAT_COMPLETIONS
 
 
 DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
@@ -810,6 +818,7 @@ async def test_anthropic_runs_on_rust_without_the_opt_in(
         pytest.param(BEDROCK_INVOKE_MODEL, id="invoke"),
         pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", id="mantle-route"),
         pytest.param("bedrock_mantle/anthropic.claude-sonnet-5", id="bedrock-mantle"),
+        pytest.param("bedrock/claude_platform/claude-sonnet-4-5", id="claude-platform"),
     ),
 )
 async def test_bedrock_messages_run_on_rust_without_the_opt_in(
@@ -832,8 +841,8 @@ async def test_bedrock_messages_run_on_rust_without_the_opt_in(
 @pytest.mark.parametrize(
     "model",
     (
-        pytest.param("bedrock/claude_platform/claude-sonnet-4-5", id="claude-platform"),
         pytest.param("bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", id="converse"),
+        pytest.param("bedrock/us.meta.llama3-2-11b-instruct-v1:0", id="non-claude"),
     ),
 )
 async def test_other_bedrock_messages_keep_python(
@@ -1081,7 +1090,9 @@ async def test_azure_ai_runs_on_rust_only_where_its_claude_config_serves_the_cal
         pytest.param(BEDROCK_INVOKE_MODEL, {}, True, id="bedrock-invoke"),
         pytest.param("bedrock/mantle/anthropic.claude-sonnet-5", {}, True, id="bedrock-mantle-route"),
         pytest.param("bedrock_mantle/anthropic.claude-sonnet-5", {}, True, id="bedrock-mantle"),
+        pytest.param("bedrock/claude_platform/claude-sonnet-4-5", {}, True, id="claude-platform"),
         pytest.param("bedrock_mantle/openai.gpt-oss-120b", {}, False, id="bedrock-mantle-non-claude"),
+        pytest.param("bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", {}, False, id="converse"),
         pytest.param("deepseek/deepseek-v4-flash", {}, False, id="deepseek"),
     ),
 )

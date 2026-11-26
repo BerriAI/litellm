@@ -1,11 +1,19 @@
-use litellm_python_compat::{lenient::UintOrUnset, unicode::isspace};
+use litellm_env::Lookup;
+use litellm_python_compat::{
+    lenient::{FloatOrUnset, UintOrUnset},
+    unicode::isspace,
+};
 use serde::{Deserialize, Deserializer};
 use serde_with::serde_as;
+use struct_field_names_as_array::FieldNamesAsSlice;
 
-/// The environment variables the proxy reads outside its config file, as written. Each field is
-/// its variable's name in lower case.
+use crate::Error;
+
+/// The settings only the environment holds, as written: the variables the proxy reads that no
+/// config.yaml key sets. Each field is its variable's name in lower case. A setting config.yaml
+/// can also set is a field of its config section instead, which `Config::with_environment` fills.
 #[serde_as]
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, FieldNamesAsSlice)]
 #[serde(default)]
 pub struct Environment {
     pub litellm_cors_origins: Option<String>,
@@ -17,6 +25,46 @@ pub struct Environment {
     pub max_decompressed_request_bodies_in_flight_mb: Option<f64>,
     #[serde_as(as = "UintOrUnset")]
     pub non_llm_connection_timeout: Option<u64>,
+    pub legacy_multi_instance_rate_limiting: Option<String>,
+    pub use_aws_kms: Option<String>,
+    pub litellm_ssl_ciphers: Option<String>,
+    pub litellm_worker_startup_hooks: Option<String>,
+    pub litellm_otel_v2: Option<String>,
+    pub use_ddtrace: Option<String>,
+    pub litellm_lens_url: Option<String>,
+    pub litellm_telemetry_endpoint: Option<String>,
+    pub litellm_max_streaming_duration_seconds: Option<String>,
+    pub router_max_fallbacks: Option<String>,
+    pub default_max_retries: Option<String>,
+    pub default_allowed_fails: Option<String>,
+    pub default_cooldown_time_seconds: Option<String>,
+    #[serde_as(as = "FloatOrUnset")]
+    pub default_cooldown_redis_read_interval_seconds: Option<f64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub default_max_redis_batch_cache_size: Option<u64>,
+    pub litellm_rate_limit_window_size: Option<i64>,
+    pub litellm_tpm_token_reservation_enabled: Option<Flag>,
+    #[serde_as(as = "UintOrUnset")]
+    pub proxy_batch_write_at: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub spend_log_queue_max_bytes: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub spend_log_write_batch_max_bytes: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub spend_log_write_batch_max_rows: Option<u64>,
+}
+
+impl Environment {
+    /// Each variable asked of `environment` by its field's name, so `environment` can be one
+    /// that cannot be listed, as a config's `environment_variables` over a secret manager is.
+    pub fn read(environment: &dyn Lookup) -> Result<Self, Error> {
+        let set = Self::FIELD_NAMES_AS_SLICE.iter().filter_map(|field| {
+            let variable = field.to_uppercase();
+            let value = environment.get(&variable)?;
+            Some((variable, value))
+        });
+        Ok(envy::from_iter(set)?)
+    }
 }
 
 /// The proxy's `os.getenv(name).strip().lower() == "true"`: anything but `true` is off.
@@ -61,6 +109,8 @@ mod tests {
             ("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", "10"),
             ("MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", "20"),
             ("NON_LLM_CONNECTION_TIMEOUT", "40"),
+            ("LITELLM_RATE_LIMIT_WINDOW_SIZE", "30"),
+            ("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false"),
         ])
         .unwrap();
 
@@ -75,8 +125,38 @@ mod tests {
                 max_request_body_decompression_ratio: Some(10),
                 max_decompressed_request_bodies_in_flight_mb: Some(20.0),
                 non_llm_connection_timeout: Some(40),
+                litellm_rate_limit_window_size: Some(30),
+                litellm_tpm_token_reservation_enabled: Some(Flag(false)),
+                ..Environment::default()
             }
         );
+    }
+
+    #[rstest]
+    fn each_variable_is_asked_for_by_its_fields_name() {
+        let lookup = |name: &str| match name {
+            "USE_AWS_KMS" => Some("1".to_owned()),
+            "NON_LLM_CONNECTION_TIMEOUT" => Some("40".to_owned()),
+            _ => None,
+        };
+
+        assert_eq!(
+            Environment::read(&lookup).unwrap(),
+            Environment {
+                use_aws_kms: Some("1".into()),
+                non_llm_connection_timeout: Some(40),
+                ..Environment::default()
+            }
+        );
+    }
+
+    #[rstest]
+    fn a_variable_that_does_not_read_as_its_type_is_an_error() {
+        let lookup = |name: &str| {
+            (name == "MAX_REQUEST_BODY_DECOMPRESSION_RATIO").then(|| "many".to_owned())
+        };
+
+        assert!(Environment::read(&lookup).is_err());
     }
 
     #[rstest]
@@ -99,6 +179,31 @@ mod tests {
         let environment = from_variables(&[("NON_LLM_CONNECTION_TIMEOUT", raw)]).unwrap();
 
         assert_eq!(environment.non_llm_connection_timeout, expected);
+    }
+
+    #[rstest]
+    #[case::blank("", "", None, None)]
+    #[case::words("soon", "many", None, None)]
+    #[case::numbers(" 2.5 ", "42", Some(2.5), Some(42))]
+    fn the_router_read_tuning_is_unset_where_python_falls_back_to_its_default(
+        #[case] interval: &str,
+        #[case] size: &str,
+        #[case] expected_interval: Option<f64>,
+        #[case] expected_size: Option<u64>,
+    ) {
+        let environment = from_variables(&[
+            ("DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS", interval),
+            ("DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", size),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            (
+                environment.default_cooldown_redis_read_interval_seconds,
+                environment.default_max_redis_batch_cache_size,
+            ),
+            (expected_interval, expected_size)
+        );
     }
 
     #[rstest]

@@ -2,13 +2,22 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Final
+from typing import Final, cast
 from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
+from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
+    SESSION_ID_OMITTED_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.langfuse.langfuse import LangFuseLogger, langfuse_trace_id
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.messages.adapters.handler import (
@@ -16,7 +25,8 @@ from litellm.llms.anthropic.messages.adapters.handler import (
     request_safeguards_evaluator,
 )
 from litellm.llms.anthropic.messages.safeguards import ToolUseUnderReview
-from litellm.proxy._types import LiteLLM_TeamTableCachedObj, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTableCachedObj, SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.router import Router
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
@@ -177,6 +187,7 @@ async def test_non_stream_response_carries_a_verdict_for_the_tool_use_and_bills_
         "user_api_key": "hashed-key",
         "user_api_key_team_id": "team-1",
         "headers": {},
+        SESSION_ID_INHERITED_METADATA_KEY: True,
     }
     assert json.dumps({"command": "npm ci"}) in str(classifier_call["messages"][1]["content"])
 
@@ -426,11 +437,13 @@ async def test_a_subagent_turns_classifier_call_stays_on_the_classifier_model_wh
         num_retries=0,
     )
     session_headers: Final = {"x-claude-code-session-id": "session-1234"}
+    proxy_session_ids: Final = {"litellm_session_id": "session-1234", "litellm_trace_id": "session-1234"}
     await router.acompletion(
         model="smart-router",
         messages=list(MESSAGES),
         metadata={"user_api_key_hash": "key-hash-a"},
         proxy_server_request={"headers": session_headers},
+        **proxy_session_ids,
     )
     subagent_headers: Final = {**session_headers, "x-claude-code-agent-id": "agent-1234"}
     with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
@@ -444,6 +457,7 @@ async def test_a_subagent_turns_classifier_call_stays_on_the_classifier_model_wh
                 },
                 "litellm_router": router,
                 "proxy_server_request": {"headers": subagent_headers},
+                **proxy_session_ids,
             },
             MESSAGES,
         )
@@ -505,3 +519,288 @@ async def test_a_trace_id_sent_in_the_body_carries_the_classifier_and_summary_ca
         "call_main": {"type": "evaluated", "outcome": "not_flagged"}
     }
     assert "The user asked to install the deps." in json.dumps(backend.calls[0]["messages"])
+
+
+class _SpendRows(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: Final[list[SpendLogsPayload]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.rows.append(get_logging_payload(kwargs, response_obj, start_time, end_time))
+
+
+def _classifier_and_summarizer_router(classifier_params: Mapping[str, object] | None = None) -> Router:
+    classifier: Final = _mock_deployment("classifier", '{"verdicts": {"call_main": {"flagged": false}}}')
+    return Router(
+        model_list=[
+            {**classifier, "litellm_params": classifier_params} if classifier_params else classifier,
+            _mock_deployment("summarizer", "<summary>The user asked to install the deps.</summary>"),
+        ],
+        num_retries=0,
+    )
+
+
+async def _send_parent_request(
+    router: Router,
+    general_settings: Mapping[str, object],
+    litellm_metadata: Mapping[str, object],
+    parent_ids: Mapping[str, str],
+    request_headers: Mapping[str, str] | None = None,
+    anthropic_metadata: Mapping[str, str] | None = None,
+) -> None:
+    parent_logging, _ = litellm.utils.function_setup(
+        "anthropic_messages",
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="fireworks_ai/kimi",
+        messages=list(MESSAGES),
+        stream=False,
+        litellm_call_id="parent-call",
+        litellm_trace_id=parent_ids.get("litellm_trace_id", "trace-the-parent-minted"),
+        litellm_metadata=dict(litellm_metadata),
+        **({} if anthropic_metadata is None else {"metadata": dict(anthropic_metadata)}),
+    )
+    backend: Final = _Backend(stream=False)
+    router_deployment_call: Final = litellm.acompletion
+
+    async def agent_model_or_router_deployment(**kwargs: object) -> object:
+        if kwargs.get("model") == "fireworks_ai/kimi":
+            return await backend(**kwargs)
+        return await router_deployment_call(**kwargs)
+
+    with (
+        patch("litellm.acompletion", new=agent_model_or_router_deployment),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "safeguards_classifier_model": "classifier",
+                "context_management_summary_model": "summarizer",
+                **general_settings,
+            },
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+    ):
+        await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+            max_tokens=256,
+            messages=list(MESSAGES),
+            model="fireworks_ai/kimi",
+            tools=[dict(BASH_TOOL)],
+            stream=False,
+            litellm_router=router,
+            litellm_metadata=dict(litellm_metadata),
+            litellm_logging_obj=parent_logging,
+            **({} if anthropic_metadata is None else {"metadata": dict(anthropic_metadata)}),
+            safeguards=SAFEGUARDS,
+            context_management={"edits": [{"type": "compact_20260112"}]},
+            **({} if request_headers is None else {"proxy_server_request": {"headers": dict(request_headers)}}),
+            **parent_ids,
+        )
+        await _drain_logging_worker()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_correlation_in_logs, general_settings, parent_metadata, parent_ids, parent_session",
+    [
+        (
+            False,
+            {},
+            {},
+            {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
+            "claude-code-session",
+        ),
+        (False, {}, {}, {"litellm_session_id": "conversation-1", "litellm_trace_id": "trace-1"}, "conversation-1"),
+        (False, {}, {}, {}, "trace-the-parent-minted"),
+        (
+            True,
+            {},
+            {"session_id": "client-trace", "trace_id": "client-trace", CALLER_SESSION_ID_METADATA_KEY: "claude-code-session"},
+            {"litellm_session_id": "client-trace", "litellm_trace_id": "client-trace"},
+            "claude-code-session",
+        ),
+        (False, {}, {"session_id": "conversation-in-metadata"}, {}, "conversation-in-metadata"),
+        (
+            False,
+            {"missing_session_id": "omit"},
+            {"session_id": "claude-code-session", "trace_id": "claude-code-session", SESSION_ID_OMITTED_METADATA_KEY: True},
+            {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
+            "claude-code-session",
+        ),
+        (False, {"missing_session_id": "omit"}, {SESSION_ID_OMITTED_METADATA_KEY: True}, {}, None),
+    ],
+    ids=[
+        "claude-code-session-header",
+        "session-and-trace-sent-apart",
+        "no-session-sent",
+        "trace-header-beside-the-claude-code-session-under-request-correlation",
+        "session-sent-only-in-litellm-metadata",
+        "claude-code-session-header-under-omit",
+        "no-session-sent-under-omit",
+    ],
+)
+async def test_the_classifier_and_summary_spend_rows_land_in_the_parent_requests_session(
+    monkeypatch: pytest.MonkeyPatch,
+    request_correlation_in_logs: bool,
+    general_settings: Mapping[str, object],
+    parent_metadata: Mapping[str, object],
+    parent_ids: Mapping[str, str],
+    parent_session: str | None,
+) -> None:
+    await _drain_logging_worker()
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", request_correlation_in_logs)
+    spend: Final = _SpendRows()
+    monkeypatch.setattr(litellm, "callbacks", [spend])
+    monkeypatch.setattr(litellm, "_async_success_callback", [spend])
+
+    await _send_parent_request(
+        _classifier_and_summarizer_router(), general_settings, {**LITELLM_METADATA, **parent_metadata}, parent_ids
+    )
+
+    assert {row["model_group"]: row["session_id"] for row in spend.rows} == {
+        "classifier": parent_session,
+        "summarizer": parent_session,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parent_metadata, affinity_header",
+    [
+        ({"session_id": "conversation-1"}, "conversation-1"),
+        ({"session_id": "minted-1", SESSION_ID_GENERATED_METADATA_KEY: True}, None),
+    ],
+    ids=["session-the-caller-sent", "session-the-proxy-minted"],
+)
+async def test_the_classifier_call_sends_the_parents_session_as_its_affinity_header_unless_the_proxy_minted_it(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    parent_metadata: Mapping[str, object],
+    affinity_header: str | None,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    session: Final = str(parent_metadata["session_id"])
+    classifier_route: Final = respx_mock.post("https://classifier.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-classifier",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.4-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"verdicts": {"call_main": {"flagged": false}}}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+    )
+    router: Final = _classifier_and_summarizer_router(
+        {
+            "model": "openai/gpt-5.4-mini",
+            "api_key": "sk-fake",
+            "api_base": "https://classifier.example/v1",
+            "provider_affinity_header": "x-session-affinity",
+        }
+    )
+
+    await _send_parent_request(
+        router,
+        {},
+        {**LITELLM_METADATA, **parent_metadata},
+        {"litellm_session_id": session, "litellm_trace_id": session},
+    )
+
+    assert classifier_route.call_count == 1
+    assert classifier_route.calls.last.request.headers.get("x-session-affinity") == affinity_header
+
+
+class _LoggedCalls(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: Final[list[Mapping[str, object]]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.calls.append(kwargs)
+
+
+def _langfuse_trace(logged_call: Mapping[str, object]) -> tuple[object, bool]:
+    litellm_params: Final = cast(dict[str, object], logged_call["litellm_params"])
+    trace_metadata: Final = LangFuseLogger.add_metadata_from_header(
+        litellm_params, dict(cast(Mapping[str, object], litellm_params.get("metadata") or {}))
+    )
+    standard_logging_object: Final = cast(Mapping[str, object], logged_call["standard_logging_object"])
+    trace_id: Final = langfuse_trace_id(
+        metadata=trace_metadata,
+        standard_trace_id=standard_logging_object["trace_id"],
+        litellm_trace_id=logged_call.get("litellm_trace_id"),
+        litellm_call_id=logged_call.get("litellm_call_id"),
+        proxy_server_request=litellm_params.get("proxy_server_request"),
+    )
+    return trace_id, "existing_trace_id" in trace_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parent_metadata, parent_ids, request_headers, anthropic_metadata, parent_trace",
+    [
+        (
+            {"session_id": "claude-code-session"},
+            {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
+            {"x-claude-code-session-id": "claude-code-session"},
+            None,
+            "parent-call",
+        ),
+        (
+            {"session_id": "claude-code-session"},
+            {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
+            {"x-claude-code-session-id": "claude-code-session"},
+            {"user_id": '{"device_id":"laptop","session_id":"claude-code-session"}'},
+            "parent-call",
+        ),
+        ({}, {}, None, None, "trace-the-parent-minted"),
+        (
+            {},
+            {},
+            {"langfuse_existing_trace_id": "trace-the-client-continues"},
+            None,
+            "trace-the-client-continues",
+        ),
+    ],
+    ids=[
+        "claude-code-session-header",
+        "claude-code-sends-its-anthropic-metadata-user-id",
+        "no-session-sent",
+        "client-continues-its-own-langfuse-trace",
+    ],
+)
+async def test_the_classifier_and_summary_join_the_parent_requests_langfuse_trace_without_renaming_it(
+    monkeypatch: pytest.MonkeyPatch,
+    parent_metadata: Mapping[str, object],
+    parent_ids: Mapping[str, str],
+    request_headers: Mapping[str, str] | None,
+    anthropic_metadata: Mapping[str, str] | None,
+    parent_trace: str,
+) -> None:
+    await _drain_logging_worker()
+    logged: Final = _LoggedCalls()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logged])
+
+    await _send_parent_request(
+        _classifier_and_summarizer_router(),
+        {},
+        {**LITELLM_METADATA, **parent_metadata},
+        parent_ids,
+        request_headers,
+        anthropic_metadata,
+    )
+
+    assert {
+        cast(Mapping[str, object], call["standard_logging_object"])["model_group"]: _langfuse_trace(call)
+        for call in logged.calls
+    } == {"classifier": (parent_trace, True), "summarizer": (parent_trace, True)}

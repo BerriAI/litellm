@@ -7,10 +7,10 @@ import sys
 import types
 from binascii import crc32
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -27,6 +27,8 @@ from litellm.llms.bedrock.passthrough.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, PassthroughStreamingResponse
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import get_passthrough_router_request_metadata
 from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 _STANDARD_LOGGING_OBJECT: Final = TypeAdapter(Mapping[str, object])
@@ -36,7 +38,96 @@ INVOKE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/invoke-with-response-stream"
 
 
 @pytest.mark.asyncio
-async def test_bedrock_passthrough_router_replaces_alias_in_endpoint() -> None:
+async def test_passthrough_proxy_identity_reaches_sts_and_isolates_cached_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_session_tag_fields", ["user_api_key_team_alias"])
+    monkeypatch.setattr(litellm, "bedrock_session_name_fields", ["user_api_key_user_id"])
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_SESSION_NAME", raising=False)
+    sts = MagicMock()
+    sts.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "ASIAIDENTITY",
+            "SecretAccessKey": "assumed-secret",
+            "SessionToken": "assumed-token",
+            "Expiration": datetime(2099, 1, 1, tzinfo=timezone.utc),
+        }
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "identity-model",
+                "litellm_params": {
+                    "model": f"bedrock/{CONVERSE_MODEL}",
+                    "aws_access_key_id": "caller",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-east-1",
+                    "aws_role_name": "arn:aws:iam::123456789012:role/invocation",
+                    "aws_session_tags": [{"Key": "deployment", "Value": "static"}],
+                },
+            }
+        ]
+    )
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"generation": "ok"}, request=request))
+    first_identity = get_passthrough_router_request_metadata(UserAPIKeyAuth(user_id="agent-one", team_alias="team-one"))
+    second_identity = get_passthrough_router_request_metadata(
+        UserAPIKeyAuth(user_id="agent-two", team_alias="team-two")
+    )
+    with patch("boto3.client", return_value=sts):
+        first = await router.allm_passthrough_route(
+            model="identity-model",
+            method="POST",
+            endpoint=f"/model/{CONVERSE_MODEL}/invoke",
+            data={"prompt": "hi"},
+            litellm_metadata=first_identity,
+            client=AsyncHTTPHandler(transport=transport),
+        )
+        first_sts = sts.assume_role.call_args.kwargs
+        second = await router.allm_passthrough_route(
+            model="identity-model",
+            method="POST",
+            endpoint=f"/model/{CONVERSE_MODEL}/invoke",
+            data={"prompt": "hi"},
+            litellm_metadata=second_identity,
+            client=AsyncHTTPHandler(transport=transport),
+        )
+        repeated = await router.allm_passthrough_route(
+            model="identity-model",
+            method="POST",
+            endpoint=f"/model/{CONVERSE_MODEL}/invoke",
+            data={"prompt": "hi"},
+            litellm_metadata=first_identity,
+            client=AsyncHTTPHandler(transport=transport),
+        )
+    assert (first.status_code, second.status_code, repeated.status_code) == (200, 200, 200)
+    assert first_sts == {
+        "RoleArn": "arn:aws:iam::123456789012:role/invocation",
+        "RoleSessionName": "agent-one",
+        "Tags": ({"Key": "deployment", "Value": "static"}, {"Key": "user_api_key_team_alias", "Value": "team-one"}),
+    }
+    assert sts.assume_role.call_args.kwargs == {
+        "RoleArn": "arn:aws:iam::123456789012:role/invocation",
+        "RoleSessionName": "agent-two",
+        "Tags": ({"Key": "deployment", "Value": "static"}, {"Key": "user_api_key_team_alias", "Value": "team-two"}),
+    }
+    assert sts.assume_role.call_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "custom_llm_provider"),
+    [
+        ("bedrock/", None),
+        ("bedrock/invoke/", None),
+        ("bedrock/converse/", None),
+        ("invoke/", "bedrock"),
+        ("converse/", "bedrock"),
+    ],
+)
+async def test_bedrock_passthrough_router_replaces_alias_in_endpoint(
+    route: str, custom_llm_provider: str | None
+) -> None:
     deployment_model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     requests: Final[list[httpx.Request]] = []
 
@@ -49,7 +140,8 @@ async def test_bedrock_passthrough_router_replaces_alias_in_endpoint() -> None:
             {
                 "model_name": "special-bedrock-model",
                 "litellm_params": {
-                    "model": f"bedrock/{deployment_model}",
+                    "model": f"{route}{deployment_model}",
+                    **({"custom_llm_provider": custom_llm_provider} if custom_llm_provider else {}),
                     "aws_access_key_id": "AKIAROUTERKEY",
                     "aws_secret_access_key": "router-secret",
                     "aws_region_name": "us-west-2",
@@ -1050,6 +1142,111 @@ async def test_invoke_stream_relay_is_priced_at_the_service_tier_bedrock_served(
     assert await relay.wait_for_spend_flush() is True
     assert callback.kwargs is not None
     assert callback.kwargs["response_cost"] == pytest.approx(_tier_priced_cost(price_suffix))
+
+
+def _logged_converse_reply_cost(deployment_model: str) -> float:
+    endpoint: Final = f"/model/{CONVERSE_MODEL}/converse"
+    reply: Final = httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "pong"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 25, "outputTokens": 12, "totalTokens": 37},
+        },
+    )
+    logged: Final = BedrockPassthroughConfig().logging_non_streaming_response(
+        model=deployment_model,
+        custom_llm_provider="bedrock",
+        httpx_response=reply,
+        request_data={},
+        logging_obj=_stream_logging_obj(endpoint),
+        endpoint=endpoint,
+    )
+    return litellm.completion_cost(model=f"bedrock/{CONVERSE_MODEL}", completion_response=logged)
+
+
+@pytest.mark.parametrize("route", ["invoke/", "converse/"])
+def test_converse_reply_on_a_route_pinned_deployment_is_priced_like_an_unpinned_one(route: str) -> None:
+    pinned_cost: Final = _logged_converse_reply_cost(f"{route}{CONVERSE_MODEL}")
+
+    assert pinned_cost > 0
+    assert pinned_cost == pytest.approx(_logged_converse_reply_cost(CONVERSE_MODEL))
+
+
+APP_PROFILE_ARN = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+APP_PROFILE_ARN_NAMED_LIKE_A_PROVIDER = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/nova2kq1zz9x"
+BASE_MODEL_PARAMS: Final[dict[str, object]] = {"metadata": {"model_info": {"base_model": f"bedrock/{CONVERSE_MODEL}"}}}
+
+
+def _logged_invoke_reply_cost(deployment_model: str, litellm_params: dict[str, object]) -> float:
+    endpoint: Final = f"/model/{deployment_model}/invoke"
+    reply: Final = httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude",
+            "content": [{"type": "text", "text": "pong"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 25, "output_tokens": 12},
+        },
+    )
+    logging_obj: Final = _stream_logging_obj(endpoint)
+    logging_obj.update_environment_variables(litellm_params=litellm_params, optional_params={})
+    logged: Final = BedrockPassthroughConfig().logging_non_streaming_response(
+        model=deployment_model,
+        custom_llm_provider="bedrock",
+        httpx_response=reply,
+        request_data={},
+        logging_obj=logging_obj,
+        endpoint=endpoint,
+    )
+    return litellm.completion_cost(model=f"bedrock/{CONVERSE_MODEL}", completion_response=logged)
+
+
+@pytest.mark.parametrize("profile_arn", [APP_PROFILE_ARN, APP_PROFILE_ARN_NAMED_LIKE_A_PROVIDER])
+@pytest.mark.parametrize("route", ["", "invoke/"])
+def test_invoke_reply_on_an_app_profile_deployment_is_priced_by_its_base_model(route: str, profile_arn: str) -> None:
+    profile_cost: Final = _logged_invoke_reply_cost(f"{route}{profile_arn}", BASE_MODEL_PARAMS)
+
+    assert profile_cost > 0
+    assert profile_cost == pytest.approx(_logged_invoke_reply_cost(f"invoke/{CONVERSE_MODEL}", {}))
+
+
+async def _relayed_invoke_stream_cost(deployment_model: str, litellm_params: dict[str, object]) -> object:
+    callback: Final = _CaptureAsyncSuccessCallback()
+    endpoint: Final = f"/model/{deployment_model}/invoke-with-response-stream"
+    logging_obj: Final = _stream_logging_obj(endpoint, [callback], model=deployment_model)
+    logging_obj.update_environment_variables(litellm_params=litellm_params, optional_params={})
+    stream: Final = _invoke_text_stream(["po", "ng"])
+
+    async def provider_reply() -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/vnd.amazon.eventstream"},
+            content=stream,
+            request=httpx.Request("POST", f"https://bedrock-runtime.us-east-1.amazonaws.com{endpoint}"),
+        )
+
+    relay: Final = AsyncPassthroughStreamingResponse(
+        response=provider_reply(), litellm_logging_obj=logging_obj, provider_config=BedrockPassthroughConfig()
+    )
+
+    assert b"".join([chunk async for chunk in relay]) == stream
+    assert await relay.wait_for_spend_flush() is True
+    assert callback.kwargs is not None
+    return callback.kwargs["response_cost"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile_arn", [APP_PROFILE_ARN, APP_PROFILE_ARN_NAMED_LIKE_A_PROVIDER])
+async def test_invoke_stream_on_an_app_profile_deployment_is_priced_by_its_base_model(profile_arn: str) -> None:
+    profile_cost: Final = await _relayed_invoke_stream_cost(profile_arn, BASE_MODEL_PARAMS)
+
+    assert isinstance(profile_cost, float)
+    assert profile_cost > 0
+    assert profile_cost == pytest.approx(await _relayed_invoke_stream_cost(CONVERSE_MODEL, {}))
 
 
 class _ImmediateExecutor:

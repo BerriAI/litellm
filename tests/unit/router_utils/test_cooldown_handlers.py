@@ -561,11 +561,6 @@ def setup_and_teardown():
 
     asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
     importlib.reload(litellm)
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception:
-        pass
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
     yield
@@ -1677,6 +1672,67 @@ def test_only_a_role_less_request_is_a_failure_outside_the_deployment(
     exception: Exception, outside_deployment: bool
 ) -> None:
     assert is_failure_outside_selected_deployment(exception) is outside_deployment
+
+
+_IMAGE_USAGE: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
+
+
+@pytest.mark.usefixtures("setup_and_teardown")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param({"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}, id="refusal"),
+        pytest.param({"finishReason": "STOP", "content": {"parts": [{"text": "a red dot"}]}}, id="no_image"),
+    ],
+)
+@pytest.mark.parametrize("shares_a_logging_object", [False, True], ids=["sdk", "proxy"])
+async def test_image_answers_without_an_image_do_not_count_toward_the_deployments_failure_rate(
+    answer: Mapping[str, object], shares_a_logging_object: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.invalid/v1",
+                },
+                "model_info": {"id": group},
+            }
+            for group in ("primary", "backup")
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+    def request(call_id: str) -> Mapping[str, object]:
+        if not shares_a_logging_object:
+            return {"model": "primary", "prompt": "a single small red dot"}
+        logging_obj, setup = litellm.utils.function_setup(
+            original_function="aimage_generation",
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime.datetime.now(),
+            model="primary",
+            prompt="a single small red dot",
+            litellm_call_id=call_id,
+        )
+        return {**setup, "litellm_logging_obj": logging_obj}
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(url__startswith="https://").mock(
+            return_value=httpx.Response(200, json={"candidates": [answer], "usageMetadata": _IMAGE_USAGE})
+        )
+        for attempt in range(3):
+            with pytest.raises((litellm.ContentPolicyViolationError, litellm.UnprocessableEntityError)):
+                await router.aimage_generation(**request(f"answer-without-an-image-{attempt}"))
+    await asyncio.sleep(1)
+
+    assert [
+        get_deployment_failures_for_current_minute(RoutingContext(router), group) for group in ("primary", "backup")
+    ] == [0, 0]
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")

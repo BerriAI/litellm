@@ -1,9 +1,12 @@
 mod auth;
+pub mod db;
 mod environment;
 mod error;
+mod layer;
 mod mcp;
 mod model;
 mod pass_through;
+mod priority;
 mod redis;
 mod routes;
 mod settings;
@@ -18,17 +21,27 @@ pub use auth::{
 };
 pub use environment::{Environment, Flag};
 pub use error::Error;
-pub use litellm_router_types::{LitellmParams, Spelled};
+pub use layer::Origins;
+pub use litellm_router_types::{
+    LitellmParams, OptionalPreCallCheck, RouterRedis, RouterSettings, RoutingGroupSpec,
+    RoutingStrategy, Spelled,
+};
 pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::Model;
 pub use pass_through::{PassThroughEndpoint, PassThroughGuardrail};
+pub use priority::{
+    BorrowingEntity, ClassShareEntity, ModelLimitBorrowingConfig, PriorityClassShareConfig,
+    PriorityReservation, PriorityReservationSettings, ReservationUnit,
+};
 pub use redis::{CacheSettings, RedisSettings};
-pub use routes::RouteList;
+pub use routes::{AddressList, RouteList};
 pub use settings::{
-    ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, RouterSettings, TracingSettings,
+    ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, TracingSettings,
     TracingStoreSettings, UserHeaderMapping,
 };
 pub use value::{AdditionalFields, Object, Value};
+
+pub const ENV_REFERENCE_PREFIX: &str = "os.environ/";
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -57,6 +70,9 @@ pub struct Config {
     pub policies: Object,
     pub policy_attachments: Box<[Object]>,
     pub include: Box<[String]>,
+    /// Which keys the environment set, once `with_environment` has put it under this config.
+    #[serde(skip)]
+    pub origins: Origins,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }

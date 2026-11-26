@@ -1,8 +1,8 @@
 import asyncio
 import json
 import queue
-from collections.abc import Awaitable, Callable
-from types import NoneType
+from collections.abc import Awaitable, Callable, Sequence
+from types import NoneType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -16,7 +16,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.common_utils import AZURE_AI_AGENTS_SCOPE, AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
-from litellm.responses.main import _will_bridge_to_chat_completions, provider_stores_the_conversation
+from litellm.responses.main import will_bridge_to_chat_completions, provider_stores_the_conversation
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -167,7 +167,7 @@ def test_model_router_calls_responses_natively_on_a_foundry_project_or_resource(
     "api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (GATEWAY_PROJECT_BASE, False), (SERVERLESS_BASE, True)]
 )
 def test_will_bridge_to_chat_completions_follows_host(api_base, bridged):
-    assert _will_bridge_to_chat_completions("gpt-5.6-luna", "azure_ai", False, None, api_base) is bridged
+    assert will_bridge_to_chat_completions("gpt-5.6-luna", "azure_ai", False, None, api_base) is bridged
 
 
 @pytest.mark.parametrize(
@@ -729,13 +729,29 @@ async def test_a_model_router_keeps_the_namespace_of_custom_tool_history():
 
     await litellm.aresponses(
         model="azure_ai/model_router/model-router",
-        input=[{**item, "namespace": "editor"} if item["type"] == "custom_tool_call" else item for item in CUSTOM_TOOL_HISTORY],
+        input=[
+            {**item, "namespace": "editor"} if item["type"] == "custom_tool_call" else item
+            for item in CUSTOM_TOOL_HISTORY
+        ],
         api_base=FOUNDRY_PROJECT_BASE,
         api_key="fake-key",
     )
 
     sent_call: Final = json.loads(route.calls.last.request.content)["input"][1]
     assert (sent_call["type"], sent_call["namespace"], sent_call["name"]) == ("function_call", "editor", "apply_patch")
+
+
+class _EarlierBridgedTurn:
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict[str, object]]:
+        return [
+            {
+                "request_id": request_ids[0],
+                "call_type": "aresponses",
+                "session_id": "earlier-session",
+                "proxy_server_request": {"input": "What is the first step?"},
+                "response": _chat_completion_payload("FW-GLM-5.3-Flash"),
+            }
+        ]
 
 
 @pytest.mark.asyncio
@@ -749,24 +765,25 @@ async def test_a_model_router_keeps_the_namespace_of_custom_tool_history():
     ],
 )
 async def test_only_a_model_router_follow_up_to_a_bridged_turn_stays_on_the_bridge(model, earlier_response_id, bridged):
-    chat_route: Final = respx.post(url__regex=r".*/chat/completions(\?.*)?$").mock(
+    respx.post(url__regex=r".*/chat/completions(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_chat_completion_payload("FW-GLM-5.3-Flash"))
     )
-    responses_route: Final = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+    respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
         return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
     )
 
-    await litellm.aresponses(
-        model=model,
-        input="And the next step?",
-        previous_response_id=ResponsesAPIRequestUtils._build_responses_api_response_id(
-            custom_llm_provider="azure_ai", model_id=None, response_id=earlier_response_id
-        ),
-        api_base=FOUNDRY_PROJECT_BASE,
-        api_key="fake-key",
-    )
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_EarlierBridgedTurn())):
+        await litellm.aresponses(
+            model=model,
+            input="And the next step?",
+            previous_response_id=ResponsesAPIRequestUtils._build_responses_api_response_id(
+                custom_llm_provider="azure_ai", model_id=None, response_id=earlier_response_id
+            ),
+            api_base=FOUNDRY_PROJECT_BASE,
+            api_key="fake-key",
+        )
 
-    assert (chat_route.called, responses_route.called) == (bridged, not bridged)
+    assert [call.request.url.path.endswith("/chat/completions") for call in respx.calls] == [bridged]
 
 
 @pytest.mark.parametrize(
@@ -1580,5 +1597,5 @@ async def test_acompletion_reaches_the_agent_through_the_project_responses_api()
     assert body["agent_reference"] == {"type": "agent_reference", "name": "support-agent"}
     assert "model" not in body
     assert "instructions" not in body
-    assert body["input"][0] == SYSTEM_PROMPT
+    assert body["input"][0] == {**SYSTEM_PROMPT, "content": [{"type": "input_text", "text": "Answer in French"}]}
     assert response.choices[0].message.content == "4"

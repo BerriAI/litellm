@@ -1,6 +1,7 @@
 name: "Restore the Rust bridge"
 description: >-
-  Restore the prebuilt Rust bridge keyed on the Rust build and packaging inputs.
+  Restore the prebuilt Rust bridge that the unit workflow's rust-bridge job saves
+  on main, keyed on every input of the Rust build.
 
   The bridge is abi3, so one build serves every supported Python version. A job
   whose Rust inputs match main installs the restored wheel and native library
@@ -8,13 +9,9 @@ description: >-
   source as before.
 
   The restored `rust-bridge-dist` directory holds the editable litellm wheel, the
-  optional litellm-proxy gateway wheel, and `litellm/rust_bridge/_native.abi3.so`.
+  litellm-proxy gateway wheel, and `litellm/rust_bridge/_native.abi3.so`.
 
 inputs:
-  gateway:
-    description: "'true' to restore a bridge with the gateway wheel"
-    required: false
-    default: "false"
   stale-cost-map:
     description: >-
       'true' to fall back to a bridge built from the same Rust inputs whose embedded
@@ -40,7 +37,7 @@ runs:
       id: key
       shell: bash
       env:
-        RUST_INPUTS: ${{ runner.os }}-rust-bridge-editable-v2-gateway-${{ inputs.gateway }}-${{ hashFiles('litellm/rust/Cargo.lock', 'litellm/rust/Cargo.toml', 'litellm/rust/rust-toolchain.toml', 'litellm/rust/.cargo/config.toml', 'litellm/rust/crates/*/Cargo.toml', 'litellm/rust/crates/*/src/**', 'litellm/rust/crates/*/build.rs', 'litellm/rust/crates/python-bridge/preflight_contract.json', 'litellm/rust/crates/python-compat/generated/nonprintable.rs', 'litellm/rust/crates/*/.sqlx/*.json', 'litellm/rust/crates/*/migrations/**', 'pyproject.toml', 'litellm/packaging/litellm-proxy/pyproject.toml', '.github/packaging/*.py', '!**/*.md', '!**/tests/**', '!**/benches/**') }}
+        RUST_INPUTS: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm/rust/Cargo.lock', 'litellm/rust/Cargo.toml', 'litellm/rust/crates/**', 'pyproject.toml', 'litellm/packaging/litellm-proxy/pyproject.toml') }}
         COST_MAP: ${{ hashFiles('model_prices_and_context_window.json') }}
         STALE_COST_MAP: ${{ inputs.stale-cost-map }}
       run: |
