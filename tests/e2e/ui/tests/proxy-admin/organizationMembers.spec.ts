@@ -54,7 +54,7 @@ test.describe("Proxy Admin - Organization members", () => {
         })
         .toBe("internal_user");
     } finally {
-      await request.post("/organization/member_delete", {
+      await request.delete("/organization/member_delete", {
         headers: auth(),
         data: { organization_id: ORG_ID, user_id: userId },
       });
