@@ -2416,3 +2416,10 @@ def test_image_params_keep_the_builtin_mapping_when_a_custom_provider_reuses_its
     assert get_optional_params_image_gen(
         model="imagegeneration", custom_llm_provider=custom_provider_named, n=2, size="1024x1024"
     ) == {"sampleCount": 2, "aspectRatio": "1:1"}
+
+def test_openai_transcription_params_includes_prompt_and_temperature():
+    from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
+    from litellm.types.llms.openai import OpenAIAudioTranscriptionOptionalParams
+    from typing import get_args
+    for param in get_args(OpenAIAudioTranscriptionOptionalParams):
+        assert param in OPENAI_TRANSCRIPTION_PARAMS, f"Missing {param} in OPENAI_TRANSCRIPTION_PARAMS"

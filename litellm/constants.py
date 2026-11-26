@@ -1022,9 +1022,12 @@ OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "language",
     "languages",
     "keywords",
+    "prompt",
+    "temperature",
     "response_format",
     "stream",
     "timestamp_granularities",
+    "include",
 ]
 
 GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS: Final = (
