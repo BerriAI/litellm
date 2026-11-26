@@ -5,7 +5,6 @@ import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import httpx
@@ -14,7 +13,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
-from litellm.litellm_core_utils.env_utils import get_env_float
+from litellm.litellm_core_utils.env_utils import get_env_float, str_to_bool, true_or_false
 from litellm.litellm_core_utils.single_flight import single_flight_lru_cache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -125,32 +124,6 @@ def _get_oidc_http_handler(timeout: httpx.Timeout | None = None) -> HTTPHandler:
     if timeout is None:
         timeout = httpx.Timeout(timeout=600.0, connect=5.0)
     return HTTPHandler(timeout=timeout)
-
-
-_TRUE_FALSE_STRINGS: Final = MappingProxyType({"true": True, "false": False})
-_BOOL_STRINGS: Final = MappingProxyType(
-    {**_TRUE_FALSE_STRINGS, "1": True, "yes": True, "on": True, "0": False, "no": False, "off": False}
-)
-
-
-######### Secret Manager ############################
-# checks if user has passed in a secret manager client
-# if passed in then checks the secret there
-def str_to_bool(value: str | None) -> bool | None:
-    """
-    Converts a string to a boolean if it's a recognized boolean string.
-    Returns None if the string is not a recognized boolean value.
-
-    :param value: The string to be checked.
-    :return: True or False if the string is a recognized boolean, otherwise None.
-    """
-    if value is None:
-        return None
-    return _BOOL_STRINGS.get(value.strip().lower())
-
-
-def true_or_false(value: str) -> bool | None:
-    return _TRUE_FALSE_STRINGS.get(value.strip().lower())
 
 
 def get_secret_str(

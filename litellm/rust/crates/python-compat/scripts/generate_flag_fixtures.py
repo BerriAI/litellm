@@ -39,7 +39,7 @@ def helpers(module, *names: str):
 
 _str_to_bool, _coerces_to_true = helpers("_redis.py", "_str_to_bool", "_coerces_to_true")
 _, _, str_to_bool, true_or_false = helpers(
-    "secret_managers/main.py", "_TRUE_FALSE_STRINGS", "_BOOL_STRINGS", "str_to_bool", "true_or_false"
+    "litellm_core_utils/env_utils.py", "_TRUE_FALSE_STRINGS", "_BOOL_STRINGS", "str_to_bool", "true_or_false"
 )
 _, lax_bool = helpers("litellm_core_utils/core_helpers.py", "_LAX_BOOL", "lax_bool")
 

@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.env_utils import (
     get_env_int,
     get_env_int_in_range,
     get_env_int_or_none,
+    str_to_bool,
 )
 
 MICROSOFT_GRAPH_BETA_BASE: Final = "https://graph.microsoft.com/beta"
@@ -424,7 +425,7 @@ AIOHTTP_TTL_DNS_CACHE: Final = get_env_int("AIOHTTP_TTL_DNS_CACHE", 300)
 # during a long provider call and the NAT reaps the flow before the response
 # arrives. Enabling SO_KEEPALIVE makes the kernel emit TCP probes that reset
 # the NAT idle timer.
-AIOHTTP_SO_KEEPALIVE: Final = os.getenv("AIOHTTP_SO_KEEPALIVE", "False").lower() == "true"
+AIOHTTP_SO_KEEPALIVE: Final = str_to_bool(os.getenv("AIOHTTP_SO_KEEPALIVE")) is True
 AIOHTTP_TCP_KEEPIDLE: Final = get_env_int("AIOHTTP_TCP_KEEPIDLE", 60)
 AIOHTTP_TCP_KEEPINTVL: Final = get_env_int("AIOHTTP_TCP_KEEPINTVL", 30)
 AIOHTTP_TCP_KEEPCNT: Final = get_env_int("AIOHTTP_TCP_KEEPCNT", 5)

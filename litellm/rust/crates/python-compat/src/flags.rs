@@ -2,8 +2,8 @@
 //!
 //! | Function | Python |
 //! |---|---|
-//! | [`str_to_bool`] | `litellm.secret_managers.main.str_to_bool(text)` |
-//! | [`true_or_false`] | `litellm.secret_managers.main._TRUE_FALSE_STRINGS.get(text.strip().lower())` |
+//! | [`str_to_bool`] | `litellm.litellm_core_utils.env_utils.str_to_bool(text)` |
+//! | [`true_or_false`] | `litellm.litellm_core_utils.env_utils.true_or_false(text)` |
 //! | [`redis_str_to_bool`] | `litellm._redis._str_to_bool(text)` |
 //! | [`lower_is_true`] | `text.lower() == "true"` |
 //! | [`coerces_to_true`] | `litellm._redis._coerces_to_true(value)` |

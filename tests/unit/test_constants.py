@@ -152,6 +152,33 @@ def test_mcp_sse_event_limit_uses_positive_override_or_default(raw: str | None, 
         importlib.reload(constants)
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        (None, False),
+        ("true", True),
+        ("1", True),
+        ("yes", True),
+        (" On ", True),
+        ("false", False),
+        ("0", False),
+        ("off", False),
+        ("enabled", False),
+    ),
+)
+def test_aiohttp_so_keepalive_reads_the_shared_on_off_words(raw: str | None, expected: bool) -> None:
+    try:
+        with pytest.MonkeyPatch.context() as environment:
+            if raw is None:
+                environment.delenv("AIOHTTP_SO_KEEPALIVE", raising=False)
+            else:
+                environment.setenv("AIOHTTP_SO_KEEPALIVE", raw)
+            importlib.reload(constants)
+            assert constants.AIOHTTP_SO_KEEPALIVE is expected
+    finally:
+        importlib.reload(constants)
+
+
 def _is_blank(value: object) -> bool:
     return isinstance(value, str) and not value.strip()
 
