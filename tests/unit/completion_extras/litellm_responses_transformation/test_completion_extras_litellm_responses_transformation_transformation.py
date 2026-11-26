@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, g
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
+import openai
 import pytest
 import respx
 from openai.types.responses import (
@@ -663,6 +664,23 @@ def test_bridged_chat_keeps_serving_a_faked_stream_with_background_on_a_server_n
         text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
 
     assert text == "pong"
+    assert json.loads(upstream.calls.last.request.content)["background"] is True
+
+
+def test_bridged_chat_sends_background_to_the_server_a_supplied_client_points_at() -> None:
+    request: Final = {
+        key: value for key, value in _inline_request("openai/self-hosted-model").items() if key != "api_base"
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://inline-server.invalid/v1/responses").mock(
+            return_value=httpx.Response(200, json=_searched_responses_body("self-hosted-model"))
+        )
+        response: Final = litellm.completion(
+            **request, client=openai.OpenAI(base_url="https://inline-server.invalid/v1", api_key="test-key")
+        )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "pong"
     assert json.loads(upstream.calls.last.request.content)["background"] is True
 
 

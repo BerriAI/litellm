@@ -5792,6 +5792,7 @@ def _responses_bridge_optional_params(
     model: str,
     base_model: str | None,
     api_base: str | None,
+    reached_api_base: str | None,
     deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
 ) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
@@ -5801,7 +5802,7 @@ def _responses_bridge_optional_params(
         routing_kwargs=routing_kwargs,
         model=model,
         custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
+        api_base=reached_api_base,
         deployment_model_info=deployment_model_info,
     )
     if isinstance(requested, dict):
@@ -6771,6 +6772,7 @@ def completion(
                 model=model,
                 base_model=deployment_base_model,
                 api_base=api_base,
+                reached_api_base=reached_api_base,
                 deployment_model_info=typed_deployment_model_info,
                 drop_params=drop_unsupported_reasoning,
             )
