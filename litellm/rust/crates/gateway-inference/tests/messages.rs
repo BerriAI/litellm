@@ -17,9 +17,9 @@ use wiremock::{
 const MESSAGE_SSE: &str = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
 #[rstest]
-#[case::anthropic("anthropic/test-model", "/v1/messages", true)]
-#[case::azure("azure_ai/test-model", "/anthropic/v1/messages", false)]
-#[case::deepseek("deepseek/test-model", "/anthropic/v1/messages", true)]
+#[case::anthropic("anthropic/claude-test-model", "/v1/messages", true)]
+#[case::azure("azure_ai/claude-test-model", "/anthropic/v1/messages", false)]
+#[case::deepseek("deepseek/claude-test-model", "/anthropic/v1/messages", true)]
 #[tokio::test]
 async fn messages_reaches_the_provider_and_preserves_json_or_sse(
     #[case] model: &str,
@@ -29,7 +29,7 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(
 ) {
     let upstream = MockServer::start().await;
     let message = json!({"id": "msg_test", "type": "message", "role": "assistant",
-        "model": "test-model", "content": [{"type": "text", "text": "hello"}],
+        "model": "claude-test-model", "content": [{"type": "text", "text": "hello"}],
         "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}});
     let sse = MESSAGE_SSE;
     let template = if streaming {
@@ -47,7 +47,7 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(
             .and(header("anthropic-version", "test-version"));
     }
     mock.and(body_json(
-        json!({"model": "test-model", "messages": messages, "max_tokens": 16, "stream": streaming}),
+        json!({"model": "claude-test-model", "messages": messages, "max_tokens": 16, "stream": streaming}),
     ))
     .respond_with(template)
     .expect(1)
