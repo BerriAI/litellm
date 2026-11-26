@@ -82101,6 +82101,17 @@
         "cache_read_input_token_cost": 7.5e-08,
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
+    "perplexity/google/gemini-4-neon": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "cache_read_input_token_cost": 1.5e-07,
+        "source": "https://docs.perplexity.ai/docs/agent-api/models#google",
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
+    },
     "perplexity/xai/grok-4.7": {
         "litellm_provider": "perplexity",
         "mode": "responses",
@@ -90480,6 +90491,18 @@
         "supports_reasoning": true,
         "supports_function_calling": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info"
+    },
+    "nebius/deepseek-ai/DeepSeek-V4.1-Flash-1017-fast": {
+        "max_input_tokens": 1048576,
+        "input_cost_per_token": 6e-07,
+        "cache_read_input_token_cost": 1.2e-08,
+        "output_cost_per_token": 2.4e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/image2text/deepseek-ai%2FDeepSeek-V4.1-Flash-1017-fast"
     },
     "nebius/meta-models/muse-spark-open": {
         "max_input_tokens": 1048576,
