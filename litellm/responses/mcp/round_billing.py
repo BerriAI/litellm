@@ -1,23 +1,45 @@
 from asyncio import CancelledError
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
 from pydantic_core import to_jsonable_python
 
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.llms.anthropic import UsageIteration
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import CostBreakdown, ModelResponse, Usage
+
+
+@with_config(ConfigDict(extra="allow"))
+class _ServedAnthropicUsage(AnthropicUsage):
+    pass
+
+
+@with_config(ConfigDict(extra="allow"))
+class _ServedUsageIteration(UsageIteration):
+    pass
+
 
 _PER_REQUEST_KEYS: Final = frozenset({"discount_percent", "margin_percent", "margin_fixed_amount"})
 _TOTALS_WITH_FIXED_MARGIN: Final = ("total_cost", "margin_total_amount")
 _COST_BREAKDOWN: Final = TypeAdapter(CostBreakdown)
 _STR_KEYED: Final = TypeAdapter(Mapping[str, object])
 _JSONABLE_USAGE: Final = TypeAdapter(object)
+_ANTHROPIC_USAGE: Final = TypeAdapter(_ServedAnthropicUsage)
+_USAGE_ITERATION: Final = TypeAdapter(_ServedUsageIteration)
+_ITERATION_TOKEN_KEYS: Final = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
 
 _Round = TypeVar("_Round", ResponsesAPIResponse, ModelResponse)
 
@@ -63,6 +85,30 @@ def merged_chat_usage(first: Usage, final: Usage) -> Usage:
     return Usage.model_validate(_summed_usage(first, final))
 
 
+def _usage_iterations(usage: AnthropicUsage) -> Sequence[UsageIteration]:
+    if "iterations" in usage:
+        return usage["iterations"]
+    return (
+        _USAGE_ITERATION.validate_python(
+            {"type": "message", **{key: value for key, value in usage.items() if key in _ITERATION_TOKEN_KEYS}}
+        ),
+    )
+
+
+def merged_anthropic_usage(first: AnthropicUsage | None, final: AnthropicUsage | None) -> AnthropicUsage | None:
+    if first is None or final is None:
+        return final if first is None else first
+    summed: Final = _summed_mapping(first, final)
+    served: Final = _ANTHROPIC_USAGE.validate_python(
+        to_jsonable_python(
+            {key: value for key, value in summed.items() if key != "iterations" and value is not None}, fallback=dict
+        )
+    )
+    if "iterations" not in first and "iterations" not in final:
+        return served
+    return {**served, "iterations": (*_usage_iterations(first), *_usage_iterations(final))}
+
+
 def _chat_usage(round_response: ResponsesAPIResponse | ModelResponse) -> Usage | None:
     if isinstance(round_response, ResponsesAPIResponse):
         return (
@@ -101,17 +147,26 @@ def _usage_of_both_rounds(
     return merged_chat_usage(first_usage, final_usage)
 
 
+def _repeated_fixed_margin(
+    first_breakdown: CostBreakdown | None,
+    first_cached: bool,
+    final_breakdown: CostBreakdown | None,
+    final_cached: bool,
+) -> float:
+    if first_breakdown is None or final_breakdown is None or first_breakdown is final_breakdown:
+        return 0.0
+    if first_cached or final_cached:
+        return 0.0
+    return first_breakdown.get("margin_fixed_amount", 0.0)
+
+
 def _first_round_fixed_margin(
     first: ResponsesAPIResponse | ModelResponse,
     first_breakdown: CostBreakdown | None,
     final: ResponsesAPIResponse | ModelResponse,
     final_breakdown: CostBreakdown | None,
 ) -> float:
-    if first_breakdown is None or final_breakdown is None or first_breakdown is final_breakdown:
-        return 0.0
-    if served_from_cache(first) or served_from_cache(final):
-        return 0.0
-    return first_breakdown.get("margin_fixed_amount", 0.0)
+    return _repeated_fixed_margin(first_breakdown, served_from_cache(first), final_breakdown, served_from_cache(final))
 
 
 def _less_repeated_fixed_margin(summed: Mapping[str, object], repeated: float) -> Mapping[str, object]:
@@ -137,20 +192,48 @@ def summed_cost_breakdown(
 ) -> CostBreakdown | None:
     """The breakdown of the charged rounds, or None when a charged round was priced without its own breakdown, since a
     partial one would disagree with the billed cost. The fixed margin is charged once per request, not once per round."""
-    if served_from_cache(final):
-        return None if served_from_cache(first) else first_breakdown
+    return _breakdown_of_rounds(first_breakdown, served_from_cache(first), final_breakdown, served_from_cache(final))
+
+
+def _breakdown_of_rounds(
+    first_breakdown: CostBreakdown | None,
+    first_cached: bool,
+    final_breakdown: CostBreakdown | None,
+    final_cached: bool,
+) -> CostBreakdown | None:
+    if final_cached:
+        return None if first_cached else first_breakdown
     if first_breakdown is final_breakdown:
         return None
-    if served_from_cache(first):
+    if first_cached:
         return final_breakdown
     if first_breakdown is None or final_breakdown is None:
         return None
     return _COST_BREAKDOWN.validate_python(
         _less_repeated_fixed_margin(
             _summed_mapping(first_breakdown, final_breakdown),
-            _first_round_fixed_margin(first, first_breakdown, final, final_breakdown),
+            _repeated_fixed_margin(first_breakdown, first_cached, final_breakdown, final_cached),
         )
     )
+
+
+@dataclass(frozen=True, slots=True)
+class RoundCharge:
+    cost: float | None
+    cost_breakdown: CostBreakdown | None
+    served_from_cache: bool
+
+    def then(self, later: "RoundCharge") -> "RoundCharge":
+        repeated: Final = _repeated_fixed_margin(
+            self.cost_breakdown, self.served_from_cache, later.cost_breakdown, later.served_from_cache
+        )
+        return RoundCharge(
+            None if self.cost is None or later.cost is None else self.cost + later.cost - repeated,
+            _breakdown_of_rounds(
+                self.cost_breakdown, self.served_from_cache, later.cost_breakdown, later.served_from_cache
+            ),
+            self.served_from_cache and later.served_from_cache,
+        )
 
 
 def billed_for_every_round(

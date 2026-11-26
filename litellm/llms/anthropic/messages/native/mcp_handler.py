@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Any, Final, NamedTuple
 
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.messages.native.mcp_round_billing import BilledRounds, RoundBilling
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.types.llms.anthropic import (
     AnthropicMessagesTool,
@@ -44,6 +45,15 @@ def _extract_tool_use_blocks(response: AnthropicMessagesResponse) -> Sequence[Ma
 def _get_stop_reason(response: AnthropicMessagesResponse) -> str | None:
     stop_reason: Final = response.get("stop_reason")
     return stop_reason if isinstance(stop_reason, str) else None
+
+
+async def _messages_round(
+    call: Awaitable[AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]],
+) -> AnthropicMessagesResponse:
+    response: Final = await call
+    if isinstance(response, dict):
+        return response
+    raise TypeError("A non-streaming MCP tool loop round returned a stream")
 
 
 def _requests_stream(kwargs: Mapping[str, object]) -> bool:
@@ -149,63 +159,63 @@ async def anthropic_messages_with_mcp(
         if classified_here
         else base_call_args
     )
-    working_messages: Sequence[Mapping[str, object]] = tuple(messages)
-    response: AnthropicMessagesResponse = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
-        messages=list(working_messages), stream=False, **loop_call_args
-    )
+    billing: Final = RoundBilling.of(kwargs.get("litellm_logging_obj"))
+    billing.start()
 
-    for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
-        if _get_stop_reason(response) != "tool_use":
-            break
+    def model_round(round_messages: Sequence[Mapping[str, object]]) -> Awaitable[BilledRounds]:
+        return billing.round(
+            _messages_round(
+                _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
+                    messages=list(round_messages), stream=False, **loop_call_args
+                )
+            )
+        )
 
-        tool_use_blocks = _extract_tool_use_blocks(response)
+    async def tool_loop(
+        billed: BilledRounds, round_messages: Sequence[Mapping[str, object]], iterations_left: int
+    ) -> tuple[BilledRounds, Sequence[Mapping[str, object]]]:
+        if _get_stop_reason(billed.response) != "tool_use":
+            return billed, round_messages
+        tool_use_blocks: Final = _extract_tool_use_blocks(billed.response)
         if not tool_use_blocks:
-            break
+            return billed, round_messages
+        if iterations_left == 0:
+            verbose_logger.warning(
+                "MCP tool loop hit its %s iteration cap for model %s; returning the last response",
+                MAX_MCP_TOOL_USE_ITERATIONS,
+                model,
+            )
+            return billed, round_messages
+        with billing.billed_on_failure(billed):
+            tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                tool_server_map=tool_server_map,
+                served_tools=deduplicated_mcp_tools,
+                tool_calls=list(tool_use_blocks),
+                user_api_key_auth=context.user_api_key_auth,
+                mcp_auth_header=context.mcp_auth_header,
+                mcp_server_auth_headers=context.mcp_server_auth_headers,
+                oauth2_headers=context.oauth2_headers,
+                raw_headers=context.raw_headers,
+                litellm_call_id=context.litellm_call_id,
+                litellm_trace_id=context.litellm_trace_id,
+                request_tags=list(context.request_tags) if context.request_tags else None,
+                guardrail_context=context.guardrail_context,
+            )
+            if not tool_results:
+                return billed, round_messages
+            next_messages: Final = (
+                *round_messages,
+                {"role": "assistant", "content": list(_get_response_content(billed.response))},
+                _build_tool_result_message(tool_results),
+            )
+            later: Final = await model_round(next_messages)
+        return await tool_loop(billed.then(later), next_messages, iterations_left - 1)
 
-        tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
-            tool_server_map=tool_server_map,
-            served_tools=deduplicated_mcp_tools,
-            tool_calls=list(tool_use_blocks),
-            user_api_key_auth=context.user_api_key_auth,
-            mcp_auth_header=context.mcp_auth_header,
-            mcp_server_auth_headers=context.mcp_server_auth_headers,
-            oauth2_headers=context.oauth2_headers,
-            raw_headers=context.raw_headers,
-            litellm_call_id=context.litellm_call_id,
-            litellm_trace_id=context.litellm_trace_id,
-            request_tags=list(context.request_tags) if context.request_tags else None,
-            guardrail_context=context.guardrail_context,
+    billed, final_messages = await tool_loop(await model_round(messages), tuple(messages), MAX_MCP_TOOL_USE_ITERATIONS)
+    with billing.billed_on_failure(billed):
+        client_response: Final = (
+            await with_safeguard_results(billed.response, request_safeguards_evaluator(kwargs, final_messages))
+            if classified_here
+            else billed.response
         )
-
-        # Every tool call was skipped, so there is nothing to feed back; a
-        # tool_result message with empty content is rejected by Anthropic.
-        if not tool_results:
-            break
-
-        working_messages = (
-            *working_messages,
-            {"role": "assistant", "content": list(_get_response_content(response))},
-            _build_tool_result_message(tool_results),
-        )
-        response = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
-            messages=list(working_messages), stream=False, **loop_call_args
-        )
-    else:
-        verbose_logger.warning(
-            "MCP tool loop hit its %s iteration cap for model %s; returning the last response",
-            MAX_MCP_TOOL_USE_ITERATIONS,
-            model,
-        )
-
-    client_response: Final = (
-        await with_safeguard_results(response, request_safeguards_evaluator(kwargs, working_messages))
-        if classified_here
-        else response
-    )
-    if stream:
-        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
-
-        return FakeAnthropicMessagesStreamIterator(client_response)
-    return client_response
+    return billing.finish(billed, client_response, stream)

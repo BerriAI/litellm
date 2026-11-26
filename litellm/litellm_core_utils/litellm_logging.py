@@ -3341,6 +3341,11 @@ class Logging(LiteLLMLoggingBaseClass):
     def record_every_round_breakdown(self, cost_breakdown: CostBreakdown | None) -> None:
         self.cost_breakdown = cost_breakdown
 
+    def record_every_round_usage(self, usage: Usage | None, served_from_cache: bool) -> None:
+        self.model_call_details["cache_hit"] = served_from_cache
+        if usage is not None:
+            self.model_call_details["combined_usage_object"] = usage
+
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves
         the state the request's other attempts share untouched."""

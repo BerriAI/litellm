@@ -1,11 +1,18 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.responses.mcp.round_billing import billed_for_every_round, merged_round_usage, summed_cost_breakdown
+from litellm.responses.mcp.round_billing import (
+    RoundCharge,
+    billed_for_every_round,
+    merged_anthropic_usage,
+    merged_round_usage,
+    summed_cost_breakdown,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import CostBreakdown, ModelResponse, Usage
 
@@ -317,3 +324,105 @@ def test_billed_chat_usage_sums_every_provider_counter_and_adds_no_field_the_rou
         and isinstance(final_value := final_usage.prompt_tokens_details.model_dump()[key], int)
     } | {"cache_creation_token_details": {"ephemeral_5m_input_tokens": 50, "ephemeral_1h_input_tokens": 0}}
     assert billed["service_tier"] == "priority"
+
+
+def test_merged_anthropic_usage_sums_every_counter_and_keeps_each_rounds_iterations():
+    first: Final = cast(
+        AnthropicUsage,
+        {
+            "input_tokens": 418,
+            "output_tokens": 68,
+            "cache_creation_input_tokens": 2048,
+            "cache_read_input_tokens": 0,
+            "server_tool_use": {"web_search_requests": 1},
+            "service_tier": "standard",
+        },
+    )
+    final: Final = cast(
+        AnthropicUsage,
+        {
+            "input_tokens": 492,
+            "output_tokens": 432,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 2048,
+            "server_tool_use": {"web_search_requests": 2, "web_fetch_requests": 1},
+            "service_tier": "priority",
+            "inference_geo": None,
+            "iterations": [
+                {"type": "compaction", "input_tokens": 300, "output_tokens": 40},
+                {"type": "message", "input_tokens": 192, "output_tokens": 392},
+            ],
+        },
+    )
+
+    merged: Final = merged_anthropic_usage(first, final)
+
+    assert merged is not None
+    assert {key: value for key, value in merged.items() if key != "iterations"} == {
+        "input_tokens": 910,
+        "output_tokens": 500,
+        "cache_creation_input_tokens": 2048,
+        "cache_read_input_tokens": 2048,
+        "server_tool_use": {"web_search_requests": 3, "web_fetch_requests": 1},
+        "service_tier": "priority",
+    }
+    assert tuple(merged["iterations"]) == (
+        {
+            "type": "message",
+            "input_tokens": 418,
+            "output_tokens": 68,
+            "cache_creation_input_tokens": 2048,
+            "cache_read_input_tokens": 0,
+        },
+        *final["iterations"],
+    )
+    assert sum(iteration.get("input_tokens", 0) for iteration in merged["iterations"]) == merged["input_tokens"]
+
+
+def _charged(cost: float, fixed_margin: float) -> RoundCharge:
+    return RoundCharge(
+        cost,
+        {
+            "input_cost": cost - fixed_margin,
+            "output_cost": 0.0,
+            "total_cost": cost,
+            "margin_fixed_amount": fixed_margin,
+            "margin_total_amount": fixed_margin,
+        },
+        served_from_cache=False,
+    )
+
+
+_FROM_CACHE: Final = RoundCharge(0.0, None, served_from_cache=True)
+_UNPRICED: Final = RoundCharge(None, None, served_from_cache=False)
+
+
+@pytest.mark.parametrize(
+    ("rounds", "request_cost"),
+    [
+        pytest.param((_charged(0.003, 0.001), _charged(0.004, 0.001), _charged(0.005, 0.001)), 0.010, id="all-paid"),
+        pytest.param((_charged(0.003, 0.001), _FROM_CACHE, _charged(0.005, 0.001)), 0.007, id="a-cached-round"),
+        pytest.param((_charged(0.003, 0.001), _UNPRICED, _charged(0.005, 0.001)), None, id="an-unpriced-round"),
+    ],
+)
+def test_a_request_of_many_rounds_is_charged_each_paid_round_and_the_fixed_margin_once(
+    rounds: tuple[RoundCharge, RoundCharge, RoundCharge], request_cost: float | None
+):
+    first, second, third = rounds
+
+    charged: Final = first.then(second).then(third)
+
+    assert charged.served_from_cache is False
+    if request_cost is None:
+        assert (charged.cost, charged.cost_breakdown) == (None, None)
+        return
+    assert charged.cost == pytest.approx(request_cost)
+    assert charged.cost_breakdown is not None
+    assert charged.cost_breakdown["total_cost"] == pytest.approx(request_cost)
+    assert charged.cost_breakdown["margin_total_amount"] == pytest.approx(0.001)
+
+
+def test_a_request_whose_every_round_came_from_the_response_cache_is_charged_nothing():
+    charged: Final = _FROM_CACHE.then(_FROM_CACHE).then(_FROM_CACHE)
+
+    assert (charged.cost, charged.cost_breakdown, charged.served_from_cache) == (0.0, None, True)
