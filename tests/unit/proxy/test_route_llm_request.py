@@ -3783,6 +3783,50 @@ async def test_tokens_of_a_rerouted_latest_alias_request_count_against_the_tpm_o
 
 
 @pytest.mark.asyncio
+async def test_tokens_of_a_rerouted_latest_alias_request_count_in_the_daily_window_of_the_latest_deployment() -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router, target = _latest_alias_router_with_limits(
+        {"tpd": 50, "daily_reset_time": "12:00"}, optional_pre_call_checks=["enforce_model_rate_limits"]
+    )
+    checks: Final = [callback for callback in litellm.callbacks if isinstance(callback, ModelRateLimitingCheck)]
+    assert checks, "the router registered no deployment limit callback"
+    for check in checks:
+        check.clock = lambda: datetime(2026, 1, 2, 6, 0, tzinfo=timezone.utc)
+    data: Final = {"model": "latest", "metadata": {}}
+    await _serve_latest_alias_from_versioned_model_group(data, router)
+    success: Final = {
+        "litellm_params": {"metadata": data["metadata"]},
+        "standard_logging_object": {
+            "model_group": "pinned",
+            "model_id": "pinned-id",
+            "total_tokens": 80,
+            "hidden_params": {"litellm_model_name": f"openai/{target}"},
+        },
+    }
+    for check in checks:
+        await check.async_log_success_event(success, None, None, None)
+    with pytest.raises(litellm.RateLimitError):
+        await _serve_latest_alias_from_versioned_model_group({"model": "latest", "metadata": {}}, router)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra", "route_type"),
+    [({"user_config": {"model_list": []}}, "acompletion"), ({}, "_aresponses_websocket")],
+)
+async def test_a_latest_alias_request_the_shared_router_cannot_admit_per_turn_or_does_not_serve_is_not_rerouted(
+    extra: Mapping[str, object], route_type: str
+) -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router, _ = _latest_alias_router_with_limits({})
+    data: Final = {"model": "latest", "metadata": {}, **extra}
+    await _serve_latest_alias_from_versioned_model_group(data, router, route_type)
+    assert data == {"model": "latest", "metadata": {}, **extra}
+
+
+@pytest.mark.asyncio
 async def test_a_latest_alias_whose_deployments_are_all_blocked_is_refused_instead_of_rerouted() -> None:
     from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
     from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group

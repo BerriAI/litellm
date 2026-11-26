@@ -903,16 +903,25 @@ def _is_request_metadata(
     return isinstance(value, dict)
 
 
+_ROUTE_TYPES_ADMITTING_EVERY_TURN_ON_ONE_DEPLOYMENT: Final = frozenset({"_aresponses_websocket"})
+
+
 async def _serve_latest_alias_from_versioned_model_group(
     data: dict[str, object],  # mutable-ok: request body is the proxy-wide mutable dict shared with route_request
     llm_router: LitellmRouter | None,
+    route_type: str | None = None,
 ) -> None:
     requested: Final = data.get("model")
     metadata: Final = tuple(filter(_is_request_metadata, (data.get(key) for key in _METADATA_CHANNELS)))
     for value in metadata:
         value.pop(LATEST_ALIAS_REQUESTED_MODEL_GROUP_METADATA_KEY, None)
         value.pop(LATEST_ALIAS_REQUESTED_DEPLOYMENT_METADATA_KEY, None)
-    if llm_router is None or not isinstance(requested, str):
+    if (
+        llm_router is None
+        or not isinstance(requested, str)
+        or data.get("user_config") is not None
+        or route_type in _ROUTE_TYPES_ADMITTING_EVERY_TURN_ON_ONE_DEPLOYMENT
+    ):
         return
     target: Final = latest_alias_versioned_model_group(requested, llm_router)
     if target is None:
@@ -937,7 +946,7 @@ async def route_request(
     Common helper to route the request
     """
     enforce_total_timeout_scope(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
-    await _serve_latest_alias_from_versioned_model_group(data, llm_router)
+    await _serve_latest_alias_from_versioned_model_group(data, llm_router, route_type)
     router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     try:
         return await _route_request_single_attempt(

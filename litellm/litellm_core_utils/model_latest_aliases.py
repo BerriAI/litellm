@@ -31,6 +31,13 @@ def latest_alias_requested_deployment(success_kwargs: Mapping[str, object]) -> t
     return (deployment_id, model) if isinstance(deployment_id, str) and isinstance(model, str) else None
 
 
+def latest_alias_requested_deployment_daily_window(success_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    """Success kwargs that place the daily counters of the latest-alias deployment in its own ``daily_reset_time``"""
+    admitted: Final = _admitted_latest_alias_deployment(success_kwargs) or {}
+    reset: Final = admitted.get("daily_reset_time")
+    return {"litellm_params": {"daily_reset_time": reset} if isinstance(reset, str) else {}}
+
+
 def latest_alias_io_token_reservation(success_kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
     """The input and output tokens a rerouted request holds on the latest-alias deployment it was also admitted on"""
     admitted: Final = _admitted_latest_alias_deployment(success_kwargs)

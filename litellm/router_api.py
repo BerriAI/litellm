@@ -2039,7 +2039,12 @@ async def admit_on_model_group(
     model: Final = None if params is None else params.get("model")
     if not isinstance(deployment_id, str) or not isinstance(model, str):
         return None
-    admitted: Final = {"id": deployment_id, "model": model}
+    daily_reset_time: Final = params.get("daily_reset_time") if params is not None else None
+    admitted: Final = {
+        "id": deployment_id,
+        "model": model,
+        **({"daily_reset_time": daily_reset_time} if isinstance(daily_reset_time, str) else {}),
+    }
     channel: Final = next((key for key in _REQUEST_METADATA_CHANNELS if _is_request_metadata(request.get(key))), None)
     metadata: Final = None if channel is None else request.get(channel)
     if channel is None or not _is_request_metadata(metadata):
