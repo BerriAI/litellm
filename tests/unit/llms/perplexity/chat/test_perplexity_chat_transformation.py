@@ -1033,10 +1033,10 @@ def test_chat_tools_reach_an_agent_model_whose_cost_map_row_leaves_function_call
     assert [tool["name"] for tool in json.loads(upstream.calls.last.request.content)["tools"]] == ["get_time"]
 
 
+@pytest.mark.parametrize("model", ["perplexity/example/agent-model-disabled", "perplexity/perplexity/agent-disabled"])
 def test_chat_tools_stay_rejected_for_an_agent_model_the_cost_map_marks_as_not_function_calling(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+    model: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
-    model: Final = "perplexity/example/agent-model-disabled"
     upstream: Final = _register_agent_model(monkeypatch, respx_mock, model, {"supports_function_calling": False})
 
     with pytest.raises(litellm.UnsupportedParamsError):
@@ -1048,3 +1048,113 @@ def test_chat_tools_stay_rejected_for_an_agent_model_the_cost_map_marks_as_not_f
         )
 
     assert upstream.call_count == 0
+
+
+_OWN_AGENT_MODEL: Final = "perplexity/perplexity/example-own-agent"
+
+
+@pytest.mark.parametrize("flags", [{}, {"supports_function_calling": True}])
+def test_chat_tools_reach_a_perplexity_own_agent_model_whose_id_repeats_the_provider_prefix(
+    flags: dict[str, bool], monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = _register_agent_model(monkeypatch, respx_mock, _OWN_AGENT_MODEL, flags)
+
+    litellm.completion(
+        model=_OWN_AGENT_MODEL,
+        api_key="fake-api-key",
+        messages=[{"role": "user", "content": "What time is it in Vienna?"}],
+        tools=[_GET_TIME_TOOL],
+        tool_choice="auto",
+        parallel_tool_calls=False,
+    )
+
+    sent: Final = json.loads(upstream.calls.last.request.content)
+    assert [tool["name"] for tool in sent["tools"]] == ["get_time"]
+    assert sent["tool_choice"] == "auto"
+    assert sent["parallel_tool_calls"] is False
+
+
+@pytest.mark.parametrize("supported", [True, False])
+def test_supported_params_for_a_perplexity_own_agent_model_follow_its_cost_map_row(
+    supported: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        _OWN_AGENT_MODEL,
+        {
+            "litellm_provider": "perplexity",
+            "mode": "responses",
+            "input_cost_per_token": 0.0,
+            "supports_function_calling": supported,
+            "supports_reasoning": supported,
+            "supports_web_search": supported,
+        },
+    )
+
+    params: Final = litellm.get_supported_openai_params(
+        model=_OWN_AGENT_MODEL.removeprefix("perplexity/"), custom_llm_provider="perplexity"
+    )
+
+    capability_params: Final = ("reasoning_effort", "web_search_options", "tools", "tool_choice", "parallel_tool_calls")
+    assert {name: name in params for name in capability_params} == dict.fromkeys(capability_params, supported)
+
+
+def test_chat_tools_stay_rejected_for_a_doubled_prefix_id_that_routes_to_a_chat_row(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "perplexity/example-shadowed",
+        {"litellm_provider": "perplexity", "mode": "chat", "input_cost_per_token": 0.0},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "perplexity/perplexity/example-shadowed",
+        {
+            "litellm_provider": "perplexity",
+            "mode": "responses",
+            "input_cost_per_token": 0.0,
+            "supports_function_calling": True,
+        },
+    )
+    chat_upstream: Final = respx_mock.post("https://api.perplexity.ai/chat/completions")
+    agent_upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/responses")
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.completion(
+            model="perplexity/perplexity/example-shadowed",
+            api_key="fake-api-key",
+            messages=[{"role": "user", "content": "What time is it in Vienna?"}],
+            tools=[_GET_TIME_TOOL],
+        )
+
+    assert chat_upstream.call_count == 0
+    assert agent_upstream.call_count == 0
+
+
+@pytest.mark.parametrize("model", [_OWN_AGENT_MODEL, "perplexity/perplexity/example-shadowed"])
+def test_model_info_advertises_the_params_a_chat_request_to_the_same_perplexity_model_accepts(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_row: Final = {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "input_cost_per_token": 0.0,
+        "supports_function_calling": True,
+        "supports_web_search": True,
+    }
+    monkeypatch.setitem(litellm.model_cost, _OWN_AGENT_MODEL, agent_row)
+    monkeypatch.setitem(litellm.model_cost, "perplexity/perplexity/example-shadowed", agent_row)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "perplexity/example-shadowed",
+        {"litellm_provider": "perplexity", "mode": "chat", "input_cost_per_token": 0.0},
+    )
+
+    advertised: Final = litellm.get_model_info(model)["supported_openai_params"]
+    accepted: Final = litellm.get_supported_openai_params(
+        model=model.removeprefix("perplexity/"), custom_llm_provider="perplexity"
+    )
+
+    assert sorted(advertised) == sorted(accepted)

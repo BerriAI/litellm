@@ -17,7 +17,7 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAnnotation, ChatCompletionAnnotationURLCitation
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
-from litellm.utils import declared_value_factory, is_explicitly_disabled_factory
+from litellm.utils import declared_value_factory, get_model_info_helper, is_explicitly_disabled_factory
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -37,6 +37,18 @@ _BASE_PARAMS: Final = (
     "extra_headers",
 )
 _TOOL_PARAMS: Final = ("tools", "tool_choice", "parallel_tool_calls")
+
+
+def _capability_model(model: str) -> str:
+    """The capability helpers strip one `perplexity/` before their lookup, which also eats the start of Perplexity's
+    own ids (`perplexity/glm-5.3`). When routing matched the row only under `perplexity/<model>`, hand the helpers
+    that id so their strip lands back on the one routing resolved."""
+    qualified: Final = f"perplexity/{model}"
+    try:
+        routed: Final = get_model_info_helper(model=model, custom_llm_provider="perplexity", catalog_only=True)
+    except Exception:  # noqa: BLE001  # routing reads a failed lookup as no row, so the helpers keep the id as given
+        return model
+    return qualified if routed.get("key") == qualified else model
 
 
 def _accepts_tools(model: str, provider: str | None) -> bool:
@@ -74,11 +86,12 @@ class PerplexityChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         """Ref: https://docs.perplexity.ai/api-reference/chat-completions"""
         provider: Final = self.custom_llm_provider
+        capability_model: Final = _capability_model(model)
         return [
             *_BASE_PARAMS,
-            *(("reasoning_effort",) if litellm.supports_reasoning(model, provider) else ()),
-            *(("web_search_options",) if litellm.supports_web_search(model, provider) else ()),
-            *(_TOOL_PARAMS if _accepts_tools(model, provider) else ()),
+            *(("reasoning_effort",) if litellm.supports_reasoning(capability_model, provider) else ()),
+            *(("web_search_options",) if litellm.supports_web_search(capability_model, provider) else ()),
+            *(_TOOL_PARAMS if _accepts_tools(capability_model, provider) else ()),
         ]
 
     def transform_response(
