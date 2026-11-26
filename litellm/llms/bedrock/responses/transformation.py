@@ -244,6 +244,9 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
     def _declares_no_sampling(self, model: str) -> bool:
         return not AmazonConverseConfig.supports_sampling_params(model)
 
+    def _keeps_sampling_at_effort_none(self, params: Mapping[str, object], model: str) -> bool:
+        return super()._keeps_sampling_at_effort_none(params, _without_chat_completions_route(model))
+
     def supports_native_file_search(self) -> bool:
         return False
 

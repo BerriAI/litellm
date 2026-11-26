@@ -5520,6 +5520,21 @@ def test_a_row_without_sampling_support_refuses_each_sampling_param_without_drop
 
 
 @pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
+def test_a_row_without_sampling_support_refuses_temperature_at_an_effort_none_it_does_not_allow(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    config: type[OpenAIResponsesAPIConfig],
+    model: str,
+    row_key: str,
+) -> None:
+    monkeypatch.setitem(model_cost_table.published(), row_key, _responses_row(row_key, _NO_SAMPLING))
+    request: Final[ResponsesAPIOptionalRequestParams] = {"temperature": 0.5, "reasoning": {"effort": "none"}}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="support temperature: .*supports_sampling_params: false"):
+        config().map_openai_params(response_api_optional_params=request, model=model, drop_params=False)
+
+
+@pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
 def test_a_row_without_sampling_support_drops_default_sampling_values_without_drop_params(
     local_model_cost_map: None,
     monkeypatch: pytest.MonkeyPatch,
