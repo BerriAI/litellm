@@ -633,6 +633,7 @@ class AsyncHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
         transport: httpx.AsyncBaseTransport | None = None,
         follow_redirects: bool = True,
+        client: httpx.AsyncClient | None = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -640,12 +641,16 @@ class AsyncHTTPHandler:
         self.shared_session = shared_session
         self.transport = transport
         self.follow_redirects = follow_redirects
-        self._owns_client = True
-        self._client = self.create_client(
-            timeout=timeout,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-            shared_session=shared_session,
+        self._owns_client = client is None
+        self._client = (
+            self.create_client(
+                timeout=timeout,
+                event_hooks=event_hooks,
+                ssl_verify=ssl_verify,
+                shared_session=shared_session,
+            )
+            if client is None
+            else client
         )
         self.client_alias = client_alias
 
