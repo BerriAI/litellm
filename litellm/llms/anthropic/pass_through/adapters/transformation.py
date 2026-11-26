@@ -1229,24 +1229,26 @@ class LiteLLMAnthropicMessagesAdapter:
         effort: Final = reasoning_effort_within_thinking_budget(output_effort, budget_effort)
         if effort is None or effort == budget_effort:
             return effort
+        normalized: Final = normalize_effort(effort)
         drop_reason: Final = (
             None
             if not drop_params
             else "no reasoning API defines it"
             if effort not in KNOWN_REASONING_EFFORTS
             else "its model cost map entry does not list it"
-            if excludes_effort(effort)
+            if excludes_effort(normalized)
             else None
         )
         if drop_reason is not None and report_drops:
             verbose_logger.warning(
-                "Dropping output_config.effort=%r for %s, %s, because drop_params is set", effort, model, drop_reason
+                "Dropping output_config.effort=%r for %s, %s, because drop_params is set",
+                normalized,
+                model,
+                drop_reason,
             )
         if drop_reason is not None:
             return budget_effort
-        normalized_within_budget: Final = reasoning_effort_within_thinking_budget(
-            normalize_effort(effort), budget_effort
-        )
+        normalized_within_budget: Final = reasoning_effort_within_thinking_budget(normalized, budget_effort)
         return budget_effort if normalized_within_budget == budget_effort else effort
 
     @staticmethod
