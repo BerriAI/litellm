@@ -408,9 +408,9 @@ class UnknownPreviousResponseError(UnresolvablePreviousResponseError):
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: str,
+        model: str | None,
+        llm_provider: str | None,
         response: httpx.Response,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,

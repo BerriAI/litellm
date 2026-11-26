@@ -241,3 +241,15 @@ def _provider_name(model: str, provider: object) -> str:
         return litellm.get_llm_provider(model=model)[1]
     except litellm.BadRequestError:
         return ""
+
+
+def tool_result_text_part(block: object) -> str | None:
+    match block:
+        case {"type": "text", "text": str(text)}:
+            return text
+        case {"type": "text", "text": object()}:
+            return None
+        case {"type": "text"}:
+            return ""
+        case _:
+            return None

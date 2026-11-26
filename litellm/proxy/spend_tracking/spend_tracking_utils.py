@@ -557,7 +557,7 @@ def get_logging_payload(
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params: Final = kwargs.get("litellm_params", {})
     metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
-    completion_start_time: Final = kwargs.get("completion_start_time", end_time)
+    completion_start_time: Final = kwargs.get("completion_start_time") or end_time
     call_type: Final = kwargs.get("call_type")
     cache_hit: Final = kwargs.get("cache_hit", False)
 
@@ -581,11 +581,11 @@ def get_logging_payload(
         elif isinstance(_usage, dict):
             usage = _usage
 
-    # A request that failed mid-stream has no usable response_obj usage, but the
-    # streaming handler may have recovered the usage from the chunks already
-    # delivered. Honor that override so the partial usage lands in spend tracking.
+    # A request that failed mid-stream has no usable response_obj usage, and a success
+    # that bills a failed attempt it replaced only has its own. combined_usage_object
+    # holds the usage of every call the row bills, so it wins in both cases.
     _combined_usage: Final = kwargs.get("combined_usage_object")
-    if not usage and isinstance(_combined_usage, litellm.Usage):
+    if (not usage or "failed_attempts_billed_on_success" in kwargs) and isinstance(_combined_usage, litellm.Usage):
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs, metadata)
