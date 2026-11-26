@@ -4711,7 +4711,7 @@ class PrometheusLogger(CustomLogger):
             rows: Final = await memberships_table.find_many(
                 skip=(page - 1) * page_size,
                 take=page_size,
-                order=[{"team_id": "asc"}, {"user_id": "asc"}],
+                order=[{"user_id": "asc"}, {"team_id": "asc"}],
                 include={"litellm_budget_table": True},
             )
             total_count: Final = await memberships_table.count() if page == 1 else None
