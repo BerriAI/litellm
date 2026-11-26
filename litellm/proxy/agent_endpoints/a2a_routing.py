@@ -245,9 +245,19 @@ def _agent_prices_the_client_left_unset(
 ) -> Mapping[str, object]:
     if any(data.get(key) is not None for key in _PER_SECOND_PRICES):
         return {}
-    return {
-        key: value for key, value in litellm_params.items() if key in _CUSTOM_PRICING_PARAMS and data.get(key) is None
-    }
+    return _numeric_prices(
+        {key: value for key, value in litellm_params.items() if key in _CUSTOM_PRICING_PARAMS and data.get(key) is None}
+    )
+
+
+def _numeric_prices(prices: Mapping[str, object]) -> Mapping[str, object]:
+    try:
+        CustomPricingLiteLLMParams.model_validate(prices)
+    except ValidationError as e:
+        unusable: Final = frozenset(str(error["loc"][0]) for error in e.errors() if error["loc"])
+        verbose_proxy_logger.warning("A2A agent prices %s are not numbers, so they are not billed", sorted(unusable))
+        return {key: value for key, value in prices.items() if key not in unusable}
+    return prices
 
 
 def _agent_params_under_client_prices(

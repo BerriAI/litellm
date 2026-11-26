@@ -902,6 +902,30 @@ async def test_route_a2a_bridge_agent_with_an_unusable_price_still_answers(
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    "agent",
+    [
+        _priced_dbx_agent("text-price", {"input_cost_per_token": "abc", "output_cost_per_token": 0.0002}),
+        _priced_url_agent("url-text-price", {"input_cost_per_token": "abc", "output_cost_per_token": 0.0002}),
+    ],
+    ids=["bridge", "url"],
+)
+async def test_route_a2a_agent_with_a_token_price_that_is_not_a_number_answers_and_bills_its_other_price(
+    httpx_transport: None, agent: AgentResponse
+) -> None:
+    respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    respx.post(AGENT_URL).mock(return_value=httpx.Response(200, json=A2A_REPLY))
+
+    cost, response, _ = await _billed_chat_call(_registry_with(agent), agent.agent_name)
+
+    assert response.choices[0].message.content == "pong"
+    assert response.usage.completion_tokens > 0
+    assert cost == pytest.approx(response.usage.completion_tokens * 0.0002)
+
+
+@respx.mock
 async def test_route_a2a_bridge_per_query_agent_reports_no_input_or_output_cost(httpx_transport: None) -> None:
     respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
         return_value=httpx.Response(200, json=AGENT_REPLY)
