@@ -2,6 +2,7 @@ import base64
 import functools
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from types import MappingProxyType
@@ -1505,6 +1506,57 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
         result[0]["input"] == {}
     ), "Empty function arguments should result in empty dict"
     assert "provider_specific_fields" not in result[0]
+
+
+@pytest.mark.parametrize("tool_call_id", ("", f"{THOUGHT_SIGNATURE_SEPARATOR}sig"), ids=("empty", "signature-only"))
+def test_translate_openai_content_to_anthropic_gives_each_tool_call_without_an_id_its_own_id(tool_call_id: str):
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id=tool_call_id, type="function", function=Function(name=name, arguments="{}")
+                    )
+                    for name in ("Bash", "Read")
+                ],
+            )
+        )
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter()._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    ids = [block["id"] for block in result]
+    assert all(re.fullmatch(r"[a-zA-Z0-9_-]+", tool_use_id) for tool_use_id in ids)
+    assert len(set(ids)) == 2
+
+
+def test_translate_streaming_openai_chunk_gives_a_signature_only_tool_call_id_an_id():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                content=None,
+                role="assistant",
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id=f"{THOUGHT_SIGNATURE_SEPARATOR}sig",
+                        function=Function(arguments="", name="Bash"),
+                        type="function",
+                        index=0,
+                    )
+                ],
+            ),
+        )
+    ]
+
+    _block_type, content_block_start = (
+        LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
+    )
+
+    assert re.fullmatch(r"[a-zA-Z0-9_-]+", content_block_start["id"])
 
 
 def test_translate_openai_content_to_anthropic_text_and_tool_calls():

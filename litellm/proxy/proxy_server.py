@@ -380,7 +380,7 @@ from litellm.llms.anthropic.pass_through.convertible_blocks import (
     non_string_user_text_error,
     without_non_string_system_texts,
 )
-from litellm.llms.anthropic.pass_through.messages.utils import deployment_renames_tool_use_ids, native_messages_to_send
+from litellm.llms.anthropic.pass_through.messages.utils import native_messages_to_send
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
@@ -14696,7 +14696,6 @@ def _counted_request_messages(
     messages: Sequence[dict[str, object]] | None,  # mutable-ok: TokenCountRequest.messages is typed list[dict]
     messages_format: TokenCountMessagesFormat,
     drops: bool,
-    renames_tool_use_ids: bool,
 ) -> list[dict[str, object]] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes list messages
     if messages is None:
         return None
@@ -14705,7 +14704,7 @@ def _counted_request_messages(
     user_text_error: Final = None if drops else non_string_user_text_error(messages)
     if user_text_error is not None:
         raise ProxyException(message=user_text_error, type="invalid_request_error", param="messages", code=400)
-    kept: Final = native_messages_to_send(messages, drops, rewrites_tool_use_ids=renames_tool_use_ids)
+    kept: Final = native_messages_to_send(messages, drops)
     emptied_error: Final = emptied_messages_error(messages, kept)
     if emptied_error is not None:
         raise ProxyException(message=emptied_error, type="invalid_request_error", param="messages", code=400)
@@ -14890,12 +14889,7 @@ async def count_request_tokens(
         {} if llm_router is None else _router_default_litellm_params(llm_router)
     )
     count_drops: Final = _count_drops_params(deployment, {**router_defaults, **request_litellm_params})
-    request_messages: Final = _counted_request_messages(
-        messages,
-        messages_format,
-        count_drops,
-        await asyncify(deployment_renames_tool_use_ids)(deployment_view.get("litellm_params", {}), request.model),
-    )
+    request_messages: Final = _counted_request_messages(messages, messages_format, count_drops)
     request_system: Final = _counted_request_system(system, messages_format, count_drops)
     bridged_system: Final = (
         system_without_claude_code_billing_header(request_system)

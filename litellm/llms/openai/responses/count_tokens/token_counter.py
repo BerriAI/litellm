@@ -13,7 +13,6 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
-from litellm.llms.anthropic.pass_through.messages.utils import deployment_renames_tool_use_ids
 from litellm.llms.anthropic.pass_through.responses_adapters.handler import preserves_system_instructions
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
@@ -87,7 +86,6 @@ class OpenAITokenCounter(BaseTokenCounter):
                     tools=tools,
                     output_format=output_format,
                     preserve_system_instructions=preserves_system_instructions(request_params),
-                    rewrites_tool_use_ids=deployment_renames_tool_use_ids(request_params, model_to_use),
                 )
             case "openai":
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
