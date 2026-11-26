@@ -115,6 +115,7 @@ impl ReceivedRequest for Request {
 pub struct RecordingCall<P: litellm_host::protocol::Protocol> {
     pub request: Mutex<Option<P::Request>>,
     pub events: Arc<CallEvents>,
+    pub responses: Mutex<Vec<litellm_host::interceptors::RawResponse>>,
     pub chunks: Mutex<Vec<P::Chunk>>,
     pub head: Mutex<Option<P::StreamHead>>,
 }
@@ -165,6 +166,7 @@ impl<P: litellm_host::protocol::Protocol> RecordingCall<P> {
         Self {
             request: Mutex::new(Some(request)),
             events: Arc::new(CallEvents::default()),
+            responses: Mutex::new(Vec::new()),
             chunks: Mutex::new(Vec::new()),
             head: Mutex::new(None),
         }
@@ -191,8 +193,9 @@ impl<P: litellm_host::protocol::Protocol> litellm_host::interceptors::Intercepto
 
     async fn after_provider_response(
         &self,
-        _: litellm_host::interceptors::RawResponse,
+        raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), P::Error> {
+        self.responses.lock().unwrap().push(raw);
         Ok(())
     }
 }

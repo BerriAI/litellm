@@ -28,6 +28,16 @@ pub struct RequestContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawResponse {
     pub body: String,
+    pub headers: Vec<(String, String)>,
+}
+
+impl RawResponse {
+    pub fn new(body: impl Into<String>) -> Self {
+        Self {
+            body: body.into(),
+            headers: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,7 +196,7 @@ mod tests {
                 .await?;
                 Interceptors::after_provider_response(
                     &channel.interceptors,
-                    RawResponse { body: "raw".into() },
+                    RawResponse::new("raw"),
                 )
                 .await?;
                 Ok((sent, ()))

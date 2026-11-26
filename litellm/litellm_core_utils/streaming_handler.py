@@ -1001,6 +1001,7 @@ class CustomStreamWrapper:
             )
             or (getattr(model_response.choices[0].delta, "reasoning_items", None) is not None)
             or getattr(model_response.choices[0].delta, "thinking_blocks", None)
+            or bool(getattr(model_response.choices[0].delta, "reasoning_details", None))
         ):
             return True
         else:

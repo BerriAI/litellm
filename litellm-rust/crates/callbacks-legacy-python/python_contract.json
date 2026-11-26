@@ -31,7 +31,8 @@
     "logger",
     "original_response",
     "api_key",
-    "additional_args"
+    "additional_args",
+    "response_headers"
   ],
   "defers_async_logging": [
     "logger"

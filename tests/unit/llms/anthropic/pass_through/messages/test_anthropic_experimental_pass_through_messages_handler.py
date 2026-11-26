@@ -13,7 +13,7 @@ import openai
 import pytest
 import respx
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,6 +33,54 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 import unittest.mock
+
+
+CONTAINER_RESPONSE: Final = {
+    "id": "resp_container",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.5",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+async def test_openai_messages_container_answers_400_unless_drop_params_drops_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = {
+        "model": "openai/gpt-5.5",
+        "max_tokens": 80,
+        "messages": [{"role": "user", "content": "hi"}],
+        "container": {"id": "container_abc"},
+        "api_key": "test-api-key",
+    }
+    with respx.mock as upstream:
+        bridge: Final = upstream.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=CONTAINER_RESPONSE)
+        )
+        with pytest.raises(litellm.BadRequestError) as rejected:
+            await litellm.anthropic.messages.acreate(**request)
+        assert rejected.value.status_code == 400
+        assert "no equivalent for container" in rejected.value.message
+        assert not bridge.called
+
+        await litellm.anthropic.messages.acreate(**request, drop_params=True)
+        assert "container" not in json.loads(bridge.calls.last.request.content)
 
 
 def test_anthropic_experimental_pass_through_messages_handler():
@@ -1616,6 +1664,71 @@ async def test_anthropic_messages_streaming_forwards_safeguards_and_keeps_safegu
     assert captured["body"]["safeguards"] == safeguards
     assert events[0]["message"]["safeguard_results"] == safeguard_results
     assert [e for e in events if e["type"] == "message_delta"][0]["delta"]["safeguard_results"] == safeguard_results
+
+
+class _ResponseHeaderCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final[asyncio.Queue[dict[str, str]]] = asyncio.Queue()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged.put_nowait(TypeAdapter(dict[str, str]).validate_python(kwargs["response_headers"]))
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_messages_call_hands_loggers_every_header_the_provider_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages import handler
+
+    provider_headers: Final = {
+        "content-type": "text/event-stream",
+        "anthropic-ratelimit-tokens-remaining": "11999000",
+        "request-id": "req_streamed_messages",
+        "x-ms-is-spilled-over": "true",
+    }
+    message: Final = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-4-5",
+        "content": [],
+        "stop_reason": None,
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 0},
+    }
+    sse: Final = _sse_body(
+        [
+            {"type": "message_start", "message": message},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+            {"type": "message_stop"},
+        ]
+    )
+
+    def upstream_streams_with_provider_headers(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers=provider_headers, content=sse, request=request)
+
+    upstream: Final = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_streams_with_provider_headers))
+    capture: Final = _ResponseHeaderCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    _bind_logging_worker_to_running_loop()
+
+    stream: Final = await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="anthropic/claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        api_key="sk-test",
+        client=upstream,
+        stream=True,
+    )
+    await _drain(stream)
+    logged: Final = await asyncio.wait_for(capture.logged.get(), timeout=10)
+
+    assert provider_headers.items() <= logged.items()
 
 
 def _claude_code_auto_mode_request() -> tuple[list[dict[str, object]], list[dict[str, object]]]:

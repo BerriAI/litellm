@@ -2,7 +2,7 @@
 //! the deferred and worker-submitted success paths, and the sync-callbacks-for-async-calls
 //! duplication. All of it expires with the legacy callback contract.
 
-use litellm_host::interceptors::{RequestContext, WireRequest};
+use litellm_host::interceptors::{RawResponse, RequestContext, WireRequest};
 use litellm_host_python::to_py;
 use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 
@@ -35,7 +35,7 @@ pub trait LegacyCallbacks {
     fn post_call(
         &self,
         py: Python<'_>,
-        original_response: &str,
+        raw: &RawResponse,
         api_key: Option<&str>,
         body: Option<&Py<PyDict>>,
         headers: Option<&Py<PyDict>>,
@@ -148,7 +148,7 @@ impl LegacyCallbacks for PythonLogger {
     fn post_call(
         &self,
         py: Python<'_>,
-        original_response: &str,
+        raw: &RawResponse,
         api_key: Option<&str>,
         body: Option<&Py<PyDict>>,
         headers: Option<&Py<PyDict>>,
@@ -158,7 +158,13 @@ impl LegacyCallbacks for PythonLogger {
         additional.set_item("headers", headers)?;
         Logging::PostCall.call(
             py,
-            (self.object(py), original_response, api_key, &additional),
+            (
+                self.object(py),
+                raw.body.as_str(),
+                api_key,
+                &additional,
+                raw.headers.clone(),
+            ),
         )?;
         Ok(())
     }
