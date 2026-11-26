@@ -1014,9 +1014,6 @@
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "prefer-const": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
@@ -1828,7 +1825,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/routing_groups/index.tsx": {
