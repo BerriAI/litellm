@@ -26,7 +26,9 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
+from litellm.exceptions import UnresolvablePreviousResponseError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.router import Deployment
@@ -74,6 +76,19 @@ def mark_advisor_orchestration_failure(exception: BaseException) -> None:
 def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
     """Whether ``exception`` was tagged by ``mark_advisor_orchestration_failure``."""
     return bool(getattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, False))
+
+
+def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
+    return (
+        is_advisor_orchestration_failure(exception)
+        or isinstance(exception, UnresolvablePreviousResponseError)
+        or is_previous_response_rejected(exception)
+    )
+
+
+def is_previous_response_rejected(exception: BaseException | None) -> bool:
+    rejected_param: Final[object] = getattr(exception, "param", None)
+    return rejected_param == "previous_response_id"
 
 
 _BACKGROUND_RESPONSE_POLL_CALL_ORIGINS: Final[frozenset[InternalCallOrigin]] = frozenset(
@@ -346,6 +361,10 @@ def _should_run_cooldown_logic(
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: litellm rejected the request before calling the deployment"
         )
+        return False
+
+    if isinstance(original_exception, IMAGE_ANSWER_ERRORS):
+        verbose_router_logger.debug("Should Not Run Cooldown Logic: the deployment answered without an image")
         return False
 
     if request_kwargs is not None and _is_per_user_provider_request(request_kwargs):

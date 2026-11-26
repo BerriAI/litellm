@@ -1,6 +1,7 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
+import json
 import threading
 from collections import deque
 from collections.abc import AsyncGenerator, Iterator, Mapping
@@ -12,7 +13,7 @@ from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
-from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
 )
@@ -142,8 +143,10 @@ class AnthropicResponsesStreamWrapper:
         model: str,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
+        tool_search_name: str | None = None,
     ) -> None:
         self.responses_stream = responses_stream
+        self._tool_search_name: Final = tool_search_name
         self.model = model
         self.safeguards_evaluator: Final = safeguards_evaluator
         self._message_id: str = f"msg_{uuid.uuid4()}"
@@ -202,6 +205,20 @@ class AnthropicResponsesStreamWrapper:
             }
         )
         return block_idx
+
+    def _emit_mcp_call(self, item: object) -> None:
+        tool_use, result = LiteLLMAnthropicToResponsesAPIAdapter.mcp_blocks_from_call(item)
+        use_idx: Final = self._open_block(None, {**tool_use, "input": {}})
+        self._chunk_queue.append(
+            {
+                "type": "content_block_delta",
+                "index": use_idx,
+                "delta": {"type": "input_json_delta", "partial_json": json.dumps(tool_use["input"])},
+            }
+        )
+        self._chunk_queue.append({"type": "content_block_stop", "index": use_idx})
+        result_idx: Final = self._open_block(None, result)
+        self._chunk_queue.append({"type": "content_block_stop", "index": result_idx})
 
     @staticmethod
     def _field(source: object, name: str) -> object:
@@ -295,11 +312,18 @@ class AnthropicResponsesStreamWrapper:
 
             if item_type == "message":
                 self._open_block(item_id, {"type": "text", "text": ""})
-            elif item_type == "function_call":
+            elif item_type == "function_call" or (
+                item_type == "tool_search_call" and self._tool_search_name is not None
+            ):
                 call_id: Final = (
                     getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or ""
                 )
-                name = getattr(item, "name", None) or (item.get("name") if isinstance(item, dict) else None) or ""
+                name: Final = (
+                    (self._tool_search_name if item_type == "tool_search_call" else None)
+                    or getattr(item, "name", None)
+                    or (item.get("name") if isinstance(item, dict) else None)
+                    or ""
+                )
                 if item_id:
                     self._pending_tool_ids[item_id] = call_id
                 self._open_block(
@@ -422,11 +446,17 @@ class AnthropicResponsesStreamWrapper:
             if self._field(item, "type") == "reasoning":
                 self._close_reasoning_item(item, item_id)
                 return
+            if self._field(item, "type") == "mcp_call":
+                self._emit_mcp_call(item)
+                return
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:
                 return
             if self._field(item, "type") == "function_call":
                 self._stream_unstreamed_tool_input(item_id, self._field(item, "arguments"))
+            search_arguments: Final = as_str_mapping(self._field(item, "arguments"))
+            if self._field(item, "type") == "tool_search_call" and search_arguments:
+                self._stream_unstreamed_tool_input(item_id, json.dumps(search_arguments))
             self._tool_input_settled_blocks = self._tool_input_settled_blocks | {block_idx}
             self._chunk_queue.append(
                 {
@@ -461,11 +491,12 @@ class AnthropicResponsesStreamWrapper:
             output: Final = (getattr(response_obj, "output", None) or ()) if response_obj is not None else ()
             refusal_text: Final = responses_output_refusal_text(output) or (self._refusal_text or None)
             status: Final = getattr(response_obj, "status", None) if response_obj is not None else None
-            has_tool_call: Final = any(
-                getattr(item, "type", None) == "function_call"
-                or (isinstance(item, dict) and item.get("type") == "function_call")
-                for item in output
+            tool_call_types: Final = (
+                frozenset({"function_call", "tool_search_call"})
+                if self._tool_search_name is not None
+                else frozenset({"function_call"})
             )
+            has_tool_call: Final = any(self._field(item, "type") in tool_call_types for item in output)
             stop_reason: Final = (
                 "max_tokens"
                 if status == "incomplete"

@@ -114,22 +114,46 @@ impl MessagesRoute {
             stream,
         } = request;
         let provider_name = provider.as_str();
+        let config = provider.config();
         log_request_body(provider_name, stream, &wire.body);
         let response = send(
             &self.http,
             Authenticated {
-                headers: wire.headers,
-                signer,
+                headers: wire.headers.clone(),
+                signer: signer.clone(),
             },
             &wire.url,
             &wire.body,
             timeout,
         )
         .await?;
-        if !response.status().is_success() {
-            return Err(provider_error(response).await);
-        }
-        let config = provider.config();
+        let response = if response.status().is_success() {
+            response
+        } else {
+            let status = response.status().as_u16();
+            let text = response.text().await.map_err(network)?;
+            log_error_body(status, &text);
+            let Some(retried_body) = config.retry_after_http_error(status, &text, &wire.body)
+            else {
+                return Err(http_error(status, &text));
+            };
+            log_request_body(provider_name, stream, &retried_body);
+            let retried = send(
+                &self.http,
+                Authenticated {
+                    headers: wire.headers,
+                    signer,
+                },
+                &wire.url,
+                &retried_body,
+                timeout,
+            )
+            .await?;
+            if !retried.status().is_success() {
+                return Err(provider_error(retried).await);
+            }
+            retried
+        };
         if stream {
             return Ok(streaming_response(
                 response,
@@ -137,9 +161,10 @@ impl MessagesRoute {
                 provider_name,
             ));
         }
+        let headers = header_pairs(&response);
         let text = response.text().await.map_err(network)?;
         log_response_body(&text);
-        context.response_received(&text).await?;
+        context.response_received(&text, headers).await?;
         decode_response(config, &identity.model, &text)
             .map(|message| MessagesCallResponse::Complete(Box::new(message)))
     }
@@ -179,13 +204,17 @@ async fn provider_error(response: reqwest::Response) -> Error {
     match response.text().await {
         Ok(text) => {
             log_error_body(status, &text);
-            Error::Transport(TransportError::Http {
-                status,
-                body: truncate_error_body(&text),
-            })
+            http_error(status, &text)
         }
         Err(error) => network(error),
     }
+}
+
+fn http_error(status: u16, text: &str) -> Error {
+    Error::Transport(TransportError::Http {
+        status,
+        body: truncate_error_body(text),
+    })
 }
 
 fn decode_response(
@@ -204,16 +233,20 @@ fn decode_response(
         .map_err(Error::from)
 }
 
+fn header_pairs(response: &reqwest::Response) -> Vec<(String, String)> {
+    response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
+        .collect()
+}
+
 fn streaming_response(
     response: reqwest::Response,
     decoder: Option<StreamDecoder>,
     provider: &'static str,
 ) -> MessagesCallResponse {
-    let headers = response
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
-        .collect();
+    let headers = header_pairs(&response);
     let chunks = match decoder {
         None => futures_util::stream::try_unfold(response, move |mut response| async move {
             let chunk = response.chunk().await.map_err(network)?;

@@ -89,6 +89,12 @@ def _declared_levels(raw: object) -> tuple[str, ...] | None:
     return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in declared)
 
 
+def deployment_reasoning_effort_levels(model_info: Mapping[str, object] | None) -> tuple[str, ...] | None:
+    if model_info is None:
+        return None
+    return declared_reasoning_efforts(MappingProxyType({_DECLARED_EFFORTS_KEY: model_info.get(_DECLARED_EFFORTS_KEY)}))
+
+
 def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
     """The levels an entry declares, resolved from the model string a provider config holds rather
     than from a router deployment's model_info.
@@ -113,7 +119,10 @@ def declared_reasoning_efforts_for_map_key(key: str) -> tuple[str, ...] | None:
 
 
 REASONING_EFFORT_STRENGTH_ORDER: Final = ("minimal", "low", "medium", "high", "xhigh", "max")
-_STRENGTH_RANK: Final = MappingProxyType({effort: rank for rank, effort in enumerate(REASONING_EFFORT_STRENGTH_ORDER)})
+REASONING_EFFORT_STRENGTH_RANK: Final = MappingProxyType(
+    {effort: rank for rank, effort in enumerate(REASONING_EFFORT_STRENGTH_ORDER)}
+)
+DEFAULT_REASONING_EFFORT: Final = "default"
 
 
 def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -> str:
@@ -124,11 +133,27 @@ def nearest_declared_reasoning_effort(requested: str, declared: Sequence[str]) -
     who turned reasoning off must not be billed for it, and a model that cannot turn it off says so
     itself. A level outside the strength order is likewise returned as is for upstream to judge."""
     ranked: Final = sorted(
-        (effort for effort in declared if effort in _STRENGTH_RANK), key=lambda effort: _STRENGTH_RANK[effort]
+        (effort for effort in declared if effort in REASONING_EFFORT_STRENGTH_RANK),
+        key=lambda effort: REASONING_EFFORT_STRENGTH_RANK[effort],
     )
-    if requested in ranked or requested not in _STRENGTH_RANK or not ranked:
+    if requested in ranked or requested not in REASONING_EFFORT_STRENGTH_RANK or not ranked:
         return requested
-    return next((effort for effort in ranked if _STRENGTH_RANK[effort] >= _STRENGTH_RANK[requested]), ranked[-1])
+    return next(
+        (
+            effort
+            for effort in ranked
+            if REASONING_EFFORT_STRENGTH_RANK[effort] >= REASONING_EFFORT_STRENGTH_RANK[requested]
+        ),
+        ranked[-1],
+    )
+
+
+def reasoning_effort_within_thinking_budget(requested: object, budget_effort: str | None) -> str | None:
+    budget_rank: Final = REASONING_EFFORT_STRENGTH_RANK.get(budget_effort) if budget_effort else None
+    if budget_rank is None or not isinstance(requested, str) or requested in ("", DEFAULT_REASONING_EFFORT):
+        return budget_effort
+    requested_rank: Final = REASONING_EFFORT_STRENGTH_RANK.get(requested)
+    return budget_effort if requested_rank is not None and requested_rank > budget_rank else requested
 
 
 def _requested_level(requested: object) -> str | None:

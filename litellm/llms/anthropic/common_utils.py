@@ -5,7 +5,7 @@ This file contains common utils for anthropic calls.
 import copy
 import json
 import re
-from collections.abc import Container, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Container, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain
 from types import MappingProxyType
@@ -24,7 +24,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -48,6 +48,7 @@ from litellm.llms.anthropic.wif import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
@@ -67,7 +68,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import OPENAI_RESPONSE_HEADERS, LlmProviders
 
 _MessageT = TypeVar("_MessageT")
 
@@ -79,6 +80,11 @@ DROP_DISABLED_THINKING_WARNING: Final = (
     "Dropping `thinking={'type': 'disabled'}` for model=%s: thinking is always on for this model and cannot be "
     "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
     "thinking blocks, and those thinking tokens are billed as output tokens."
+)
+DROP_SERVER_SIDE_FALLBACK_BETA_WARNING: Final = (
+    "Dropping the %s beta for model=%s (drop_params=True): neither its model_info nor the model cost map lists "
+    "server-side fallback support for it. Set model_info.supports_server_side_fallback: true on a deployment whose "
+    "model supports it."
 )
 
 # Anthropic error `type` (both the JSON error body and SSE `event: error`
@@ -240,8 +246,9 @@ def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple
     """Put the ``tool_config`` point's breakpoint on the last tool Anthropic caches.
 
     Anthropic caches tools as one prefix ending at the marked tool, so the last one carries
-    the mark, skipping tool-search tools whose transform drops cache markers. A client that
-    already marked a tool keeps its own breakpoint. Returns ``None`` when nothing is marked.
+    the mark, skipping tool-search tools whose transform drops cache markers and deferred tools,
+    which Anthropic refuses to mark. A client that already marked a tool keeps its own breakpoint.
+    Returns ``None`` when nothing is marked.
     """
     control: Final = _tool_config_point_control(points)
     tool_list: Final = validated_object_list(tools) or ()
@@ -251,7 +258,9 @@ def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple
     cacheable: Final = tuple(
         (position, fields)
         for position, fields in enumerate(tool_fields)
-        if fields is not None and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+        if fields is not None
+        and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+        and fields.get("defer_loading") is not True
     )
     if not cacheable:
         return None
@@ -444,6 +453,33 @@ def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta:
     joined: Final = ",".join(_beta_header_values(existing) + _beta_header_values(new_beta))
     betas: Final = frozenset(b.strip() for b in joined.split(",") if b.strip())
     return ",".join(sorted(betas))
+
+
+def supports_server_side_fallback(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    declared: Final = None if model_info is None else model_info.get("supports_server_side_fallback")
+    if isinstance(declared, bool):
+        return declared
+    return AnthropicModelInfo.supports_model_capability(model, "supports_server_side_fallback", custom_llm_provider)
+
+
+def without_unsupported_server_side_fallback_beta(
+    betas: Sequence[str],
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    drop_params: object,
+) -> tuple[str, ...]:
+    fallback_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value
+    if (
+        fallback_beta not in betas
+        or not drops_unsupported_params(drop_params)
+        or supports_server_side_fallback(model, custom_llm_provider, model_info)
+    ):
+        return tuple(betas)
+    litellm.verbose_logger.warning(DROP_SERVER_SIDE_FALLBACK_BETA_WARNING, fallback_beta, model)
+    return tuple(beta for beta in betas if beta != fallback_beta)
 
 
 def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tuple[dict, str | None]:
@@ -1854,6 +1890,24 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     return "must contain thinking" in lower
 
 
+_ANTHROPIC_TOOL_USE_ID_PATTERN_ERROR: Final = re.compile(
+    r"(?:tool_use\.id|tool_result\.tool_use_id): String should match pattern"
+)
+
+
+def is_anthropic_tool_use_id_pattern_error(error_text: str) -> bool:
+    """messages.N.content.M.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"""
+    return _ANTHROPIC_TOOL_USE_ID_PATTERN_ERROR.search(error_text) is not None
+
+
+def messages_with_renamed_tool_use_ids(messages: object) -> Sequence[object] | None:
+    listed: Final = as_object_list(messages)
+    if listed is None:
+        return None
+    renamed: Final = sanitize_tool_use_ids_in_anthropic_messages(listed)
+    return None if renamed == listed else renamed
+
+
 _ADAPTIVE_THINKING_KEYS: Final = (
     AnthropicThinkingParam.__required_keys__ | AnthropicThinkingParam.__optional_keys__
 ) - {"budget_tokens"}
@@ -2033,6 +2087,32 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data.pop("thinking", None)
 
 
+def strips_thinking_from_anthropic_messages_request(request_body: Mapping[object, object]) -> bool:
+    messages: Final = as_object_list(request_body.get("messages"))
+    return "thinking" in request_body or (
+        messages is not None and strip_thinking_blocks_from_anthropic_messages(messages) != messages
+    )
+
+
+_DROP_ANTHROPIC_MESSAGE: Final = object()
+
+
+def _strip_empty_content_blocks_from_message(message: object) -> object:
+    mapping: Final = as_str_mapping(message)
+    content: Final = None if mapping is None else as_object_list(mapping.get("content"))
+    if mapping is None or content is None:
+        return message
+    from_user: Final = mapping.get("role") == "user"
+    filtered: Final = [
+        block
+        for block in content
+        if not _is_empty_text_block(block, from_user) and not is_empty_unsigned_thinking_block(block)
+    ]
+    if len(filtered) == len(content):
+        return message
+    return {**mapping, "content": filtered} if filtered else _DROP_ANTHROPIC_MESSAGE
+
+
 def strip_empty_content_blocks_from_anthropic_messages(
     messages: Sequence[object],
 ) -> list[Any]:
@@ -2067,25 +2147,23 @@ def strip_empty_content_blocks_from_anthropic_messages(
     The caller's list and its content blocks are never mutated; modified
     messages are returned as shallow copies with a fresh content list.
     """
-    out: Final[list[Any]] = []
-    for m in messages:
-        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
-            out.append(m)
-            continue
-        content = m["content"]
-        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_unsigned_thinking_block(b)]
-        if len(filtered) == len(content):
-            out.append(m)
-        elif filtered:
-            out.append({**m, "content": filtered})
-    return out
+    return [
+        stripped_message
+        for message in messages
+        if (stripped_message := _strip_empty_content_blocks_from_message(message)) is not _DROP_ANTHROPIC_MESSAGE
+    ]
 
 
-def _is_empty_text_block(block: object) -> bool:
-    if not isinstance(block, dict) or block.get("type") != "text":
-        return False
-    text: Final = block.get("text")
-    return not isinstance(text, str) or not text.strip()
+def _is_empty_text_block(block: object, from_user: bool) -> bool:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return not text.strip()
+        case {"type": "text", "text": object()}:
+            return not from_user
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
 
 
 def is_empty_thinking_block(block: object) -> bool:
@@ -2133,29 +2211,35 @@ def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     """
     base_id = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if THOUGHT_SIGNATURE_SEPARATOR in raw_id else raw_id
     sanitized: Final = re.sub(r"[^a-zA-Z0-9_-]", "_", base_id)
-    return sanitized or "tool_use_id"
+    return fill_empty_tool_use_id(sanitized)
 
 
-def _sanitize_tool_use_id_content_block(block: object) -> object:
+def fill_empty_tool_use_id(raw_id: str) -> str:
+    return raw_id or "tool_use_id"
+
+
+def _sanitize_tool_use_id_content_block(block: object, rename: Callable[[str], str]) -> object:
     if not isinstance(block, dict):
         return block
     block_type: Final = block.get("type")
     if block_type in ("tool_use", "server_tool_use"):
         raw_id = block.get("id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = rename(raw_id)
             if normalized != raw_id:
                 return {**block, "id": normalized}
     elif block_type == "tool_result":
         raw_id = block.get("tool_use_id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = rename(raw_id)
             if normalized != raw_id:
                 return {**block, "tool_use_id": normalized}
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> list[Any]:
+def sanitize_tool_use_ids_in_anthropic_messages(
+    messages: Sequence[object], rename: Callable[[str], str] = normalize_anthropic_tool_use_id
+) -> list[Any]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
@@ -2172,7 +2256,7 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> l
             out.append(m)
             continue
         content = m["content"]
-        new_content = [_sanitize_tool_use_id_content_block(b) for b in content]
+        new_content = [_sanitize_tool_use_id_content_block(b, rename) for b in content]
         if new_content == content:
             out.append(m)
         else:
@@ -2457,21 +2541,25 @@ def normalize_cache_control_in_anthropic_payload(
     return {key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()}
 
 
-def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
-    openai_headers: Final = {}
-    if "anthropic-ratelimit-requests-limit" in headers:
-        openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]
-    if "anthropic-ratelimit-requests-remaining" in headers:
-        openai_headers["x-ratelimit-remaining-requests"] = headers["anthropic-ratelimit-requests-remaining"]
-    if "anthropic-ratelimit-tokens-limit" in headers:
-        openai_headers["x-ratelimit-limit-tokens"] = headers["anthropic-ratelimit-tokens-limit"]
-    if "anthropic-ratelimit-tokens-remaining" in headers:
-        openai_headers["x-ratelimit-remaining-tokens"] = headers["anthropic-ratelimit-tokens-remaining"]
+_ANTHROPIC_RATELIMIT_TO_OPENAI_HEADERS: Final = MappingProxyType(
+    {
+        "anthropic-ratelimit-requests-limit": "x-ratelimit-limit-requests",
+        "anthropic-ratelimit-requests-remaining": "x-ratelimit-remaining-requests",
+        "anthropic-ratelimit-tokens-limit": "x-ratelimit-limit-tokens",
+        "anthropic-ratelimit-tokens-remaining": "x-ratelimit-remaining-tokens",
+    }
+)
 
-    llm_response_headers: Final = {"{}-{}".format("llm_provider", k): v for k, v in headers.items()}
 
-    additional_headers: Final = {**llm_response_headers, **openai_headers}
-    return additional_headers
+def process_anthropic_headers(headers: httpx.Headers | Mapping[str, str]) -> dict[str, str]:
+    llm_response_headers: Final = {f"llm_provider-{name}": value for name, value in headers.items()}
+    provider_openai_headers: Final = {name: value for name, value in headers.items() if name in OPENAI_RESPONSE_HEADERS}
+    mapped_openai_headers: Final = {
+        openai_name: headers[anthropic_name]
+        for anthropic_name, openai_name in _ANTHROPIC_RATELIMIT_TO_OPENAI_HEADERS.items()
+        if anthropic_name in headers
+    }
+    return {**llm_response_headers, **provider_openai_headers, **mapped_openai_headers}
 
 
 def _anthropic_model_entry(

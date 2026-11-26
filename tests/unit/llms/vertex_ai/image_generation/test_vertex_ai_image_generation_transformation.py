@@ -11,6 +11,7 @@ from google.oauth2.credentials import Credentials
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.exceptions import UnprocessableEntityError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
@@ -353,42 +354,6 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert result.usage.input_tokens_details.image_tokens == 39
         assert result.usage.output_tokens == 17
         assert result.usage.total_tokens == 110
-
-    def test_transform_text_only_no_image_response_bills_text_tokens(self) -> None:
-        result: Final = self.config.transform_image_generation_response(
-            model="gemini-3.1-flash-image",
-            raw_response=httpx.Response(
-                200,
-                json={
-                    "candidates": [
-                        {"content": {"parts": [{"text": "No image generated"}]}, "finishReason": "NO_IMAGE"}
-                    ],
-                    "usageMetadata": {
-                        "promptTokenCount": 5,
-                        "candidatesTokenCount": 25,
-                        "totalTokenCount": 30,
-                        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 25}],
-                    },
-                },
-            ),
-            model_response=ImageResponse(),
-            logging_obj=MagicMock(),
-            request_data={},
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
-        assert result.data == []
-        assert cost_calculator(
-            model="gemini-3.1-flash-image",
-            image_response=result,
-            model_info={
-                "input_cost_per_token": 5e-7,
-                "output_cost_per_token": 3e-6,
-                "output_cost_per_image_token": 6e-5,
-            },
-            vertex_location="global",
-        ) == pytest.approx(5 * 5e-7 + 25 * 3e-6)
 
     def test_transform_image_generation_response_preserves_usage_details_and_traffic_type(self):
         mock_response: Final = MagicMock(spec=httpx.Response)
@@ -823,12 +788,16 @@ def test_gemini_image_generation_response_maps_usage_by_modality():
 def test_gemini_image_generation_response_with_falsy_usage_metadata_keeps_zeroed_usage(usage_metadata: object):
     response: Final = _transform_gemini_response(
         {
-            "candidates": [{"content": {"parts": []}, "groundingMetadata": {"webSearchQueries": ["a"]}}],
+            "candidates": [
+                {
+                    "content": {"parts": [{"inlineData": {"data": "aGVsbG8="}}]},
+                    "groundingMetadata": {"webSearchQueries": ["a"]},
+                }
+            ],
             "usageMetadata": usage_metadata,
         }
     )
 
-    assert response.data == []
     assert (response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens) == (0, 0, 0)
     assert response.usage.web_search_requests == 1
 
@@ -838,7 +807,12 @@ def test_gemini_image_generation_response_rejects_non_object_usage_metadata_with
     usage_metadata: object,
 ):
     with pytest.raises(ValidationError) as exc_info:
-        _transform_gemini_response({"candidates": [], "usageMetadata": usage_metadata})
+        _transform_gemini_response(
+            {
+                "candidates": [{"content": {"parts": [{"inlineData": {"data": "aGVsbG8="}}]}}],
+                "usageMetadata": usage_metadata,
+            }
+        )
 
     assert "input_value" not in str(exc_info.value)
 
@@ -851,7 +825,6 @@ def test_gemini_image_generation_response_rejects_non_object_usage_metadata_with
         {"candidates": ""},
         {"candidates": {}},
         {"candidates": [{}]},
-        {"candidates": [{"finishReason": "SAFETY"}]},
         {"candidates": [{"content": {}}]},
         {"candidates": [{"content": {"parts": ""}}]},
         {"candidates": [{"content": {"parts": "plain text"}}]},
@@ -863,8 +836,9 @@ def test_gemini_image_generation_response_rejects_non_object_usage_metadata_with
         {"candidates": [{"content": {"parts": [{"inline_data": {"data": "snake-case-is-not-read"}}]}}]},
     ],
 )
-def test_gemini_image_generation_response_without_inline_image_data_has_no_images(payload: object):
-    assert _transform_gemini_response(payload).data == []
+def test_gemini_image_generation_response_without_inline_image_data_is_unprocessable(payload: object):
+    with pytest.raises(UnprocessableEntityError):
+        _transform_gemini_response(payload)
 
 
 def test_gemini_image_generation_response_keeps_image_order_and_thought_signatures():

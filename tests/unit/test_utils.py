@@ -1213,6 +1213,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "supports_regex_lookaround": {"type": "boolean"},
+                "supports_all_json_schema_keywords": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
                     "type": "array",
@@ -2517,6 +2518,29 @@ def test_reasoning_content_preserved_in_text_completion_wrapper():
     choice = transformed["choices"][0]
     assert choice["text"] == "Some answer text"
     assert choice["reasoning_content"] == "Here's my chain of thought..."
+
+
+def test_text_completion_stream_carries_a_reasoning_details_piece_on_its_frame() -> None:
+    signature_piece: Final = {"type": "reasoning.text", "signature": "sig", "index": 0}
+    chunks: Final = tuple(
+        ModelResponseStream(
+            id="chatcmpl-1",
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=delta)],
+        )
+        for delta in (Delta(content="391"), Delta(reasoning_details=[signature_piece]))
+    )
+
+    frames: Final = tuple(
+        TextCompletionStreamWrapper(completion_stream=iter(chunks), model="test-model", stream_options=None)
+    )
+
+    assert [(frame.choices[0].text, "reasoning_details" in frame.choices[0]) for frame in frames] == [
+        ("391", False),
+        (None, True),
+    ]
+    assert frames[1].choices[0]["reasoning_details"] == [signature_piece]
 
 
 def test_anthropic_claude_4_invoke_chat_provider_config():

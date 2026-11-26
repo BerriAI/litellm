@@ -1,4 +1,6 @@
 import base64
+import io
+import wave
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -93,17 +95,36 @@ def test_gemini_tts_pcm_response_returns_raw_pcm_bytes() -> None:
     assert response.response.headers["content-type"] == "audio/pcm"
 
 
+@pytest.mark.parametrize("pcm", [PCM_BYTES, b"\xff\xff\x00\x00" * 6], ids=["pcm", "pcm-that-sniffs-as-mpeg"])
 @pytest.mark.parametrize("response_format", ["wav", None])
-def test_gemini_tts_wav_and_default_responses_wrap_pcm_in_wav(response_format: str | None) -> None:
+def test_gemini_tts_wav_and_default_responses_wrap_pcm_in_wav(response_format: str | None, pcm: bytes) -> None:
     response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
-        model_response=_model_response(GEMINI_TTS_MODEL, PCM_BYTES),
+        model_response=_model_response(GEMINI_TTS_MODEL, pcm),
         response_format=response_format,
     )
 
     body: Final = response.response.content
     assert body[:4] == b"RIFF"
     assert body[8:12] == b"WAVE"
-    assert body[44:] == PCM_BYTES
+    assert body[44:] == pcm
+    assert response.response.headers["content-type"] == "audio/wav"
+
+
+@pytest.mark.parametrize("response_format", ["wav", None])
+def test_gemini_tts_wav_response_keeps_audio_that_is_already_wav_as_is(response_format: str | None) -> None:
+    stereo_wav: Final = io.BytesIO()
+    with wave.open(stereo_wav, "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(48000)
+        wav.writeframes(PCM_BYTES)
+
+    response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
+        model_response=_model_response(GEMINI_TTS_MODEL, stereo_wav.getvalue()),
+        response_format=response_format,
+    )
+
+    assert response.response.content == stereo_wav.getvalue()
     assert response.response.headers["content-type"] == "audio/wav"
 
 

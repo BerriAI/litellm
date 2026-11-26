@@ -30,6 +30,8 @@ from litellm.litellm_core_utils.tool_fields import (
     tools_without_mcp_servers,
 )
 from litellm.llms.anthropic.common_utils import (
+    is_anthropic_tool_use_id_pattern_error,
+    messages_with_renamed_tool_use_ids,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
     strip_unsignable_thinking_blocks_for_claude,
 )
@@ -107,6 +109,14 @@ def _declared_base_model(kwargs: Mapping[str, object]) -> str | None:
     model_info: Final = as_str_mapping(kwargs.get("model_info"))
     info_base_model: Final = None if model_info is None else model_info.get("base_model")
     return info_base_model if isinstance(info_base_model, str) else None
+
+
+def model_info_with_request_base_model(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    model_info: Final = as_str_mapping(kwargs.get("model_info"))
+    base_model: Final = kwargs.get("base_model")
+    if not isinstance(base_model, str) or not base_model:
+        return model_info
+    return {**(model_info or {}), "base_model": base_model}
 
 
 def _provider_error_code(body: object) -> str | None:
@@ -203,6 +213,32 @@ def _messages_without_rejected_reasoning(
     )
 
 
+def _messages_with_renamed_tool_use_ids(messages: _AnthropicMessages, error: Exception) -> "_AnthropicMessages | None":
+    renamed: Final = (
+        messages_with_renamed_tool_use_ids(messages)
+        if isinstance(error, litellm.BadRequestError) and is_anthropic_tool_use_id_pattern_error(str(error))
+        else None
+    )
+    return None if renamed is None else _ANTHROPIC_MESSAGES.validate_python(list(renamed))
+
+
+def _is_resent_rejection(messages: _AnthropicMessages, sent_encrypted_reasoning: bool, error: Exception) -> bool:
+    return (sent_encrypted_reasoning and _is_rejected_reasoning(error)) or (
+        _messages_with_renamed_tool_use_ids(messages, error) is not None
+    )
+
+
+def _replayed_messages(
+    messages: _AnthropicMessages,
+    error: litellm.BadRequestError,
+    completion_kwargs: _CompletionKwargs,
+    sent_encrypted_reasoning: bool,
+) -> "_AnthropicMessages | None":
+    return _messages_without_rejected_reasoning(
+        messages, error, completion_kwargs, sent_encrypted_reasoning
+    ) or _messages_with_renamed_tool_use_ids(messages, error)
+
+
 async def _acompletion_without_rejected_reasoning(
     completion_kwargs: _CompletionKwargs,
     messages: _AnthropicMessages,
@@ -210,12 +246,10 @@ async def _acompletion_without_rejected_reasoning(
 ) -> "ChatResult":
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(completion_kwargs)
     try:
-        with resent_without_rejected_reasoning(sent_encrypted_reasoning):
+        with resent_on(partial(_is_resent_rejection, messages, sent_encrypted_reasoning)):
             return await litellm.acompletion(**completion_kwargs)
     except litellm.BadRequestError as error:
-        replayed_messages: Final = _messages_without_rejected_reasoning(
-            messages, error, completion_kwargs, sent_encrypted_reasoning
-        )
+        replayed_messages: Final = _replayed_messages(messages, error, completion_kwargs, sent_encrypted_reasoning)
         if replayed_messages is None:
             raise
         return await litellm.acompletion(**prepare_replay(replayed_messages))
@@ -228,12 +262,10 @@ def _completion_without_rejected_reasoning(
 ) -> "ChatResult | Coroutine[object, object, ChatResult]":
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(completion_kwargs)
     try:
-        with resent_without_rejected_reasoning(sent_encrypted_reasoning):
+        with resent_on(partial(_is_resent_rejection, messages, sent_encrypted_reasoning)):
             return litellm.completion(**completion_kwargs)
     except litellm.BadRequestError as error:
-        replayed_messages: Final = _messages_without_rejected_reasoning(
-            messages, error, completion_kwargs, sent_encrypted_reasoning
-        )
+        replayed_messages: Final = _replayed_messages(messages, error, completion_kwargs, sent_encrypted_reasoning)
         if replayed_messages is None:
             raise
         return litellm.completion(**prepare_replay(replayed_messages))
@@ -755,16 +787,25 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         model: Final = completion_kwargs.get("model", "")
         custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
+        deployment_model_info: Final = model_info_with_request_base_model(completion_kwargs)
 
         if isinstance(reasoning_effort, str):
             normalized = normalize_reasoning_effort_value(
-                reasoning_effort, model=model, custom_llm_provider=custom_llm_provider
+                reasoning_effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
             )
             if normalized != reasoning_effort:
                 completion_kwargs["reasoning_effort"] = normalized
         elif isinstance(reasoning_effort, dict) and "effort" in reasoning_effort:
             effort: Final = reasoning_effort["effort"]
-            normalized = normalize_reasoning_effort_value(effort, model=model, custom_llm_provider=custom_llm_provider)
+            normalized = normalize_reasoning_effort_value(
+                effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
+            )
             if normalized != effort:
                 completion_kwargs["reasoning_effort"] = {
                     **reasoning_effort,

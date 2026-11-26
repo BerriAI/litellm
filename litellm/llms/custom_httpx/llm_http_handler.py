@@ -41,6 +41,7 @@ from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, up
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.exceptions import with_provider_reply
 from litellm.files.types import FileContentStreamingResult
+from litellm.images.retries import async_retried, retried
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
@@ -7319,6 +7320,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
+        max_retries: int = 0,
     ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
         """
         Handles image generation requests.
@@ -7341,6 +7343,7 @@ class BaseLLMHTTPHandler:
                 fake_stream=fake_stream,
                 litellm_metadata=litellm_metadata,
                 api_key=api_key,
+                max_retries=max_retries,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -7387,26 +7390,24 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider requires multipart/form-data (e.g., Stability AI)
+        def send() -> httpx.Response:
             if image_generation_provider_config.use_multipart_form_data():
-                # Use form-data: pass files={} to force multipart encoding
-                response = sync_httpx_client.post(
+                return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (default)
-                response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
+            return sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
 
+        try:
+            response: Final = retried(send, max_retries)()
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -7443,6 +7444,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
+        max_retries: int = 0,
     ) -> ImageResponse:
         """
         Async version of the image generation handler.
@@ -7495,26 +7497,24 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            # Check if provider requires multipart/form-data (e.g., Stability AI)
+        async def send() -> httpx.Response:
             if image_generation_provider_config.use_multipart_form_data():
-                # Use form-data: pass files={} to force multipart encoding
-                response = await async_httpx_client.post(
+                return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
-            else:
-                # Use JSON (default)
-                response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    json=data,
-                    timeout=timeout,
-                )
+            return await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
 
+        try:
+            response: Final = await async_retried(send, max_retries)()
         except Exception as e:
             raise self._handle_error(
                 e=e,

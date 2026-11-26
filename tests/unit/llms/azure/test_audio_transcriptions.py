@@ -1,9 +1,11 @@
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
 import httpx
 import pytest
+import respx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
 import litellm
@@ -160,3 +162,128 @@ async def test_azure_transcription_parses_response_formats(
         )
 
     assert response.text == expected_text
+
+
+@pytest.mark.parametrize(
+    ("api_version", "expected_api_version"),
+    [
+        ("2024-06-01", "2024-06-01"),
+        ("2025-03-01-preview", "2025-03-01-preview"),
+        ("v1", litellm.AZURE_DEFAULT_API_VERSION),
+        ("latest", litellm.AZURE_DEFAULT_API_VERSION),
+        ("preview", litellm.AZURE_DEFAULT_API_VERSION),
+        ("none", litellm.AZURE_DEFAULT_API_VERSION),
+        ("V1", litellm.AZURE_DEFAULT_API_VERSION),
+        ("Latest", litellm.AZURE_DEFAULT_API_VERSION),
+        ("NONE", litellm.AZURE_DEFAULT_API_VERSION),
+    ],
+)
+async def test_azure_router_transcription_sends_the_deployment_api_version(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    api_version: str,
+    expected_api_version: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    route: Final = respx_mock.route(host="transcribe-route.openai.azure.com").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "transcriber",
+                "litellm_params": {
+                    "model": "azure/gpt-transcribe",
+                    "api_key": "test-key",
+                    "api_base": "https://transcribe-route.openai.azure.com",
+                    "api_version": api_version,
+                },
+            }
+        ]
+    )
+
+    response: Final = await router.atranscription(model="transcriber", file=_audio_file())
+
+    sent_url: Final = route.calls.last.request.url
+    assert sent_url.path == "/openai/deployments/gpt-transcribe/audio/transcriptions"
+    assert sent_url.params.get("api-version") == expected_api_version
+    assert response.text == "hello"
+
+
+@pytest.mark.parametrize(
+    ("api_version", "expected_api_version"),
+    [
+        ("v1", litellm.AZURE_DEFAULT_API_VERSION),
+        ("latest", litellm.AZURE_DEFAULT_API_VERSION),
+        ("preview", litellm.AZURE_DEFAULT_API_VERSION),
+        ("none", litellm.AZURE_DEFAULT_API_VERSION),
+        ("Preview", litellm.AZURE_DEFAULT_API_VERSION),
+        ("2025-03-01-preview", "2025-03-01-preview"),
+    ],
+)
+def test_azure_sync_transcription_uses_the_deployments_route(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    api_version: str,
+    expected_api_version: str,
+) -> None:
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    route: Final = respx_mock.route(host="transcribe-route.openai.azure.com").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    response: Final = litellm.transcription(
+        model="azure/gpt-transcribe",
+        file=_audio_file(),
+        api_key="test-key",
+        api_base="https://transcribe-route.openai.azure.com",
+        api_version=api_version,
+    )
+
+    sent_url: Final = route.calls.last.request.url
+    assert sent_url.path == "/openai/deployments/gpt-transcribe/audio/transcriptions"
+    assert sent_url.params.get("api-version") == expected_api_version
+    assert response.text == "hello"
+
+
+@pytest.mark.parametrize(
+    ("deployment_api_version", "request_params", "expected_api_version"),
+    [
+        (None, {}, "2024-10-21"),
+        ("2025-03-01-preview", {}, "2025-03-01-preview"),
+        ("2025-03-01-preview", {"api_version": "2024-12-01-preview"}, "2024-12-01-preview"),
+        ("v1", {}, "2024-06-01"),
+    ],
+)
+async def test_azure_router_transcription_api_version_precedence(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_api_version: str | None,
+    request_params: Mapping[str, str],
+    expected_api_version: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "api_version", "2024-10-21")
+    monkeypatch.setenv("AZURE_API_VERSION", "2024-06-01")
+    route: Final = respx_mock.route(host="transcribe-route.openai.azure.com").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "transcriber",
+                "litellm_params": {
+                    "model": "azure/gpt-transcribe",
+                    "api_key": "test-key",
+                    "api_base": "https://transcribe-route.openai.azure.com",
+                    "api_version": deployment_api_version,
+                },
+            }
+        ]
+    )
+
+    response: Final = await router.atranscription(model="transcriber", file=_audio_file(), **request_params)
+
+    assert route.calls.last.request.url.params.get("api-version") == expected_api_version
+    assert response.text == "hello"

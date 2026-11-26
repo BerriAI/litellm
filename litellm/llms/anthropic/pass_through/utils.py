@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 from collections.abc import Iterator, Mapping, Sequence
@@ -32,6 +33,7 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
 REASONING_EFFORT_OFF: Final = "none"
 KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
+_PROVIDERS_ROUNDING_REASONING_EFFORT: Final = frozenset({"zai"})
 _LOWEST_REASONING_TIERS: Final = ("minimal", "low")
 _UNCONFIRMED_MINIMAL_LOWEST_TIERS: Final = ("low",)
 
@@ -181,6 +183,150 @@ def _object_mapping(value: object) -> Mapping[str, object] | None:
         return _OBJECT_MAPPING.validate_python(value)
     except ValidationError:
         return None
+
+
+_SUBSCHEMA_LIST_KEYWORDS: Final = ("anyOf", "oneOf", "allOf")
+_SUBSCHEMA_MAP_KEYWORDS: Final = ("$defs", "definitions")
+
+
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+
+
+def _json_array(value: object) -> Sequence[object] | None:
+    try:
+        return _JSON_ARRAY.validate_python(value, strict=True)
+    except ValidationError:
+        return None
+
+
+def openai_strict_json_schema(schema: object) -> object:
+    """New copy of a JSON schema where every object with properties forbids extra keys and requires all of them.
+
+    OpenAI strict structured outputs rejects any schema that leaves an object open or a property optional.
+    """
+    source: Final = _object_mapping(schema)
+    if source is None:
+        return copy.deepcopy(schema)
+    properties: Final = _object_mapping(source.get("properties"))
+    closing: Final[Mapping[str, object]] = (
+        {"required": list(properties), "additionalProperties": False}
+        if properties is not None and _includes_type(source.get("type"), "object")
+        else {}
+    )
+    return {**{key: _strict_subschema(key, value) for key, value in source.items()}, **closing}
+
+
+_OPENAI_STRICT_MODE_KEYWORDS: Final = frozenset(
+    {
+        "type",
+        "enum",
+        "const",
+        "format",
+        "pattern",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minItems",
+        "maxItems",
+        "items",
+        "properties",
+        "required",
+        "additionalProperties",
+        "anyOf",
+        *_SUBSCHEMA_MAP_KEYWORDS,
+        "title",
+        "description",
+        "default",
+        "examples",
+        "$schema",
+        "$id",
+        "$comment",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "nullable",
+        "contentEncoding",
+        "contentMediaType",
+        "discriminator",
+    }
+)
+_OPENAI_STRICT_MODE_FORMATS: Final = frozenset(
+    {"date-time", "time", "date", "duration", "email", "hostname", "ipv4", "ipv6", "uuid"}
+)
+_OPENAI_STRICT_MODE_TYPE_KEYWORDS: Final = frozenset({"type", "anyOf", "enum"})
+
+
+def fits_openai_strict_mode(schema: object) -> bool:
+    source: Final = _object_mapping(schema)
+    if source is None:
+        return False
+    if "$ref" in source:
+        return all(key == "$ref" or key in _SUBSCHEMA_MAP_KEYWORDS for key in source) and _subschemas_fit(source)
+    return (
+        all(key in _OPENAI_STRICT_MODE_KEYWORDS or key.startswith("x-") for key in source)
+        and not _OPENAI_STRICT_MODE_TYPE_KEYWORDS.isdisjoint(source)
+        and _has_strict_mode_format(source)
+        and _has_strict_mode_shape(source)
+        and _subschemas_fit(source)
+    )
+
+
+def _has_strict_mode_format(source: Mapping[str, object]) -> bool:
+    if "format" not in source:
+        return True
+    schema_format: Final = source["format"]
+    return isinstance(schema_format, str) and schema_format in _OPENAI_STRICT_MODE_FORMATS
+
+
+def _has_strict_mode_shape(source: Mapping[str, object]) -> bool:
+    schema_type: Final = source.get("type")
+    if _includes_type(schema_type, "array") and "items" not in source:
+        return False
+    return not _includes_type(schema_type, "object") or _object_mapping(source.get("properties")) is not None
+
+
+def _subschemas_fit(source: Mapping[str, object]) -> bool:
+    subschemas: Final = chain.from_iterable(_subschemas(key, value) for key, value in source.items())
+    return all(fits_openai_strict_mode(subschema) for subschema in subschemas)
+
+
+def _subschemas(key: str, value: object) -> tuple[object, ...]:
+    if key == "items":
+        return (value,)
+    if key == "properties" or key in _SUBSCHEMA_MAP_KEYWORDS:
+        named: Final = _object_mapping(value)
+        return (None,) if named is None else tuple(named.values())
+    if key in _SUBSCHEMA_LIST_KEYWORDS:
+        variants: Final = _json_array(value)
+        return (None,) if variants is None else tuple(variants)
+    return ()
+
+
+def _includes_type(schema_type: object, name: str) -> bool:
+    types: Final = _json_array(schema_type)
+    return schema_type == name if types is None else name in types
+
+
+def _strict_subschema(key: str, value: object) -> object:
+    if key == "items":
+        return openai_strict_json_schema(value)
+    if key == "properties" or key in _SUBSCHEMA_MAP_KEYWORDS:
+        named: Final = _object_mapping(value)
+        return (
+            copy.deepcopy(value)
+            if named is None
+            else {name: openai_strict_json_schema(subschema) for name, subschema in named.items()}
+        )
+    if key in _SUBSCHEMA_LIST_KEYWORDS:
+        variants: Final = _json_array(value)
+        return (
+            copy.deepcopy(value) if variants is None else [openai_strict_json_schema(variant) for variant in variants]
+        )
+    return copy.deepcopy(value)
 
 
 def litellm_logging_obj_from_kwargs(kwargs: Mapping[str, object]) -> "LiteLLMLoggingObject | None":
@@ -375,6 +521,22 @@ def is_unconfirmed_none(
     ) is None and _reasons_without_confirming_none(model_info)
 
 
+def model_excludes_effort(
+    effort: str, *, model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> bool:
+    row_model: Final = _cost_map_model(model, deployment_model_info)
+    levels: Final = deployment_reasoning_efforts(row_model, custom_llm_provider, deployment_model_info) or ()
+    return (bool(levels) and effort not in levels) or is_unconfirmed_none(
+        effort, row_model, custom_llm_provider, deployment_model_info=deployment_model_info
+    )
+
+
+def _cost_map_model(model: str, deployment_model_info: object) -> str:
+    own_info: Final = as_str_mapping(deployment_model_info)
+    base_model: Final = own_info.get("base_model") if own_info is not None else None
+    return base_model if isinstance(base_model, str) and base_model else model
+
+
 def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, deployment_model_info: object) -> bool:
     from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
@@ -386,12 +548,23 @@ def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, depl
     )
 
 
+def _provider_rounds_reasoning_effort(model: str, custom_llm_provider: str | None) -> bool:
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except litellm.exceptions.BadRequestError:
+        return False
+    return provider in _PROVIDERS_ROUNDING_REASONING_EFFORT
+
+
 def normalize_reasoning_effort_value(
     effort: str,
     model: str,
     custom_llm_provider: str | None = None,
+    deployment_model_info: object = None,
 ) -> str:
     """Lower a tier the deployment does not accept to the nearest one it does, leaving others alone.
+
+    A provider whose chat config rounds the tier onto its models' levels itself, like zai, keeps the tier as sent.
 
     The accepted set is resolved by the same owner that answers ``/model_group/info``, so a level
     the proxy advertises is a level this path forwards.
@@ -404,10 +577,10 @@ def normalize_reasoning_effort_value(
     chain's floor, which is what every deployment degraded to before there was anything to ask.
     """
     chain: Final = _EFFORT_DEGRADATION_CHAIN.get(effort)
-    if chain is None:
+    if chain is None or _provider_rounds_reasoning_effort(model, custom_llm_provider):
         return effort
 
-    supported: Final = model_reasoning_efforts(model, custom_llm_provider)
+    supported: Final = model_reasoning_efforts(_cost_map_model(model, deployment_model_info), custom_llm_provider)
     if not supported:
         return chain[-1]
 

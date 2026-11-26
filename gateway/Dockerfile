@@ -7,6 +7,13 @@ ARG PGBOUNCER_SHA256=afd25dd61ee6775d37b40629b87ce08736b3e6955f3057bb212e410fbf2
 
 FROM $UV_IMAGE AS uvbin
 
+FROM $LITELLM_BUILD_IMAGE AS prisma-openssl-builder
+USER root
+RUN apk add --no-cache build-base perl curl
+WORKDIR /build
+COPY docker/build_prisma_openssl.sh /build_prisma_openssl.sh
+RUN sh /build_prisma_openssl.sh
+
 FROM $LITELLM_BUILD_IMAGE AS pgbouncer-builder
 ARG PGBOUNCER_VERSION
 ARG PGBOUNCER_SHA256
@@ -95,7 +102,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash openssl libssl3 tzdata python-3.13 libsndfile libatomic libevent && break; \
+      apk add --no-cache bash openssl-4.0 '!libssl3' '!libcrypto3' tzdata python-3.13 libsndfile libatomic libevent && break; \
       [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
       sleep 5; \
     done
@@ -117,6 +124,8 @@ COPY --from=builder --chown=nonroot:nonroot /app/gateway /app/gateway
 COPY --from=builder --chown=nonroot:nonroot /app/docker/component_entrypoint.sh /app/docker/component_entrypoint.sh
 COPY --from=builder --chown=nonroot:nonroot /app/schema.prisma /app/schema.prisma
 COPY --from=builder /opt/prisma /opt/prisma
+COPY --from=prisma-openssl-builder /runtime/ /
+RUN ldconfig
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \

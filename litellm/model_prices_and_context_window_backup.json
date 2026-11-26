@@ -4721,6 +4721,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -4728,7 +4729,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure_ai/gpt-5.4-pro-2026-03-05": {
         "deprecation_date": "2027-09-07",
@@ -4767,6 +4768,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -4774,7 +4776,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure_ai/gpt-5.4-mini": {
         "deprecation_date": "2027-09-21",
@@ -7262,6 +7264,9 @@
         "mode": "responses",
         "output_cost_per_token": 0.00012,
         "output_cost_per_token_batches": 6e-05,
+        "reasoning_effort_levels": [
+            "high"
+        ],
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
@@ -7273,6 +7278,7 @@
         "supported_output_modalities": [
             "text"
         ],
+        "supports_low_reasoning_effort": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -7281,7 +7287,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.1": {
         "deprecation_date": "2027-05-15",
@@ -7853,6 +7860,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -7892,6 +7901,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -8258,6 +8269,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -8306,6 +8319,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -10599,6 +10614,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -22722,6 +22739,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -37273,7 +37292,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_low_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false
     },
     "gpt-5.2-pro-2025-12-11": {
         "input_cost_per_token": 2.1e-05,
@@ -37315,7 +37335,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_low_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false
     },
     "gpt-6-astra": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -38488,6 +38509,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
+        "supports_low_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
         "input_cost_per_token_above_272k_tokens_flex": 3e-05,
         "output_cost_per_token_above_272k_tokens_flex": 0.000135,
@@ -38541,6 +38563,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
+        "supports_low_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
         "input_cost_per_token_above_272k_tokens_flex": 3e-05,
         "output_cost_per_token_above_272k_tokens_flex": 0.000135,
@@ -38799,7 +38822,11 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_low_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false,
+        "reasoning_effort_levels": [
+            "high"
+        ]
     },
     "gpt-5-pro-2025-10-06": {
         "deprecation_date": "2026-12-11",
@@ -38842,7 +38869,11 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_low_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false,
+        "reasoning_effort_levels": [
+            "high"
+        ]
     },
     "gpt-5-2025-08-07": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -47166,6 +47197,7 @@
     "perplexity/perplexity/deepseek-v4-pro-0813": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 1.32e-06,
         "output_cost_per_token": 3.96e-06,
         "cache_read_input_token_cost": 4.4e-08,
@@ -53765,6 +53797,106 @@
         "supports_web_search": false,
         "vertex_ai_audio_api": "lyria_interactions"
     },
+    "vertex_ai/meta/muse-wonder-1.0": {
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 4e-06,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 1048576,
+        "mode": "responses",
+        "output_cost_per_token": 2e-05,
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta/muse-wonder-1-0",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supported_regions": [
+            "global"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": true,
+        "supports_native_structured_output": true,
+        "supports_none_reasoning_effort": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "vertex_ai/meta/muse-ember-1.0": {
+        "cache_read_input_token_cost": 4e-09,
+        "cache_read_input_token_cost_above_200k_tokens": 1.2e-08,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_200k_tokens": 3e-07,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 524288,
+        "mode": "responses",
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_above_200k_tokens": 1.5e-06,
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta/muse-ember-1-0",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supported_regions": [
+            "global"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": true,
+        "supports_native_structured_output": true,
+        "supports_none_reasoning_effort": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "vertex_ai/meta/muse-spark-1.3": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 1048576,
+        "mode": "responses",
+        "output_cost_per_token": 4.25e-06,
+        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/meta/muse-spark-1-3",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supported_regions": [
+            "global"
+        ],
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": true,
+        "supports_native_structured_output": true,
+        "supports_none_reasoning_effort": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true
+    },
     "vertex_ai/meta/llama-3.1-405b-instruct-maas": {
         "input_cost_per_token": 5e-06,
         "litellm_provider": "vertex_ai-llama_models",
@@ -55523,6 +55655,11 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "supports_tool_choice": true
     },
     "zai/glm-5.3-flash": {
@@ -55537,6 +55674,11 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
         "supports_tool_choice": true,
         "source": "https://docs.z.ai/guides/overview/pricing",
         "supports_vision": true
@@ -62051,6 +62193,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_all_json_schema_keywords": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -62077,6 +62220,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_all_json_schema_keywords": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -62103,6 +62247,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_all_json_schema_keywords": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -62724,6 +62869,130 @@
         "metadata": {
             "comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 23 CNY per million tokens without a video input, converted at 7.0 CNY/USD like the other volcengine entries. Clips of 4-15s at 480p or 720p. Only text and image inputs are declared; the mini tier's reference video and audio caps were not verified. Requests with a video input bill at a lower rate per token and are rejected, since their cost is not known at create time. provider_specific_entry.volcengine_video_frames is the frame Ark renders per resolution tier and ratio, verified with ffprobe at 480p for every ratio and at 720p for 16:9 and 4:3; the other 720p ratios are from the Seedance 2.0 model card."
         }
+    },
+    "volcengine/doubao-seedream-4-0-260415": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.028571429,
+        "metadata": {"comment": "List 0.20 CNY per output image with input images free, converted at 7.0 CNY/USD like the other volcengine entries (price page fetched 2026-11-24)."}
+    },
+    "volcengine/doubao-seedream-4-0-20260415": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.028571429,
+        "metadata": {"comment": "Alias of volcengine/doubao-seedream-4-0-260415. List 0.20 CNY per output image with input images free, converted at 7.0 CNY/USD like the other volcengine entries (price page fetched 2026-11-24)."}
+    },
+    "volcengine/doubao-seedream-5-0-flash-260915": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.017142857,
+        "metadata": {"comment": "List 0.12 CNY per output image with input images free, converted at 7.0 CNY/USD like the other volcengine entries (price page fetched 2026-11-24)."}
+    },
+    "volcengine/doubao-seedream-5-0-pro-260628": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.085714286,
+        "output_cost_per_image_1K": 0.042857143,
+        "output_cost_per_image_2K": 0.085714286,
+        "input_cost_per_image": 0.002857143,
+        "provider_specific_entry": {"volcengine_image": {"layer_output_cost_per_image_1K": 0.021428571, "layer_output_cost_per_image_2K": 0.042857143, "free_input_images": 1}},
+        "metadata": {"comment": "List 0.30 CNY per single-image output at P <= 2.61M pixels and 0.60 above, 0.15 and 0.30 for layer decomposition outputs, first input image free and 0.02 CNY per additional input image, converted at 7.0 CNY/USD (price page fetched 2026-11-24). Base field is the 2K single-image tier; provider_specific_entry.volcengine_image carries the layer rates and the free first input image."}
+    },
+    "volcengine/dola-seedream-5-5-261028": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.035,
+        "output_cost_per_image_1K": 0.02,
+        "output_cost_per_image_2K": 0.035,
+        "input_cost_per_image": 0.008,
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.008 per input image and $0.020 per output image at P <= 1536^2 x 1.05^2 (2,601,123.84) pixels, $0.035 above. Base field is the 2K tier. Layer decomposition outputs bill at the same per-image rate."}
+    },
+    "volcengine/dola-seedream-5-0-pro-260628": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.09,
+        "output_cost_per_image_1K": 0.045,
+        "output_cost_per_image_2K": 0.09,
+        "input_cost_per_image": 0.003,
+        "provider_specific_entry": {"volcengine_image": {"layer_output_cost_per_image_1K": 0.0225, "layer_output_cost_per_image_2K": 0.045, "free_input_images": 1}},
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.045 per single-image output at P <= 2.61M pixels and $0.09 above, $0.0225 and $0.045 for layer decomposition outputs, first input image free and $0.003 per additional input image. Base field is the 2K single-image tier; provider_specific_entry.volcengine_image carries the layer rates and the free first input image."}
+    },
+    "volcengine/dola-seedream-5-0-flash-260915": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.018,
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.018 per output image with input images free."}
+    },
+    "volcengine/seedream-5-0-lite-260128": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.035,
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.035 per output image with input images free."}
+    },
+    "volcengine/seedream-4-5-251128": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.04,
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.04 per output image with input images free."}
+    },
+    "volcengine/seedream-4-0-250828": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.03,
+        "metadata": {"comment": "BytePlus ModelArk list price in USD (price page last updated 2026-11-24, fetched 2026-11-25): $0.03 per output image with input images free."}
+    },
+    "volcengine/doubao-seedream-5-5-261028": {
+        "litellm_provider": "volcengine",
+        "mode": "image_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["image"],
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "output_cost_per_image": 0.032857143,
+        "output_cost_per_image_1K": 0.018571429,
+        "output_cost_per_image_2K": 0.032857143,
+        "input_cost_per_image": 0.007142857,
+        "metadata": {"comment": "List 0.05 CNY per input image and 0.13 CNY per output image at P <= 2.61M pixels, 0.23 CNY above, converted at 7.0 CNY/USD (price page fetched 2026-11-24). Base field is the 2K tier; 1K and 1.5K use the 1K tier. Layer decomposition outputs bill at the same per-image rate."}
     },
     "bedrock/us-east-1/zai.glm-5": {
         "input_cost_per_token": 1e-06,
@@ -64659,6 +64928,15 @@
                 "description": "Claude at version 4.5 or higher, with the same id shapes and version boundaries as claude-tool-search. On 2026-11-05 Bedrock InvokeModel answered 200 with the per-turn-control-2026-07-01 beta on every Claude 4.5 and newer model a QA account reached across 13 regions, and 400 invalid beta flag on Claude 3 Haiku in ca-central-1. The jp., au. and in. profiles answered 200 too, AWS lists no apac. profile for Claude 4.5 or newer, and GovCloud was not tested. Claude 3.5, 3.7, Sonnet 4, Opus 4 and Opus 4.1 were unreachable, so they keep the beta dropped as before. The flag means Bedrock accepts the beta name on the model, as supports_tool_search does for the tool search beta, and Bedrock Invoke forwards the beta only where it is set. It does not promise per-turn output_config works, since on 2026-11-05 Opus 4.8, Opus 5, Sonnet 5 and Fable 5 rejected it with or without the beta. A deployment turns the forward off with model_info supports_per_turn_control false.",
                 "model_info": {
                     "supports_per_turn_control": true
+                }
+            },
+            {
+                "name": "claude-server-side-fallback",
+                "pattern": "claude-[a-z]+-(?:4[-._](?:[5-9]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
+                "fill_missing_for_providers": ["bedrock", "bedrock_converse", "bedrock_mantle", "databricks"],
+                "description": "Claude at version 4.5 or higher, with the same id shapes and version boundaries as claude-per-turn-control. Bedrock Invoke rejects the server-side-fallback-2026-06-01 beta on Opus 4.1 with 400 invalid beta flag and takes it on Haiku 4.5, Sonnet 4.5 and every newer Claude. On 2026-11-23 Databricks answered 200 with the beta on databricks-claude-haiku-4-5 and databricks-claude-sonnet-4-5 and 400 invalid beta flag on databricks-claude-opus-4-1. Without drop_params, Bedrock Invoke, Mantle and Databricks forward the beta on every model and the provider answers its own 400. Under drop_params they drop it where this flag is unset. A deployment overrides the flag with model_info supports_server_side_fallback.",
+                "model_info": {
+                    "supports_server_side_fallback": true
                 }
             },
             {
@@ -68634,6 +68912,39 @@
             "/v1/audio/transcriptions"
         ]
     },
+    "elevenlabs/scribe_v2_realtime": {
+        "input_cost_per_second": 6.1111e-05,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.22/hour = $0.003667/minute = $0.000061111 per second",
+            "original_pricing_per_hour": 0.22
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "elevenlabs/scribe_v2_realtime/keyterms": {
+        "input_cost_per_second": 1.3889e-05,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.05/hour = $0.000013889 per second",
+            "note": "Keyterm prompting add-on for Scribe v2 Realtime, billed on top of the base rate",
+            "original_pricing_per_hour": 0.05
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://elevenlabs.io/pricing/api"
+    },
     "scaleway/glm-5.2": {
         "input_cost_per_token": 1.8e-06,
         "litellm_provider": "scaleway",
@@ -69632,6 +69943,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_all_json_schema_keywords": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -69651,6 +69963,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_all_json_schema_keywords": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -69670,6 +69983,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_all_json_schema_keywords": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -70390,6 +70704,7 @@
     "perplexity/openai/gpt-5-nano": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 4e-07,
         "cache_read_input_token_cost": 5e-09,
@@ -70398,6 +70713,7 @@
     "perplexity/openai/gpt-5.3-codex": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 3.5e-06,
         "output_cost_per_token": 2.8e-05,
         "cache_read_input_token_cost": 3.5e-07,
@@ -71366,7 +71682,12 @@
         "mode": "responses",
         "output_cost_per_token": 0.000132,
         "output_cost_per_token_batches": 6.6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
+        "reasoning_effort_levels": [
+            "high"
+        ]
     },
     "azure/eu/gpt-5.1-codex-max": {
         "deprecation_date": "2027-05-18",
@@ -71408,7 +71729,9 @@
         "mode": "responses",
         "output_cost_per_token": 0.0001848,
         "output_cost_per_token_batches": 9.24e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "azure/eu/gpt-5.3-codex": {
         "deprecation_date": "2027-08-24",
@@ -71463,7 +71786,9 @@
         "output_cost_per_token_above_272k_tokens": 0.000297,
         "output_cost_per_token_above_272k_tokens_batches": 0.0001485,
         "output_cost_per_token_batches": 9.9e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "azure/eu/gpt-6-astra": {
         "deprecation_date": "2028-01-11",
@@ -71874,7 +72199,12 @@
         "mode": "responses",
         "output_cost_per_token": 0.000132,
         "output_cost_per_token_batches": 6.6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
+        "reasoning_effort_levels": [
+            "high"
+        ]
     },
     "azure/us/gpt-5.1-codex-max": {
         "deprecation_date": "2027-05-18",
@@ -71916,7 +72246,9 @@
         "mode": "responses",
         "output_cost_per_token": 0.0001848,
         "output_cost_per_token_batches": 9.24e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "azure/us/gpt-5.3-codex": {
         "deprecation_date": "2027-08-24",
@@ -71971,7 +72303,9 @@
         "output_cost_per_token_above_272k_tokens": 0.000297,
         "output_cost_per_token_above_272k_tokens_batches": 0.0001485,
         "output_cost_per_token_batches": 9.9e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "azure/us/o1-mini": {
         "cache_read_input_token_cost": 6.05e-07,
@@ -72781,6 +73115,8 @@
         "source": "https://aihubmix.com/api/v1/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -75481,6 +75817,7 @@
     "perplexity/anthropic/claude-fable-5-1": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 1e-05,
         "output_cost_per_token": 5e-05,
         "cache_read_input_token_cost": 2.5e-07,
@@ -75489,6 +75826,7 @@
     "perplexity/anthropic/claude-opus-5-5": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 4e-06,
         "output_cost_per_token": 2e-05,
         "cache_read_input_token_cost": 2e-07,
@@ -75497,6 +75835,7 @@
     "perplexity/openai/gpt-6.1-sol": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 1e-05,
         "cache_read_input_token_cost": 1e-07,
@@ -75508,6 +75847,7 @@
     "perplexity/openai/gpt-6-sol": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 1e-05,
         "cache_read_input_token_cost": 2e-07,
@@ -75519,6 +75859,7 @@
     "perplexity/openai/gpt-6-astra": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 1e-05,
         "output_cost_per_token": 5e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -75528,6 +75869,7 @@
     "perplexity/openai/gpt-6-luna": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 5e-07,
         "cache_read_input_token_cost": 1e-08,
@@ -75539,6 +75881,7 @@
     "perplexity/google/gemini-3.8-flash": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "supports_sampling_params": false,
         "input_cost_per_token": 7.5e-07,
         "output_cost_per_token": 3.75e-06,
@@ -75548,6 +75891,7 @@
     "perplexity/xai/grok-4.7": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_function_calling": true,
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 6e-06,
         "cache_read_input_token_cost": 5e-07,

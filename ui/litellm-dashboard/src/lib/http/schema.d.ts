@@ -27009,6 +27009,12 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * Forward Messages As Sent
+             * @description Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.
+             * @default false
+             */
+            forward_messages_as_sent: boolean | null;
+            /**
              * Guard Name
              * @description Name of the guardrail in guardrails.ai
              */
@@ -27434,6 +27440,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -27445,6 +27455,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -27456,6 +27470,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -35283,6 +35301,10 @@ export interface components {
             output_cost_per_image_1024?: number | null;
             /** Output Cost Per Image 1536 */
             output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 1K */
+            output_cost_per_image_1K?: number | null;
+            /** Output Cost Per Image 2K */
+            output_cost_per_image_2K?: number | null;
             /** Output Cost Per Image 512 */
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
@@ -36533,6 +36555,12 @@ export interface components {
              * @description HTTP timeout in seconds for checking attached files. Default: 10.
              */
             file_guardrail_timeout?: number | null;
+            /**
+             * Forward Messages As Sent
+             * @description Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.
+             * @default false
+             */
+            forward_messages_as_sent: boolean | null;
             /**
              * Gateway Name
              * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
@@ -50581,6 +50609,10 @@ export interface components {
             output_cost_per_image_1024?: number | null;
             /** Output Cost Per Image 1536 */
             output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 1K */
+            output_cost_per_image_1K?: number | null;
+            /** Output Cost Per Image 2K */
+            output_cost_per_image_2K?: number | null;
             /** Output Cost Per Image 512 */
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */

@@ -15,6 +15,7 @@ from litellm.integrations.custom_logger import Span
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.llms.gemini.empty_image_response import success_cost_without_failed_image_answers
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
 from litellm.router_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
@@ -612,7 +613,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if model is None:
             return
 
-        response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
+        response_cost: Final[float] = success_cost_without_failed_image_answers(
+            kwargs,  # pyright: ignore[reportUnknownArgumentType]  # callback kwargs are untyped
+            standard_logging_payload.get("response_cost", 0),
+        )
         key_model_max_budget: Final = _metadata.get("user_api_key_model_max_budget")
         team_member_user_id: Final = _metadata_string_value(
             payload_metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped

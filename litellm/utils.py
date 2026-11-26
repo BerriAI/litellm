@@ -88,6 +88,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
+    attribute_or_none,
     bind_budget_reservation_to_callbacks,
     normalize_drop_params,
     unbind_budget_reservation_from_callbacks,
@@ -758,12 +759,46 @@ def load_credentials_from_list(kwargs: dict):
 
 
 def get_dynamic_callbacks(
-    dynamic_callbacks: list[str | Callable[..., object] | CustomLogger] | None,
+    dynamic_callbacks: Sequence[str | Callable[..., object] | CustomLogger] | None,
 ) -> list[str | Callable[..., object] | CustomLogger]:
     returned_callbacks: Final = litellm.callbacks.copy()
     if dynamic_callbacks:
         returned_callbacks.extend(dynamic_callbacks)
     return returned_callbacks
+
+
+def register_dynamic_callbacks(
+    dynamic_callbacks: Sequence[str | Callable[..., object] | CustomLogger] | None,
+) -> None:
+    all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
+
+    if len(all_callbacks) > 0:
+        for callback in all_callbacks:
+            # check if callback is a string - e.g. "lago", "openmeter"
+            if isinstance(callback, str):
+                resolved_callback: CustomLogger | None = (
+                    litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                        callback,
+                        internal_usage_cache=None,
+                        llm_router=None,
+                    )
+                )
+                callback = resolved_callback
+                if callback is None or any(
+                    type(cb) is type(callback) for cb in litellm._async_success_callback
+                ):  # don't double add a callback
+                    continue
+            if callback not in litellm.input_callback:
+                litellm.input_callback.append(callback)
+            if callback not in litellm.success_callback:
+                litellm.logging_callback_manager.add_litellm_success_callback(callback)
+            if callback not in litellm.failure_callback:
+                litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+            if callback not in litellm._async_success_callback:
+                litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+            if callback not in litellm._async_failure_callback:
+                litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
+        print_verbose(f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}")
 
 
 def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool:
@@ -1048,33 +1083,10 @@ def function_setup(
         coroutine_checker: Final = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Final[list[str | Callable | CustomLogger] | None] = kwargs.pop("callbacks", None)
-        all_callbacks: Final = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
-
-        if len(all_callbacks) > 0:
-            for callback in all_callbacks:
-                # check if callback is a string - e.g. "lago", "openmeter"
-                if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
-                        callback,
-                        internal_usage_cache=None,
-                        llm_router=None,
-                    )
-                    if callback is None or any(
-                        type(cb) is type(callback) for cb in litellm._async_success_callback
-                    ):  # don't double add a callback
-                        continue
-                if callback not in litellm.input_callback:
-                    litellm.input_callback.append(callback)
-                if callback not in litellm.success_callback:
-                    litellm.logging_callback_manager.add_litellm_success_callback(callback)
-                if callback not in litellm.failure_callback:
-                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)
-                if callback not in litellm._async_success_callback:
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
-                if callback not in litellm._async_failure_callback:
-                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
-            print_verbose(f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}")
+        dynamic_callbacks: Final[Sequence[str | Callable[..., object] | CustomLogger] | None] = kwargs.pop(
+            "callbacks", None
+        )
+        register_dynamic_callbacks(dynamic_callbacks)
 
         if (
             len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
@@ -2035,7 +2047,10 @@ def client(original_function):
 
                 is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not is_responses_litellm_router_call and not is_resent_failure(e)
+                    num_retries
+                    and not is_responses_litellm_router_call
+                    and not is_resent_failure(e)
+                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2355,6 +2370,7 @@ def client(original_function):
                     and not is_aresponses_litellm_router_call
                     and not isinstance(e, ImportError)
                     and not is_resent_failure(e)
+                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -4915,6 +4931,16 @@ def _map_params_with_provider_config(
     base_model: str | None,
     allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
+    if isinstance(provider_config, litellm.ZAIChatConfig):
+        from litellm.router_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+
+        return provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            declared_reasoning_efforts=deployment_reasoning_effort_levels(model_info),
+        )
     if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
         return provider_config.map_openai_params(
             non_default_params=non_default_params,
@@ -6936,6 +6962,8 @@ def get_model_info_helper(
                 output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
+                output_cost_per_image_1K=_model_info.get("output_cost_per_image_1K", None),
+                output_cost_per_image_2K=_model_info.get("output_cost_per_image_2K", None),
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
@@ -6976,6 +7004,7 @@ def get_model_info_helper(
                 thinking_always_on=_model_info.get("thinking_always_on", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_per_turn_control=_model_info.get("supports_per_turn_control", None),
+                supports_server_side_fallback=_model_info.get("supports_server_side_fallback", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
                 supports_anthropic_compaction=_model_info.get("supports_anthropic_compaction", None),
@@ -7980,8 +8009,9 @@ def register_prompt_template(
 
 
 def _text_choice(chat_choice: StreamingChoices) -> TextChoices:
-    text_choices: Final = TextChoices()
     delta: Final = chat_choice["delta"]
+    reasoning_details: Final = attribute_or_none(attribute_or_none(chat_choice, "delta"), "reasoning_details")
+    text_choices: Final = TextChoices(reasoning_details=reasoning_details) if reasoning_details else TextChoices()
     text_choices["text"] = delta["content"]
     text_choices["reasoning_content"] = delta.get("reasoning_content")
     text_choices["index"] = chat_choice["index"]
@@ -9916,6 +9946,10 @@ class ProviderConfigManager:
             return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.responses.transformation import VertexAIMuseResponsesAPIConfig
+
+            return VertexAIMuseResponsesAPIConfig.for_model(model)
         elif litellm.LlmProviders.SAIL == provider:
             from litellm.llms.sail.responses.transformation import SailResponsesAPIConfig
 
@@ -10431,6 +10465,12 @@ class ProviderConfigManager:
             from litellm.llms.minimax.image_generation import MinimaxImageGenerationConfig
 
             return MinimaxImageGenerationConfig()
+        elif LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.image_generation import (
+                VolcEngineImageGenerationConfig,
+            )
+
+            return VolcEngineImageGenerationConfig()
         return None
 
     @staticmethod
@@ -10539,6 +10579,8 @@ class ProviderConfigManager:
     def get_provider_realtime_config(
         model: str,
         provider: LlmProviders,
+        drop_params: bool = False,
+        litellm_params: Mapping[str, object] = MappingProxyType({}),
     ) -> BaseRealtimeConfig | None:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -10548,6 +10590,10 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig()
+        if LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
+
+            return elevenlabs_realtime_config(litellm_params, drop_params=drop_params)
         return None
 
     @staticmethod
@@ -10575,19 +10621,8 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
-    def get_provider_image_edit_config(
-        model: str,
-        provider: LlmProviders,
-    ) -> BaseImageEditConfig | None:
-        if LlmProviders.OPENAI == provider:
-            from litellm.llms.openai.image_edit import get_openai_image_edit_config
-
-            return get_openai_image_edit_config(model=model)
-        elif LlmProviders.HOSTED_VLLM == provider:
-            from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
-
-            return get_hosted_vllm_image_edit_config(model=model)
-        elif LlmProviders.AZURE == provider:
+    def _get_model_independent_image_edit_config(provider: LlmProviders) -> BaseImageEditConfig | None:
+        if LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,
             )
@@ -10605,10 +10640,40 @@ class ProviderConfigManager:
             )
 
             return BlackForestLabsImageEditConfig()
+        elif LlmProviders.LITELLM_PROXY == provider:
+            from litellm.llms.litellm_proxy.image_edit.transformation import (
+                LiteLLMProxyImageEditConfig,
+            )
+
+            return LiteLLMProxyImageEditConfig()
         elif LlmProviders.MINIMAX == provider:
             from litellm.llms.minimax.image_edit import MinimaxImageEditConfig
 
             return MinimaxImageEditConfig()
+        elif LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.image_edit.transformation import (
+                VolcEngineImageEditConfig,
+            )
+
+            return VolcEngineImageEditConfig()
+        return None
+
+    @staticmethod
+    def get_provider_image_edit_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> BaseImageEditConfig | None:
+        model_independent_config: Final = ProviderConfigManager._get_model_independent_image_edit_config(provider)
+        if model_independent_config is not None:
+            return model_independent_config
+        if LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.image_edit import get_openai_image_edit_config
+
+            return get_openai_image_edit_config(model=model)
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
+
+            return get_hosted_vllm_image_edit_config(model=model)
         elif LlmProviders.FAL_AI == provider:
             from litellm.llms.fal_ai.image_edit import get_fal_ai_image_edit_config
 
@@ -10621,12 +10686,6 @@ class ProviderConfigManager:
             from litellm.llms.gemini.image_edit import get_gemini_image_edit_config
 
             return get_gemini_image_edit_config(model)
-        elif LlmProviders.LITELLM_PROXY == provider:
-            from litellm.llms.litellm_proxy.image_edit.transformation import (
-                LiteLLMProxyImageEditConfig,
-            )
-
-            return LiteLLMProxyImageEditConfig()
         elif LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.image_edit import (
                 get_vertex_ai_image_edit_config,
