@@ -30,4 +30,12 @@ describe("prompt editor payload", () => {
   it("rejects a whitespace-only publish name", () => {
     expect(promptEditorSchema.safeParse({ prompt: { ...draft, name: "  " } }).success).toBe(false);
   });
+
+  it("preserves the max tokens value from an overflowing integer parse", () => {
+    const maxTokens = parseInt(`1${"0".repeat(309)}e-309`, 10);
+    const prompt = { ...draft, config: { ...draft.config, max_tokens: maxTokens } };
+    const { litellm_params } = toPromptEditorPayload(promptEditorSchema.parse({ prompt }));
+
+    expect(litellm_params.dotprompt_content).toContain("\nmax_tokens: Infinity\n");
+  });
 });
