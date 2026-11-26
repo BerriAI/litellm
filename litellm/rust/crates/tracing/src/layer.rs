@@ -11,18 +11,6 @@ use tracing_subscriber::{
 
 use crate::{Emitting, Record, Sink};
 
-pub fn sink_layer<S, R>(sink: S) -> impl Layer<R>
-where
-    S: Sink,
-    R: Subscriber + for<'a> LookupSpan<'a>,
-{
-    let sink = Arc::new(sink);
-    let filter_sink = sink.clone();
-    Output(sink).with_filter(dynamic_filter_fn(move |metadata, _| {
-        enabled(filter_sink.as_ref(), metadata)
-    }))
-}
-
 pub(crate) fn dispatch(sink: impl Sink) -> Dispatch {
     let sink = Arc::new(sink);
     let filter_sink = sink.clone();

@@ -15,44 +15,48 @@ use crate::{RawJson, utc_timestamp};
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Serialize)]
 pub struct User {
-    pub(super) user_id: String,
-    pub(super) user_alias: Option<String>,
-    pub(super) team_id: Option<String>,
-    pub(super) sso_user_id: Option<String>,
-    pub(super) organization_id: Option<String>,
-    pub(super) object_permission_id: Option<String>,
-    pub(super) password_reset_required: Option<bool>,
+    pub user_id: String,
+    pub user_alias: Option<String>,
+    pub team_id: Option<String>,
+    pub sso_user_id: Option<String>,
+    pub organization_id: Option<String>,
+    pub object_permission_id: Option<String>,
+    pub password_reset_required: Option<bool>,
     #[serde(with = "utc_timestamp::option")]
-    pub(super) last_breach_check_at: Option<NaiveDateTime>,
-    pub(super) teams: Vec<String>,
-    pub(super) user_role: Option<String>,
-    pub(super) max_budget: Option<f64>,
-    pub(super) budget_limits: Option<RawJson>,
-    pub(super) spend: f64,
-    pub(super) user_email: Option<String>,
-    pub(super) models: Vec<String>,
-    pub(super) metadata: RawJson,
-    pub(super) max_parallel_requests: Option<i32>,
-    pub(super) tpm_limit: Option<i64>,
-    pub(super) rpm_limit: Option<i64>,
-    pub(super) budget_duration: Option<String>,
+    pub last_breach_check_at: Option<NaiveDateTime>,
+    pub teams: Vec<String>,
+    pub user_role: Option<String>,
+    pub max_budget: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollover_max_budget: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollover_credit: Option<f64>,
+    pub budget_limits: Option<RawJson>,
+    pub spend: f64,
+    pub user_email: Option<String>,
+    pub models: Vec<String>,
+    pub metadata: RawJson,
+    pub max_parallel_requests: Option<i32>,
+    pub tpm_limit: Option<i64>,
+    pub rpm_limit: Option<i64>,
+    pub budget_duration: Option<String>,
     #[serde(with = "utc_timestamp::option")]
-    pub(super) budget_reset_at: Option<NaiveDateTime>,
-    pub(super) allowed_cache_controls: Vec<String>,
-    pub(super) policies: Vec<String>,
-    pub(super) model_spend: RawJson,
-    pub(super) model_max_budget: RawJson,
+    pub budget_reset_at: Option<NaiveDateTime>,
+    pub allowed_cache_controls: Vec<String>,
+    pub policies: Vec<String>,
+    pub model_spend: RawJson,
+    pub model_max_budget: RawJson,
     #[serde(with = "utc_timestamp::option")]
-    pub(super) created_at: Option<NaiveDateTime>,
+    pub created_at: Option<NaiveDateTime>,
     #[serde(with = "utc_timestamp::option")]
-    pub(super) updated_at: Option<NaiveDateTime>,
-    pub(super) organization_memberships: Json<Vec<OrganizationMembership>>,
+    pub updated_at: Option<NaiveDateTime>,
+    pub organization_memberships: Json<Vec<OrganizationMembership>>,
 }
 
 /// One `LiteLLM_OrganizationMembership` row, as a user row includes it
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Deserialize, Serialize)]
-pub(super) struct OrganizationMembership {
+pub struct OrganizationMembership {
     pub user_id: String,
     pub organization_id: String,
     pub user_role: Option<String>,

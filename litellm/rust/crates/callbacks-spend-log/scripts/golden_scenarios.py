@@ -1,5 +1,4 @@
 import base64
-import copy
 import datetime
 import json
 from datetime import timezone
@@ -8,6 +7,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
@@ -32,6 +32,7 @@ _CHAT_RESPONSE: Final = {
                 "role": "assistant",
                 "content": "secret answer",
                 "reasoning_content": "secret thought",
+                "refusal": "secret refusal",
                 "thinking_blocks": [{"type": "thinking", "thinking": "t"}],
                 "audio": {"data": "a"},
                 "images": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}],
@@ -343,6 +344,25 @@ _EXTRA_SCENARIOS: Final[dict[str, tuple[dict[str, object], dict[str, object], di
             },
         },
     ),
+    "caller_session_under_omit": (
+        {"missing_session_id": "omit"},
+        {},
+        {
+            **_scenario_kwargs(),
+            "litellm_params": {"metadata": {"user_api_key": "sk-scenario"}, "litellm_session_id": "parent-session"},
+        },
+    ),
+    "inherited_session_under_omit": (
+        {"missing_session_id": "omit"},
+        {},
+        {
+            **_scenario_kwargs(),
+            "litellm_params": {
+                "metadata": {"user_api_key": "sk-scenario", "litellm_session_id_inherited": True},
+                "litellm_session_id": "parent-session",
+            },
+        },
+    ),
     "caller_session_echoes_trace": (
         {},
         {"request_correlation_in_logs": True},
@@ -516,7 +536,7 @@ def test_a_golden_extra_scenario_row(monkeypatch: pytest.MonkeyPatch, name: str)
         monkeypatch.setattr(litellm, flag, value)
 
     row: Final = get_logging_payload(
-        kwargs=copy.deepcopy(kwargs) if name != "deep_body_and_metadata" else kwargs,
+        kwargs=safe_deep_copy(kwargs) if name != "deep_body_and_metadata" else kwargs,
         response_obj={"id": f"resp-{name}"},
         start_time=_NOW,
         end_time=_NOW,

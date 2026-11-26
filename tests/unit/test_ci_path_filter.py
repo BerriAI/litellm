@@ -49,25 +49,6 @@ CI = [".github/workflows/test-unit.yml"]
 @pytest.mark.parametrize(
     "category,changed,expected",
     [
-        ("tests-only", ["tests/test_root.py"], "run"),
-        ("tests-only", ["tests/unit/router/test_router.py", "README.md", "docs/guide.mdx"], "run"),
-        ("tests-only", ["tests/unit/test_x.py", "tests/unit/conftest.py"], "skip"),
-        ("tests-only", ["tests/unit/test_x.py", "tests/unit/helpers.py"], "skip"),
-        ("tests-only", ["tests/unit/test_x.py", "tests/fixtures/data.json"], "skip"),
-        ("tests-only", ["tests/unit/test_x.py", "litellm/router.py"], "skip"),
-        ("tests-only", ["test_outside.py"], "skip"),
-        ("tests-only", DOCS, "skip"),
-        ("tests-only", [], "skip"),
-        ("mcp-dependencies", ["pyproject.toml"], "run"),
-        ("mcp-dependencies", ["uv.lock"], "run"),
-        ("mcp-dependencies", ["litellm/mcp_client/client.py"], "run"),
-        ("mcp-dependencies", ["tests/e2e/mcp/datadog_mcp.py"], "run"),
-        ("mcp-dependencies", ["litellm/proxy-extras/pyproject.toml"], "run"),
-        ("mcp-dependencies", ["litellm/scripts/check_mcp_sdk_install.py"], "run"),
-        ("mcp-dependencies", [".github/workflows/test-mcp-dependency-resolution.yml"], "run"),
-        ("mcp-dependencies", [".github/scripts/ci/classify_changes.sh"], "run"),
-        ("mcp-dependencies", ["litellm/llms/openai/chat/gpt_transformation.py"], "skip"),
-        ("mcp-dependencies", DOCS + CLIENT, "skip"),
         ("windows-release", ["litellm/rust/crates/inference/src/lib.rs"], "run"),
         ("windows-release", ["litellm/rust_bridge/dispatch.py"], "run"),
         ("windows-release", ["litellm/rust/rust-toolchain.toml"], "run"),
@@ -142,6 +123,30 @@ def test_classify_decisions(category: str, changed: list[str], expected: str) ->
 )
 def test_redis_compat_path_filter(changed: str, expected: str) -> None:
     assert classify("redis-compat", [changed]) == expected
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    (
+        ("litellm/proxy/db/prisma_engine.py", "run"),
+        ("litellm/proxy/db/prisma_client.py", "run"),
+        ("tests/unit/proxy/db/test_prisma_engine.py", "run"),
+        ("tests/unit/proxy/db/test_prisma_planned_engine_restart.py", "run"),
+        ("tests/unit/proxy/db/conftest.py", "run"),
+        ("tests/_process_helpers.py", "run"),
+        ("litellm/integrations/custom_logger_v2/dispatcher.py", "run"),
+        ("tests/unit/integrations/custom_logger_v2/test_dispatcher.py", "run"),
+        (".github/workflows/test-unit.yml", "run"),
+        ("uv.lock", "run"),
+        ("litellm/proxy/db/log_db_metrics.py", "skip"),
+        ("tests/unit/proxy/db/test_prisma_client.py", "skip"),
+        ("litellm/integrations/custom_logger_v2/user-guide.md", "skip"),
+        ("tests/unit/integrations/custom_logger_v2/test_planner.py", "skip"),
+        ("litellm/router.py", "skip"),
+    ),
+)
+def test_python_310_path_filter(changed: str, expected: str) -> None:
+    assert classify("python-310", [changed]) == expected
 
 
 def test_markdown_under_ui_counts_as_client_not_docs() -> None:

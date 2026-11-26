@@ -150,7 +150,7 @@ fn across_teams(registry: &Registry, model: &str) -> Result<Vec<Arc<Deployment>>
 /// The access groups of the rows `_core_get_model_list(model_name, team_id)` lists: the
 /// group's deployments, an alias's target deployments, a routing group's rows (which carry no
 /// access groups), and only when there are none of those, the wildcard's deployments.
-fn model_access_groups(
+pub fn model_access_groups(
     registry: &Registry,
     model: &str,
     team_id: Option<&str>,
@@ -547,6 +547,8 @@ mod tests {
     #[case::every_model_pins_any_deployment(&["*"], "priv", &["priv"])]
     #[case::every_proxy_model_pins_any_deployment(&["all-proxy-models"], "priv", &["priv"])]
     #[case::the_group_name_stays_kept_to_the_callers_access_group(&["public"], "shared", &["pub"])]
+    #[case::every_model_beside_an_access_group_keeps_the_whole_group(&["public", "*"], "shared", &["pub", "priv"])]
+    #[case::every_proxy_model_beside_an_access_group_keeps_the_whole_group(&["public", "all-proxy-models"], "shared", &["pub", "priv"])]
     fn pinned_deployment_respects_caller_access_groups(
         shared_group: Registry,
         #[case] allowed: &[&str],

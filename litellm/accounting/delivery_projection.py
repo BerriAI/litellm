@@ -76,6 +76,10 @@ def entity_transactions(
     return {
         **base,
         "app_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppTable")),
+        "app_group_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppGroupTable")),
+        "app_group_customer_org_list_transactions": dict(
+            _entity_totals(contributions, "LiteLLM_AppGroupCustomerOrgTable")
+        ),
         "app_customer_org_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppCustomerOrgTable")),
         "app_customer_member_list_transactions": dict(_entity_totals(contributions, "LiteLLM_AppCustomerMemberTable")),
     }
@@ -89,6 +93,8 @@ def _entity_totals(contributions: tuple[Contribution, ...], table: str) -> tuple
 
 def _entity_key(item: Contribution) -> str:
     fields: Final = dict(item.key)
+    if item.table == "LiteLLM_AppGroupCustomerOrgTable":
+        return f"{fields['app_group_id']}:{fields['customer_org_id']}"
     if item.table in ("LiteLLM_AppCustomerOrgTable", "LiteLLM_AppCustomerMemberTable"):
         column: Final = "customer_org_id" if item.table == "LiteLLM_AppCustomerOrgTable" else "customer_member_id"
         return f"{fields['app_id']}:{fields[column]}"

@@ -13,10 +13,11 @@
 //! | [`truthy`] | `bool(value)`, also straight off a `serde_json` value, `a or b or ...` over optional text, and `first or second` |
 //! | [`dict`] | `dict` reads and `d[key] = value` writes, in insertion order |
 //! | [`safe_json`] | LiteLLM's `safe_json_structure(value)` and `safe_dumps(value)` |
+//! | [`scalar`] | `str(value)` and number comparison of request values whose wide numbers, `NaN` and `Infinity` arrive as raw-JSON marked strings |
 //! | [`pystr`] | `len(text)` and `text[start:end]` over code points |
 //! | [`number`] | `int(text)`, `float(text)`, `int(value)` and `float(value)` of loaded values, `sum(floats)`, `int(seconds)` as a `Duration`, and `str()` of an `int` or `float` |
 //! | [`format`] | `format(value, f".{precision}f")` and `format(value, f".{precision}%")` |
-//! | [`unicode`] | `str.isspace()` and `unicodedata.category()` for one character, and whether `str.encode("latin-1")` succeeds |
+//! | [`unicode`] | `str.isspace()` and `unicodedata.category()` for one character, whether `str.encode("latin-1")` succeeds, and `bytes.decode("latin-1")` |
 //! | [`pydantic`] | `TypeAdapter(bool)`, `TypeAdapter(int)` and `TypeAdapter(float)` lax validation |
 //! | [`urllib`] | `urllib.parse.quote(text, safe=safe)` and `urllib.parse.urlsplit(url)` |
 //! | [`base64`] | `base64.b64decode(text, validate=True)` |
@@ -51,6 +52,7 @@ pub mod pystr;
 pub mod repr;
 pub mod reprlib;
 pub mod safe_json;
+pub mod scalar;
 pub mod truthy;
 pub mod unicode;
 pub mod urllib;

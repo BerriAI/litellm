@@ -1,6 +1,7 @@
 # ruff: noqa: T201
 import functools
 import importlib.metadata
+import itertools
 import json
 import logging.config
 import os
@@ -9,7 +10,7 @@ import re
 import subprocess
 import sys
 import urllib.parse as urlparse
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -20,11 +21,17 @@ import httpx
 from click.core import ParameterSource
 from dotenv import load_dotenv
 from pydantic import BeforeValidator, ConfigDict, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import StartupOutputSettings, print_startup_message, print_startup_warning, terminal_text
-from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.constants import (
+    DEFAULT_MAX_REQUEST_HEADER_SIZE,
+    DEFAULT_NUM_WORKERS_LITELLM_PROXY,
+    DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS,
+)
+from litellm.litellm_core_utils.llm_request_utils import is_cost_map_model_past_deprecation_date, is_in_cost_map
+from litellm.litellm_core_utils.url_utils import is_loopback_host
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
     PgBouncerSettings,
@@ -37,6 +44,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from openai import OpenAI
 
     from litellm.proxy.control_plane.main import Tls
     from litellm.proxy.rust_forward.peer import ASGIApp
@@ -274,6 +282,130 @@ _GENERAL_SETTINGS: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object
 _DECODED_JSON: Final = TypeAdapter[object](object)
 
 
+class _ListedModel(TypedDict):
+    id: ReadOnly[str]
+    mode: NotRequired[ReadOnly[str | None]]
+
+
+class _ModelList(TypedDict):
+    data: ReadOnly[tuple[_ListedModel, ...]]
+
+
+_MODEL_LIST: Final = TypeAdapter(_ModelList)
+
+
+_PROXY_KEY_HINT: Final = "--test and --health send LITELLM_MASTER_KEY as the key, and only to a local --host"
+
+
+@dataclass(frozen=True, slots=True)
+class _ProxyTarget:
+    base_url: str
+    api_key: str
+    trust_env: bool
+
+
+def _fits_in_header(value: str) -> bool:
+    return value.isascii() and value.isprintable() and value == value.rstrip()
+
+
+def _proxy_target(host: str, port: int) -> _ProxyTarget:
+    is_local: Final = is_loopback_host(host)
+    master_key: Final = os.getenv("LITELLM_MASTER_KEY")
+    api_key: Final = master_key if master_key and is_local else "My API Key"
+    if not _fits_in_header(api_key):
+        raise click.ClickException(
+            "LITELLM_MASTER_KEY has a newline, a trailing space, or another character an HTTP header can't carry. "
+            "Fix the value and run again"
+        )
+    return _ProxyTarget(
+        base_url=str(httpx.URL(scheme="http", host=host, port=port)),
+        api_key=api_key,
+        trust_env=not is_local,
+    )
+
+
+def _proxy_error(response: httpx.Response) -> click.ClickException:
+    hint: Final = f". {_PROXY_KEY_HINT}" if response.status_code in (401, 403) else ""
+    return click.ClickException(
+        f"{response.request.method} {response.url} answered {response.status_code}: {response.text}{hint}"
+    )
+
+
+def _raise_for_proxy_error(response: httpx.Response) -> None:
+    if response.is_error:
+        raise _proxy_error(response)
+
+
+def _is_retired(listed_model: str) -> bool:
+    provider, _, provider_model = listed_model.partition("/")
+    checks_bare_name: Final = (
+        bool(provider_model) and provider in litellm.provider_list and not is_in_cost_map(listed_model)
+    )
+    return is_cost_map_model_past_deprecation_date(provider_model if checks_bare_name else listed_model)
+
+
+def _pick_test_model(target: _ProxyTarget) -> str:
+    response: Final = httpx.get(
+        url=f"{target.base_url}/v1/models",
+        params={"return_wildcard_routes": "true"},
+        headers={"Authorization": f"Bearer {target.api_key}"},
+        trust_env=target.trust_env,
+    )
+    _raise_for_proxy_error(response)
+    named_models: Final = itertools.takewhile(
+        lambda listed: "*" not in listed["id"], _MODEL_LIST.validate_json(response.content)["data"]
+    )
+    chat_models: Final = tuple(
+        listed["id"] for listed in named_models if listed.get("mode") in (None, "chat", "responses")
+    )
+    if not chat_models:
+        raise click.ClickException(f"the proxy at {target.base_url} lists no chat model by name, pass one with --model")
+    return next((model for model in chat_models if not _is_retired(model)), chat_models[0])
+
+
+def _send_test_requests(client: "OpenAI", request_model: str) -> None:
+    response: Final = client.chat.completions.create(
+        model=request_model,
+        messages=[
+            {
+                "role": "user",
+                "content": "this is a test request, write a short poem",
+            }
+        ],
+    )
+    click.echo(f"\nLiteLLM: response from proxy {response}")
+
+    print(f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}")
+
+    stream_response: Final = client.chat.completions.create(
+        model=request_model,
+        messages=[
+            {
+                "role": "user",
+                "content": "this is a test request, write a short poem",
+            }
+        ],
+        stream=True,
+    )
+    for chunk in stream_response:
+        click.echo(f"LiteLLM: streaming response from proxy {chunk}")
+    print("\n making completion request to proxy")
+    completion_response: Final = client.completions.create(
+        model=request_model, prompt="this is a test request, write a short poem"
+    )
+    print(completion_response)
+
+
+class _GunicornSettings(Protocol):
+    def __getattr__(self, name: str, /) -> object: ...
+
+
+def _gunicorn_settings() -> _GunicornSettings:
+    from gunicorn.config import Config as GunicornConfig
+
+    return GunicornConfig()
+
+
 class ProxyInitializationHelpers:
     @staticmethod
     def echo_litellm_version():
@@ -283,9 +415,18 @@ class ProxyInitializationHelpers:
     _echo_litellm_version = echo_litellm_version
 
     @staticmethod
-    def run_health_check(host, port):
+    def run_health_check(host: str, port: int):
+        from openai import DEFAULT_TIMEOUT
+
         print("\nLiteLLM: Health Testing models in config")
-        response: Final = httpx.get(url=f"http://{host}:{port}/health")
+        target: Final = _proxy_target(host, port)
+        response: Final = httpx.get(
+            url=f"{target.base_url}/health",
+            headers={"Authorization": f"Bearer {target.api_key}"},
+            timeout=DEFAULT_TIMEOUT,
+            trust_env=target.trust_env,
+        )
+        _raise_for_proxy_error(response)
         print(json.dumps(response.json(), indent=4))
 
     _run_health_check = run_health_check
@@ -330,54 +471,21 @@ class ProxyInitializationHelpers:
     _run_config_validation = run_config_validation
 
     @staticmethod
-    def run_test_chat_completion(
-        host: str,
-        port: int,
-        model: str,
-        test: bool | str,
-    ):
-        request_model: Final = model or "gpt-3.5-turbo"
-        click.echo(f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}")
+    def run_test_chat_completion(host: str, port: int, model: str | None) -> None:
         import openai
 
-        api_base = f"http://{host}:{port}"
-        if isinstance(test, str):
-            api_base = test
-        else:
-            raise ValueError("Invalid test value")
-        client: Final = openai.OpenAI(api_key="My API Key", base_url=api_base)
-
-        response: Final = client.chat.completions.create(
-            model=request_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                }
-            ],
-            max_tokens=256,
+        target: Final = _proxy_target(host, port)
+        request_model: Final = model or _pick_test_model(target)
+        click.echo(f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}")
+        client: Final = openai.OpenAI(
+            api_key=target.api_key,
+            base_url=target.base_url,
+            http_client=openai.DefaultHttpxClient(trust_env=target.trust_env),
         )
-        click.echo(f"\nLiteLLM: response from proxy {response}")
-
-        print(f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}")
-
-        stream_response: Final = client.chat.completions.create(
-            model=request_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                }
-            ],
-            stream=True,
-        )
-        for chunk in stream_response:
-            click.echo(f"LiteLLM: streaming response from proxy {chunk}")
-        print("\n making completion request to proxy")
-        completion_response: Final = client.completions.create(
-            model=request_model, prompt="this is a test request, write a short poem"
-        )
-        print(completion_response)
+        try:
+            _send_test_requests(client, request_model)
+        except openai.APIStatusError as error:
+            raise _proxy_error(error.response) from error
 
     _run_test_chat_completion = run_test_chat_completion
 
@@ -448,8 +556,9 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         elif litellm_log := os.environ.get("LITELLM_LOG"):
             uvicorn_args["log_level"] = resolve_log_level(litellm_log)
-        if keepalive_timeout is not None:
-            uvicorn_args["timeout_keep_alive"] = keepalive_timeout
+        uvicorn_args["timeout_keep_alive"] = (
+            DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS if keepalive_timeout is None else keepalive_timeout
+        )
         if timeout_worker_healthcheck is not None:
             if "timeout_worker_healthcheck" in inspect.signature(uvicorn.Config.__init__).parameters:
                 uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
@@ -465,7 +574,7 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def apply_uvicorn_max_requests_jitter(
-        uvicorn_args: dict,
+        uvicorn_args: MutableMapping[str, object],
         max_requests_before_restart: int | None,
         jitter: int,
     ) -> None:
@@ -576,7 +685,7 @@ class ProxyInitializationHelpers:
         return True
 
     @staticmethod
-    def configure_dev_reload(uvicorn_args: dict, config_path: str | None) -> None:
+    def configure_dev_reload(uvicorn_args: MutableMapping[str, object], config_path: str | None) -> None:
         """Wire up --reload (dev only): watch *.py, the --config YAML, and .env,
         and signal reloaded workers to re-read .env with override so edits to
         existing keys actually take effect rather than staying masked by the
@@ -711,18 +820,19 @@ class ProxyInitializationHelpers:
 
         # Gunicorn Application Class
         class StandaloneApplication(gunicorn.app.base.BaseApplication):
-            def __init__(self, app, options=None):
+            def __init__(self, app, options: Mapping[str, object] | None = None):
                 self.options = options or {}  # gunicorn options
                 self.application = app  # FastAPI app
                 super().__init__()
 
-                _endpoint_str: Final = f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
+                _endpoint_str: Final = f"curl --location --noproxy '*' 'http://0.0.0.0:{port}/chat/completions' \\"
                 curl_command: Final = (
                     _endpoint_str
                     + """
                 --header 'Content-Type: application/json' \\
+                --header "Authorization: Bearer $LITELLM_MASTER_KEY" \\
                 --data ' {
-                "model": "gpt-3.5-turbo",
+                "model": "<your-model-name>",
                 "messages": [
                     {
                     "role": "user",
@@ -735,7 +845,7 @@ class ProxyInitializationHelpers:
                 )
                 print_startup_message("")
                 print_startup_message(
-                    '\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
+                    '\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab, with LITELLM_MASTER_KEY exported there if the proxy has a master key]\033[0m\n'
                 )
                 print_startup_message(
                     f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
@@ -768,7 +878,9 @@ class ProxyInitializationHelpers:
         gunicorn_options: Final = {
             "bind": f"{host}:{port}",
             "workers": num_workers,  # default is 1
-            "worker_class": build_graceful_shutdown_uvicorn_worker(graceful_shutdown_timeout, max_request_header_size),
+            "worker_class": build_graceful_shutdown_uvicorn_worker(
+                graceful_shutdown_timeout, max_request_header_size, recycle_workers=bool(max_requests_before_restart)
+            ),
             "graceful_timeout": math.ceil(graceful_shutdown_timeout) + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
             "preload": True,  # Add the preload flag,
             "accesslog": "-",  # Log to stdout
@@ -793,7 +905,7 @@ class ProxyInitializationHelpers:
         if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
             from litellm.proxy.prometheus_cleanup import mark_worker_exit
 
-            def child_exit(server, worker):
+            def child_exit(server: object, worker):
                 mark_worker_exit(worker.pid)
 
             gunicorn_options["child_exit"] = child_exit
@@ -879,7 +991,11 @@ class ProxyInitializationHelpers:
             ProxyInitializationHelpers.gunicorn_keepalive_and_trusted_proxies()
             if server is Server.GUNICORN
             else (
-                uvicorn.Config(app="", log_config=None).timeout_keep_alive
+                (
+                    DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS
+                    if server is Server.UVICORN
+                    else uvicorn.Config(app="", log_config=None).timeout_keep_alive
+                )
                 if keepalive_timeout is None
                 else keepalive_timeout,
                 uvicorn_trusted_proxies(None),
@@ -899,14 +1015,10 @@ class ProxyInitializationHelpers:
     @staticmethod
     def gunicorn_keepalive_and_trusted_proxies() -> tuple[int, str]:
         """Loaded only when gunicorn is the server, because gunicorn imports ``fcntl``, which Windows lacks."""
-        from gunicorn.config import Config as GunicornConfig
-
-        config: Final = GunicornConfig()
-        keepalive: Final[object] = config.keepalive
-        forwarded_allow_ips: Final[object] = config.forwarded_allow_ips
+        config: Final = _gunicorn_settings()
         return (
-            TypeAdapter(int).validate_python(keepalive),
-            ",".join(TypeAdapter(list[str]).validate_python(forwarded_allow_ips)),
+            TypeAdapter(int).validate_python(config.keepalive),
+            ",".join(TypeAdapter(list[str]).validate_python(config.forwarded_allow_ips)),
         )
 
     @staticmethod
@@ -937,7 +1049,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def maybe_setup_prometheus_multiproc_dir(
         num_workers: int,
-        litellm_settings: dict | None,
+        litellm_settings: Mapping[str, object] | None,
         prometheus_metrics_port: int | None = None,
     ) -> str | None:
         """
@@ -977,7 +1089,7 @@ class _ControlPlaneLicense(Protocol):
     def is_premium(self) -> bool: ...
 
 
-def _decrypt_env_var() -> Mapping[str, str]:
+def _decrypt_env_var() -> Mapping[str, str | bool]:
     from litellm.secret_managers.aws_secret_manager import decrypt_env_var
 
     return decrypt_env_var()
@@ -997,17 +1109,17 @@ def _migrate_control_plane() -> None:
 
 @dataclass(frozen=True, slots=True)
 class CliDependencies:
-    decrypt_env: Callable[[], Mapping[str, str]] = _decrypt_env_var
+    decrypt_env: Callable[[], Mapping[str, str | bool]] = _decrypt_env_var
     license_check: Callable[[], _ControlPlaneLicense] = _control_plane_license_check
     migrate_control_plane: Callable[[], None] = _migrate_control_plane
 
 
-def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str]]) -> None:
+def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str | bool]]) -> None:
     if os.getenv("USE_AWS_KMS") != "True":
         return
 
     for key, value in decrypt_env().items():
-        os.environ[key] = value
+        os.environ[key] = value  # pyright: ignore[reportArgumentType]  # environ raises its own TypeError for a bool
 
 
 def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | None) -> "Tls | None":
@@ -1139,12 +1251,13 @@ def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | Non
 @click.option(
     "--health",
     flag_value=True,
-    help="Make a chat/completions request to all llms in config.yaml",
+    help="Health check every model of the proxy at --host and --port, with LITELLM_MASTER_KEY when --host is local",
 )
 @click.option(
     "--test",
     flag_value=True,
-    help="proxy chat completions url to make a test request to",
+    help="Send test chat, streaming and text completion requests to the proxy at --host and --port, "
+    "with LITELLM_MASTER_KEY when --host is local",
 )
 @click.option(
     "--test_async",
@@ -1371,50 +1484,50 @@ def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | Non
 @click.pass_context
 def run_server(
     ctx: click.Context,
-    cli_args,
+    cli_args: tuple[str, ...],
     host: str,
     port: int,
-    api_base,
-    api_version,
-    model,
-    alias,
-    add_key,
-    headers,
-    save,
-    debug,
-    detailed_debug,
-    temperature,
-    max_tokens,
-    request_timeout,
-    drop_params,
-    add_function_to_prompt,
+    api_base: str | None,
+    api_version: str,
+    model: str | None,
+    alias: str | None,
+    add_key: str | None,
+    headers: str | None,
+    save: bool,
+    debug: bool,
+    detailed_debug: bool,
+    temperature: float | None,
+    max_tokens: int | None,
+    request_timeout: int | None,
+    drop_params: bool,
+    add_function_to_prompt: bool,
     config: str | None,
-    max_budget,
+    max_budget: float | None,
     test: str | bool | None,
-    local,
+    local: bool,
     num_workers: int,
-    granian_threads,
-    test_async,
-    iam_token_db_auth,
+    granian_threads: int | None,
+    test_async: bool,
+    iam_token_db_auth: bool,
     azure_postgresql_auth: bool,
-    num_requests,
-    use_queue,
+    num_requests: int,
+    use_queue: bool,
     health: bool,
-    setup,
+    setup: bool,
     version: bool,
-    run_gunicorn,
-    run_hypercorn,
-    run_granian,
+    run_gunicorn: bool,
+    run_hypercorn: bool,
+    run_granian: bool,
     ssl_keyfile_path: str | None,
     ssl_certfile_path: str | None,
-    ciphers,
+    ciphers: str | None,
     log_config: str | None,
     use_prisma_db_push: bool,
     skip_server_startup: bool,
     validate_config: bool,
     check_migrations_against_existing_data: bool,
     keepalive_timeout: int | None,
-    timeout_worker_healthcheck,
+    timeout_worker_healthcheck: int | None,
     max_request_header_size: int | None,
     max_requests_before_restart: int | None,
     max_requests_before_restart_jitter: int | None,
@@ -1426,7 +1539,7 @@ def run_server(
     prometheus_metrics_port: int | None,
     control_plane: bool,
 ):
-    dependencies: Final = ctx.obj if isinstance(ctx.obj, CliDependencies) else CliDependencies()
+    dependencies: Final = ctx.find_object(CliDependencies) or CliDependencies()
     if cli_args:
         if cli_args == ("xai-oauth", "login"):
             from litellm.llms.xai.oauth import XAIOAuthAuthenticator
@@ -1548,7 +1661,7 @@ def run_server(
         ProxyInitializationHelpers.run_health_check(host, port)
         return
     if test is True:
-        ProxyInitializationHelpers.run_test_chat_completion(host, port, model, test)
+        ProxyInitializationHelpers.run_test_chat_completion(host, port, model)
         return
     else:
         worker_headers: Final = _DECODED_JSON.validate_python(json.loads(headers) if headers else headers)
@@ -2033,6 +2146,10 @@ def run_server(
             if single_worker_warning is not None:
                 print_startup_warning(f"\033[1;33m{single_worker_warning}\033[0m\n")
         if run_gunicorn is False and run_hypercorn is False and run_granian is False:
+            if max_requests_before_restart is not None:
+                from litellm.proxy.shutdown.recycling_http_protocol import RecyclingHTTPProtocol
+
+                uvicorn_args["http"] = RecyclingHTTPProtocol
             if limit_concurrency is not None:
                 uvicorn_args["limit_concurrency"] = limit_concurrency
             if max_requests_before_restart_jitter is not None:
@@ -2080,10 +2197,17 @@ def run_server(
                         "and an OS other than Windows, so only a single worker reloads.\033[0m"
                     )
                 uvicorn_args.update(worker_overrides)
-            uvicorn.run(
-                **uvicorn_args,
-                workers=num_workers,
-            )
+            if max_requests_before_restart is None:
+                uvicorn.run(**uvicorn_args, workers=num_workers)
+            else:
+                from litellm.proxy import dev_reload
+
+                dev_reload.run_uvicorn_with_recycling(
+                    dev_reload.RELOAD_OPTIONS.validate_python(
+                        {"reload": False, "reload_dirs": (), "reload_includes": (), **uvicorn_args}
+                    ),
+                    workers=TypeAdapter(int).validate_python(num_workers),
+                )
         elif run_gunicorn is True:
             from litellm.proxy.rust_forward.peer import wrap
 

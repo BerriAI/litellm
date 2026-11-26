@@ -29,7 +29,7 @@ import litellm
 from litellm._internal_context import is_internal_call, post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.caching.caching import S3Cache, response_cache_phase
+from litellm.caching.caching import S3Cache, has_per_input_extra_body, kwargs_for_input, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, RESPONSE_CACHE_EXCLUDED_PROVIDERS
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -38,12 +38,14 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     assemble_complete_response_from_streaming_chunks,
 )
+from litellm.llms.base_llm.embedding.transformation import extra_body_for_inputs
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.caching import CACHED_STREAM_EVENTS_KEY, EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ChatCompletionFileObject, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
+from litellm.types.semantic_cache import semantic_cache_policy
 from litellm.types.utils import (
     CachingDetails,
     CallTypes,
@@ -51,6 +53,7 @@ from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
     ModelResponse,
+    PromptTokensDetailsWrapper,
     TextChoices,
     TextCompletionResponse,
     TranscriptionResponse,
@@ -62,7 +65,7 @@ if TYPE_CHECKING:
     from litellm.llms.anthropic.messages.native.response_cache import (
         AnthropicMessagesStreamCacheWriter,
     )
-    from litellm.types.utils import PromptTokensDetailsWrapper
+    from litellm.types.utils import ModelResponseStream
 else:
     LiteLLMLoggingObj = Any
 
@@ -105,9 +108,15 @@ class CachingHandlerResponse(LiteLLMBaseModel):
     final_embedding_cached_response: EmbeddingResponse | None = None
     embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
     embedding_uncached_input: SkipValidation[list[EmbeddingCacheInputElement]] | None = None
+    embedding_uncached_extra_body: SkipValidation[object] = None
 
 
 in_memory_cache_obj: Final = InMemoryCache()
+_CACHE_READS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _missed_input_indexes(cached_result: object) -> tuple[int, ...]:
+    return tuple(idx for idx, hit in enumerate(_CACHE_READS.validate_python(cached_result)) if hit is None)
 
 
 class _CacheCallKwargs(TypedDict, total=False, extra_items=object):
@@ -142,7 +151,7 @@ def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object])
     )
 
 
-def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
+def _is_chat_completion_cached_dict(cached_result: Mapping[str, object]) -> bool:
     obj: Final = cached_result.get("object")
     if obj == "response":
         return False
@@ -155,6 +164,17 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
 
 
 _SSE_EVENT_DATA: Final = TypeAdapter(Mapping[str, object])
+
+
+_CACHED_CHOICES: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _stored_finish_reason_indices(cached_result: Mapping[str, object]) -> frozenset[int]:
+    try:
+        choices: Final = _CACHED_CHOICES.validate_python(cached_result.get("choices"))
+    except ValidationError:
+        return frozenset()
+    return frozenset(index for index, choice in enumerate(choices) if choice.get("finish_reason") is not None)
 
 
 def _sse_event_data(line: str) -> Mapping[str, object] | None:
@@ -328,7 +348,7 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
     return task
 
 
-def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
+def _request_cache_key(request_kwargs: Mapping[str, object]) -> object:
     """Read the caller-supplied ``cache_key`` off the request kwargs."""
     return request_kwargs.get("cache_key", None)
 
@@ -377,6 +397,59 @@ def _current_format_embedding_entry(entry: object) -> CachedEmbedding | None:
     return cached
 
 
+def _is_per_input_embedding_entry(cached: object) -> bool:
+    entry: Final = as_str_mapping(cached)
+    return isinstance(cached, dict) and entry is not None and "embedding" in entry and "data" not in entry
+
+
+def _is_single_embedding_input(request_input: object) -> bool:
+    items: Final = as_object_list(request_input)
+    return items is None or all(isinstance(item, int) for item in items)
+
+
+def _count_text_tokens(text: str) -> int:
+    from litellm.utils import token_counter
+
+    return token_counter(text=text, count_response_tokens=True)
+
+
+def _cached_prompt_tokens_details(entry: CachedEmbedding) -> PromptTokensDetailsWrapper | None:
+    if not entry["prompt_tokens_details"]:
+        return None
+    try:
+        return PromptTokensDetailsWrapper.model_validate(entry["prompt_tokens_details"])
+    except ValidationError:
+        return None
+
+
+def _per_input_embedding_response(
+    cached: object, request_input: object, fallback_model: str
+) -> EmbeddingResponse | None:
+    """Expand the per-input entry aembedding stores under the key a single-input embedding request also uses."""
+    entry: Final = _current_format_embedding_entry(cached)
+    if entry is None or entry["embedding"] is None or not _is_single_embedding_input(request_input):
+        return None
+    stored_tokens: Final = entry["prompt_tokens"]
+    prompt_tokens: Final = (
+        stored_tokens
+        if stored_tokens is not None
+        else _count_text_tokens(request_input)
+        if isinstance(request_input, str)
+        else 0
+    )
+    return EmbeddingResponse(
+        model=entry["model"] or fallback_model,
+        data=[Embedding(embedding=entry["embedding"], index=0, object="embedding")],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=0,
+            total_tokens=prompt_tokens,
+            prompt_tokens_details=_cached_prompt_tokens_details(entry),
+        ),
+        hidden_params={"cache_hit": True},
+    )
+
+
 class LLMCachingHandler:
     def __init__(
         self,
@@ -389,7 +462,7 @@ class LLMCachingHandler:
         self.async_streaming_chunks: list[object] = []
         self.sync_streaming_chunks: list[object] = []
         self.request_kwargs = _drop_logging_obj_from_kwargs(request_kwargs)
-        self.preset_cache_key: str | None = None
+        self.preset_cache_key: object = None
         self.original_function = original_function
         self.start_time = start_time
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
@@ -407,7 +480,7 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         start_time: datetime.datetime,
         call_type: str,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse | None:
         """
@@ -490,6 +563,11 @@ class LLMCachingHandler:
                     final_embedding_cached_response=final_embedding_cached_response,
                     embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
                     embedding_uncached_input=self.handle_kwargs_input_list_or_str(kwargs),
+                    embedding_uncached_extra_body=extra_body_for_inputs(
+                        kwargs.get("extra_body"), _missed_input_indexes(read.cached_result)
+                    )
+                    if has_per_input_extra_body(kwargs)
+                    else kwargs.get("extra_body"),
                 )
 
         verbose_logger.debug("CACHE RESULT: %s", cached_result)
@@ -618,8 +696,21 @@ class LLMCachingHandler:
                     pass
                 else:
                     call_type = original_function.__name__
+                    per_input_entry: Final = call_type == CallTypes.embedding.value and _is_per_input_embedding_entry(
+                        cached_result
+                    )
+                    expanded_entry: Final = (
+                        _per_input_embedding_response(
+                            cached=cached_result, request_input=new_kwargs.get("input"), fallback_model=model
+                        )
+                        if per_input_entry
+                        else None
+                    )
+                    if per_input_entry and expanded_entry is None:
+                        verbose_logger.debug("LiteLLM Cache: unusable per-input embedding entry, treating it as a miss")
+                        return CachingHandlerResponse(cached_result=None)
                     converted_result: Final = self._convert_cached_result_to_model_response(
-                        cached_result=cached_result,
+                        cached_result=cached_result if expanded_entry is None else expanded_entry,
                         call_type=call_type,
                         kwargs=kwargs,
                         logging_obj=logging_obj,
@@ -756,7 +847,7 @@ class LLMCachingHandler:
 
         """
         embedding_all_elements_cache_hit: bool = False
-        remaining_list: Final = []
+        remaining_list: Final[list[EmbeddingCacheInputElement]] = []
         non_null_list: Final = []
         kwargs_input_as_list: Final = self.handle_kwargs_input_list_or_str(kwargs)
         for idx, cr in enumerate(cached_result):
@@ -792,9 +883,7 @@ class LLMCachingHandler:
                     if cached_prompt_tokens is not None:
                         prompt_tokens += cached_prompt_tokens
                     elif isinstance(kwargs_input_as_list[idx], str):
-                        from litellm.utils import token_counter
-
-                        prompt_tokens += token_counter(text=kwargs_input_as_list[idx], count_response_tokens=True)
+                        prompt_tokens += _count_text_tokens(kwargs_input_as_list[idx])
                     # Aggregate prompt_tokens_details from cached items
                     item_details = cr.get("prompt_tokens_details")
                     if item_details:
@@ -885,7 +974,7 @@ class LLMCachingHandler:
         dict1: Final = _prompt_tokens_details_as_mapping(details1)
         dict2: Final = _prompt_tokens_details_as_mapping(details2)
 
-        merged: Final[dict] = {}
+        merged: Final[dict[str, object]] = {}
         for key in set(dict1.keys()) | set(dict2.keys()):
             v1 = dict1.get(key, 0)
             v2 = dict2.get(key, 0)
@@ -893,7 +982,7 @@ class LLMCachingHandler:
                 merged[key] = v1 + v2
             elif isinstance(v1, dict) and isinstance(v2, dict):
                 # Recursively merge nested dicts (e.g. cache_creation_token_details)
-                nested: dict = {}
+                nested: dict[object, object] = {}
                 for nk in set(v1.keys()) | set(v2.keys()):
                     nv1 = v1.get(nk, 0)
                     nv2 = v2.get(nk, 0)
@@ -1000,8 +1089,12 @@ class LLMCachingHandler:
             dispatch_success_logging(logging_obj, cached_result, start_time, end_time, False, False)
             return
 
+        if not logging_obj.claim_async_success_log():
+            return
+
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
+        logging_obj.mark_async_success_log_enqueued()
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=logging_obj.async_success_handler(
                 result=cached_result,
@@ -1061,14 +1154,20 @@ class LLMCachingHandler:
             new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
         cached_result: object | None = None
         if call_type == CallTypes.aembedding.value:
+            scoped_controls: Final = (
+                {"cache": new_kwargs["cache"]}
+                if not litellm.cache.is_semantic_cache() and semantic_cache_policy(new_kwargs) is not None
+                else {}
+            )
             new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)
             tasks: Final[list[Awaitable[object]]] = []
             for idx, i in enumerate(new_kwargs["input"]):
-                preset_cache_key = litellm.cache.get_cache_key(**{**new_kwargs, "input": i})
+                preset_cache_key = litellm.cache.get_cache_key(**kwargs_for_input(new_kwargs, i, idx))
                 tasks.append(
                     litellm.cache.async_get_cache(
                         cache_key=preset_cache_key,
                         dynamic_cache_object=self.dual_cache,
+                        **scoped_controls,
                     )
                 )
             with response_cache_phase("get"):
@@ -1121,7 +1220,7 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         model: str,
         args: tuple[object, ...],
-        custom_llm_provider: str | None = None,
+        custom_llm_provider: object = None,
     ) -> object:
         """
         Internal method to process the cached result
@@ -1157,6 +1256,7 @@ class LLMCachingHandler:
                 cached_result = convert_to_model_response_object(
                     response_object=cached_result,
                     model_response_object=ModelResponse(),
+                    preserve_stored_finish_reason=True,
                 )
         if (
             call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value
@@ -1230,6 +1330,7 @@ class LLMCachingHandler:
                     cached_result = convert_to_model_response_object(
                         response_object=cached_result,
                         model_response_object=ModelResponse(),
+                        preserve_stored_finish_reason=True,
                     )
             else:
                 from litellm.responses.streaming_iterator import (
@@ -1278,7 +1379,7 @@ class LLMCachingHandler:
             convert_to_streaming_response_async,
         )
 
-        _stream_cached_result: AsyncGenerator | Generator
+        _stream_cached_result: AsyncGenerator[ModelResponseStream, None] | Generator[ModelResponseStream, None, None]
         if call_type == CallTypes.acompletion.value or call_type == CallTypes.atext_completion.value:
             _stream_cached_result = convert_to_streaming_response_async(
                 response_object=cached_result,
@@ -1292,12 +1393,13 @@ class LLMCachingHandler:
             model=model,
             custom_llm_provider="cached_response",
             logging_obj=logging_obj,
+            stored_finish_reason_indices=_stored_finish_reason_indices(cached_result),
         )
 
     async def async_set_cache(
         self,
         result: object,
-        original_function: Callable,
+        original_function: Callable[..., object],
         kwargs: Mapping[str, object],
         args: tuple[object, ...] | None = None,
     ):
@@ -1532,7 +1634,7 @@ class LLMCachingHandler:
         self,
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        kwargs: dict[str, Any],
+        kwargs: Mapping[str, object],
         cached_result: object,
         is_async: bool,
         is_embedding: bool = False,
@@ -1586,6 +1688,9 @@ class LLMCachingHandler:
             stream=request_kwargs.get("stream", False),
             custom_llm_provider=custom_llm_provider,
         )
+        from litellm.utils import call_headers
+
+        logging_obj.record_call_credential(request_kwargs.get("api_key"), call_headers(request_kwargs))
 
         logging_obj.caching_details = CachingDetails(
             cache_hit=True,
@@ -1594,7 +1699,7 @@ class LLMCachingHandler:
 
 
 def convert_args_to_kwargs(
-    original_function: Callable,
+    original_function: Callable[..., object],
     args: tuple[object, ...] | None = None,
 ) -> dict[str, object]:
     # Get the signature of the original function
@@ -1604,7 +1709,7 @@ def convert_args_to_kwargs(
     param_names: Final = list(signature.parameters.keys())
 
     # Create a mapping of positional arguments to parameter names
-    args_to_kwargs: Final = {}
+    args_to_kwargs: Final[dict[str, object]] = {}
     if args:
         for index, arg in enumerate(args):
             if index < len(param_names):

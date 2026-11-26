@@ -2,6 +2,8 @@
 #    On success, logs events to Helicone
 import os
 import traceback
+from collections.abc import Callable
+from datetime import datetime
 from typing import Final
 
 import litellm
@@ -44,7 +46,7 @@ class HeliconeLogger:
         "command-nightly",
     ]
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Instance variables
         self.is_mock_mode = should_use_helicone_mock()
         if self.is_mock_mode:
@@ -56,7 +58,7 @@ class HeliconeLogger:
         self.api_base = os.getenv("HELICONE_API_BASE") or "https://api.hconeai.com"
         self.api_base = self.api_base.removesuffix("/")
 
-    def claude_mapping(self, model, messages, response_obj):
+    def claude_mapping(self, model: str, messages, response_obj):
         from anthropic import AI_PROMPT, HUMAN_PROMPT
 
         prompt = f"{HUMAN_PROMPT}"
@@ -126,7 +128,16 @@ class HeliconeLogger:
 
         return metadata
 
-    def log_success(self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs):
+    def log_success(
+        self,
+        model: str,
+        messages: object,
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[..., object],
+        kwargs,
+    ) -> None:
         # Method definition
         try:
             print_verbose(f"Helicone Logging - Enters logging function for model {model}")
@@ -179,7 +190,7 @@ class HeliconeLogger:
             end_time_milliseconds: Final = int((end_time.timestamp() - end_time_seconds) * 1000)
             meta: Final = {"Helicone-Auth": f"Bearer {self.key}"}
             meta.update(metadata)
-            data: Final = {
+            data: Final[dict[str, object]] = {  # mutable-ok: built here, sent as is
                 "providerRequest": {
                     "url": provider_url,
                     "json": provider_request,

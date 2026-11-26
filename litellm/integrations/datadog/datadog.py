@@ -18,9 +18,9 @@ import datetime
 import os
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from datetime import datetime as datetimeObj
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 import httpx
 from httpx import Response
@@ -42,6 +42,7 @@ from litellm.integrations.datadog.datadog_mock_client import (
     create_mock_datadog_client,
     should_use_datadog_mock,
 )
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -69,7 +70,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
-class _DatadogLoggingKwargs(TypedDict, total=False):
+class _DatadogLoggingKwargs(TypedDict, total=False, extra_items=object):
     """The subset of logging ``kwargs`` that the Datadog payload builder reads."""
 
     standard_logging_object: ReadOnly[StandardLoggingPayload | None]
@@ -103,6 +104,21 @@ def _resolve_dd_batch_size() -> int:
 def _span_attribute(span: object, name: str) -> object:
     """Read an optional attribute off whatever span object the active tracer hands back."""
     return getattr(span, name, None)
+
+
+class _V0LoggedResponse(Protocol):
+    def __getitem__(self, key: Literal["usage"], /) -> Iterable[tuple[str, object]]: ...
+
+    def get(self, key: Literal["id"], default: str, /) -> object: ...
+
+    def __iter__(self) -> Iterator[tuple[str, object]]: ...
+
+
+def _v0_response_fields(response_obj: _V0LoggedResponse) -> Mapping[str, object] | _V0LoggedResponse:
+    try:
+        return dict(response_obj)
+    except Exception:
+        return response_obj
 
 
 class DataDogLogger(
@@ -192,13 +208,13 @@ class DataDogLogger(
             verbose_logger.exception("Datadog: Got exception on init Datadog client %s", e)
             raise e
 
-    def _get_datadog_params(self) -> dict:
+    def _get_datadog_params(self) -> dict[str, object]:
         """
         Get the datadog_params from litellm.datadog_params
 
         These are params specific to initializing the DataDogLogger e.g. turn_off_message_logging
         """
-        dict_datadog_params: dict = {}
+        dict_datadog_params: dict[str, object] = {}
         if litellm.datadog_params is not None:
             if isinstance(litellm.datadog_params, DatadogInitParams):
                 dict_datadog_params = litellm.datadog_params.model_dump()
@@ -258,7 +274,13 @@ class DataDogLogger(
         self.DD_API_KEY = resolved_api_key
         self.intake_url = f"https://http-intake.logs.{resolved_site}/api/v2/logs"
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs: _DatadogLoggingKwargs,
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         """
         Async Log success events to Datadog
 
@@ -277,7 +299,13 @@ class DataDogLogger(
         except Exception as e:
             verbose_logger.exception("Datadog Layer Error - %s\n%s", e, traceback.format_exc())
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self,
+        kwargs: _DatadogLoggingKwargs,
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         try:
             verbose_logger.debug("Datadog: Logging - Enters logging function for model %s", kwargs)
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
@@ -287,7 +315,7 @@ class DataDogLogger(
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         original_exception: Exception,
         user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: str | None = None,
@@ -403,7 +431,7 @@ class DataDogLogger(
             self.log_queue = batch_to_send + self.log_queue
             verbose_logger.exception("Datadog Error sending batch API - %s\n%s", e, traceback.format_exc())
 
-    async def _send_with_413_split(self, batch: list) -> list:
+    async def _send_with_413_split(self, batch: list[DatadogPayload]) -> list[DatadogPayload]:
         """
         Send a batch, halving any sub-batch that exceeds Datadog's intake limits before
         sending, and halving again on a 413 (payload too large) response, since Datadog
@@ -453,7 +481,9 @@ class DataDogLogger(
                 if not self.log_queue:
                     self.last_flush_time = time.time()
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: _DatadogLoggingKwargs, response_obj, start_time: datetime.datetime, end_time: datetime.datetime
+    ):
         """
         Sync Log success events to Datadog
 
@@ -477,7 +507,7 @@ class DataDogLogger(
                 )
 
             # Build headers
-            headers: Final = {}
+            headers: Final[dict[str, str]] = {}  # mutable-ok: built here, sent as is
             # Add API key if available (required for direct API, optional for agent)
             if self.DD_API_KEY:
                 headers["DD-API-KEY"] = self.DD_API_KEY
@@ -501,7 +531,13 @@ class DataDogLogger(
         except Exception as e:
             verbose_logger.exception("Datadog Layer Error - %s\n%s", e, traceback.format_exc())
 
-    async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
+    async def _log_async_event(
+        self,
+        kwargs: _DatadogLoggingKwargs,
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         dd_payload: Final = self.create_datadog_logging_payload(
             kwargs=kwargs,
             response_obj=response_obj,
@@ -611,7 +647,7 @@ class DataDogLogger(
         parent_otel_span: object = None,
         start_time: datetimeObj | float | None = None,
         end_time: float | datetimeObj | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ):
         """
         Logs failures from Redis, Postgres (Adjacent systems), as 'WARNING' on DataDog
@@ -645,7 +681,7 @@ class DataDogLogger(
         parent_otel_span: object = None,
         start_time: datetimeObj | float | None = None,
         end_time: float | datetimeObj | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ):
         """
         Logs success from Redis, Postgres (Adjacent systems), as 'INFO' on DataDog
@@ -679,8 +715,8 @@ class DataDogLogger(
 
     def _create_v0_logging_payload(
         self,
-        kwargs: dict,
-        response_obj: Any,
+        kwargs: _DatadogLoggingKwargs,
+        response_obj: _V0LoggedResponse,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> DatadogPayload:
@@ -691,24 +727,21 @@ class DataDogLogger(
         (Not Recommended) If you want this to get logged set `litellm.datadog_use_v1 = True`
         """
 
-        litellm_params: Final = kwargs.get("litellm_params", {})
+        litellm_params: Final = require_get(kwargs.get("litellm_params", {}))
         metadata: Final = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
         messages: Final = kwargs.get("messages")
         optional_params: Final = kwargs.get("optional_params", {})
         call_type: Final = kwargs.get("call_type", "litellm.completion")
         cache_hit: Final = kwargs.get("cache_hit", False)
-        usage = response_obj["usage"]
+        raw_usage: Final = response_obj["usage"]
         id: Final = response_obj.get("id", str(uuid.uuid4()))
-        usage = dict(usage)
+        usage: Final = dict(raw_usage)
         try:
             response_time = (end_time - start_time).total_seconds() * 1000
         except Exception:
             response_time = None
 
-        try:
-            response_obj = dict(response_obj)
-        except Exception:
-            response_obj = response_obj
+        response_fields: Final = _v0_response_fields(response_obj)
 
         # Clean Metadata before logging - never log raw metadata
         # the raw metadata can contain circular references which leads to infinite recursion
@@ -739,7 +772,7 @@ class DataDogLogger(
             "model_parameters": optional_params,
             "spend": kwargs.get("response_cost", 0),
             "messages": messages,
-            "response": response_obj,
+            "response": response_fields,
             "usage": usage,
             "metadata": clean_metadata,
         }
@@ -843,5 +876,5 @@ class DataDogLogger(
         request_id: str,
         start_time_utc: datetimeObj | None,
         end_time_utc: datetimeObj | None,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         pass

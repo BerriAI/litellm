@@ -59,7 +59,7 @@ from litellm.types.tool_management import (
     ToolUsageLogsResponse,
 )
 
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
 
 if TYPE_CHECKING:
 
@@ -388,7 +388,7 @@ def _snippet_str(text: object, max_len: int = 200) -> str | None:
     if isinstance(text, str):
         s = text
     elif isinstance(text, list):
-        parts: Final = []
+        parts: Final = list[str]()
         for item in text:
             if isinstance(item, dict) and "content" in item:
                 c = item["content"]

@@ -9,7 +9,7 @@ methods; richer repositories live in their own modules.
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, Generic, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Final, Generic, NamedTuple, Protocol
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.repositories import rust_database
@@ -46,7 +46,7 @@ class PrismaTableRepository(Generic[RowT_co]):
         return self._prisma_client
 
     @property
-    def prisma_client(self) -> Any:
+    def prisma_client(self) -> object:
         return self._connected_client()
 
     def _selected_database(self) -> object:
@@ -342,6 +342,10 @@ class BackgroundResponseSettlementRepository(
     PrismaTableRepository["prisma_models.LiteLLM_BackgroundResponseSettlement"]
 ):
     table_name = "litellm_backgroundresponsesettlement"
+
+
+class BackgroundResponseCreatorRepository(PrismaTableRepository["prisma_models.LiteLLM_BackgroundResponseCreator"]):
+    table_name = "litellm_backgroundresponsecreator"
 
 
 class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):

@@ -35,7 +35,7 @@ class HookCache(StateCache):
         local_only: bool = False,
         **kwargs: object,  # kwargs-ok: DualCache's signature, which callers pass ttl through
     ) -> object:
-        held: Final[object] = self._auth_cache().get_cache(key=key, local_only=True)
+        held: Final[object] = self._auth_cache().get_local_by_key(key)
         if held is not None:
             return held
         return super().get_cache(key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
@@ -47,7 +47,7 @@ class HookCache(StateCache):
         local_only: bool = False,
         **kwargs: object,  # kwargs-ok: DualCache's signature, which callers pass ttl through
     ) -> object:
-        held: Final[object] = self._auth_cache().get_cache(key=key, local_only=True)
+        held: Final[object] = self._auth_cache().get_local_by_key(key)
         if held is not None:
             return held
         return await super().async_get_cache(key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)

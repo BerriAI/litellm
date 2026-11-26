@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
+fips = ["rustls/fips"]
 test-support = []
 
 [dependencies]
@@ -34,6 +35,6 @@ webpki-roots.workspace = true
 futures-util.workspace = true
 rcgen = "0.14.10"
 tempfile.workspace = true
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs"] }
 rstest.workspace = true
 tokio.workspace = true

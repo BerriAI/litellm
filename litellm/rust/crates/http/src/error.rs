@@ -396,6 +396,45 @@ impl Error {
         }
     }
 
+    pub fn is_unreachable_media(&self) -> bool {
+        match &*self.0 {
+            Repr::Resolve(_)
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::Download(_) => true,
+            Repr::Read { .. }
+            | Repr::InvalidPem { .. }
+            | Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::Request(_)
+            | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
+            | Repr::UnsignableBody
+            | Repr::UnsignableHeader(_)
+            | Repr::Signature(_)
+            | Repr::Connect { .. }
+            | Repr::Network(_)
+            | Repr::BodyCut { .. }
+            | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
+            | Repr::Status { .. }
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::Handshake(_)
+            | Repr::HandshakeTimeout(_)
+            | Repr::WebSocket(_)
+            | Repr::WebSocketClosed
+            | Repr::BlockedUrl
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects
+            | Repr::DownloadStatus(_)
+            | Repr::DownloadTimeout(_) => false,
+        }
+    }
+
     pub fn is_connect(&self) -> bool {
         match &*self.0 {
             Repr::Connect { .. } => true,
@@ -668,7 +707,7 @@ mod tests {
     use litellm_error::Report;
     use rstest::rstest;
 
-    use super::{TRUNCATION_MARKER, UPSTREAM_BODY_MAX_CHARS};
+    use super::{Error, Repr, TRUNCATION_MARKER, UPSTREAM_BODY_MAX_CHARS};
 
     #[tokio::test]
     async fn transport_errors_remove_urls_and_keep_dispatch_context() {
@@ -722,6 +761,45 @@ mod tests {
             super::url_origin(&url::Url::parse(url).unwrap()).as_deref(),
             Some(origin)
         );
+    }
+
+    #[rstest]
+    #[case::unresolvable_host(Repr::Resolve(std::io::Error::other("no such host")), true)]
+    #[case::redirect_without_a_location(Repr::MissingRedirectLocation, true)]
+    #[case::redirect_to_an_invalid_url(
+        Repr::InvalidRedirect(url::ParseError::EmptyHost.into()),
+        true
+    )]
+    #[case::not_found(Repr::DownloadStatus(404), false)]
+    #[case::blocked(Repr::BlockedUrl, false)]
+    #[case::disabled(Repr::DownloadDisabled, false)]
+    #[case::too_large(Repr::DownloadTooLarge, false)]
+    #[case::too_many_redirects(Repr::TooManyRedirects, false)]
+    fn unreachable_media_is_neither_an_answer_nor_a_refusal(
+        #[case] repr: Repr,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(Error::from(repr).is_unreachable_media(), expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_failed_download_is_unreachable_media_and_a_refused_provider_is_not() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        drop(listener);
+        let refused = || async {
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("client")
+                .get(format!("http://{address}/"))
+                .send()
+                .await
+                .expect_err("nothing listens")
+        };
+        assert!(Error::from(Repr::download(refused().await)).is_unreachable_media());
+        assert!(!Error::from(refused().await).is_unreachable_media());
     }
 
     fn root_cause<'a>(

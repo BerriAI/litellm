@@ -1,13 +1,16 @@
 name: "Cache uv downloads"
 description: >-
   Restore the uv download cache on every run and save it only from main, so pull
-  requests reuse main's cache instead of evicting it with their own copies.
+  requests reuse main's cache instead of evicting it with their own copies. A
+  download that stalls gives up after two minutes and continues as a cache miss.
 
 runs:
   using: composite
   steps:
     - name: Restore and save the uv download cache
       if: github.ref == 'refs/heads/main'
+      env:
+        SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ env.UV_CACHE_DIR }}
@@ -17,6 +20,8 @@ runs:
 
     - name: Restore the uv download cache
       if: github.ref != 'refs/heads/main'
+      env:
+        SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ env.UV_CACHE_DIR }}

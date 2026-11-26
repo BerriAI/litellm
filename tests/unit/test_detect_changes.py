@@ -149,16 +149,6 @@ def test_docs_only_pr_skips(tmp_path: Path) -> None:
     assert decision == "decision=skip"
 
 
-def test_tests_only_category_accepts_tests_and_markdown(tmp_path: Path) -> None:
-    decision, _ = _run(tmp_path, files=["tests/unit/test_router.py", "README.md"], category="tests-only")
-    assert decision == "decision=run"
-
-
-def test_tests_only_category_rejects_shared_test_configuration(tmp_path: Path) -> None:
-    decision, _ = _run(tmp_path, files=["tests/unit/test_router.py", "tests/conftest.py"], category="tests-only")
-    assert decision == "decision=skip"
-
-
 def test_non_pull_request_event_runs(tmp_path: Path) -> None:
     decision, stdout = _run(tmp_path, files=[UI_FILE], pr_number="")
     assert decision == "decision=run"

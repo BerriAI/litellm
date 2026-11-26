@@ -5,9 +5,18 @@ https://docs.cohere.com/reference/rerank
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal, overload
+from typing import Final, Literal, TypeVar, overload
 
-from pydantic import ConfigDict, PrivateAttr, TypeAdapter, ValidationError
+from pydantic import (
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_serializer,
+)
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -79,6 +88,8 @@ class RerankUsage(TypedDict):
 
 
 _RERANK_META: Final = TypeAdapter(RerankResponseMeta)
+_FIELD_VALUE: Final = TypeAdapter(object)
+_Default = TypeVar("_Default")
 
 
 def get_rerank_usage(response: Mapping[str, object]) -> RerankUsage | None:
@@ -118,13 +129,42 @@ class RerankResponseResult(TypedDict, total=False):
     document: RerankResponseDocument
 
 
-class RerankResponse(LiteLLMBaseModel):
+_PROVIDER_USAGE: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_DUMPED_FIELDS: Final = TypeAdapter(dict[str, object])
+_PROVIDER_USAGE_KEYS: Final = frozenset({"usage", "provider_usage"})
+
+
+def provider_usage_or_none(value: object) -> Mapping[str, object] | None:
+    try:
+        return _PROVIDER_USAGE.validate_python(value)
+    except ValidationError:
+        return None
+
+
+class RerankResponse(LiteLLMBaseModel):  # frozen-ok: existing conversion updates supplied response objects in place
+    model_config = ConfigDict(validate_by_name=True)
+
     id: str | None = None
     results: list[RerankResponseResult] | None = None  # Contains index and relevance_score
     meta: RerankResponseMeta | None = None  # Contains api_version and billed_units
+    # The provider's raw block is "usage" only in by-alias (client JSON) dumps. The attribute and plain dumps use
+    # provider_usage, since logging, spend tracking and routing read a `usage` key or attribute as litellm's token Usage
+    provider_usage: Mapping[str, object] | None = Field(default=None, alias="usage")
 
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
+
+    @field_validator("provider_usage", mode="before")
+    @classmethod
+    def _ignore_malformed_provider_usage(cls, value: object) -> Mapping[str, object] | None:
+        return provider_usage_or_none(value)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_provider_usage(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+        fields: Final = _DUMPED_FIELDS.validate_python(handler(self))
+        if self.provider_usage is not None:
+            return fields
+        return {key: value for key, value in fields.items() if key not in _PROVIDER_USAGE_KEYS}
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -146,8 +186,8 @@ class RerankResponse(LiteLLMBaseModel):
     @overload
     def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None: ...
 
-    def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None:
-        return self.__dict__[key]
+    def __getitem__(self, key: str) -> object:
+        return _FIELD_VALUE.validate_python(self.__dict__[key])
 
     @overload
     def get(self, key: Literal["id"], default: None = None) -> str | None: ...
@@ -156,13 +196,16 @@ class RerankResponse(LiteLLMBaseModel):
     def get(self, key: Literal["results"], default: None = None) -> list[RerankResponseResult] | None: ...
 
     @overload
+    def get(self, key: Literal["results"], default: _Default) -> Sequence[RerankResponseResult] | _Default | None: ...
+
+    @overload
     def get(self, key: Literal["meta"], default: None = None) -> RerankResponseMeta | None: ...
 
     @overload
     def get(self, key: str, default: object = None) -> object: ...
 
     def get(self, key: str, default: object = None) -> object:
-        return self.__dict__.get(key, default)
+        return _FIELD_VALUE.validate_python(self.__dict__.get(key, default))
 
     def __contains__(self, key: str) -> bool:
         return key in self.__dict__

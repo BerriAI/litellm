@@ -48,27 +48,13 @@ impl CachedMapping {
     }
 }
 
-/// The claim a key mapping is cached under. `issuer` is `None` for the mapping every issuer shares.
+/// The claim a key mapping is cached under. `issuer` is `None` or empty for the mapping every issuer
+/// shares. The host spells the cache key, since the auth cache owns its keyspace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MappedClaim<'a> {
     pub field: &'a str,
     pub value: &'a str,
     pub issuer: Option<&'a str>,
-}
-
-impl MappedClaim<'_> {
-    pub fn cache_key(&self) -> String {
-        mapping_cache_key(self.field, self.value, self.issuer)
-    }
-}
-
-/// The one cache key format for a claim's mapping. Python's management endpoints invalidate
-/// through this too, so a key they evict is the key auth reads.
-pub fn mapping_cache_key(claim_field: &str, claim_value: &str, issuer: Option<&str>) -> String {
-    match issuer.filter(|issuer| !issuer.is_empty()) {
-        None => format!("jwt_key_mapping:{claim_field}:{claim_value}"),
-        Some(issuer) => format!("jwt_key_mapping:{issuer}:{claim_field}:{claim_value}"),
-    }
 }
 
 /// `IdentityStore.resolve(hashed_token)` as the mapping reads it.
@@ -479,9 +465,9 @@ mod tests {
 
     use super::*;
     use crate::{
+        Affiliation, Holder,
         authn::key::KeyRecord,
         commit::{self, Grant, Grants},
-        identity::jwt::JwtRows,
         testing::{Labels, ScriptedHost},
     };
 
@@ -514,7 +500,12 @@ mod tests {
             end_user_id: None,
             agent_id: None,
             managed_agent: None,
-            rows: JwtRows::default(),
+            affiliation: Affiliation {
+                holder: Holder::Nobody,
+                org: None,
+                project: None,
+            },
+            end_user: None,
         }
     }
 
@@ -555,14 +546,6 @@ mod tests {
             issuer: None,
             behavior,
         })
-    }
-
-    #[rstest]
-    #[case::global(None, "jwt_key_mapping:f:v")]
-    #[case::empty_issuer_is_global(Some(""), "jwt_key_mapping:f:v")]
-    #[case::issuer_scoped(Some("https://idp"), "jwt_key_mapping:https://idp:f:v")]
-    fn cache_key_is_scoped_by_issuer(#[case] issuer: Option<&str>, #[case] expected: &str) {
-        assert_eq!(mapping_cache_key("f", "v", issuer), expected);
     }
 
     #[rstest]

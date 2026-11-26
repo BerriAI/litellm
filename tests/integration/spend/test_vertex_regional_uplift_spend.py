@@ -188,6 +188,10 @@ def _only_generate_calls(wire: Wire, count: int, *, target: str = _GENERATE) -> 
     return received
 
 
+def _async_openai_client(gateway: Gateway, key: str) -> openai.AsyncOpenAI:
+    return openai.AsyncOpenAI(base_url=f"{gateway.client.base_url}/v1", api_key=key, max_retries=0)
+
+
 @pytest.mark.parametrize("location", tuple(_LOCATIONS))
 def test_chat_completion_spend_follows_the_vertex_location(gateway: Gateway, location: str) -> None:
     placed: Final = _LOCATIONS[location]
@@ -218,11 +222,11 @@ async def test_async_chat_completion_on_a_regional_endpoint_is_uplifted(gateway:
     with wire_server(_RESPOND) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire, _US)
         key: Final = scenario.key(models=[model])
-        client: Final = openai.AsyncOpenAI(base_url=f"{gateway.client.base_url}/v1", api_key=key, max_retries=0)
-        raw: Final = await client.chat.completions.with_raw_response.create(
-            model=model, messages=[{"role": "user", "content": _prompt()}], extra_body=_NO_CACHE
-        )
-        completion: Final = raw.parse()
+        async with _async_openai_client(gateway, key) as client:
+            raw: Final = await client.chat.completions.with_raw_response.create(
+                model=model, messages=[{"role": "user", "content": _prompt()}], extra_body=_NO_CACHE
+            )
+            completion: Final = raw.parse()
         expected: Final = _expected(gateway, model, _US)
         assert float(raw.headers["x-litellm-response-cost"]) == pytest.approx(expected), raw.headers
         _only_generate_calls(wire, 1)
@@ -316,9 +320,11 @@ async def test_streamed_responses_on_a_regional_endpoint_are_uplifted(gateway: G
     with wire_server(_RESPOND) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire, _US)
         key: Final = scenario.key(models=[model])
-        client: Final = openai.AsyncOpenAI(base_url=f"{gateway.client.base_url}/v1", api_key=key, max_retries=0)
-        stream: Final = await client.responses.create(model=model, input=_prompt(), stream=True, extra_body=_NO_CACHE)
-        events: Final = [event async for event in stream]
+        async with _async_openai_client(gateway, key) as client:
+            stream: Final = await client.responses.create(
+                model=model, input=_prompt(), stream=True, extra_body=_NO_CACHE
+            )
+            events: Final = [event async for event in stream]
         completed: Final = events[-1]
         assert isinstance(completed, ResponseCompletedEvent), events
         usage: Final = completed.response.usage
@@ -352,9 +358,11 @@ async def test_async_image_generation_on_a_regional_endpoint_is_uplifted(gateway
     with wire_server(_RESPOND) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire, _US, images=True)
         key: Final = scenario.key(models=[model])
-        client: Final = openai.AsyncOpenAI(base_url=f"{gateway.client.base_url}/v1", api_key=key, max_retries=0)
-        raw: Final = await client.images.with_raw_response.generate(model=model, prompt=_prompt(), extra_body=_NO_CACHE)
-        images: Final = raw.parse()
+        async with _async_openai_client(gateway, key) as client:
+            raw: Final = await client.images.with_raw_response.generate(
+                model=model, prompt=_prompt(), extra_body=_NO_CACHE
+            )
+            images: Final = raw.parse()
         assert images.data is not None and len(images.data) == 1, images
         expected: Final = _expected(gateway, model, _US)
         assert float(raw.headers["x-litellm-response-cost"]) == pytest.approx(expected), raw.headers
@@ -432,7 +440,7 @@ def test_flex_tier_on_a_regional_endpoint_is_uplifted_with_the_rest(gateway: Gat
         prices: Final = _published_prices(gateway, global_model)
         assert global_spend == pytest.approx(
             _PROMPT_TOKENS * _rate(prices, "input_cost_per_token_flex")
-            + _IMAGE_TOKENS * _rate(prices, "output_cost_per_image_token")
+            + _IMAGE_TOKENS * _rate(prices, "output_cost_per_image_token_flex")
         )
         assert global_spend < _standard_cost(prices)
         assert regional_spend == pytest.approx(global_spend * _uplift(_published_prices(gateway, regional_model), _US))

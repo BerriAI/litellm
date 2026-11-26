@@ -1,4 +1,4 @@
-"""Resolve the attributes of `litellm` and `litellm.utils` that are imported on first access."""
+"""Resolve the attributes of the modules in `LAZY_ATTRIBUTES` that are imported on first access."""
 
 import importlib
 import sys
@@ -6,7 +6,9 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Final
 
-from ._lazy_imports_registry import LITELLM_ATTRIBUTES, UTILS_ATTRIBUTES
+from pydantic import TypeAdapter
+
+from ._lazy_imports_registry import LAZY_ATTRIBUTES
 
 if TYPE_CHECKING:
     import httpx
@@ -48,10 +50,12 @@ _get_messages_reach_token_count = get_messages_reach_token_count
 
 
 _NOT_LOADED: Final = object()
+_LAZY_ATTRIBUTE: Final = TypeAdapter(object)
 
 
 def _cached(namespace: str, name: str) -> object:
-    return vars(sys.modules[namespace]).get(name, _NOT_LOADED)
+    namespace_attributes: Final[Mapping[str, object]] = MappingProxyType(vars(sys.modules[namespace]))
+    return namespace_attributes.get(name, _NOT_LOADED)
 
 
 def _cache(namespace: str, name: str, value: object) -> object:
@@ -65,7 +69,7 @@ def _import(namespace: str, name: str, location: tuple[str, str]) -> object:
         return cached
     module_path, attr_name = location
     module: Final[ModuleType] = importlib.import_module(module_path, package="litellm")
-    attribute: Final[object] = getattr(module, attr_name)
+    attribute: Final = _LAZY_ATTRIBUTE.validate_python(getattr(module, attr_name))
     return _cache(namespace, name, attribute)
 
 
@@ -73,7 +77,8 @@ def _instance_of(class_name: str) -> Callable[[], object]:
     def create() -> object:
         cls: Final = resolve_lazy_attribute("litellm", class_name)
         assert isinstance(cls, type)
-        return cls()
+        klass: Final[type[object]] = cls
+        return klass()
 
     return create
 
@@ -132,16 +137,31 @@ _LITELLM_FACTORIES: Final[Mapping[str, Callable[[], object]]] = MappingProxyType
 )
 
 
+# Other hosts each module falls back to, cached on the host that owns the attribute. `litellm.utils` keeps resolving
+# every `litellm` attribute, as it has since `litellm.utils.__getattr__` was added
+_FALLBACK_HOSTS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {"litellm": ("litellm.utils",), "litellm.utils": ("litellm",)}
+)
+
+
 def resolve_lazy_attribute(module_name: str, name: str) -> object:
     """Import, cache and return `name`, the way `module_name.__getattr__` would."""
-    litellm_location: Final = LITELLM_ATTRIBUTES.get(name)
-    if litellm_location is not None:
-        return _import("litellm", name, litellm_location)
-    utils_location: Final = UTILS_ATTRIBUTES.get(name)
-    if utils_location is not None:
-        return _import("litellm.utils", name, utils_location)
+    hosts: Final = (module_name, *_FALLBACK_HOSTS.get(module_name, ()))
+    for host in hosts:
+        location = LAZY_ATTRIBUTES.get(host, {}).get(name)
+        if location is not None:
+            return _import(host, name, location)
     factory: Final = _LITELLM_FACTORIES.get(name) if module_name == "litellm" else None
     if factory is None:
         raise AttributeError(f"module {module_name!r} has no attribute {name!r}")
     cached: Final = _cached("litellm", name)
     return cached if cached is not _NOT_LOADED else _cache("litellm", name, factory())
+
+
+def load_all() -> None:
+    """Resolve every lazy attribute and factory now, for LITELLM_DISABLE_LAZY_LOADING."""
+    for host, attributes in LAZY_ATTRIBUTES.items():
+        for name in attributes:
+            _ = resolve_lazy_attribute(host, name)
+    for name in _LITELLM_FACTORIES:
+        _ = resolve_lazy_attribute("litellm", name)

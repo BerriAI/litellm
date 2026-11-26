@@ -21,6 +21,7 @@ use litellm_redis_client::{
 };
 use litellm_redis_store::{
     Number, Remote, RequestRedis,
+    auth_cache::AuthObject,
     spend_counters::{SpendCounter, SpendCounters},
 };
 use litellm_redis_testing::RedisServer;
@@ -78,7 +79,13 @@ impl Proxy {
                                 .as_array()
                                 .unwrap()
                                 .iter()
-                                .find_map(|key| self.cached.get(key.as_str().unwrap()))
+                                .find_map(|source| {
+                                    self.cached.get(
+                                        &serde_json::from_value::<AuthObject>(source.clone())
+                                            .unwrap()
+                                            .key(),
+                                    )
+                                })
                                 .copied()
                                 .unwrap_or(0.0)
                         )
@@ -294,7 +301,7 @@ async fn a_warm_counter_takes_the_charge_without_asking_the_proxy_for_spend() {
 async fn a_raw_key_is_charged_on_its_hashed_counter() {
     let store = memory(&[]);
     let charged = CounterStep {
-        token: Some("sk-1234".into()),
+        token: Some("sk-raw-key".into()),
         ..step(1.0)
     };
 
@@ -303,7 +310,7 @@ async fn a_raw_key_is_charged_on_its_hashed_counter() {
     assert_eq!(
         snapshot(&store),
         values(&[(
-            "spend:key:88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "spend:key:7e829077433c1b2fa414ae023e40914235063fcb5cf3cb0797e835c509a9b02a",
             1.0
         )])
     );
@@ -826,6 +833,59 @@ async fn a_pipeline_that_fails_drops_every_counter_it_carried_and_reports_the_fa
     assert!(snapshot(&store).is_empty());
 }
 
+#[rstest]
+#[tokio::test]
+async fn two_pods_charging_one_cold_counter_hold_its_cached_spend_once() {
+    let server = RedisServer::start().await.unwrap();
+    let (first_pod, second_pod) = (redis(&server, None), redis(&server, None));
+    let proxy = Proxy {
+        cached: values(&[("end_user_id:e", 6.0)]),
+        ..Proxy::default()
+    };
+    let charged = || CounterStep {
+        end_user_id: Some("e".into()),
+        ..step(2.0)
+    };
+
+    let (first, second) = tokio::join!(
+        run(&first_pod, &proxy, charged(), None, None),
+        run(&second_pod, &proxy, charged(), None, None),
+    );
+
+    assert!(first.outcome.error.is_none() && second.outcome.error.is_none());
+    let held = redis(&server, None)
+        .read(&counter("spend:end_user:e"))
+        .await
+        .unwrap()
+        .value()
+        .map(|spend| spend.as_f64());
+    assert_eq!(held, Some(10.0));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_cached_spend_seed_that_fails_leaves_nothing_in_this_process() {
+    let server = RedisServer::start().await.unwrap();
+    let store = redis(&server, None);
+    server.stop().await.unwrap();
+    let proxy = Proxy {
+        cached: values(&[("end_user_id:e", 6.0)]),
+        ..Proxy::default()
+    };
+    let charged = CounterStep {
+        end_user_id: Some("e".into()),
+        ..step(2.0)
+    };
+
+    let Run { outcome, .. } = run(&store, &proxy, charged, None, None).await;
+
+    assert!(matches!(
+        outcome.error.as_deref(),
+        Some(CounterError::Store(_))
+    ));
+    assert!(snapshot(&store).is_empty());
+}
+
 #[tokio::test]
 async fn a_customer_counter_that_cannot_be_seeded_fails_the_step_with_the_rest() {
     let server = RedisServer::start().await.unwrap();
@@ -854,7 +914,7 @@ async fn a_customer_counter_that_cannot_be_seeded_fails_the_step_with_the_rest()
         Some(CounterError::Store(_))
     ));
     assert!(!outcome.finalized);
-    assert_eq!(outcome.stamps, [None]);
+    assert_eq!(outcome.stamps, [Some(-3.0)]);
     assert!(snapshot(&store).is_empty());
 }
 

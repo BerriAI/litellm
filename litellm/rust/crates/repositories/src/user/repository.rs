@@ -49,6 +49,19 @@ pub struct SignIn {
     pub links_any_user: bool,
 }
 
+impl SignIn {
+    /// A sign-in that carries only `user_id`, as a plain lookup by id makes it.
+    pub fn by_id(user_id: &str) -> Self {
+        Self {
+            user_id: user_id.to_owned(),
+            sso_user_id: None,
+            user_email: None,
+            email_verified: None,
+            links_any_user: false,
+        }
+    }
+}
+
 /// What `default_internal_user_params` sets on a user created at sign-in. The host resolves them, the reset time
 /// of `budget_duration` and the opening windows of `budget_limits` included. `None` leaves the column unset.
 #[derive(Clone, Debug, Default)]
@@ -172,7 +185,7 @@ impl UserRepository {
     /// `links_any_user`; the sign-in does not wait for it.
     fn set_sso_user_id_later(&self, user_id: String, sso_user_id: String) {
         let database = self.database.clone();
-        tokio::spawn(async move {
+        litellm_call_scope::spawn_in_call(async move {
             let outcome = database
                 .run(UPDATE_USER, || async {
                     let mut session = database.session(Side::Writer).await?;

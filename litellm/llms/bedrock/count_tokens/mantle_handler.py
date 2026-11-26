@@ -12,7 +12,7 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo, context_mana
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, AnthropicCountTokensConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url
-from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensRequestError
+from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensRequestError, aws_credentials_error
 from litellm.llms.bedrock.count_tokens.transformation import count_tokens_messages_problem
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 
@@ -81,6 +81,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                     {name: value for name, value in request_data.items() if name in COUNT_TOKEN_OPTION_NAMES}
                 ),
                 context_management=request.get("context_management"),
+                custom_llm_provider="bedrock_mantle",
             )
             betas: Final = (
                 *context_management_betas(request.get("context_management")),
@@ -88,6 +89,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
             )
             verbose_logger.debug("Making bedrock-mantle count_tokens request to: %s", endpoint_url)
             api_key: Final = litellm_params.get("api_key")
+            signed_headers: dict[str, object]  # mutable-ok: the callee's own dict
             signed_headers, signed_body = await run_aws_signing(
                 self._sign_request,
                 service_name="bedrock",
@@ -124,4 +126,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                 response=e.response,
             )
         except Exception as e:
+            credentials_error: Final = aws_credentials_error(e)
+            if credentials_error is not None:
+                raise credentials_error from e
             raise BedrockError(status_code=500, message=f"bedrock-mantle count_tokens processing error: {e}")

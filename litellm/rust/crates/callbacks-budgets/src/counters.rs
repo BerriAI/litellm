@@ -8,8 +8,8 @@
 
 use std::collections::HashSet;
 
-use litellm_redis_store::spend_counters::SpendCounter;
-use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use litellm_redis_store::{auth_cache::AuthObject, spend_counters::SpendCounter};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use sha2::{Digest, Sha256};
 
 use crate::charge::{CounterStep, WindowSource};
@@ -32,12 +32,28 @@ pub(crate) fn counter_keys<'de, D: Deserializer<'de>>(
         .collect()
 }
 
+/// Writes a counter as its `spend:*` key, the form [`counter_key`] reads.
+pub(crate) fn counter_key_text<S: Serializer>(
+    counter: &SpendCounter,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&counter.key())
+}
+
+/// [`counter_key_text`] for a list of counters.
+pub(crate) fn counter_keys_text<S: Serializer>(
+    counters: &[SpendCounter],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(counters.iter().map(SpendCounter::key))
+}
+
 /// A customer hierarchy budget counter the request was admitted against. Only the ones with a
 /// `window_duration` are window counters the fan-out charges.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CustomerWindow {
-    #[serde(deserialize_with = "counter_key")]
+    #[serde(deserialize_with = "counter_key", serialize_with = "counter_key_text")]
     pub counter_key: SpendCounter,
     pub entity_type: String,
     pub entity_id: String,
@@ -49,10 +65,10 @@ pub struct CustomerWindow {
 }
 
 /// A customer scope's lifetime or period counter and the spend its auth snapshot recorded.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CustomerScopeSpend {
-    #[serde(deserialize_with = "counter_key")]
+    #[serde(deserialize_with = "counter_key", serialize_with = "counter_key_text")]
     pub counter_key: SpendCounter,
     pub spend: f64,
 }
@@ -106,7 +122,7 @@ impl WindowedEntity {
 pub(crate) enum Task {
     Counter {
         counter: SpendCounter,
-        sources: Vec<String>,
+        sources: Vec<AuthObject>,
     },
     CachedWindows(WindowSource),
     CustomerScope(usize),
@@ -189,7 +205,7 @@ pub(crate) fn entity_label(entity_type: &str) -> String {
     .to_owned()
 }
 
-fn counter(counter: SpendCounter, sources: Vec<String>) -> Task {
+fn counter(counter: SpendCounter, sources: Vec<AuthObject>) -> Task {
     Task::Counter { counter, sources }
 }
 
@@ -212,7 +228,7 @@ pub(crate) fn plan(step: &CounterStep) -> Vec<Scope> {
                     token: hashed.clone(),
                     window: None,
                 },
-                vec![hashed.clone()],
+                vec![AuthObject::Key(hashed.clone())],
             ),
             Task::CachedWindows(WindowSource {
                 entity_type: WindowedEntity::Key,
@@ -229,7 +245,7 @@ pub(crate) fn plan(step: &CounterStep) -> Vec<Scope> {
                     team_id: team_id.clone(),
                     window: None,
                 },
-                vec![cache_key.clone()],
+                vec![AuthObject::Team(team_id.clone())],
             ),
             Task::CachedWindows(WindowSource {
                 entity_type: WindowedEntity::Team,
@@ -244,12 +260,18 @@ pub(crate) fn plan(step: &CounterStep) -> Vec<Scope> {
                 user_id: user_id.clone(),
                 team_id: team_id.clone(),
             },
-            vec![format!("team_membership:{user_id}:{team_id}")],
+            vec![AuthObject::TeamMembershipReservation {
+                user_id: user_id.clone(),
+                team_id: team_id.clone(),
+            }],
         )]));
     }
     if let Some(user_id) = &step.user_id {
         scopes.push(Scope::sequential([
-            counter(SpendCounter::User(user_id.clone()), vec![user_id.clone()]),
+            counter(
+                SpendCounter::User(user_id.clone()),
+                vec![AuthObject::User(user_id.clone())],
+            ),
             Task::CachedWindows(WindowSource {
                 entity_type: WindowedEntity::User,
                 entity_id: user_id.clone(),
@@ -260,12 +282,15 @@ pub(crate) fn plan(step: &CounterStep) -> Vec<Scope> {
     let end_user = step.end_user_id.iter().map(|end_user| {
         counter(
             SpendCounter::EndUser(end_user.clone()),
-            vec![format!("end_user_id:{end_user}")],
+            vec![AuthObject::EndUser(end_user.clone())],
         )
     });
-    let tags = named(step.tags.as_deref())
-        .into_iter()
-        .map(|tag| counter(SpendCounter::Tag(tag.clone()), vec![format!("tag:{tag}")]));
+    let tags = named(step.tags.as_deref()).into_iter().map(|tag| {
+        counter(
+            SpendCounter::Tag(tag.clone()),
+            vec![AuthObject::Tag(tag.clone())],
+        )
+    });
     scopes.push(Scope::concurrent(end_user.chain(tags)));
     scopes.push(Scope::concurrent(
         named(step.model_access_groups.as_deref())
@@ -273,7 +298,7 @@ pub(crate) fn plan(step: &CounterStep) -> Vec<Scope> {
             .map(|group| {
                 counter(
                     SpendCounter::ModelAccessGroup(group.clone()),
-                    vec![format!("model_access_group:{group}")],
+                    vec![AuthObject::ModelAccessGroup(group.clone())],
                 )
             }),
     ));
@@ -281,15 +306,15 @@ pub(crate) fn plan(step: &CounterStep) -> Vec<Scope> {
         scopes.push(Scope::sequential([counter(
             SpendCounter::Org(org_id.clone()),
             vec![
-                format!("org_id:{org_id}:with_budget"),
-                format!("org_id:{org_id}"),
+                AuthObject::OrgWithBudget(org_id.clone()),
+                AuthObject::Org(org_id.clone()),
             ],
         )]));
     }
     if let Some(project_id) = &step.project_id {
         scopes.push(Scope::sequential([counter(
             SpendCounter::Project(project_id.clone()),
-            vec![format!("project_id:{project_id}")],
+            vec![AuthObject::Project(project_id.clone())],
         )]));
     }
     let twins = committed_twins(&step.committed_tracked, step.response_cost);
@@ -396,13 +421,15 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn source_cache_keys_name_the_cached_auth_objects() {
         let sources: Vec<Vec<String>> = plan(&full_step())
             .iter()
             .flat_map(|scope| &scope.tasks)
             .filter_map(|task| match task {
-                Task::Counter { sources, .. } => Some(sources.clone()),
+                Task::Counter { sources, .. } => {
+                    Some(sources.iter().map(AuthObject::key).collect())
+                }
                 _ => None,
             })
             .collect();
@@ -423,13 +450,13 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn a_raw_key_is_hashed_before_it_names_a_counter() {
         let scopes = plan(&CounterStep {
-            token: Some("sk-1234".into()),
+            token: Some("sk-raw-key".into()),
             ..CounterStep::default()
         });
-        let hashed = format!("{:x}", Sha256::digest(b"sk-1234"));
+        let hashed = format!("{:x}", Sha256::digest(b"sk-raw-key"));
         assert_eq!(
             scopes[0].tasks[0],
             Task::Counter {
@@ -437,7 +464,7 @@ mod tests {
                     token: hashed.clone(),
                     window: None,
                 },
-                sources: vec![hashed],
+                sources: vec![AuthObject::Key(hashed)],
             }
         );
     }

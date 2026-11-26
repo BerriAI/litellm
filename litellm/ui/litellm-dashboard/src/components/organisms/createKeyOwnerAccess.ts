@@ -57,17 +57,19 @@ export const anotherUserScope = ({
 export const effectiveKeyOwner = (requestedOwner: string, scope: AnotherUserScope): string =>
   requestedOwner === "another_user" && scope === "none" ? "you" : requestedOwner;
 
+export const keyOwnerOption = (user: {
+  user_id: string;
+  user_email?: string | null;
+  user_alias?: string | null;
+}): SearchSelectOption => {
+  const identity = user.user_email?.trim() || user.user_alias?.trim();
+  return { value: user.user_id, label: identity ? `${identity} (${user.user_id})` : user.user_id };
+};
+
 export const teamMemberOwnerOptions = (team: TeamMembers | null, viewerId: string | null): SearchSelectOption[] => {
   if (!administersTeam(team, viewerId)) return [];
   return (team?.members_with_roles ?? []).flatMap((member) =>
-    member.user_id && member.user_id !== viewerId
-      ? [
-          {
-            value: member.user_id,
-            label: member.user_email ? `${member.user_email} (${member.user_id})` : member.user_id,
-          },
-        ]
-      : [],
+    member.user_id && member.user_id !== viewerId ? [keyOwnerOption({ ...member, user_id: member.user_id })] : [],
   );
 };
 

@@ -331,9 +331,10 @@ async fn a_rejected_strict_tool_reaches_the_caller_without_drop_params(call: Mes
 
 #[rstest]
 #[tokio::test]
-async fn strict_tools_and_a_thinking_replay_share_the_one_retry(call: MessagesCall) {
+async fn strict_tools_and_a_thinking_replay_are_each_recovered_once(call: MessagesCall) {
     let upstream = upstream([
         rejection(400, STRICT_REJECTION),
+        rejection(400, INVALID_SIGNATURE),
         rejection(400, INVALID_SIGNATURE),
         message_response(),
     ])
@@ -348,16 +349,17 @@ async fn strict_tools_and_a_thinking_replay_share_the_one_retry(call: MessagesCa
     let error = execute(&host)
         .await
         .err()
-        .expect("the second rejection is raised");
+        .expect("the third rejection is raised");
 
-    let [first, second] = <[_; 2]>::try_from(received(&upstream).await).unwrap();
+    let [first, second, third] = <[_; 3]>::try_from(received(&upstream).await).unwrap();
     assert_eq!(first.json()["thinking"], enabled());
     assert_eq!(second.json()["thinking"], enabled());
     assert_eq!(
         second.json()["tools"][0],
         json!({"name": "a", "input_schema": {"type": "object"}})
     );
-    assert_eq!(received(&upstream).await.len(), 2);
+    assert_eq!(third.json().get("thinking"), None);
+    assert_eq!(third.json()["tools"], second.json()["tools"]);
     assert!(error.upstream_response().unwrap().1.contains("signature"));
 }
 
@@ -385,4 +387,181 @@ async fn a_truthy_global_drop_params_that_is_not_true_does_not_drop_strict(call:
     );
     assert_eq!(error.upstream_response().unwrap().0, 400);
     assert!(observed_retries(&host).is_empty());
+}
+
+const TOOL_USE_ID_PATTERN: &str =
+    "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'";
+
+fn kimi_tool_round(id: &str, thinking: bool) -> Value {
+    let signed =
+        thinking.then(|| json!({"type": "thinking", "thinking": "plan", "signature": "sig"}));
+    let tool_use = json!({"type": "tool_use", "id": id, "name": "Bash", "input": {}});
+    json!([
+        {"role": "user", "content": "run ls"},
+        {"role": "assistant", "content": signed.into_iter().chain([tool_use]).collect::<Vec<_>>()},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": id, "content": "ok"}]}
+    ])
+}
+
+fn gateway_replay(
+    call: MessagesCall,
+    api_base: String,
+    stream: bool,
+    thinking: bool,
+) -> MessagesCall {
+    MessagesCall {
+        api_key: Some("sk-ant".into()),
+        api_base: Some(api_base),
+        ..with_fields(
+            call,
+            json!({
+                "model": "sonnet-prod",
+                "max_tokens": 4096,
+                "stream": stream,
+                "messages": kimi_tool_round("functions.Bash:0", thinking)
+            }),
+        )
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_rejected_tool_use_id_is_sent_once_more_renamed(
+    call: MessagesCall,
+    #[values(false, true)] stream: bool,
+) {
+    let success = if stream {
+        sse_response()
+    } else {
+        message_response()
+    };
+    let upstream = upstream([rejection(400, TOOL_USE_ID_PATTERN), success]).await;
+    let host = RecordingCall::<Messages>::new(gateway_replay(call, upstream.uri(), stream, false));
+
+    execute(&host).await.expect("the retry succeeds");
+
+    let [first, second] = <[_; 2]>::try_from(received(&upstream).await).unwrap();
+    assert_eq!(
+        first.json()["messages"],
+        kimi_tool_round("functions.Bash:0", false)
+    );
+    let mut expected = first.json();
+    expected["messages"] = kimi_tool_round("functions_Bash_0", false);
+    assert_eq!(second.json(), expected);
+    let expected_retry = RetriedRequest {
+        reasons: Vec::new(),
+        body: expected,
+    };
+    assert_eq!(*host.retried.lock().unwrap(), vec![expected_retry.clone()]);
+    assert_eq!(observed_retries(&host), vec![expected_retry]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_rejected_tool_use_id_and_then_a_rejected_thinking_replay_are_both_recovered(
+    call: MessagesCall,
+) {
+    let upstream = upstream([
+        rejection(400, TOOL_USE_ID_PATTERN),
+        rejection(400, INVALID_SIGNATURE),
+        message_response(),
+    ])
+    .await;
+    let host = RecordingCall::<Messages>::new(gateway_replay(
+        with_fields(call, json!({"thinking": enabled()})),
+        upstream.uri(),
+        false,
+        true,
+    ));
+
+    execute(&host).await.expect("the second retry succeeds");
+
+    let sent: Vec<Value> = received(&upstream)
+        .await
+        .iter()
+        .map(|request| request.json()["messages"].clone())
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            kimi_tool_round("functions.Bash:0", true),
+            kimi_tool_round("functions_Bash_0", true),
+            kimi_tool_round("functions_Bash_0", false),
+        ]
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn strict_tools_a_rejected_tool_use_id_and_a_thinking_replay_are_all_recovered(
+    call: MessagesCall,
+) {
+    let upstream = upstream([
+        rejection(400, STRICT_REJECTION),
+        rejection(400, TOOL_USE_ID_PATTERN),
+        rejection(400, INVALID_SIGNATURE),
+        message_response(),
+    ])
+    .await;
+    let host = RecordingCall::<Messages>::new(gateway_replay(
+        with_fields(
+            strict_tools(call, upstream.uri(), false, true),
+            json!({"thinking": enabled()}),
+        ),
+        upstream.uri(),
+        false,
+        true,
+    ));
+
+    execute(&host).await.expect("the third retry succeeds");
+
+    let sent: Vec<(Value, Value)> = received(&upstream)
+        .await
+        .iter()
+        .map(|request| {
+            let body = request.json();
+            (body["messages"].clone(), body["tools"][0]["strict"].clone())
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            (kimi_tool_round("functions.Bash:0", true), json!(true)),
+            (kimi_tool_round("functions.Bash:0", true), Value::Null),
+            (kimi_tool_round("functions_Bash_0", true), Value::Null),
+            (kimi_tool_round("functions_Bash_0", false), Value::Null),
+        ]
+    );
+}
+
+#[rstest]
+#[case::ids_already_match("toolu_01", TOOL_USE_ID_PATTERN)]
+#[case::other_field(
+    "functions.Bash:0",
+    "tools.0.name: String should match pattern '^[a-zA-Z0-9_-]{1,128}$'"
+)]
+#[tokio::test]
+async fn a_pattern_rejection_that_renaming_cannot_fix_reaches_the_caller(
+    call: MessagesCall,
+    #[case] id: &str,
+    #[case] message: &str,
+) {
+    let upstream = upstream([rejection(400, message), message_response()]).await;
+    let host = RecordingCall::<Messages>::new(MessagesCall {
+        api_key: Some("sk-ant".into()),
+        api_base: Some(upstream.uri()),
+        ..with_fields(
+            call,
+            json!({"model": "sonnet-prod", "messages": kimi_tool_round(id, false)}),
+        )
+    });
+
+    let error = execute(&host).await.err().expect("the call fails");
+
+    assert_eq!(
+        only_request(&upstream).await.json()["messages"],
+        kimi_tool_round(id, false)
+    );
+    assert_eq!(error.upstream_response().unwrap().0, 400);
+    assert!(host.retried.lock().unwrap().is_empty());
 }

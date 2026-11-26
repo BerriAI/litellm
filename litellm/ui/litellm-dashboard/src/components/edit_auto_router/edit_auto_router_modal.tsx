@@ -473,7 +473,7 @@ const ExistingEditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       return;
     }
     if (isComplexityRouterModel) {
-      const { tiers, custom_tier_set, classifier_llm_config } = complexityRouterConfig;
+      const { tiers, custom_tier_set } = complexityRouterConfig;
       const rows = activeTierRows(complexityRouterConfig);
       const builtInTiersEmpty = Object.values(tiers).every((models) => models.length === 0);
       const tierSetError = custom_tier_set

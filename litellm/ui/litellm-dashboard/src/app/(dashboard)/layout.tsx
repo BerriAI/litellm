@@ -30,9 +30,11 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/s
 import { useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
 import { sidebarProviderClassName, sidebarWidthStyle } from "@/components/shared/sidebarStyles";
 import { cn } from "@/lib/cva.config";
+import { Page } from "@/components/shared/Page";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
+import { GatewayLensNavigationProvider } from "@/components/lens/GatewayLensNavigation";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -116,14 +118,60 @@ export function AgentControlPlaneView() {
 
 const FULL_BLEED_SEGMENTS = new Set(["logs"]);
 
+const PAGE_FRAME_CLASS_NAMES = {
+  default: "",
+  fill: "h-full",
+  fixed: "h-full overflow-hidden pb-0 sm:pb-0",
+} as const;
+
+const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([
+  ["", "default"],
+  ["access-groups", "default"],
+  ["admin-panel", "default"],
+  ["agents", "default"],
+  ["alerts", "default"],
+  ["api-keys", "fill"],
+  ["app-groups", "default"],
+  ["apps", "default"],
+  ["budgets", "fill"],
+  ["caching", "default"],
+  ["cost-optimization", "default"],
+  ["cost-tracking", "default"],
+  ["customers", "default"],
+  ["guardrails", "default"],
+  ["guardrails-monitor", "default"],
+  ["home", "default"],
+  ["logging-and-alerts", "default"],
+  ["logs", "fill"],
+  ["mcp-servers", "fill"],
+  ["memory", "default"],
+  ["models-and-endpoints", "default"],
+  ["organizations", "default"],
+  ["playground", "fixed"],
+  ["policies", "fill"],
+  ["projects", "default"],
+  ["prompts", "default"],
+  ["router-settings", "default"],
+  ["search-tools", "fill"],
+  ["skills", "default"],
+  ["tag-management", "fill"],
+  ["teams", "fill"],
+  ["telemetry", "default"],
+  ["tool-policies", "default"],
+  ["ui-theme", "default"],
+  ["usage", "default"],
+  ["users", "default"],
+  ["vector-stores", "default"],
+  ["workflows", "default"],
+]);
+
 function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: string }) {
   useCloseMobileSidebarOn(navigationKey);
   return null;
 }
-const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers", "apps"]);
+const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers", "apps", "app-groups"]);
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
-  const { t } = useTranslation();
   const { accessToken } = useAuth();
   const { mode, setMode } = usePluginMode();
   const pathname = usePathname();
@@ -140,6 +188,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const navigationKey = `${pathname}?${searchParams.toString()}`;
   const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
   const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
+  const pageFrame = FRAMED_SEGMENTS.get(routeSegment);
   // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
   const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
   const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
@@ -202,7 +251,11 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
               }
             >
               <TelemetryEnvBanner />
-              {children}
+              {pageFrame === undefined ? (
+                children
+              ) : (
+                <Page className={PAGE_FRAME_CLASS_NAMES[pageFrame]}>{children}</Page>
+              )}
             </div>
           </SidebarInset>
         </CommandPaletteProvider>
@@ -252,7 +305,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      <DashboardShell>{children}</DashboardShell>
+      <GatewayLensNavigationProvider>
+        <DashboardShell>{children}</DashboardShell>
+      </GatewayLensNavigationProvider>
     </ThemeProvider>
   );
 }
