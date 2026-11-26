@@ -2,11 +2,18 @@ import userEvent from "@testing-library/user-event";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Profiler, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { sessionSpendLogsCall } from "../../networking";
 import { LogEntry } from "../types";
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
+
+vi.mock("@/components/ui/sheet", () => ({
+  Sheet: ({ open, children }: { open: boolean; children: ReactNode }) => (open ? children : null),
+  SheetContent: ({ children }: { children: ReactNode }) => <div role="dialog">{children}</div>,
+  SheetTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
+}));
 
 vi.mock("@/utils/dataUtils", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/utils/dataUtils")>()),
@@ -101,6 +108,40 @@ const renderSessionDrawer = () => {
 
 const sidebarEventNames = () =>
   screen.queryAllByText(/^(llm-early|llm-late|tool-early|tool-late)$/).map((el) => el.textContent);
+
+it("keeps the trace sidebar out of every mobile opening commit and expands it on desktop", () => {
+  const queryClient = new QueryClient();
+  const log = makeLog({ request_id: "single" });
+  const recordSidebar = vi.fn();
+  const drawer = (open: boolean) => (
+    <Profiler id="drawer" onRender={() => recordSidebar(screen.queryByLabelText("Copy trace id") !== null)}>
+      <QueryClientProvider client={queryClient}>
+        <LogDetailsDrawer open={open} onClose={() => {}} logEntry={log} />
+      </QueryClientProvider>
+    </Profiler>
+  );
+
+  try {
+    vi.stubGlobal("innerWidth", 767);
+    const { rerender } = render(drawer(true));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(recordSidebar).not.toHaveBeenCalledWith(true);
+
+    rerender(drawer(false));
+    vi.stubGlobal("innerWidth", 768);
+    rerender(drawer(true));
+    expect(screen.getByRole("button", { name: "Copy trace id" })).toBeInTheDocument();
+
+    rerender(drawer(false));
+    recordSidebar.mockClear();
+    vi.stubGlobal("innerWidth", 767);
+    rerender(drawer(true));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(recordSidebar).not.toHaveBeenCalledWith(true);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 describe("LogDetailsDrawer session sidebar sorting", () => {
   it("defaults to duration order, longest call first across LLM and MCP calls", async () => {

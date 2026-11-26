@@ -17,7 +17,6 @@ import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
 import { normalizeGuardrailEntries, readMetaString, sortSessionLogs, SessionLogSortMode } from "./utils";
-import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
@@ -132,6 +131,16 @@ export function LogDetailsDrawer({
   const [sessionSortMode, setSessionSortMode] = useState<SessionLogSortMode>("duration");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
+  const sidebarMode = isSessionMode ? "session" : "trace";
+  const sidebarResetKey = open ? sidebarMode : null;
+  const [previousSidebarResetKey, setPreviousSidebarResetKey] = useState<typeof sidebarResetKey>(null);
+
+  if (sidebarResetKey !== previousSidebarResetKey) {
+    setPreviousSidebarResetKey(sidebarResetKey);
+    if (sidebarResetKey !== null) {
+      setIsSidebarCollapsed(typeof window !== "undefined" && window.innerWidth < 768);
+    }
+  }
 
   const { data: sessionData } = useQuery({
     queryKey: ["sessionLogs", sessionId],
@@ -223,15 +232,11 @@ export function LogDetailsDrawer({
     }
   }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
-  // Reset transient UI state when the drawer opens or closes.
   useEffect(() => {
-    if (open) {
-      setIsSidebarCollapsed(false);
-    } else {
-      if (isSessionMode) setSelectedSessionRequestId(null);
-      setSessionSortMode("duration");
-      setCopiedLeftPanelId(false);
-    }
+    if (open) return;
+    if (isSessionMode) setSelectedSessionRequestId(null);
+    setSessionSortMode("duration");
+    setCopiedLeftPanelId(false);
   }, [open, isSessionMode]);
 
   // Keyboard navigation
@@ -312,8 +317,7 @@ export function LogDetailsDrawer({
       <SheetContent
         side="right"
         showCloseButton={false}
-        className="gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-none"
-        style={{ width: DRAWER_WIDTH }}
+        className="gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-none !w-full md:!w-[60%]"
       >
         <SheetTitle className="sr-only">
           {logEntry?.request_id
