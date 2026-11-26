@@ -641,7 +641,9 @@ class CustomStreamWrapper:
         self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
-        self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
+        self.stream_options: Final = cast(  # cast-ok: callers and the logging object pass stream_options untyped
+            Mapping[str, object] | None, stream_options or getattr(logging_obj, "stream_options", None)
+        )
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
@@ -3099,11 +3101,8 @@ class CustomStreamWrapper:
         return None if is_model_response_stream_empty(model_response=usage_free_chunk) else usage_free_chunk
 
     def _returned_sync_stream_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
-        if (
-            getattr(chunk, "usage", None) is None
-            or self._continuous_usage_stats
-            or (not self.send_stream_usage and chunk.choices)
-        ):
+        keeps_usage: Final = self._continuous_usage_stats or getattr(chunk, "usage", None) is None
+        if keeps_usage or (not self.send_stream_usage and chunk.choices):
             self.chunks.append(chunk)
             return chunk
         return self._record_and_strip_usage_chunk(chunk)
