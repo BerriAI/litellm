@@ -10843,7 +10843,7 @@
         "choiceOptionCount": "选择条件必须包含 1 到 {{max}} 个选项。",
         "noulNeedsInstructionsOrCriteria": "是/否问题需要提供指令或条件。",
         "modelNonEmpty": "模型必须为非空字符串。",
-        "questionCount": "问题必须包含 1 到 128 个条目。",
+        "questionCount": "问题必须至少包含 1 个条目。",
         "instructionsMissing": "缺少必需属性 'instructions'。",
         "instructionsType": "指令必须为字符串。",
         "choiceDescriptionType": "选项描述必须为字符串。",

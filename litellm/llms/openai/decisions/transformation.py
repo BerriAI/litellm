@@ -1,3 +1,4 @@
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -279,12 +280,12 @@ def _answers_in_question_order(
     answer_names: Final = tuple(answer.name for answer in answers)
     if answer_names == question_names[: len(answer_names)]:
         return (*answers, *(None for _ in questions[len(answers) :]))
-    unknown: Final = tuple(name for name in answer_names if name not in question_names)
+    question_counts: Final = Counter(question_names)
+    unknown: Final = tuple(name for name in answer_names if name not in question_counts)
     if unknown:
         return _unmatched_answers(f"no requested question is named {unknown[0]!r}")
-    ambiguous: Final = tuple(
-        name for name in answer_names if answer_names.count(name) > 1 or question_names.count(name) > 1
-    )
+    answer_counts: Final = Counter(answer_names)
+    ambiguous: Final = tuple(name for name in answer_names if answer_counts[name] > 1 or question_counts[name] > 1)
     if ambiguous:
         return _unmatched_answers(f"answers are out of order and the name {ambiguous[0]!r} is used more than once")
     by_name: Final = {answer.name: answer for answer in answers}
