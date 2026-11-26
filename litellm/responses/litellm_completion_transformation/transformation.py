@@ -775,8 +775,14 @@ def _expand_param_node(
         keys: Final = tuple(node.keys())
         return ("dict", node, keys, tuple(node[k] for k in keys))
     if isinstance(node, (list, tuple)):
-        kind: Final = "list" if isinstance(node, list) else "tuple"
-        return (kind, node, len(node), tuple(node))
+        # Tuples materialize as lists rather than being rebuilt 1:1: dict
+        # polymorphism cannot tell ``(a, b)`` from ``[a, b]``, so a container
+        # that stays a tuple is forwarded to the provider while every
+        # list-shaped reader downstream (guardrail input extraction above all,
+        # which only walks ``str`` and ``list`` content) silently skips it. A
+        # caller could otherwise hand a tuple to the SDK and bypass the
+        # guardrail scan that the identical list would have gone through.
+        return ("list", node, len(node), tuple(node))
     if isinstance(node, Iterable) and not isinstance(node, (str, bytes, bytearray, Mapping)):
         items: Final = tuple(node)
         return ("iter", items, len(items), items)
@@ -797,7 +803,10 @@ def _rebuild_param_container(
     if op == "list" and isinstance(node, list):
         return node if all(new is old for new, old in zip(children, node, strict=True)) else list(children)
     if op == "tuple" and isinstance(node, tuple):
-        return node if all(new is old for new, old in zip(children, node, strict=True)) else tuple(children)
+        # A container-level normalization would otherwise have to be spelled out
+        # here too; keep both paths list-shaped so nothing depends on which
+        # branch a caller happens to hit.
+        return list(children)
     return list(children)
 
 

@@ -1049,9 +1049,15 @@ class OpenAIResponsesHandler(BaseTranslation):
                 texts_to_check.append(text)
                 task_mappings.append((msg_idx, content_idx))
             return
-        content: Final = message.get("content", None)
-        if content is None:
+        raw_content: Final = message.get("content", None)
+        if raw_content is None:
             return
+        # `with_compaction_items_as_params` materializes tuple content as a list
+        # before this runs, so a tuple reaching here means the item did not
+        # travel through that path. Scan it anyway: reading only `str` and
+        # `list` would forward the text to the provider while silently skipping
+        # the guardrail, which is a bypass rather than a miss.
+        content: Final = list(raw_content) if isinstance(raw_content, tuple) else raw_content
 
         if isinstance(content, str):
             # Simple string content

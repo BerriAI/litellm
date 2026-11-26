@@ -5423,3 +5423,109 @@ class TestRefusalPartsReachTextGuardrails:
         )
 
         assert (events[0].delta, events[1].refusal) == (_MASKED_REFUSAL, _MASKED_REFUSAL)
+
+
+class TestTupleContentDoesNotBypassGuardrails:
+    """Tuple content has to be scanned exactly like the equivalent list.
+
+    ``_as_input_param`` used to rebuild tuples as tuples, so a caller passing
+    ``content=(part,)`` had the text forwarded to the provider while
+    ``_extract_input_text_and_images`` (which only walks ``str`` and ``list``)
+    collected nothing and returned from ``process_input_messages`` before any
+    guardrail ran. These tests pin the materialization at the transformation
+    layer and the scan itself at the handler layer.
+    """
+
+    def test_with_compaction_items_as_params_materializes_tuple_content(self) -> None:
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            with_compaction_items_as_params,
+        )
+
+        part: Final = {"type": "input_text", "text": "blocked text"}
+        original: Final = [{"role": "user", "content": (part,)}]
+
+        materialized: Final = with_compaction_items_as_params(original)
+
+        assert isinstance(materialized, list)
+        assert isinstance(materialized[0]["content"], list)
+        assert materialized[0]["content"][0] is part
+        # The caller's input is untouched; only the forwarded copy is normalized.
+        assert isinstance(original[0]["content"], tuple)
+
+    @pytest.mark.asyncio
+    async def test_tuple_content_is_scanned_and_rewritten(self) -> None:
+        data: Final = {
+            "input": [{"role": "user", "content": ({"type": "input_text", "text": "blocked text"},)}],
+            "model": "gpt-4",
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            data, MockGuardrail(guardrail_name="test")
+        )
+
+        content: Final = result["input"][0]["content"]
+        assert isinstance(content, list), "tuple content must be materialized before it is forwarded"
+        assert content[0]["text"] == "blocked text [GUARDRAILED]"
+
+    @pytest.mark.asyncio
+    async def test_tuple_content_is_scanned_when_the_transformation_is_skipped(self) -> None:
+        """Handler-level defence in depth: a tuple that never went through
+        ``with_compaction_items_as_params`` is still scanned rather than
+        silently forwarded."""
+        handler: Final = OpenAIResponsesHandler()
+        texts: Final = []
+        mappings: Final = []
+
+        handler._extract_input_text_and_images(
+            message={"role": "user", "content": ({"type": "input_text", "text": "blocked text"},)},
+            msg_idx=0,
+            texts_to_check=texts,
+            images_to_check=[],
+            task_mappings=mappings,
+        )
+
+        assert texts == ["blocked text"]
+        assert mappings == [(0, 0)]
+
+    @pytest.mark.asyncio
+    async def test_nested_tuple_of_parts_is_materialized_too(self) -> None:
+        data: Final = {
+            "input": [{"role": "user", "content": (({"type": "input_text", "text": "deep"},),)}],
+            "model": "gpt-4",
+        }
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            with_compaction_items_as_params,
+        )
+
+        materialized: Final = with_compaction_items_as_params(data["input"])
+
+        assert isinstance(materialized[0]["content"], list)
+        assert isinstance(materialized[0]["content"][0], list)
+
+
+class TestGuardrailBypassIsClosed:
+    """End-to-end statement of the bug the security scan reported.
+
+    Before the fix this asserted the opposite: the tuple form reached the
+    provider unscanned while the list form was rewritten.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "content",
+        [
+            [{"type": "input_text", "text": "blocked text"}],
+            ({"type": "input_text", "text": "blocked text"},),
+        ],
+        ids=["list", "tuple"],
+    )
+    async def test_both_container_forms_reach_the_guardrail(self, content: object) -> None:
+        data: Final = {"input": [{"role": "user", "content": content}], "model": "gpt-4"}
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            data, MockGuardrail(guardrail_name="test")
+        )
+
+        parts: Final = result["input"][0]["content"]
+        assert isinstance(parts, list)
+        assert parts[0]["text"] == "blocked text [GUARDRAILED]"
