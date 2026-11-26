@@ -620,7 +620,7 @@ class _MediaUploadKwargs(TypedDict, total=False):
 class _AsyncFilesEnvironmentValidator(Protocol):
     async def avalidate_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        headers: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
@@ -633,7 +633,7 @@ class _AsyncFilesEnvironmentValidator(Protocol):
 async def _avalidate_files_environment(
     provider_config: BaseFilesConfig | BaseBatchesConfig,
     *,
-    headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    headers: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
     model: str,
     messages: list[AllMessageValues],  # mutable-ok: mirrors the sync validate_environment contract this overrides
     optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
@@ -1118,7 +1118,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict[str, object],
-        data: dict,
+        data: dict[str, object],
         timeout: float | httpx.Timeout,
         model: str,
         model_response: ModelResponse,
@@ -1537,7 +1537,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseConfig,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-        data: dict,
+        data: dict[str, object],
         litellm_params: dict[str, object],
         optional_params: dict[str, object],
         fake_stream: bool = False,
@@ -3362,7 +3362,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        provider_headers: Final[dict[str, object]] = (  # mutable-ok: provider configs return a header dict
+        provider_headers: Final[dict[str, str]] = (  # mutable-ok: provider configs return a header dict
             responses_api_provider_config.validate_environment(
                 headers=(
                     _client_request_headers(response_api_optional_request_params, extra_headers)
@@ -3567,7 +3567,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        provider_headers: Final[dict[str, object]] = (  # mutable-ok: provider configs return a header dict
+        provider_headers: Final[dict[str, str]] = (  # mutable-ok: provider configs return a header dict
             await asyncio.to_thread(
                 responses_api_provider_config.validate_environment,
                 headers=(
@@ -5863,7 +5863,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseFilesConfig,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict[str, object],  # mutable-ok: handed to the files contract, which types it as a dict
-        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        headers: dict[str, object],  # mutable-ok: handed to validate_environment, which types it as a dict
         client: HTTPHandler,
         timeout: float | httpx.Timeout | None,
     ) -> Iterator[list[OpenAIFileObject]]:  # mutable-ok: each page arrives as the list the files contract returns
@@ -5891,7 +5891,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseFilesConfig,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict[str, object],  # mutable-ok: handed to the files contract, which types it as a dict
-        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        headers: dict[str, object],  # mutable-ok: handed to validate_environment, which types it as a dict
         client: AsyncHTTPHandler,
         timeout: float | httpx.Timeout | None,
     ) -> AsyncIterator[list[OpenAIFileObject]]:  # mutable-ok: each page arrives as the list the files contract returns
@@ -5918,7 +5918,7 @@ class BaseLLMHTTPHandler:
     def _next_listing_page_headers(
         self,
         provider_config: BaseFilesConfig,
-        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        headers: dict[str, object],  # mutable-ok: handed to validate_environment, which types it as a dict
         litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
     ) -> dict[str, object]:  # mutable-ok: validate_environment returns the header dict the files contract types
         return provider_config.validate_environment(
