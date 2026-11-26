@@ -14,6 +14,7 @@ mod hooks;
 pub mod messages;
 mod model_restamp;
 mod ocr;
+mod pricing;
 mod rate_limited;
 pub mod record;
 mod request;
@@ -56,7 +57,7 @@ pub struct Gateway<H> {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     routing: Arc<RoutingCache>,
     /// The cost map every request reads. It starts as the bundled one.
-    cost_map: ArcSwap<CostMap>,
+    cost_map: Arc<ArcSwap<CostMap>>,
     /// What `litellm_settings` sets for a messages call to any deployment.
     messages_settings: MessagesSettings,
     pub messages: MessagesRoute,
@@ -77,6 +78,16 @@ impl<H: Host> Gateway<H> {
     pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
         Self {
             cache: Some(cache),
+            ..self
+        }
+    }
+
+    /// Prices each Messages call whose deployment has a pricing identity over the cost map
+    /// installed when the call is priced.
+    pub fn with_pricing(self) -> Self {
+        let pricing = Arc::new(pricing::CostMapPricing::new(self.cost_map.clone()));
+        Self {
+            messages: self.messages.with_pricing(pricing),
             ..self
         }
     }
@@ -121,7 +132,7 @@ impl<H: Host> Gateway<H> {
             host,
             cache: None,
             routing: routing.into(),
-            cost_map: ArcSwap::from_pointee(CostMap::bundled()),
+            cost_map: Arc::new(ArcSwap::from_pointee(CostMap::bundled())),
             messages_settings,
             messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(

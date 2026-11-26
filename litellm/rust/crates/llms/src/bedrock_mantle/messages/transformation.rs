@@ -418,6 +418,51 @@ fn bedrock_region(
     )
 }
 
+/// The secrets [`cost_region`] reads.
+pub const COST_REGION_SECRET_NAMES: [&str; 5] = [
+    MANTLE_API_BASE_ENV,
+    "BEDROCK_MANTLE_REGION",
+    AWS_REGION_NAME,
+    AWS_REGION,
+    AWS_DEFAULT_REGION,
+];
+
+/// The region Python's `_resolve_mantle_region_for_cost` prices a Mantle call under, `None` for
+/// any other call. `bedrock/mantle/` prices in the Bedrock region it signs in. `bedrock_mantle`
+/// prices as Python's `resolve_mantle_region` reads the call's params: `aws_region_name`, then the
+/// region of a public Mantle host its `api_base` or `BEDROCK_MANTLE_API_BASE` names, then the
+/// environment, then `us-east-1`.
+pub fn cost_region(
+    provider: &str,
+    model: &str,
+    litellm_params: &LitellmParams,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    match provider {
+        BEDROCK => {
+            let model = model.strip_prefix("bedrock/").unwrap_or(model);
+            model
+                .starts_with("mantle/")
+                .then(|| bedrock_region(model, litellm_params, env_lookup))
+        }
+        BEDROCK_MANTLE => Some(match configured_region(litellm_params) {
+            Some(region) => region.to_string(),
+            None => litellm_params
+                .api_base
+                .clone()
+                .filter(|base| !base.is_empty())
+                .or_else(|| env_value(env_lookup, &[MANTLE_API_BASE_ENV]))
+                .and_then(|base| {
+                    mantle_host_region(&Url::parse(base.trim_end_matches('/')).ok()?)
+                        .map(str::to_string)
+                })
+                .or_else(|| env_value(env_lookup, &REGION_ENVS))
+                .unwrap_or_else(|| BEDROCK_MANTLE_DEFAULT_REGION.to_string()),
+        }),
+        _ => None,
+    }
+}
+
 /// Python's `_mantle_api_base_from_env`.
 fn mantle_api_base_from_env(env_lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     let base = env_lookup(MANTLE_API_BASE_ENV)?;

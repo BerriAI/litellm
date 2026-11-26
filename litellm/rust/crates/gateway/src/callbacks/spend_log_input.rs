@@ -35,7 +35,7 @@ const CACHE_OFF: &str = "Cache OFF";
 ///   owner, end user, budget or access group, so only the master key or a bare key is served.
 /// - `batch_accounting`: false. `/v1/messages` is the only route served, and it runs no batch.
 /// - `response` and `kwargs_response_cost`: none. The gateway builds no logging payload yet, and
-///   the cost comes from `Field::Cost`, which nothing on the native route fills yet.
+///   the cost comes from `Field::Cost`, which the served attempt's settled cost fills.
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum SpendLogInput<'a> {

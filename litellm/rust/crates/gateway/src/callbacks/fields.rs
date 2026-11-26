@@ -5,7 +5,7 @@
 use std::time::SystemTime;
 
 use litellm_callbacks::{
-    AttemptTiming, CallFacts, CallIds, CallKind, CallTarget, CallTiming, Deployment, Field,
+    AttemptTiming, CallFacts, CallIds, CallKind, CallTarget, CallTiming, Cost, Deployment, Field,
     FieldSet, FieldValues, Hook, HookInput, KeyIdentity, LoggedKeyIdentity, LoggedModelGroup,
     MetadataKind, ModelInfo, Moment, Outcome, PatchOp, Scalar, SpendLogId, Usage, UsageRecord,
 };
@@ -15,6 +15,7 @@ use litellm_gateway_inference::{
     CallType,
     record::{CallState, Charged, Ended, HeadSent, unix},
 };
+use litellm_host::interceptors::Cost as Settled;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_python_compat::datetime::UtcDateTime;
 use serde::Serialize;
@@ -227,6 +228,23 @@ fn timing(entries: &CallState) -> AttemptTiming {
     }
 }
 
+/// What the served attempt's route settled the call's cost as. A cache hit cost nothing, and a
+/// stream's price is read off its meter once the stream ended. `None` for a call the route left
+/// unpriced.
+fn cost(entries: &CallState) -> Option<Cost> {
+    let amount = match entries.attempt.as_ref()?.cost.as_ref()? {
+        Settled::Reported { amount } => Scalar::Float(amount.as_f64()?),
+        Settled::Priced(priced) => Scalar::Float(priced.receipt.total),
+        Settled::Metered(meter) => Scalar::Float(meter.settled()?.receipt.total),
+        Settled::CacheHit => Scalar::Float(0.0),
+        Settled::Deferred => return None,
+    };
+    Some(Cost {
+        response_cost: Some(amount),
+        ..Cost::default()
+    })
+}
+
 /// The spend log callback's input for a served call. A failed call has none yet.
 fn spend_log_input(entries: &CallState) -> Option<Value> {
     let call_type = entries.call_type?;
@@ -259,6 +277,7 @@ fn read(entries: &CallState, field: Field) -> Option<Value> {
         Field::AttemptTiming => record(timing(entries)),
         Field::SpendLogId => record(spend_log_id(entries)),
         Field::SpendLogInput => spend_log_input(entries),
+        Field::Cost => record(cost(entries)?),
         Field::LoggedModelGroup => record(LoggedModelGroup {
             value: Some(Scalar::Text(entries.served()?.model_group.clone())),
             ..LoggedModelGroup::default()
@@ -390,6 +409,65 @@ mod tests {
         };
         futures_util::FutureExt::now_or_never(record::scope(CallRecord::new(), async { scoped() }))
             .unwrap()
+    }
+
+    fn priced(total: f64) -> litellm_host::interceptors::PricedCost {
+        litellm_host::interceptors::PricedCost {
+            receipt: litellm_cost::receipt::Receipt::of_total(total),
+            service_tier: None,
+            data_residency: None,
+        }
+    }
+
+    fn settled_meter(total: Option<f64>) -> litellm_host::interceptors::StreamMeter {
+        let meter = litellm_host::interceptors::StreamMeter::default();
+        if let Some(total) = total {
+            meter.settle(priced(total));
+        }
+        meter
+    }
+
+    #[rstest]
+    #[case::priced_by_the_route(Some(Settled::Priced(Box::new(priced(0.25)))), Some(0.25))]
+    #[case::a_settled_stream(Some(Settled::Metered(settled_meter(Some(0.5)))), Some(0.5))]
+    #[case::a_stream_that_ended_before_its_usage(Some(Settled::Metered(settled_meter(None))), None)]
+    #[case::reported_by_the_provider(
+        Some(Settled::Reported { amount: serde_json::Number::from_f64(1.5).unwrap() }),
+        Some(1.5)
+    )]
+    #[case::a_cache_hit(Some(Settled::CacheHit), Some(0.0))]
+    #[case::left_to_the_host(Some(Settled::Deferred), None)]
+    #[case::no_attempt_settled(None, None)]
+    fn a_callback_reads_the_cost_the_served_attempts_route_settled(
+        #[case] settled: Option<Settled>,
+        #[case] expected: Option<f64>,
+    ) {
+        let read = on_a_call(|entries| {
+            entries.attempt = Some(litellm_gateway_inference::record::AttemptRecord {
+                cost: settled,
+                ..Default::default()
+            });
+            read(entries, Field::Cost)
+        });
+        assert_eq!(
+            read.as_ref()
+                .and_then(|cost| cost["response_cost"].as_f64()),
+            expected
+        );
+    }
+
+    #[rstest]
+    fn a_failed_attempts_cost_is_never_the_calls() {
+        let read = on_a_call(|entries| {
+            entries
+                .failed_attempts
+                .push(litellm_gateway_inference::record::AttemptRecord {
+                    cost: Some(Settled::Priced(Box::new(priced(0.25)))),
+                    ..Default::default()
+                });
+            read(entries, Field::Cost)
+        });
+        assert_eq!(read, None);
     }
 
     fn keys() -> Map<String, Value> {
