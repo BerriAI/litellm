@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Mapping
 from datetime import datetime
 from typing import Any, Dict, Final, List, Optional, TypeAlias, Union
 from unittest.mock import Mock
@@ -4102,10 +4103,12 @@ async def _bridged_stream_refused_after(
     frames_read: int,
     provider_holds_after: int,
     served_as: str,
+    provider_close_error: Exception | None = None,
 ) -> tuple[list[tuple[str, int, int, float]], bool]:
     """Streams a native /v1/messages answer through a post-call hook that refuses it after reading ``frames_read``
     frames, the provider holding its stream open after ``provider_holds_after``. ``served_as`` picks the bare byte stream the Rust bridge hands the proxy, or that byte stream
-    wrapped as the bridge's public stream. Returns the spend rows and whether the provider stream was closed."""
+    wrapped as the bridge's public stream, and ``provider_close_error`` is raised by the provider stream when it is
+    closed. Returns the spend rows and whether the provider stream was closed."""
     from litellm.caching.caching import DualCache
     from litellm.llms.anthropic.messages.native.streaming_iterator import AnthropicMessagesStreamingResponse
     from litellm.proxy.utils import ProxyLogging
@@ -4138,6 +4141,8 @@ async def _bridged_stream_refused_after(
                 yield frame
         finally:
             provider_closed.set()
+            if provider_close_error is not None:
+                raise provider_close_error
 
     provider_stream: Final = provider()
     served: Final = {
@@ -4225,10 +4230,102 @@ async def test_refused_messages_stream_still_bills_its_failure_when_the_client_d
 
 
 @pytest.mark.asyncio
+async def test_refused_messages_stream_still_logs_its_masked_failure_when_one_log_masking_guardrail_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.utils import ProxyLogging
+
+    class RefusingHook(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(
+            self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterable[object], request_data: Mapping[str, object]
+        ) -> AsyncIterator[object]:
+            async for _ in response:
+                pass
+            raise BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output")
+            yield
+
+    masked_by: Final[list[str | None]] = []
+
+    class UnreachableLogMasking(CustomGuardrail):
+        async def async_logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            raise ConnectionError("masking service unreachable")
+
+    class LogMasking(CustomGuardrail):
+        async def async_logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            masked_by.append(self.guardrail_name)
+            return kwargs, result
+
+    monkeypatch.setattr(litellm, "callbacks", [RefusingHook()])
+    monkeypatch.setattr(
+        litellm,
+        "_async_failure_callback",
+        [
+            UnreachableLogMasking(
+                guardrail_name="unreachable-masking", event_hook=GuardrailEventHooks.logging_only, default_on=True
+            ),
+            LogMasking(guardrail_name="log-masking", event_hook=GuardrailEventHooks.logging_only, default_on=True),
+        ],
+    )
+    spend_rows: Final = _SpendRows()
+    logging_obj: Final = _refused_stream_logging_obj(spend_rows)
+
+    async def run_parked(parked: Awaitable[None]) -> None:
+        await parked
+
+    logging_obj._on_deferred_stream_complete = run_parked
+
+    async def provider() -> AsyncIterator[bytes]:
+        for frame in _native_messages_sse(input_tokens=30, output_tokens=20):
+            yield frame
+
+    relayed: Final = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+        response=provider(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
+        request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+    _ = [chunk async for chunk in relayed]
+    for _ in range(100):
+        if spend_rows.rows:
+            break
+        await asyncio.sleep(0.05)
+
+    assert [row[:2] for row in spend_rows.rows] == [("failure", 30)]
+    assert spend_rows.rows[0][3] > 0
+    assert masked_by == ["log-masking"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("served_as", ["rust_bridge_byte_stream", "rust_bridge_public_stream"])
 async def test_refused_messages_stream_closes_the_provider_stream_still_sending(monkeypatch, served_as):
     rows, provider_closed = await asyncio.wait_for(
         _bridged_stream_refused_after(monkeypatch, frames_read=4, provider_holds_after=4, served_as=served_as),
+        timeout=10,
+    )
+
+    assert provider_closed
+    assert [row[:2] for row in rows] == [("failure", 30)]
+    assert rows[0][3] > 0
+
+
+@pytest.mark.asyncio
+async def test_refused_rust_bridged_messages_stream_still_bills_its_failure_when_closing_the_provider_stream_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows, provider_closed = await asyncio.wait_for(
+        _bridged_stream_refused_after(
+            monkeypatch,
+            frames_read=4,
+            provider_holds_after=4,
+            served_as="rust_bridge_byte_stream",
+            provider_close_error=ConnectionResetError("provider reset the connection"),
+        ),
         timeout=10,
     )
 
