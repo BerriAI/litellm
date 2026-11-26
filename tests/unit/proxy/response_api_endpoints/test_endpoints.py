@@ -3046,7 +3046,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 ),
                 (429, "rate_limit_exceeded"),
                 "Limit type: requests. Current limit: 1",
-                (1013, "Rate limit exceeded"),
+                (1008, "Rate limit exceeded"),
                 False,
             ),
             (ValueError("bad metadata"), (500, "server_error"), "bad metadata", (1008, "Pre-call error"), True),

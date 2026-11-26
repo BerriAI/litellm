@@ -2917,7 +2917,7 @@ async def _responses_websocket_session(
         verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
         with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
             await websocket.send_text(turn_refusal_frame(e))
-        await websocket.close(code=refusal_close_code(429), reason="Rate limit exceeded")
+        await websocket.close(code=1008, reason="Rate limit exceeded")
         return
     except Exception as e:
         await proxy_logging_obj.arelease_refused_responses_websocket_slot(user_api_key_dict)
