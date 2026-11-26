@@ -260,6 +260,7 @@ from .litellm_core_utils.core_helpers import (
     joined,
     keyword_arguments,
     normalize_drop_params,
+    require_attributes,
     safe_deep_copy,
     subscript,
     without,
@@ -1591,6 +1592,10 @@ def _replayed_as_stream(
     return _replayed_when_done(dispatched, replay)
 
 
+class _MergesMapping(Protocol):
+    def update(self, other: object, /) -> object: ...
+
+
 class _ProxyAuthHeadersProvider(Protocol):
     def get_auth_headers(self) -> Mapping[str, str]: ...
 
@@ -1659,7 +1664,7 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     dynamic_params = False
@@ -1794,7 +1799,7 @@ def _complete_azure_text(ctx: CompletionDispatchContext) -> _CompletionDispatchR
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     api_type: Final = get_secret_str("AZURE_API_TYPE") or "azure"
@@ -3939,7 +3944,7 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
         if k == "extra_body":
             # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
             if "extra_body" in optional_params:
-                optional_params[k].update(v)
+                require_attributes(optional_params[k], _MergesMapping, "update").update(v)
             else:
                 optional_params[k] = v
         elif k not in optional_params:
@@ -4046,7 +4051,7 @@ def _complete_vercel_ai_gateway(
         if k == "extra_body":
             # we use openai 'extra_body' to pass vercel specific params - providerOptions
             if "extra_body" in optional_params:
-                optional_params[k].update(v)
+                require_attributes(optional_params[k], _MergesMapping, "update").update(v)
             else:
                 optional_params[k] = v
         elif k not in optional_params:
@@ -4149,7 +4154,7 @@ def _complete_vertex_ai_beta(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     vertex_ai_project: Final = (
@@ -4215,7 +4220,7 @@ def _complete_vertex_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
@@ -4398,7 +4403,7 @@ def _complete_predibase(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     timeout: Final = ctx.timeout
 
     tenant_id: Final = (
@@ -4458,7 +4463,7 @@ def _complete_text_completion_codestral(
     logging: Final = ctx.logging
     messages: Final = ctx.messages
     model: Final = ctx.model
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
@@ -4510,7 +4515,7 @@ def _complete_text_completion_inception(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     text_completion: Final = ctx.text_completion
     timeout: Final = ctx.timeout
 
@@ -4703,7 +4708,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
     messages: Final = ctx.messages
     model = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     provider_config = ctx.provider_config
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
@@ -4915,7 +4920,7 @@ def _complete_watsonx_text(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
+    optional_params: Final = ctx.unnarrowed_optional_params
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
@@ -6808,6 +6813,7 @@ def completion(
             timeout=timeout,
             timeout_for_optional_params=timeout_for_optional_params,
             top_p=top_p,
+            unnarrowed_optional_params=chat_optional_params,
         )
         if custom_llm_provider == "azure":
             # azure configs

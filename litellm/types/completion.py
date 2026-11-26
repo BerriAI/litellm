@@ -229,7 +229,7 @@ class CompletionDispatchContext:
     metadata: dict | None
     model: str
     model_response: ModelResponse
-    optional_params: dict
+    optional_params: dict[str, object]
     optional_params_for_model_info: Callable[[Mapping[str, object] | None], dict[str, object]]
     organization: str | None
     provider_config: BaseConfig | None
@@ -241,6 +241,7 @@ class CompletionDispatchContext:
     timeout: float | httpx.Timeout | None
     timeout_for_optional_params: Callable[[Mapping[str, object]], float | httpx.Timeout]
     top_p: float | None
+    unnarrowed_optional_params: dict
 
 
 _CompletionDispatchContext = CompletionDispatchContext
