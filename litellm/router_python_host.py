@@ -122,12 +122,11 @@ class PythonHost:
         self,
         op: str,
         *,
-        stream: object,
         model_group: Callable[[], str | None],
         fallback_level: object,
         retry: object,
     ) -> Callable[[DeploymentAttemptResult], None] | None:
-        if op != "acompletion" or stream or not litellm.callbacks:
+        if op != "acompletion" or not litellm.callbacks:
             return None
 
         from litellm.integrations.prometheus import PrometheusLogger

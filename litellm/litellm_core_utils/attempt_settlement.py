@@ -21,20 +21,35 @@ DeploymentAttemptResult: TypeAlias = Literal["success", "error", "cancelled"]
 
 
 class RoutedAttempt:
-    __slots__ = ("_recorder", "answered", "attempt_id")
+    __slots__ = ("_deferred_recorder", "_recorder", "answered", "attempt_id")
 
     def __init__(self) -> None:
         self.attempt_id: Final = uuid.uuid4().hex
         self.answered: bool = False
         self._recorder: Callable[[DeploymentAttemptResult], None] | None = None
+        self._deferred_recorder: Callable[[DeploymentAttemptResult], None] | None = None
 
     def set_recorder(self, recorder: Callable[[DeploymentAttemptResult], None] | None) -> None:
         self._recorder = recorder
+        self._deferred_recorder = None
 
     def take_recorder(self) -> Callable[[DeploymentAttemptResult], None] | None:
         recorder: Final = self._recorder
         self._recorder = None
         return recorder
+
+    def defer_recorder(self, recorder: Callable[[DeploymentAttemptResult], None] | None) -> None:
+        self._deferred_recorder = recorder
+
+    def take_deferred_recorder(self) -> Callable[[DeploymentAttemptResult], None] | None:
+        recorder: Final = self._deferred_recorder
+        self._deferred_recorder = None
+        return recorder
+
+    def settle_deferred(self, result: DeploymentAttemptResult) -> None:
+        recorder: Final = self.take_deferred_recorder()
+        if recorder is not None:
+            recorder(result)
 
 
 _ATTEMPT: Final[ContextVar[RoutedAttempt | None]] = ContextVar("routed_attempt", default=None)
@@ -49,6 +64,12 @@ def current_attempt_id() -> str | None:
 def take_deployment_attempt_recorder() -> Callable[[DeploymentAttemptResult], None] | None:
     attempt: Final = _ATTEMPT.get()
     return None if attempt is None else attempt.take_recorder()
+
+
+def defer_deployment_attempt_recorder(recorder: Callable[[DeploymentAttemptResult], None] | None) -> None:
+    attempt: Final = _ATTEMPT.get()
+    if attempt is not None:
+        attempt.defer_recorder(recorder)
 
 
 def mark_attempt_answered() -> None:

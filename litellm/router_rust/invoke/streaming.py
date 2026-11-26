@@ -66,6 +66,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
     replace_complexity_router_headers,
 )
+from litellm.litellm_core_utils.attempt_settlement import DeploymentAttemptResult
 from litellm.litellm_core_utils.core_helpers import FinishEvidence, as_str_mapping, finish_evidence_of, without
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.on_end_byte_stream import StreamClosedEarly, StreamCompleted, StreamEnd, StreamFailed
@@ -138,6 +139,7 @@ class StreamAttempt:
     # The background recording of the stream's failure, which a same-group retry waits for so it
     # picks with the failed deployment already cooled down.
     failure_recording: "asyncio.Task[None] | None" = None
+    attempt_recorder: Callable[[DeploymentAttemptResult], None] | None = None
 
     @property
     def model_group(self) -> str:
@@ -226,10 +228,18 @@ class StreamAttempt:
         self.outcome_reported = True
         return True
 
+    def record_attempt(self, result: DeploymentAttemptResult) -> None:
+        recorder: Final = self.attempt_recorder
+        if recorder is None:
+            return
+        self.attempt_recorder = None
+        recorder(result)
+
     def report_success(self, total_tokens: int, last: object = None) -> None:
         """The stream ended: count its success and the tokens the attempt did not count, and re-pin
         the session on ``last``, the stream's final item (``deployment_callback_on_success``), in the
         background."""
+        self.record_attempt("success")
         if self._claim():
             logged: Final = {**self.logged(), "standard_logging_object": {"total_tokens": total_tokens}}
             _record_in_background(self.core.report_stream_success(logged, last, self._callbacks(sync=False)))
@@ -239,6 +249,7 @@ class StreamAttempt:
         more request (``async_deployment_callback_on_failure``), in the background. A logging object
         shared with an earlier failure blocks it, read when the wrapper took the stream: the stream's own
         failure log marks the same object before this runs."""
+        self.record_attempt("error")
         if self._claim() and "async_failure" not in self.failure_logged_before:
             self.failure_recording = _record_in_background(
                 self.core.report_stream_failure(self._failure_logged(error), self._callbacks(sync=False))
@@ -333,7 +344,11 @@ async def _areported(
         if started or fails_before_first_item:
             attempt.report_failure(error)
         else:
+            attempt.record_attempt("error")
             attempt.outcome_reported = True  # rebind-ok: a stream that never opened counts nothing
+        raise
+    except BaseException:
+        attempt.record_attempt("cancelled")
         raise
     attempt.report_success(total_tokens(last), last)
 
@@ -969,16 +984,29 @@ def _chat_wrapper_init(
 
 
 class _AsyncChatStream(FallbackAwareStreamWrapper):
-    def __init__(self, generator: AsyncGenerator[object, None], model_response: CustomStreamWrapper) -> None:  # pyright: ignore[reportMissingSuperCall]  # _chat_wrapper_init calls it
+    def __init__(
+        self,
+        generator: AsyncGenerator[object, None],
+        model_response: CustomStreamWrapper,
+        attempt: StreamAttempt | None = None,
+    ) -> None:  # pyright: ignore[reportMissingSuperCall]  # _chat_wrapper_init calls it
         _chat_wrapper_init(self, generator, model_response)
         self._source_stream = model_response
         self._async_generator: Final = generator
+        self._attempt: Final = attempt
 
     def __aiter__(self) -> "_AsyncChatStream":  # pyright: ignore[reportIncompatibleMethodOverride]  # iterates the generator
         return self
 
     async def __anext__(self) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # yields what the stream yields
         return await self._async_generator.__anext__()
+
+    async def aclose(self) -> None:
+        try:
+            await super().aclose()
+        finally:
+            if self._attempt is not None:
+                self._attempt.record_attempt("cancelled")
 
 
 class _SyncChatStream(FallbackAwareStreamWrapper):
@@ -1099,7 +1127,7 @@ def wrap_chat_stream(  # noqa: C901  # one function per Python wrapper it ports
                             "stream_with_fallbacks: error closing fallback_response: %s", close_error
                         )
 
-    wrapped_response: Final = _AsyncChatStream(stream_with_fallbacks(), model_response)
+    wrapped_response: Final = _AsyncChatStream(stream_with_fallbacks(), model_response, attempt)
     # weak, so the generator closing over it does not keep the wrapper alive
     wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
     return wrapped_response

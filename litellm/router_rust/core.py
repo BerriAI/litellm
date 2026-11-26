@@ -51,6 +51,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.attempt_settlement import (
     ATTEMPT_SETTLEMENT_GRACE_SECONDS,
+    DeploymentAttemptResult,
     RoutedAttempt,
     released,
     routed_attempt,
@@ -5092,7 +5093,11 @@ class _Driver:
         return self._last_error
 
     def _stream_attempt(
-        self, step: Mapping[str, object], kwargs: Mapping[str, object], slot: "contextlib.ExitStack | None" = None
+        self,
+        step: Mapping[str, object],
+        kwargs: Mapping[str, object],
+        slot: "contextlib.ExitStack | None" = None,
+        attempt_recorder: Callable[[DeploymentAttemptResult], None] | None = None,
     ) -> StreamAttempt:
         def number(key: str) -> int:
             value: Final = step.get(key)
@@ -5115,6 +5120,7 @@ class _Driver:
             routed=routed if isinstance(routed, str) else None,
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
+            attempt_recorder=attempt_recorder,
         )
 
     def _failed(
@@ -5447,6 +5453,19 @@ class _Driver:
         reading_stream.report_first_chunk_failure(error)
         return {**failed, "recorded": True}
 
+    @staticmethod
+    def _settle_attempt_stream(
+        attempt: RoutedAttempt, reading_stream: StreamAttempt | None, result: DeploymentAttemptResult
+    ) -> None:
+        if reading_stream is not None:
+            reading_stream.record_attempt(result)
+        attempt.settle_deferred(result)
+
+    @staticmethod
+    def _settle_unreported_stream(stream: StreamAttempt) -> None:
+        if not stream.reports_outcome:
+            stream.record_attempt("success")
+
     def _attempt_model_group(self, step: Mapping[str, object]) -> str | None:
         deployment_id: Final = step.get("deployment_id")
         if not isinstance(deployment_id, str) or not deployment_id:
@@ -5505,7 +5524,6 @@ class _Driver:
                 attempt.set_recorder(
                     host.deployment_attempt_recorder(
                         call.host_op,
-                        stream=compacted.get("stream"),
                         model_group=partial(self._attempt_model_group, step),
                         fallback_level=step.get("fallback_level"),
                         retry=step.get("retry"),
@@ -5526,17 +5544,21 @@ class _Driver:
                 logs_failure = False  # rebind-ok: see above
                 in_call = False  # rebind-ok: see above
                 self._core._endpoints.check_response(self._plan, answered, call)  # pyright: ignore[reportPrivateUsage, reportUnknownArgumentType]  # see above
-                stream: Final = self._stream_attempt(step, call.kwargs, slot)
+                stream: Final = self._stream_attempt(
+                    step, call.kwargs, slot, attempt_recorder=attempt.take_deferred_recorder()
+                )
                 logs_failure = first_to_log  # rebind-ok: the stream's own failure logging, for its first chunk
                 in_call = True  # rebind-ok: see above
                 reading_stream = stream  # rebind-ok: None until the attempt opens a stream
                 response: Final = await open_attempt_stream(stream, answered)  # pyright: ignore[reportUnknownArgumentType]  # see above
                 logs_failure = False  # rebind-ok: see above
                 in_call = False  # rebind-ok: see above
+                self._settle_unreported_stream(stream)
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
                 # plain dict fails the attempt.
                 self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # see above
         except asyncio.CancelledError:
+            self._settle_attempt_stream(attempt, reading_stream, "cancelled")
             try:
                 await self._give_turn_back(admission)
             finally:
@@ -5549,6 +5571,7 @@ class _Driver:
         except TotalTimeoutNotApplicable:
             raise
         except Exception as error:  # noqa: BLE001  # every attempt failure is classified and handed to the Rust call loop
+            self._settle_attempt_stream(attempt, reading_stream, "error")
             if call is not None:
                 try:
                     await released(self._release(call, attempt, refund_io_tokens=True))

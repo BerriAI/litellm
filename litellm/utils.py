@@ -92,7 +92,11 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     chat_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice_or_refuse,
 )
-from litellm.litellm_core_utils.attempt_settlement import mark_attempt_answered, take_deployment_attempt_recorder
+from litellm.litellm_core_utils.attempt_settlement import (
+    defer_deployment_attempt_recorder,
+    mark_attempt_answered,
+    take_deployment_attempt_recorder,
+)
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_str_mapping,
@@ -2823,15 +2827,29 @@ def client(original_function):
                         and result.custom_llm_provider == LlmProviders.BEDROCK.value
                         else None
                     )
-                    streamed_chunks: Final = (
-                        [chunk async for chunk in bedrock_stream] if bedrock_stream is not None else list(result)
-                    )
-                    assembly_chunks: Final = (
-                        bedrock_stream.chunks
-                        if bedrock_stream is not None and any(chunk.choices for chunk in bedrock_stream.chunks)
-                        else streamed_chunks
-                    )
-                    return litellm.stream_chunk_builder(assembly_chunks, messages=kwargs.get("messages", None))
+                    try:
+                        streamed_chunks: Final = (
+                            [chunk async for chunk in bedrock_stream] if bedrock_stream is not None else list(result)
+                        )
+                        assembly_chunks: Final = (
+                            bedrock_stream.chunks
+                            if bedrock_stream is not None and any(chunk.choices for chunk in bedrock_stream.chunks)
+                            else streamed_chunks
+                        )
+                        built_response: Final = litellm.stream_chunk_builder(
+                            assembly_chunks, messages=kwargs.get("messages", None)
+                        )
+                    except asyncio.CancelledError:
+                        if record_attempt is not None:
+                            record_attempt("cancelled")
+                        raise
+                    except Exception:
+                        if record_attempt is not None:
+                            record_attempt("error")
+                        raise
+                    if record_attempt is not None:
+                        record_attempt("success")
+                    return built_response
                 else:
                     if call_type == CallTypes.atranscription.value and isinstance(result, openai.AsyncStream):
                         from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
@@ -2850,6 +2868,8 @@ def client(original_function):
                         start_time=start_time,
                         end_time=end_time,
                     )
+                    if record_attempt is not None:
+                        defer_deployment_attempt_recorder(record_attempt)
                     return _llm_caching_handler.wrap_streaming_result_for_cache(
                         result=result,
                         call_type=call_type,

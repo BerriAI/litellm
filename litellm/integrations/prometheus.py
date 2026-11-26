@@ -1076,7 +1076,7 @@ class PrometheusLogger(CustomLogger):
             self.litellm_deployment_attempts_total: PrometheusCounter | _LabeledMetric | NoOpMetric = (
                 self._counter_factory(  # pyright: ignore[reportUnknownMemberType]  # the shared factory is untyped
                     name="litellm_deployment_attempts_total",
-                    documentation="Routed non-streaming Chat Completions provider call attempts, counted at completion",
+                    documentation="Routed Chat Completions provider call attempts, counted at completion",
                     labelnames=self.get_labels_for_metric("litellm_deployment_attempts_total"),
                 )
             )
