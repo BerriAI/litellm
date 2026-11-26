@@ -255,8 +255,8 @@ S3_VECTORS_METADATA: Final = {
         (
             {"type": "ONEDRIVE", "oneDriveLocation": {"url": "https://onedrive.live.com/docs/plan.pdf"}},
             S3_VECTORS_METADATA,
-            "plan.pdf",
-            "https://onedrive.live.com/docs/plan.pdf",
+            "bedrock-kb-document-CYQOANZ7OJ",
+            "bedrock-kb-764f684b-5a68-4950-9881-50250f22e87d",
         ),
         (
             {"type": "KENDRA", "kendraDocumentLocation": {"uri": "https://kendra.example.com/faq.html"}},
@@ -273,13 +273,13 @@ S3_VECTORS_METADATA: Final = {
         (
             {"type": "S3", "s3Location": {"uri": "s3://kb-docs/reports/Q1#draft?.txt"}},
             S3_VECTORS_METADATA,
-            "Q1#draft?.txt",
+            "Q1",
             "s3://kb-docs/reports/Q1#draft?.txt",
         ),
         (
             {"type": "S3", "s3Location": {"uri": "s3://kb-docs/?summary.txt"}},
             S3_VECTORS_METADATA,
-            "?summary.txt",
+            "kb-docs",
             "s3://kb-docs/?summary.txt",
         ),
         (
@@ -291,15 +291,10 @@ S3_VECTORS_METADATA: Final = {
         (
             {"type": "WEB", "webLocation": {"url": "https://docs.example.com/guide/setup/"}},
             S3_VECTORS_METADATA,
-            "setup",
+            "docs.example.com",
             "https://docs.example.com/guide/setup/",
         ),
-        (
-            {"type": "S3", "s3Location": {"uri": "s3://kb-docs/reports/"}},
-            S3_VECTORS_METADATA,
-            "reports",
-            "s3://kb-docs/reports/",
-        ),
+        ({"type": "S3", "s3Location": {"uri": "s3://kb-docs/"}}, S3_VECTORS_METADATA, "kb-docs", "s3://kb-docs/"),
         (
             {"type": "WEB", "webLocation": {"url": "https://docs.example.com/"}},
             S3_VECTORS_METADATA,
@@ -321,7 +316,7 @@ S3_VECTORS_METADATA: Final = {
         (
             None,
             {**S3_VECTORS_METADATA, "x-amz-bedrock-kb-source-uri": "s3://kb-docs/reports/Q1#draft?.txt"},
-            "Q1#draft?.txt",
+            "Q1",
             "s3://kb-docs/reports/Q1#draft?.txt",
         ),
         (None, {**S3_VECTORS_METADATA, "x-amz-bedrock-kb-source-uri": "s3://kb-docs"}, "kb-docs", "s3://kb-docs"),
