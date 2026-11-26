@@ -1697,3 +1697,24 @@ def test_retrieve__gemini_routes_to_base_http_handler_with_gemini_config(seams):
     forwarded = seams.base_http.retrieve_batch.call_args.kwargs
     assert type(forwarded["provider_config"]).__name__ == "GeminiBatchesConfig"
     assert forwarded["batch_id"] == "la6"
+
+
+# =========================================================================== #
+# a `model` kwarg that is not a string is treated as absent
+# =========================================================================== #
+
+
+def test_create__model_that_is_not_a_string_skips_provider_inference(seams: Seams) -> None:
+    with patch.object(bm, "get_llm_provider") as provider_inference:
+        result: Final = bm.create_batch(**CREATE_KW, custom_llm_provider="openai", model=123)
+
+    assert result is seams.openai.create_batch.return_value
+    assert provider_inference.call_count == 0, provider_inference.call_args_list
+
+
+def test_retrieve__model_that_is_not_a_string_skips_provider_config_lookup(seams: Seams) -> None:
+    with patch.object(bm.ProviderConfigManager, "get_provider_batches_config") as config_lookup:
+        result: Final = bm.retrieve_batch(batch_id="batch-1", custom_llm_provider="openai", model=123)
+
+    assert result is seams.openai.retrieve_batch.return_value
+    assert config_lookup.call_count == 0, config_lookup.call_args_list

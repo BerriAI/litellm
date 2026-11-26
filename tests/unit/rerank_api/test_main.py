@@ -694,3 +694,58 @@ async def test_arerank_returns_cost_while_async_success_callback_is_held(respx_m
     assert _expected_rerank_cost() > 0
     assert returned_cost == _expected_rerank_cost()
     assert callback_cost == returned_cost
+
+
+def _rerank_params_seen_by_provider_mapping(
+    respx_mock: respx.MockRouter, **wrong_typed: object
+) -> Mapping[str, object]:
+    respx_mock.post("https://api.cohere.com/v2/rerank").return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+    from litellm.rerank_api import main as rerank_main
+
+    with patch.object(
+        rerank_main, "get_optional_rerank_params", wraps=rerank_main.get_optional_rerank_params
+    ) as mapped:
+        litellm.rerank(
+            model="cohere/rerank-v4.0-pro",
+            query="hello",
+            documents=["hello", "world"],
+            api_key="test-api-key",
+            **wrong_typed,
+        )
+    return mapped.call_args.kwargs
+
+
+def test_rerank_ignores_instruction_that_is_not_a_string(respx_mock: respx.MockRouter) -> None:
+    seen: Final = _rerank_params_seen_by_provider_mapping(respx_mock, instruction=123)
+
+    assert seen["instruction"] is None, seen
+
+
+def test_rerank_coerces_truthy_drop_params_to_true(respx_mock: respx.MockRouter) -> None:
+    seen: Final = _rerank_params_seen_by_provider_mapping(respx_mock, drop_params="yes")
+
+    assert seen["drop_params"] is True, seen
+
+
+@pytest.mark.asyncio
+async def test_arerank_resolves_provider_without_api_base_that_is_not_a_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    resolved_api_bases: Final[list[object]] = []
+
+    def record_resolution(*args: object, **kwargs: object) -> tuple[str, str, None, None]:
+        resolved_api_bases.append(kwargs.get("api_base"))
+        return "rerank-v4.0-pro", "cohere", None, None
+
+    def rerank_raises_provider_error(*args: object, **kwargs: object) -> None:
+        raise BaseLLMException(status_code=401, message='{"error":"bad key"}')
+
+    monkeypatch.setattr(litellm, "get_llm_provider", record_resolution)
+    monkeypatch.setattr("litellm.rerank_api.main.rerank", rerank_raises_provider_error)
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.arerank(model="cohere/rerank-v4.0-pro", query="hello", documents=["hello"], api_base=123)
+
+    assert resolved_api_bases[0] is None, resolved_api_bases
