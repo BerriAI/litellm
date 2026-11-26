@@ -8,6 +8,8 @@ from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_enabled
 from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
+    LITELLM_UI_CONFIG_PATH,
+    UI_CONFIG_PATH,
     UiDiscoveryEndpoints,
 )
 
@@ -16,8 +18,8 @@ router: Final = APIRouter()
 SSO_FALLBACK_COOKIE: Final = "litellm_sso_fallback"
 
 
-@router.get("/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)
-@router.get("/litellm/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)  # if mounted at root path
+@router.get(UI_CONFIG_PATH, response_model=UiDiscoveryEndpoints)
+@router.get(LITELLM_UI_CONFIG_PATH, response_model=UiDiscoveryEndpoints)
 async def get_ui_config(request: Request) -> UiDiscoveryEndpoints:
     from litellm.proxy.auth.auth_utils import has_user_setup_sso
     from litellm.proxy.proxy_server import general_settings

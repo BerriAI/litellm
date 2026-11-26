@@ -1,13 +1,16 @@
 """App factory for the LiteLLM global control plane. Enterprise only: refuses to build without a valid license."""
 
+import os
+from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Final, Protocol
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from litellm._version import version
 from litellm.proxy.control_plane.audit.dependencies import get_audit_log
 from litellm.proxy.control_plane.audit.router import router as audit_router
 from litellm.proxy.control_plane.auth.dependencies import get_telemetry, get_token_verifier
@@ -35,7 +38,15 @@ from litellm.proxy.control_plane.roles.router import router as roles_router
 from litellm.proxy.control_plane.store.dependencies import get_runtime_config
 from litellm.proxy.control_plane.usage.router import router as usage_router
 from litellm.proxy.middleware.request_size_limit_middleware import RequestSizeLimitMiddleware
+from litellm.proxy.middleware.security_headers_middleware import SecurityHeadersMiddleware
 from litellm.proxy.scalar_reference import mount_api_references
+from litellm.proxy.ui_static import mount_admin_ui
+from litellm.proxy.utils import get_server_root_path
+from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
+    LITELLM_UI_CONFIG_PATH,
+    UI_CONFIG_PATH,
+    ControlPlaneUiDiscovery,
+)
 
 TITLE: Final = "LiteLLM Control Plane"
 MAX_REQUEST_SIZE_MB: Final = 1
@@ -114,11 +125,31 @@ class _Lifespan:
                 self.container.telemetry.shutdown()
 
 
+def _mount_ui_config(app: FastAPI, api_prefix: str) -> None:
+    async def get_ui_config(request: Request) -> ControlPlaneUiDiscovery:
+        scope: Final[Mapping[str, object]] = request.scope
+        root_path: Final = scope.get("root_path", "")
+        return ControlPlaneUiDiscovery(
+            server_root_path=root_path if isinstance(root_path, str) else "",
+            proxy_base_url=None,
+            auto_redirect_to_sso=False,
+            admin_ui_disabled=os.getenv("DISABLE_ADMIN_UI", "false").lower() == "true",
+            sso_configured=False,
+            hide_default_credentials_hint=True,
+            control_plane_api_prefix=api_prefix,
+            litellm_version=None if version == "unknown" else version,
+        )
+
+    app.add_api_route(UI_CONFIG_PATH, get_ui_config, methods=["GET"])
+    app.add_api_route(LITELLM_UI_CONFIG_PATH, get_ui_config, methods=["GET"])
+
+
 def create_app(container: Container, license_check: License) -> FastAPI:
     if not license_check.is_premium():
         raise LicenseRequired()
 
     api_prefix: Final = container.settings.api_prefix
+    server_root_path: Final = get_server_root_path()
     docs_url: Final = f"{api_prefix}/docs"
     swagger_url: Final = f"{api_prefix}/swagger"
     fleet: Final = FleetTeams(
@@ -131,8 +162,10 @@ def create_app(container: Container, license_check: License) -> FastAPI:
         docs_url=None,
         redoc_url=None,
         openapi_url=f"{api_prefix}/openapi.json",
+        root_path=server_root_path,
     )
     app.add_middleware(ControlPlaneRequestSizeLimitMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     container.telemetry.instrument(app, documentation_paths=(docs_url, swagger_url))
     app.dependency_overrides[get_token_verifier] = lambda: container.token_verifier
     app.dependency_overrides[get_telemetry] = lambda: container.telemetry
@@ -154,4 +187,6 @@ def create_app(container: Container, license_check: License) -> FastAPI:
     app.include_router(audit_router, prefix=container.settings.api_prefix)
     app.include_router(roles_router, prefix=container.settings.api_prefix)
     mount_api_references(app, docs_url, swagger_url)
+    _mount_ui_config(app, api_prefix)
+    mount_admin_ui(app, request_root_path=True)
     return app
