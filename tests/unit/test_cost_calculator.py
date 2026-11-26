@@ -13746,6 +13746,28 @@ def _refused_messages_body(stop_fields: Mapping[str, object], output_tokens: int
     }
 
 
+def test_completion_cost_charges_a_refusal_that_followed_another_attempt(local_model_cost_map: None) -> None:
+    attempt: Final = {"input_tokens": 13, "cache_creation_input_tokens": 6179, "output_tokens": 0}
+    body: Final = _refused_messages_body(_refusal_stop_fields("cyber"), 0)
+    usage: Final = body["usage"]
+    assert isinstance(usage, dict)
+
+    cost: Final = completion_cost(
+        completion_response={
+            **body,
+            "usage": {
+                **usage,
+                "iterations": [{"type": "message", **attempt}, {"type": "fallback_message", **attempt}],
+            },
+        },
+        model="claude-fable-5-1",
+        custom_llm_provider="anthropic",
+        call_type="anthropic_messages",
+    )
+
+    assert cost > 0
+
+
 # Billed categories per https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#how-refusals-are-billed
 # as read on 2026-11-26: a refusal before any output is billed only for bio, frontier_llm and reasoning_extraction.
 @pytest.mark.parametrize(

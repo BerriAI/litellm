@@ -122,8 +122,8 @@ struct Stop {
 
 impl Stop {
     /// Anthropic bills nothing for a refusal before any output outside the categories it names, whatever tokens the
-    /// usage counts. A refusal after partial output is billed, so any output token keeps the charge, an earlier
-    /// iteration's included
+    /// usage counts. A refusal after partial output is billed, so any output token keeps the charge. A call with
+    /// more than one attempt is never free, since each attempt is billed by its own refusal category
     fn is_unbilled_refusal(&self, output_tokens: u64) -> bool {
         let category = self
             .stop_details
@@ -200,7 +200,9 @@ impl CallPricing {
     fn billed(&self, usage: &MessagesUsage, stop: &Stop, context: UsageContext) -> Option<Billed> {
         let metered = metered(usage, context)?;
         let output_tokens = metered.usage.output.text + metered.usage.reasoning;
-        if self.provider == "anthropic" && stop.is_unbilled_refusal(output_tokens) {
+        let attempts = usage.iterations.as_deref().map_or(0, <[_]>::len);
+        if self.provider == "anthropic" && attempts <= 1 && stop.is_unbilled_refusal(output_tokens)
+        {
             return Some(Billed {
                 metered: Metered {
                     usage: TokenUsage::default(),
@@ -791,7 +793,12 @@ mod tests {
     }
 
     #[rstest]
-    fn a_refusal_after_an_iteration_with_output_is_charged(recording: Arc<Recording>) {
+    #[case::an_earlier_attempt_with_output(7)]
+    #[case::an_earlier_attempt_without_output(0)]
+    fn a_refusal_that_followed_another_attempt_is_charged(
+        recording: Arc<Recording>,
+        #[case] earlier_output: u64,
+    ) {
         let pricing = call_pricing(
             &recording,
             &refusal_case("anthropic"),
@@ -810,8 +817,8 @@ mod tests {
                 "input_tokens": 13,
                 "output_tokens": 0,
                 "iterations": [
-                    {"type": "message", "input_tokens": 13, "output_tokens": 7},
-                    {"type": "message", "input_tokens": 13, "output_tokens": 0},
+                    {"type": "message", "input_tokens": 13, "output_tokens": earlier_output},
+                    {"type": "fallback_message", "input_tokens": 13, "output_tokens": 0},
                 ],
             },
         }))

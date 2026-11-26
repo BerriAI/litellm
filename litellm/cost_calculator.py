@@ -2017,6 +2017,9 @@ class _DumpedChatChoice(TypedDict, total=False):
 _DUMPED_CHAT_CHOICES: Final[TypeAdapter[Sequence[_DumpedChatChoice]]] = TypeAdapter(Sequence[_DumpedChatChoice])
 
 
+_USAGE_ITERATIONS: Final[TypeAdapter[Sequence[object] | None]] = TypeAdapter(Sequence[object] | None)
+
+
 def _stop_fields_of(completion_response: object) -> Mapping[str, object]:
     """The Anthropic ``stop_reason`` and ``stop_details`` of a response: a Messages body carries them itself, a chat
     completion on its first choice's ``provider_specific_fields``."""
@@ -2046,6 +2049,12 @@ def _is_unbilled_anthropic_refusal(
         custom_llm_provider=custom_llm_provider or (hidden_provider if isinstance(hidden_provider, str) else None),
     )
     if provider != "anthropic":
+        return False
+    try:
+        attempts: Final = _USAGE_ITERATIONS.validate_python(attribute_or_none(usage, "iterations"))
+    except ValidationError:
+        return False
+    if attempts is not None and len(attempts) > 1:
         return False
     return is_unbilled_anthropic_refusal(_stop_fields_of(completion_response), usage.completion_tokens or 0)
 
