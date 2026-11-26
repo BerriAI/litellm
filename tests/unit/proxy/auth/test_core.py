@@ -7,23 +7,25 @@ import pytest
 from fastapi import Request
 from starlette.datastructures import URL
 
+import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_JWTAuth,
+    LiteLLM_TeamTableCachedObj,
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
 )
-import litellm
 from litellm.proxy.auth import core
 from litellm.proxy.auth.auth_utils import is_authentication_failure
-from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
-from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+from litellm.proxy.auth.host.facts import EndUserRow
 from litellm.proxy.auth.host.python import PythonAuthHost
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.caching.dual_cache import DualCache
-from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustAuthStep, RustDenial, RustPlan
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustDenial, RustPlan
 
 JWT: Final = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsifQ.eyJzdWIiOiJ1In0.c2ln"
 
@@ -236,76 +238,65 @@ async def test_a_wrong_key_without_a_database_is_an_outage_only_when_one_is_conf
     assert (denied.value.code, denied.value.type) == (code, error_type), denied.value.message
 
 
-_STEPS: Final = frozenset(
-    variant.__name__
-    for variant in vars(RustAuthStep).values()
-    if isinstance(variant, type) and issubclass(variant, RustAuthStep) and variant is not RustAuthStep.Done
+@pytest.mark.parametrize(
+    ("key_from_db", "expected_failed_authentication"),
+    [
+        pytest.param(None, True, id="db_key_lookup_before_authentication"),
+        pytest.param(
+            UserAPIKeyAuth(api_key="sk-team-key", team_id="team-1"),
+            False,
+            id="team_lookup_after_authentication",
+        ),
+    ],
 )
-_BEFORE_AUTHENTICATION: Final = frozenset(
-    {
-        "CachedKey",
-        "DbKey",
-        "EvictKey",
-        "ValidatedEndUserId",
-        "PrefetchIdentity",
-        "EndUser",
-        "FetchJson",
-        "FetchUserinfo",
-        "CachedDocument",
-        "CacheDocument",
-        "CustomValidate",
-        "KeyMappingHash",
-        "CachedKeyMapping",
-        "CacheKeyMapping",
-        "ForgetKeyMapping",
-        "KeyByHash",
-        "ReusableKeyHash",
-        "CreateKeyMapping",
-    }
-)
-_AFTER_AUTHENTICATION: Final = frozenset(
-    {
-        "UiKey",
-        "KeyOwner",
-        "CachedTeam",
-        "KeyTeam",
-        "ObjectPermission",
-        "Project",
-        "WithTeam",
-        "WithTempBudget",
-        "NormalizeModel",
-        "PrefetchAuthObjects",
-        "Team",
-        "TeamByAlias",
-        "GrantingTeam",
-        "BindTeamMember",
-        "LoadTeamMembership",
-        "User",
-        "ResolveUserIdentity",
-        "Org",
-        "OrgByAlias",
-        "JwtEndUser",
-        "SetUserRole",
-        "PatchTeamMembership",
-        "AddTeamMember",
-        "ManagedAgent",
-        "RegisteredAgent",
-        "RecordAgentAuthentication",
-        "KeySkipsBudgetChecks",
-        "TeamMemberBudget",
-        "KeyBudgets",
-        "ProxyBudgetAlert",
-        "FinishJwt",
-        "FinishAutoRegisteredJwt",
-        "TeamModelAccess",
-        "DelegatedAgentTeam",
-    }
-)
+@pytest.mark.asyncio
+async def test_a_host_failure_marks_failed_authentication_only_before_the_key_authenticates(
+    auth_host: Callable[..., PythonAuthHost],
+    key_from_db: UserAPIKeyAuth | None,
+    expected_failed_authentication: bool,
+) -> None:
+    token: Final = "sk-team-key"
+    settings: Final = RustAuthSettings(
+        {},
+        None,
+        core.HostFacts(master_key="sk-master", premium=False, has_db=True, db_configured=True),
+    )
 
+    class _FailingHost(PythonAuthHost):
+        async def db_key(self, hash: str, end_user: EndUserRow) -> UserAPIKeyAuth | None:
+            if key_from_db is None:
+                raise ConnectionError("db down")
+            return key_from_db
 
-def test_every_host_step_is_decided_as_before_or_after_authentication() -> None:
-    assert _BEFORE_AUTHENTICATION | _AFTER_AUTHENTICATION == _STEPS
-    assert frozenset(step.__name__ for step in core.PRE_AUTHENTICATION_STEPS) == _BEFORE_AUTHENTICATION
+        async def key_team(self, team_id: str) -> LiteLLM_TeamTableCachedObj | None:
+            raise ConnectionError("db down")
+
+    base: Final = auth_host(api_key=token)
+    host: Final = _FailingHost(
+        route=base.route,
+        parent_otel_span=base.parent_otel_span,
+        http=base.http,
+        prisma_client=base.prisma_client,
+        user_api_key_cache=base.user_api_key_cache,
+        jwks_cache=base.jwks_cache,
+        proxy_logging_obj=base.proxy_logging_obj,
+        llm_router=base.llm_router,
+        llm_model_list=base.llm_model_list,
+        model_max_budget_limiter=base.model_max_budget_limiter,
+        litellm_proxy_admin_name=base.litellm_proxy_admin_name,
+        litellm_jwtauth=base.litellm_jwtauth,
+        agent_lookup=base.agent_lookup,
+        http_handler=base.http_handler,
+        shared_fetches=base.shared_fetches,
+        api_key=base.api_key,
+    )
+
+    with pytest.raises(ConnectionError, match="db down") as raised:
+        await core.drive(
+            RustAuth.authenticate_key(core.request(token, "/chat/completions", "POST"), token, settings),
+            host,
+        )
+    assert is_authentication_failure(raised.value) is expected_failed_authentication
 
 
 class _Rows:
