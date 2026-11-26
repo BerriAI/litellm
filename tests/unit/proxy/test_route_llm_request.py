@@ -41,6 +41,7 @@ from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
     ADAPTIVE_ROUTER_RESPONSE_HEADER,
 )
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -3790,9 +3791,7 @@ def _latest_alias_request(words: int) -> dict[str, object]:
     return {"model": "latest", "messages": [{"role": "user", "content": "hello " * words}], "metadata": {}}
 
 
-def _rate_limit_check() -> "ModelRateLimitingCheck":
-    from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
-
+def _rate_limit_check() -> ModelRateLimitingCheck:
     return next(callback for callback in litellm.callbacks if isinstance(callback, ModelRateLimitingCheck))
 
 
