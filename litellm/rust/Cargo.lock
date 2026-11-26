@@ -5053,6 +5053,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-call-scope",
  "litellm-circuit-breaker",
+ "litellm-config",
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-testing",

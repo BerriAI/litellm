@@ -5,12 +5,13 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
+use litellm_config::LitellmRole;
 use litellm_gateway_auth_core::{
     KeyHash, StoredKey,
     authn::key::{KeyRecord, Keyed},
 };
 use litellm_python_compat::{Value, datetime::IsoDateTime, json};
-use litellm_redis_store::auth_cache::{Bag, KeyEntry, Lists, ObjectPermissionEntry};
+use litellm_redis_store::auth_cache::{Bag, KeyEntry, Lists, ModelRegion, ObjectPermissionEntry};
 use serde::Deserialize;
 
 use crate::callbacks::parallel_request_limiter::{KeyLimits, ModelLimits};
@@ -59,7 +60,15 @@ macro_rules! carried_when_held {
     };
 }
 
-carried_when_held!(String, i64, f64, IsoDateTime, ObjectPermissionEntry);
+carried_when_held!(
+    String,
+    i64,
+    f64,
+    IsoDateTime,
+    LitellmRole,
+    ModelRegion,
+    ObjectPermissionEntry
+);
 
 impl<T> Carried for Vec<T> {
     fn is_carried(&self) -> bool {
