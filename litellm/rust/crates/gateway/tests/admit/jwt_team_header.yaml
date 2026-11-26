@@ -1,0 +1,103 @@
+# A JWT choosing a team by header has the team read natively. A team that holds only what the
+# native app honors, its model list included, is found, and its caller still goes to Python, since
+# the native spend log charges no team yet. A team that holds a budget or a model entry the model
+# rule does not read is not native, and one the database does not hold is the core's to refuse.
+# With no header, the core picks the listed team that may call the model the request names, which
+# the gateway authenticates before it reads. So a JWT listing any team goes to Python, even when
+# none of them exists, where Python refuses it for naming a model no team of its reaches.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      admin_allowed_routes: [/v1/messages]
+      team_ids_jwt_field: groups
+
+teams:
+  team-1: {team_alias: alpha}
+  team-capped: {max_budget: 10}
+  team-models: {models: [claude]}
+  team-provider-models: {models: ["anthropic/*"]}
+
+requests:
+  - name: a proxy admin JWT choosing a team
+    jwt: {claims: {scope: litellm_proxy_admin}}
+    headers: {x-litellm-team-id: team-1}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a user JWT choosing one of its teams
+    jwt: {claims: {sub: user-123, groups: [team-1]}}
+    headers: {x-litellm-team-id: team-1}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a user JWT choosing its team by alias
+    jwt: {claims: {sub: user-123, groups: [team-1]}}
+    headers: {x-litellm-team-id: alpha}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a team with a budget
+    jwt: {claims: {scope: litellm_proxy_admin}}
+    headers: {x-litellm-team-id: team-capped}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: max_budget
+
+  - name: a team with a model list
+    jwt: {claims: {sub: user-123, groups: [team-models]}}
+    headers: {x-litellm-team-id: team-models}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a team whose model list holds a provider pattern
+    jwt: {claims: {sub: user-123, groups: [team-provider-models]}}
+    headers: {x-litellm-team-id: team-provider-models}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a team the database does not hold
+    jwt: {claims: {sub: user-123, groups: [team-gone]}}
+    headers: {x-litellm-team-id: team-gone}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: invalid_token
+
+  - name: a JWT listing a team that exists, with no header
+    jwt: {claims: {sub: user-123, groups: [team-models]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a JWT listing only a team that does not exist, with no header
+    jwt: {claims: {sub: user-123, groups: [team-gone]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a JWT listing no team, with no header
+    jwt: {claims: {sub: user-123}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

@@ -251,8 +251,14 @@ impl AuthStore {
         Ok(membership)
     }
 
-    /// `get_user_object` for a user read by its id: the cached user, else the database's, cached.
-    pub async fn user(&self, user_id: &str) -> Result<Option<UserEntry>, Error> {
+    /// `get_user_object` for a user read by its id: the cached user, else the database's, cached
+    /// only when `settled`. Python links a sign-in or backfills an email only on its own database
+    /// read, so a row it still owes a write must not become its cache hit.
+    pub async fn user(
+        &self,
+        user_id: &str,
+        settled: impl FnOnce(&UserEntry) -> bool,
+    ) -> Result<Option<UserEntry>, Error> {
         let object = AuthObject::User(user_id.to_owned());
         if let Some(user) = self.read(&object).await {
             return Ok(Some(user));
@@ -260,7 +266,9 @@ impl AuthStore {
         let Some(user) = self.users.user(user_id, Side::Read).await? else {
             return Ok(None);
         };
-        self.write(&object, user.clone(), None).await;
+        if settled(&user) {
+            self.write(&object, user.clone(), None).await;
+        }
         Ok(Some(user))
     }
 
@@ -610,7 +618,7 @@ mod tests {
             .await;
         let store = store(&held);
         let read = async || {
-            let user = store.user("user-1").await.unwrap();
+            let user = store.user("user-1", |_| true).await.unwrap();
             user.map(|user| user.user_id)
         };
 

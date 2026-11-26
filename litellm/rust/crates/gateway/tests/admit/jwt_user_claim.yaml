@@ -1,0 +1,60 @@
+# With a user claim configured, a proxy admin JWT has the user it names read natively. A user
+# Python has nothing to write for is found, and its caller still goes to Python, since the native
+# spend log charges no user yet, and over its team when it also chooses one. A user the database
+# does not hold is one Python looks up by its sign-in, and any other JWT's user is read with its
+# membership, so neither is native.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      admin_allowed_routes: [/v1/messages]
+      user_id_jwt_field: sub
+
+teams:
+  team-1: {}
+
+users:
+  user-1: {sso_user_id: user-1}
+
+requests:
+  - name: a proxy admin JWT naming a user
+    jwt: {claims: {scope: litellm_proxy_admin, sub: user-1}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: user
+
+  - name: a proxy admin JWT naming a user and choosing a team
+    jwt: {claims: {scope: litellm_proxy_admin, sub: user-1}}
+    headers: {x-litellm-team-id: team-1}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a proxy admin JWT naming a user the database does not hold
+    jwt: {claims: {scope: litellm_proxy_admin, sub: user-gone}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a proxy admin JWT naming no user
+    jwt: {claims: {scope: litellm_proxy_admin}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a user JWT naming a user
+    jwt: {claims: {sub: user-1}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

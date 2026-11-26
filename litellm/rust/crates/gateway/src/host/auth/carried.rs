@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use litellm_config::LitellmRole;
 use litellm_python_compat::{Value, datetime::IsoDateTime};
 use litellm_redis_store::auth_cache::{
-    Bag, BudgetEntry, Lists, ModelRegion, ModelTableEntry, ObjectPermissionEntry,
+    Bag, BudgetEntry, BudgetFullEntry, ExcludedIfNone, Lists, ModelRegion, ModelTableEntry,
+    ObjectPermissionEntry,
 };
 
 /// The name of the first of `fields` that holds something.
@@ -51,8 +52,15 @@ carried_when_held!(
     ModelRegion,
     ObjectPermissionEntry,
     ModelTableEntry,
+    BudgetFullEntry,
     BudgetEntry
 );
+
+impl<T: Carried> Carried for ExcludedIfNone<T> {
+    fn is_carried(&self) -> bool {
+        self.0.is_carried()
+    }
+}
 
 impl<T> Carried for Vec<T> {
     fn is_carried(&self) -> bool {

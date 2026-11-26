@@ -1,0 +1,27 @@
+# With `team_id_upsert` on, Python creates the team a JWT names when the database holds none. The
+# native app only reads, so it serves no team read for such a JWT, even for a team that exists.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      team_id_jwt_field: team_id
+      team_id_upsert: true
+
+teams:
+  team-1: {}
+
+requests:
+  - name: a JWT naming a team the database holds
+    jwt: {claims: {sub: user-123, team_id: team-1}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

@@ -29,6 +29,9 @@ struct Scenario {
     /// The virtual keys the database holds, each token with the columns set on its row.
     #[serde(default)]
     keys: BTreeMap<String, Columns>,
+    /// The users the database holds, each id with the columns set on its row.
+    #[serde(default)]
+    users: BTreeMap<String, Columns>,
     /// The other rows the database holds, each under its table's name, stored in this order.
     #[serde(default)]
     rows: Vec<BTreeMap<String, serde_json::Value>>,
@@ -36,9 +39,6 @@ struct Scenario {
     /// The teams the database holds, each id with the columns set on its row.
     #[serde(default)]
     teams: BTreeMap<String, Columns>,
-    /// The users the database holds, each id with the columns set on its row.
-    #[serde(default)]
-    users: BTreeMap<String, Columns>,
     /// The projects the database holds, each id with the columns set on its row.
     #[serde(default)]
     projects: BTreeMap<String, Columns>,
@@ -147,6 +147,7 @@ fn stored_config(stored: Stored, held: Held) -> StoredConfig {
     }
 }
 
+/// The columns a scenario sets on a row, each by its name.
 type Columns = serde_json::Map<String, serde_json::Value>;
 
 /// The database holding each team, user, project and key of the scenario, in that order so a key
@@ -372,6 +373,10 @@ impl Sent {
 #[case::jwt_provider_down("jwt_provider_down")]
 #[case::jwt_key_mapping("jwt_key_mapping")]
 #[case::jwt_key_mapping_without_database("jwt_key_mapping_without_database")]
+#[case::jwt_team_header("jwt_team_header")]
+#[case::jwt_team_alias("jwt_team_alias")]
+#[case::jwt_team_id_upsert("jwt_team_id_upsert")]
+#[case::jwt_user_claim("jwt_user_claim")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
