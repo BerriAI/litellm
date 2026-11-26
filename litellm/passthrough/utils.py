@@ -133,7 +133,8 @@ class CommonUtils:
         # Handle all patterns in one go - more efficient and cleaner
         patterns: Final = [
             # Custom model with 2 slashes (order matters - do this first)
-            (r"(custom-model)/([a-z0-9.-]+)/([a-z0-9]+)", r"\1%2F\2%2F\3"),
+            (r"(custom-model)/([a-z0-9.:-]+)/([a-z0-9]+)", r"\1%2F\2%2F\3"),
+            (r"(:custom-model-deployment)/", r"\1%2F"),
             # All other resource types with 1 slash
             (r"(:application-inference-profile)/", r"\1%2F"),
             (r"(:inference-profile)/", r"\1%2F"),

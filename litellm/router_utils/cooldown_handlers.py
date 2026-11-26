@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
@@ -144,6 +145,7 @@ def is_failure_outside_selected_deployment(exception: BaseException | None) -> b
         is_advisor_orchestration_failure(exception)
         or isinstance(exception, (MissingMessageRoleError, UnresolvablePreviousResponseError))
         or is_previous_response_rejected(exception)
+        or is_answer_without_an_image(exception)
         or bool(getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False))
     )
 

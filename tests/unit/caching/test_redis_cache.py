@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import sys
 import time
 import types
 import uuid
@@ -781,6 +782,19 @@ def test_call_stack_info_skips_breaker_guard_frames():
         return caller_one()
 
     assert caller_two() == "caller_one <- caller_two"
+
+
+@pytest.mark.parametrize("num_frames", [0, 1, 2, -1])
+def test_call_stack_info_does_not_retain_caller_payload(num_frames: int) -> None:
+    from litellm.caching.redis_cache import _get_call_stack_info
+
+    def cache_method(_payload: object) -> str:
+        return _get_call_stack_info(num_frames)
+
+    payload: Final = object()
+    references_before: Final = sys.getrefcount(payload)
+    cache_method(payload)
+    assert sys.getrefcount(payload) == references_before
 
 
 def test_call_stack_info_skips_guard_frames_when_deployed_without_sources(monkeypatch: pytest.MonkeyPatch):

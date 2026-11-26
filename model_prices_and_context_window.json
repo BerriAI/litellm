@@ -5142,8 +5142,8 @@
     "azure_ai/gpt-chat-latest": {
         "cache_read_input_token_cost": 5e-07,
         "successor_model": "azure_ai/gpt-6.1-sol",
-        "deprecation_date": "2027-05-18",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "deprecation_date": "2027-02-02",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -10405,7 +10405,7 @@
     "azure/gpt-chat-latest": {
         "cache_read_input_token_cost": 5e-07,
         "successor_model": "azure/gpt-6.2-sol",
-        "deprecation_date": "2027-05-18",
+        "deprecation_date": "2027-02-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure",
@@ -10443,7 +10443,7 @@
     "azure/chat-latest": {
         "cache_read_input_token_cost": 5e-07,
         "successor_model": "azure/gpt-6.2-sol",
-        "deprecation_date": "2027-05-18",
+        "deprecation_date": "2027-02-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure",
@@ -10856,7 +10856,7 @@
     "azure/us/gpt-chat-latest": {
         "cache_read_input_token_cost": 5.5e-07,
         "successor_model": "azure/us/gpt-6.2-sol",
-        "deprecation_date": "2027-05-18",
+        "deprecation_date": "2027-02-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "azure",
@@ -52561,6 +52561,8 @@
         "supports_tool_choice": true
     },
     "together_ai/openai/gpt-oss-120b": {
+        "deprecation_date": "2026-12-09",
+        "deprecation_source": "https://docs.together.ai/docs/deprecations",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
@@ -52568,6 +52570,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "source": "https://api.together.ai/v1/models",
+        "successor_model": "together_ai/zai-org/GLM-5.3-Flash",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -52754,6 +52757,8 @@
     },
     "together_ai/deepseek-ai/DeepSeek-V4-Pro-0813": {
         "cache_read_input_token_cost": 1.3e-07,
+        "deprecation_date": "2026-12-09",
+        "deprecation_source": "https://docs.together.ai/docs/deprecations",
         "input_cost_per_token": 1.32e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
@@ -52761,6 +52766,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.96e-06,
         "source": "https://api.together.ai/v1/models",
+        "successor_model": "together_ai/deepseek-ai/DeepSeek-V4.1-Flash-1017",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -52823,7 +52829,7 @@
     },
     "together_ai/thinkingmachines/Inkling": {
         "cache_read_input_token_cost": 1.7e-07,
-        "deprecation_date": "2026-11-06",
+        "deprecation_date": "2026-12-09",
         "deprecation_source": "https://docs.together.ai/docs/deprecations",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "together_ai",
@@ -52832,7 +52838,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.05e-06,
         "source": "https://api.together.ai/v1/models",
-        "successor_model": "together_ai/meta-models/Muse-Spark-Open-816B-A42B",
+        "successor_model": "together_ai/thinkingmachines/Inkling-2-Small",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -76731,6 +76737,8 @@
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/together/Tev1-4B-experimental": {
+        "deprecation_date": "2026-12-09",
+        "deprecation_source": "https://docs.together.ai/docs/deprecations",
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "together_ai",
         "max_input_tokens": 32768,
@@ -126871,7 +126879,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
-        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "source": "https://support.huaweicloud.com/intl/en-us/price-maas/price-maas-0002.html",
@@ -126887,7 +126894,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
-        "max_tokens": 128000,
         "mode": "chat",
         "off_peak_pricing": {
             "cache_read_input_token_cost": 1.82e-07,
@@ -126907,7 +126913,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
-        "max_tokens": 384000,
         "mode": "chat",
         "off_peak_pricing": {
             "cache_read_input_token_cost": 3e-09,
@@ -126931,7 +126936,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
-        "max_tokens": 384000,
         "mode": "chat",
         "off_peak_pricing": {
             "cache_read_input_token_cost": 1.5e-08,
@@ -127064,5 +127068,74 @@
             "/v1/images/generations"
         ],
         "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/models/inkling-2-small": {
+        "cache_read_input_token_cost": 3e-08,
+        "cache_read_input_token_cost_priority": 3.75e-08,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_priority": 3.75e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "output_cost_per_token_priority": 1.25e-06,
+        "source": "https://docs.fireworks.ai/serverless/pricing",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/routers/glm-5p3-flex": {
+        "cache_read_input_token_cost": 1.3e-07,
+        "input_cost_per_token": 7e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "fireworks_ai/accounts/fireworks/routers/glm-5p3-flash-flex": {
+        "cache_read_input_token_cost": 1.5e-08,
+        "input_cost_per_token": 7.5e-08,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/models/glm-5p3-spot": {
+        "cache_read_input_token_cost": 1.3e-07,
+        "input_cost_per_token": 7e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://docs.fireworks.ai/guides/spot-serverless.md",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
     }
 }

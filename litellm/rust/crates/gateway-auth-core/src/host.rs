@@ -9,6 +9,7 @@ use crate::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
         key::{CachedTeam, Keyed},
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
@@ -446,4 +447,10 @@ pub trait AuthHost: Send + Sync {
         key: &KeyRow<Self>,
         team: &TeamRow<Self>,
     ) -> impl Future<Output = Result<KeyRow<Self>, Error>> + Send;
+
+    // Request body: what the body check reads before it decides.
+
+    /// The values stored under a `litellm_credential_name`, `None` when no credential has that
+    /// name.
+    fn credential(&self, name: &str) -> impl Future<Output = Result<Option<Params>, Error>> + Send;
 }

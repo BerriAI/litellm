@@ -137,13 +137,13 @@ fn server_error() -> AttemptError {
 
 fn unsupported_endpoint() -> AttemptError {
     let mut failure = AttemptError::new(FailureKind::Declined, Some(400));
-    failure.classes = vec!["UnsupportedEndpointError".into(), "BadRequestError".into()];
+    failure.classes = ["UnsupportedEndpointError".into(), "BadRequestError".into()].into();
     failure
 }
 
 fn document_fetch() -> AttemptError {
     let mut failure = AttemptError::new(FailureKind::Declined, Some(400));
-    failure.classes = vec!["DocumentFetchError".into(), "BadRequestError".into()];
+    failure.classes = ["DocumentFetchError".into(), "BadRequestError".into()].into();
     failure.names_provider = true;
     failure
 }

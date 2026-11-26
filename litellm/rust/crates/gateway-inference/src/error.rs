@@ -1,6 +1,6 @@
 use axum::http::{HeaderName, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::{
-    Extension, Json,
+    Json,
     response::{AppendHeaders, IntoResponse, Response},
 };
 use litellm_gateway_auth_core::AuthzDenial;
@@ -41,6 +41,12 @@ pub enum Error {
     Callback(litellm_error::Source),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
+    /// The request body check refused the body, as Python's authentication refuses it.
+    #[error("Authentication Error, {0}")]
+    BodyRejected(litellm_gateway_auth_core::body::Rejection),
+    /// The host could not read a stored credential the body names, so the body is not checked.
+    #[error("could not read the stored credentials the request body names")]
+    Credentials(#[source] litellm_gateway_auth_core::Error),
     #[error("unexpected HTTP host operation")]
     Internal,
 }
@@ -118,13 +124,10 @@ impl IntoResponse for Error {
 pub struct Ended {
     pub error: Box<Error>,
     pub routing: Option<Routing>,
-}
-
-impl Ended {
-    /// What the routing headers layer reads off the response.
-    pub(crate) fn routing(&self) -> Option<Extension<Routing>> {
-        self.routing.clone().map(Extension)
-    }
+    /// The deployment whose attempt raised `error`, which names its timeout as Python's
+    /// `failure.timeout` does. It differs from `routing` when a retry that took over a failed
+    /// stream raised the error, since the call keeps the routing of the stream that failed.
+    pub raised_on: Option<String>,
 }
 
 impl<E: Into<Error>> From<E> for Ended {
@@ -132,6 +135,7 @@ impl<E: Into<Error>> From<E> for Ended {
         Self {
             error: Box::new(error.into()),
             routing: None,
+            raised_on: None,
         }
     }
 }
@@ -146,10 +150,9 @@ pub(crate) enum ErrorFormat {
 impl Ended {
     pub(crate) fn response(self, format: ErrorFormat, request_id: Option<&str>) -> Response {
         match format {
-            ErrorFormat::OpenAi => (self.routing(), *self.error).into_response(),
+            ErrorFormat::OpenAi => (*self.error).into_response(),
             ErrorFormat::Anthropic => (
                 self.error.status(),
-                self.routing(),
                 AppendHeaders(self.error.retry_after()),
                 Json(self.error.body(request_id)),
             )
@@ -183,11 +186,44 @@ impl Error {
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
-            Self::Internal | Self::Callback(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::BodyRejected(_) => StatusCode::UNAUTHORIZED,
+            Self::Internal | Self::Callback(_) | Self::Credentials(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
             Self::Routing(error) => routing_status(error),
             Self::Refused(refusal) => refusal.status,
+        }
+    }
+
+    /// Whether the proxy raises this error inside the route's handler, where its response carries
+    /// the proxy's error headers. A model the caller may not reach and a body that cannot be read
+    /// are refused before the handler runs.
+    pub(crate) fn in_handler(&self) -> bool {
+        !matches!(
+            self,
+            Self::ModelAccess(_) | Self::InvalidBody(_) | Self::BodyTooLarge
+        )
+    }
+
+    pub(crate) fn raised_by_provider(&self) -> bool {
+        matches!(self, Self::Route(_) | Self::Ocr(_))
+    }
+
+    /// The provider's response headers on the error, empty for an error no provider responded.
+    pub(crate) fn provider_headers(&self) -> Vec<(String, String)> {
+        match self {
+            Self::Route(error) => error.upstream_headers().to_vec(),
+            Self::Ocr(error) => error
+                .upstream_response()
+                .into_iter()
+                .flat_map(|(_, _, headers)| headers.iter())
+                .filter_map(|(name, value)| {
+                    Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+                })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -261,7 +297,7 @@ impl Error {
     fn message(&self) -> String {
         match self {
             Self::Refused(refusal) => refusal.message.clone(),
-            Self::ModelAccess(_) => self.to_string(),
+            Self::ModelAccess(_) | Self::BodyRejected(_) => self.to_string(),
             Self::Routing(error) if let Some(refused) = rate_limit_refusal(error) => refused,
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
@@ -271,6 +307,7 @@ impl Error {
             | Self::Routing(_)
             | Self::Callback(_)
             | Self::BodyTooLarge
+            | Self::Credentials(_)
             | Self::Internal => litellm_error::Report::new(self).to_string(),
         }
     }

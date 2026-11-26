@@ -6,6 +6,7 @@
 
 mod asked;
 mod caching;
+mod checked;
 mod error;
 mod group_usage;
 mod headers;
@@ -37,6 +38,7 @@ use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
 pub use asked::call_type;
+pub use checked::{BodyCheck, Checked};
 pub use error::{BodyError, Ended, Error};
 pub use group_usage::{GroupLimits, group_limits};
 pub use headers::ExposedHeader;
@@ -59,9 +61,15 @@ pub struct Gateway<H> {
     pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
     pub http: HttpClientConfig,
+    /// What the request body check reads besides the request.
+    body_check: BodyCheck,
 }
 
 impl<H: Host> Gateway<H> {
+    pub fn with_body_check(self, body_check: BodyCheck) -> Self {
+        Self { body_check, ..self }
+    }
+
     pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
         Self {
             cache: Some(cache),
@@ -118,6 +126,7 @@ impl<H: Host> Gateway<H> {
             secrets,
             resources,
             http,
+            body_check: BodyCheck::new(&litellm_config::GeneralSettings::default()),
         })
     }
 }
@@ -130,11 +139,11 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(
             request::MAX_BODY_BYTES,
         ))
-        .layer(headers::layer())
         .layer(axum::middleware::from_fn_with_state(
             gateway.clone(),
             group_usage::told::<H>,
         ))
+        .layer(axum::middleware::from_fn(headers::render_response_headers))
         .layer(axum::middleware::from_fn(record::scoped))
         .with_state(gateway)
 }
