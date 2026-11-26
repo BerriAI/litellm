@@ -38,7 +38,6 @@ from litellm.litellm_core_utils.bridged_audio_output import (
     bridged_audio_output_request,
     raise_audio_output_refusal,
 )
-from litellm.litellm_core_utils.call_kwargs import logging_obj_of
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -749,17 +748,6 @@ def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict[str, o
     return anthropic_metadata_obj.model_dump(exclude_none=True)
 
 
-_Result = TypeVar("_Result")
-
-
-def _taking_forwarded_kwargs(handler: Callable[..., _Result]) -> Callable[..., _Result]:
-    return handler
-
-
-def _optional_logging_obj(value: object) -> LiteLLMLoggingObj | None:
-    return None if value is None else logging_obj_of(value)
-
-
 def anthropic_messages_handler(
     max_tokens: int,
     messages: list[dict],
@@ -779,7 +767,7 @@ def anthropic_messages_handler(
     api_base: str | None = None,
     client: AsyncHTTPHandler | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs: object,
+    **kwargs,
 ) -> (
     AnthropicMessagesResponse
     | Iterator[bytes]
@@ -808,7 +796,7 @@ def anthropic_messages_handler(
     local_vars: Final = locals()
     is_async: Final = kwargs.pop("is_async", False) is True
     # Use provided client or create a new one
-    litellm_logging_obj: Final = _optional_logging_obj(kwargs.get("litellm_logging_obj"))
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
 
     # Store original model name before get_llm_provider strips the provider prefix
     # This is needed by agentic hooks (e.g., websearch_interception) to make follow-up requests
@@ -897,7 +885,7 @@ def anthropic_messages_handler(
     anthropic_messages_provider_config: Final = _native_messages_config(
         model, custom_llm_provider, kwargs.get("model_info"), api_base
     )
-    thread: Final[object] = kwargs.get("thread")
+    thread: Final[object] = kwargs.get("thread")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # **kwargs of the handler is untyped
     if thread is not None and (
         anthropic_messages_provider_config is None or not anthropic_messages_provider_config.supports_message_threads()
     ):
@@ -922,19 +910,19 @@ def anthropic_messages_handler(
             "so the request is served without a server-side thread",
             custom_llm_provider,
         )
-        kwargs.pop("thread")
+        kwargs.pop("thread")  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
     rejects_diagnostics: Final = (
         anthropic_messages_provider_config is not None and not anthropic_messages_provider_config.supports_diagnostics()
     )
     if (
         rejects_diagnostics
-        and kwargs.get("diagnostics") is not None
-        and "diagnostics" not in additional_drop_paths(kwargs)
+        and kwargs.get("diagnostics") is not None  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
+        and "diagnostics" not in additional_drop_paths(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs of the handler is untyped
     ):
         refusal: Final = diagnostics_refusal(custom_llm_provider, model, litellm_params.drop_params)
         if refusal is not None:
             raise refusal
-        kwargs.pop("diagnostics")
+        kwargs.pop("diagnostics")  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
     deployment_model_info: Final = as_str_mapping(kwargs.get("model_info"))
     drops_deferred_tools_setting: Final = drops_unsupported_params(litellm_params.drop_params)
     _refuse_deferred_tools(unknown_deferred_tools_refusal(deployment_model_info), drops_deferred_tools_setting)
@@ -975,9 +963,7 @@ def anthropic_messages_handler(
             stop_sequences=stop_sequences,
             native_deferred_tools=native_deferred_tools,
         ):
-            responses_result: Final = _taking_forwarded_kwargs(
-                LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler
-            )(
+            responses_result: Final = LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=bridged_messages,
                 model=bridge.model,
@@ -1049,7 +1035,7 @@ def anthropic_messages_handler(
     _refuse_deferred_tools(
         native_messages_deferred_tools_refusal(deployment_model_info, custom_llm_provider), drops_deferred_tools_setting
     )
-    request_kwargs: Final = kwargs
+    request_kwargs: Final = cast(dict[str, object], kwargs)  # cast-ok: **kwargs of the handler is untyped
     marked_tools: Final = tools_marked_for_cache_points(local_vars.get("tools"), request_kwargs)
     local_vars.update({**request_kwargs, **({"tools": marked_tools} if marked_tools is not None else {})})
     anthropic_messages_optional_request_params: Final = (
@@ -1069,7 +1055,7 @@ def anthropic_messages_handler(
     safeguard_kwargs: Final = (
         _SAFEGUARD_KWARGS.validate_python(kwargs) if is_async is True and "safeguards" in kwargs else None
     )
-    native_response: Final = _taking_forwarded_kwargs(base_llm_http_handler.anthropic_messages_handler)(
+    native_response: Final = base_llm_http_handler.anthropic_messages_handler(
         model=model,
         messages=cast(  # cast-ok: anthropic messages are dicts at runtime
             "list[dict[str, object]]",
@@ -1083,7 +1069,7 @@ def anthropic_messages_handler(
                 anthropic_messages_optional_request_params,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
-                kwargs=kwargs,
+                kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: router kwargs arrive untyped
                 drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
             )
         ),
