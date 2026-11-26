@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-category="${1:?usage: classify_changes.sh <backend|client|ui|cost-map-only|windows-release|redis-compat|python-310>}"
+category="${1:?usage: classify_changes.sh <backend|client|ui|cost-map-only|windows-release|redis-compat|python-310|helm|dashboard-build>}"
 
 has_client=false
 has_backend=false
@@ -10,6 +10,8 @@ has_cost_map=false
 has_windows_release=false
 has_redis_compat=false
 has_python_310=false
+has_helm=false
+has_dashboard_build=false
 outside_cost_map_set=false
 while IFS= read -r file || [ -n "$file" ]; do
   [ -n "$file" ] || continue
@@ -24,6 +26,10 @@ while IFS= read -r file || [ -n "$file" ]; do
   case "$file" in
     litellm/rust/* | litellm/rust_bridge/* | pyproject.toml | uv.lock | tests/windows_tests/* | .github/scripts/ci/* | .github/actions/*)
       has_windows_release=true ;;
+  esac
+  case "$file" in
+    litellm/deploy/helm/*) has_helm=true ;;
+    litellm/ui/litellm-dashboard/* | litellm/deploy/docker/Dockerfile | litellm/deploy/docker/Dockerfile.dockerignore) has_dashboard_build=true ;;
   esac
   case "$file" in
     litellm/ui/* | tests/e2e/ui/*) has_client=true ;;
@@ -60,6 +66,12 @@ case "$category" in
     ;;
   ui)
     { [ "$has_client" = true ] || [ "$has_ci" = true ]; } && echo run || echo skip
+    ;;
+  helm)
+    { [ "$has_helm" = true ] || [ "$has_ci" = true ]; } && echo run || echo skip
+    ;;
+  dashboard-build)
+    { [ "$has_dashboard_build" = true ] || [ "$has_ci" = true ]; } && echo run || echo skip
     ;;
   *)
     echo run

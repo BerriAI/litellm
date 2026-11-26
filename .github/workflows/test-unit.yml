@@ -61,32 +61,79 @@ jobs:
     name: plan
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       skipped: ${{ steps.plan.outputs.skipped }}
-      lint-runtime: ${{ steps.plan.outputs.lint-runtime }}
+      release-base: ${{ steps.plan.outputs.release-base }}
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
       - name: Assert every test directory and file is claimed by a shard
         run: python3 .github/scripts/assert_ci_coverage.py --shards
-      - name: Skip lint-runtime on pull requests into release branches
+      - name: Detect backend changes
+        id: backend
+        timeout-minutes: 2
+        uses: ./.github/actions/detect-changes
+      - name: Detect dashboard source changes
+        id: ui
+        timeout-minutes: 2
+        uses: ./.github/actions/detect-changes
+        with:
+          category: ui
+      - name: Detect dashboard image changes
+        id: dashboard-build
+        timeout-minutes: 2
+        uses: ./.github/actions/detect-changes
+        with:
+          category: dashboard-build
+      - name: Detect Redis client changes
+        id: redis-compat
+        timeout-minutes: 2
+        uses: ./.github/actions/detect-changes
+        with:
+          category: redis-compat
+      - name: Detect Python 3.10 Prisma changes
+        id: python-310
+        timeout-minutes: 2
+        uses: ./.github/actions/detect-changes
+        with:
+          category: python-310
+      - name: Detect Helm chart changes
+        id: helm
+        timeout-minutes: 2
+        uses: ./.github/actions/detect-changes
+        with:
+          category: helm
+      - name: Skip the jobs this change cannot affect
         id: plan
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BACKEND: ${{ steps.backend.outputs.decision }}
+          UI: ${{ steps.ui.outputs.decision }}
+          DASHBOARD_BUILD: ${{ steps.dashboard-build.outputs.decision }}
+          REDIS_COMPAT: ${{ steps.redis-compat.outputs.decision }}
+          PYTHON_310: ${{ steps.python-310.outputs.decision }}
+          HELM: ${{ steps.helm.outputs.decision }}
         run: |
-          lint_runtime=true
-          skipped='[]'
+          release_base=false
           case "${BASE_REF}" in
-            rc/* | stable/* | lts/*) lint_runtime=false; skipped='["lint-runtime"]' ;;
+            rc/* | stable/* | lts/*) release_base=true ;;
           esac
-          printf 'skipped=%s\nlint-runtime=%s\n' "${skipped}" "${lint_runtime}" | tee -a "$GITHUB_OUTPUT"
+          skipped=()
+          [ "${BACKEND}" != skip ] || skipped+=(unit lint-runtime openai-sdk-compat)
+          [ "${UI}" != skip ] || skipped+=(ui-unit)
+          [ "${DASHBOARD_BUILD}" != skip ] || skipped+=(dashboard-build)
+          [ "${REDIS_COMPAT}" != skip ] || skipped+=(redis-compat)
+          [ "${PYTHON_310}" != skip ] || skipped+=(unit-python-310)
+          [ "${HELM}" != skip ] || skipped+=(helm)
+          printf 'skipped=%s\nrelease-base=%s\n' "$(jq -cn '$ARGS.positional' --args "${skipped[@]}")" "${release_base}" | tee -a "$GITHUB_OUTPUT"
   unit:
     name: ${{ matrix.shard }}
     needs: [rust-bridge, plan]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && !contains(fromJSON(needs.plan.outputs.skipped || '[]'), 'unit') }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.job-timeout-minutes }}
     permissions:
@@ -1074,22 +1121,13 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Detect relevant changes
-        id: changes
-        timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
-        with:
-          category: ${{ matrix.changes-category || 'backend' }}
-
       - name: Set up Python
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.UV_PYTHON }}
 
       - name: Set up uv
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         uses: ./.github/actions/setup-uv-with-retries
         with:
@@ -1097,19 +1135,16 @@ jobs:
           rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Cache uv dependencies
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         uses: ./.github/actions/cache-uv-downloads
 
       - name: Set up the Rust build
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         uses: ./.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
       - name: Install dependencies
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         env:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
@@ -1130,7 +1165,7 @@ jobs:
           fi
 
       - name: Check litellm/schema.prisma against the merge base
-        if: steps.changes.outputs.decision != 'skip' && matrix.shard == 'db-and-spend' && github.event_name == 'pull_request'
+        if: matrix.shard == 'db-and-spend' && github.event_name == 'pull_request'
         timeout-minutes: 3
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1145,19 +1180,17 @@ jobs:
           uv run --no-sync python litellm/scripts/check_schema_compatibility.py --base-commit "$merge_base"
 
       - name: Cache Prisma binaries
-        if: steps.changes.outputs.decision != 'skip' && !matrix.prisma-version
+        if: ${{ !matrix.prisma-version }}
         timeout-minutes: 3
         uses: ./.github/actions/cache-prisma-binaries
 
       - name: Generate Prisma client
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run tests
         id: tests
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: ${{ matrix.timeout-minutes }}
         env:
           TEST_PATH: ${{ matrix.test-path }}
@@ -1215,7 +1248,7 @@ jobs:
           exit "$status"
 
       - name: Save test durations
-        if: always() && steps.changes.outputs.decision != 'skip'
+        if: always()
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: junit-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1224,8 +1257,8 @@ jobs:
           retention-days: 14
   unit-python-310:
     name: ${{ matrix.shard }}
-    needs: [rust-bridge]
-    if: ${{ !cancelled() }}
+    needs: [rust-bridge, plan]
+    if: ${{ !cancelled() && !contains(fromJSON(needs.plan.outputs.skipped || '[]'), 'unit-python-310') }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.job-timeout-minutes }}
     permissions:
@@ -1239,7 +1272,6 @@ jobs:
       matrix:
         include:
           - shard: python-310
-            changes-category: python-310
             test-path: >-
               tests/unit/proxy/db/test_prisma_engine.py
               tests/unit/proxy/db/test_prisma_planned_engine_restart.py
@@ -1255,7 +1287,7 @@ jobs:
   lint-runtime:
     name: lint-runtime
     needs: [rust-bridge, plan]
-    if: ${{ !cancelled() && needs.plan.outputs.lint-runtime == 'true' }}
+    if: ${{ !cancelled() && !contains(fromJSON(needs.plan.outputs.skipped || '[]'), 'lint-runtime') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -1270,32 +1302,23 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
 
-      - name: Detect relevant changes
-        id: changes
-        timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
-
       - name: Set up Python
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.UV_PYTHON }}
 
       - name: Set up uv
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Cache uv dependencies
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         uses: ./.github/actions/cache-uv-downloads
 
       - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
-        if: steps.changes.outputs.decision != 'skip'
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: BerriAI/litellm-docs
@@ -1303,14 +1326,12 @@ jobs:
           persist-credentials: false
 
       - name: Download the Rust bridge
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         uses: ./.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
       - name: Install dependencies
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group proxy-dev --group e2e-dev --extra proxy --no-install-project --no-install-package litellm-proxy
@@ -1318,40 +1339,49 @@ jobs:
           cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
 
       - name: Cache Prisma binaries
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         uses: ./.github/actions/cache-prisma-binaries
 
       - name: Generate Prisma client
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Check import safety
-        if: steps.changes.outputs.decision != 'skip'
+        if: needs.plan.outputs.release-base != 'true'
         run: |
           uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
       - name: Check OpenAPI docs (POST routes without a request schema, description or 200 schema, delta vs the base branch)
-        if: steps.changes.outputs.decision != 'skip'
+        if: needs.plan.outputs.release-base != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: uv run --no-sync python litellm/scripts/openapi_docs_gate.py --base "$(git rev-parse HEAD^1)"
 
+      - name: Put the checked-out source on the venv's import path
+        run: printf '%s\n' "$GITHUB_WORKSPACE" > "$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/litellm-workspace.pth"
+
       - name: Run the code-quality checks that import litellm
-        if: steps.changes.outputs.decision != 'skip'
+        if: needs.plan.outputs.release-base != 'true'
         run: |
-          printf '%s\n' "$GITHUB_WORKSPACE" > "$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/litellm-workspace.pth"
           uv run --no-sync python .github/scripts/ci/run_parallel_checks.py --jobs 4 <<'EOF'
           python ./tests/code_coverage_tests/enforce_llms_folder_style.py
           python ./tests/code_coverage_tests/test_proxy_types_import.py
           pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_generate_provider_endpoints_support.py
           LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)" PYTHONPATH=tests/e2e pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_metadata.py tests/code_coverage_tests/test_e2e_junit_report.py
+          EOF
+
+      - name: Check the documentation against the code
+        run: |
+          uv run --no-sync python .github/scripts/ci/run_parallel_checks.py --jobs 4 <<'EOF'
+          python ./tests/documentation_tests/test_env_keys.py
           python ./tests/documentation_tests/test_router_settings.py
           python ./tests/documentation_tests/test_api_docs.py
+          python ./tests/documentation_tests/test_circular_imports.py
           EOF
   ui-unit:
     name: ui-unit (${{ matrix.part }})
+    needs: plan
+    if: ${{ !cancelled() && !contains(fromJSON(needs.plan.outputs.skipped || '[]'), 'ui-unit') }}
     permissions:
       contents: read
       pull-requests: read
@@ -1388,14 +1418,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Detect relevant changes
-        id: changes
-        uses: ./.github/actions/detect-changes
-        with:
-          category: ui
-
       - name: Setup Node.js
-        if: steps.changes.outputs.decision != 'skip'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: litellm/ui/litellm-dashboard/.nvmrc
@@ -1403,21 +1426,20 @@ jobs:
           cache-dependency-path: litellm/ui/litellm-dashboard/package-lock.json
 
       - name: Install dependencies
-        if: steps.changes.outputs.decision != 'skip'
         run: npm ci
 
       - name: Check UI production source types
-        if: steps.changes.outputs.decision != 'skip' && matrix.part == 'typecheck'
+        if: matrix.part == 'typecheck'
         run: npm run typecheck
 
       - name: Run UI type tests (Vitest)
-        if: steps.changes.outputs.decision != 'skip' && matrix.part == 'type-tests'
+        if: matrix.part == 'type-tests'
         env:
           CI: "true"
         run: npm run test:types
 
       - name: Run UI unit tests (Vitest)
-        if: steps.changes.outputs.decision != 'skip' && matrix.vitest-shard != ''
+        if: matrix.vitest-shard != ''
         env:
           CI: "true"
           GH_TOKEN: ${{ github.token }}
@@ -1457,86 +1479,26 @@ jobs:
           echo "Pull request: running tests related to ${#changed_files[@]} changed UI files"
           npm run test -- related "${changed_files[@]}" --run --passWithNoTests \
             --pool forks --maxWorkers=4 "${shard_args[@]}"
-  docs:
-    name: docs
-    needs: rust-bridge
-    if: ${{ !cancelled() }}
+  dashboard-build:
+    name: dashboard-build
+    needs: plan
+    if: ${{ !cancelled() && !contains(fromJSON(needs.plan.outputs.skipped || '[]'), 'dashboard-build') }}
     permissions:
       contents: read
-      pull-requests: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          persist-credentials: false
-
-      - name: Detect relevant changes
-        id: changes
-        uses: ./.github/actions/detect-changes
-
-      - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
-        if: steps.changes.outputs.decision != 'skip'
+      - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: BerriAI/litellm-docs
-          path: docs/my-website
           persist-credentials: false
 
-      - name: Set up Python
-        if: steps.changes.outputs.decision != 'skip'
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12"
-
-      - name: Set up uv
-        if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/setup-uv-with-retries
-        with:
-          version: "0.10.9"
-          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
-
-      - name: Cache uv dependencies
-        if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-uv-downloads
-
-      - name: Set up the Rust build
-        if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/rust-bridge
-        with:
-          artifact: ${{ needs.rust-bridge.outputs.artifact }}
-
-      - name: Install dependencies
-        if: steps.changes.outputs.decision != 'skip'
-        env:
-          RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
-        run: |
-          if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard
-          else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --no-install-project --no-install-package litellm-proxy
-            uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
-            cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
-          fi
-
-      - name: Cache Prisma binaries
-        if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-prisma-binaries
-
-      - name: Generate Prisma client
-        if: steps.changes.outputs.decision != 'skip'
-        run: |
-          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
-
-      - name: Run documentation validation tests
-        if: steps.changes.outputs.decision != 'skip'
-        run: |
-          uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
-          uv run --no-sync python ./tests/documentation_tests/test_router_settings.py
-          uv run --no-sync python ./tests/documentation_tests/test_api_docs.py
-          uv run --no-sync python ./tests/documentation_tests/test_circular_imports.py
+      - name: Build the dashboard stage
+        run: docker build --target ui-builder -f litellm/deploy/docker/Dockerfile .
   helm:
     name: helm
+    needs: plan
+    if: ${{ !cancelled() && !contains(fromJSON(needs.plan.outputs.skipped || '[]'), 'helm') }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -1577,91 +1539,83 @@ jobs:
           fi
           echo "$chart: all $declared declared test suites ran"
   openai-sdk-compat:
-    name: OpenAI ${{ matrix.openai-version }} compatibility
-    needs: rust-bridge
-    if: ${{ !cancelled() }}
+    name: OpenAI SDK compatibility
+    needs: [rust-bridge, plan]
+    if: ${{ !cancelled() && !contains(fromJSON(needs.plan.outputs.skipped || '[]'), 'openai-sdk-compat') }}
     permissions:
       contents: read
       pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        openai-version: ["2.20.0", "3.0.0", "3.25.0"]
     env:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
       PYTHONPATH: ${{ github.workspace }}
       UV_PYTHON: "3.10"
-      OPENAI_VERSION: ${{ matrix.openai-version }}
+      OPENAI_VERSIONS: "2.20.0 3.0.0 3.25.0"
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
 
-      - name: Detect relevant changes
-        id: changes
-        timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
-
       - name: Set up Python
-        if: steps.changes.outputs.decision != 'skip'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.UV_PYTHON }}
 
       - name: Set up uv
-        if: steps.changes.outputs.decision != 'skip'
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
           rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Set up the Rust bridge
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         uses: ./.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
       - name: Install dependencies
-        if: steps.changes.outputs.decision != 'skip'
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group dev --group proxy-dev --extra proxy --no-install-workspace
           cp rust-bridge-dist/litellm/rust_bridge/_native.* litellm/rust_bridge/
-          uv pip install "openai==${OPENAI_VERSION:?}" --exclude-newer-package openai=2026-10-07T00:00:00Z
-          uv run --no-sync python -c 'import os, openai; assert openai.__version__ == os.environ["OPENAI_VERSION"], openai.__version__'
 
-      - name: Run OpenAI SDK compatibility tests
-        if: steps.changes.outputs.decision != 'skip'
+      - name: Run the compatibility checks against each OpenAI SDK version
         run: |
-          uv run --no-sync pytest \
-            tests/unit/llms/openai/test_openai.py \
-            tests/unit/llms/openai/test_openai_common_utils.py \
-            tests/unit/llms/openai/test_openai_file_content_streaming.py \
-            tests/unit/test_openai_embedding_encoding_format_default.py \
-            tests/unit/llms/inception/test_inception_completion_transformation.py::test_inception_fim_targets_fim_endpoint \
-            tests/unit/llms/inception/test_inception_completion_transformation.py::test_inception_fim_async \
-            tests/unit/llms/azure/test_azure_exception_mapping.py \
-            tests/unit/test_completion_timeout_resolution.py \
-            tests/unit/types/test_router.py \
-            tests/unit/test_exception_header_preservation.py \
-            tests/unit/integrations/otel/test_otel_v2_sources_of_truth.py::test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far \
-            tests/unit/completion_extras/litellm_responses_transformation/test_completion_extras_litellm_responses_transformation_transformation.py::test_non_stream_response_keeps_provider_metadata_and_hides_responses_fields \
-            tests/unit/completion_extras/litellm_responses_transformation/test_completion_extras_litellm_responses_transformation_transformation.py::test_streaming_final_chunk_keeps_provider_metadata_and_hides_responses_fields \
-            --tb=short -q
-
-      - name: Run workload identity tests with SDK 3
-        if: steps.changes.outputs.decision != 'skip' && startsWith(matrix.openai-version, '3.')
-        run: uv run --no-sync pytest tests/unit/llms/openai/test_openai_workload_identity.py --tb=short -q
-
-      - name: Check consumer types with the installed SDK
-        if: steps.changes.outputs.decision != 'skip'
-        run: uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json
+          check_sdk() {
+            uv pip install "openai==$1" --exclude-newer-package openai=2026-10-07T00:00:00Z &&
+            OPENAI_VERSION="$1" uv run --no-sync python -c 'import os, openai; assert openai.__version__ == os.environ["OPENAI_VERSION"], openai.__version__' &&
+            uv run --no-sync pytest \
+              tests/unit/llms/openai/test_openai.py \
+              tests/unit/llms/openai/test_openai_common_utils.py \
+              tests/unit/llms/openai/test_openai_file_content_streaming.py \
+              tests/unit/test_openai_embedding_encoding_format_default.py \
+              tests/unit/llms/inception/test_inception_completion_transformation.py::test_inception_fim_targets_fim_endpoint \
+              tests/unit/llms/inception/test_inception_completion_transformation.py::test_inception_fim_async \
+              tests/unit/llms/azure/test_azure_exception_mapping.py \
+              tests/unit/test_completion_timeout_resolution.py \
+              tests/unit/types/test_router.py \
+              tests/unit/test_exception_header_preservation.py \
+              tests/unit/integrations/otel/test_otel_v2_sources_of_truth.py::test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far \
+              tests/unit/completion_extras/litellm_responses_transformation/test_completion_extras_litellm_responses_transformation_transformation.py::test_non_stream_response_keeps_provider_metadata_and_hides_responses_fields \
+              tests/unit/completion_extras/litellm_responses_transformation/test_completion_extras_litellm_responses_transformation_transformation.py::test_streaming_final_chunk_keeps_provider_metadata_and_hides_responses_fields \
+              --tb=short -q &&
+            { [[ "$1" != 3.* ]] || uv run --no-sync pytest tests/unit/llms/openai/test_openai_workload_identity.py --tb=short -q; } &&
+            uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json
+          }
+          failed=()
+          for version in ${OPENAI_VERSIONS}; do
+            echo "::group::OpenAI SDK ${version}"
+            check_sdk "${version}" || failed+=("${version}")
+            echo "::endgroup::"
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error title=OpenAI SDK compatibility::failed for openai ${failed[*]}"
+            exit 1
+          fi
   redis-compat:
     name: redis-py ${{ matrix.redis-py }} compatibility
-    needs: rust-bridge
-    if: ${{ !cancelled() }}
+    needs: [rust-bridge, plan]
+    if: ${{ !cancelled() && !contains(fromJSON(needs.plan.outputs.skipped || '[]'), 'redis-compat') }}
     permissions:
       contents: read
       pull-requests: read
@@ -1681,22 +1635,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Detect relevant changes
-        id: changes
-        timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
-        with:
-          category: redis-compat
-
       - name: Set up Python
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.UV_PYTHON }}
 
       - name: Set up uv
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         uses: ./.github/actions/setup-uv-with-retries
         with:
@@ -1704,19 +1649,16 @@ jobs:
           rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Cache uv dependencies
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         uses: ./.github/actions/cache-uv-downloads
 
       - name: Set up the Rust build
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         uses: ./.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
       - name: Install dependencies with redis-py ${{ matrix.redis-py }}
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 8
         env:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
@@ -1732,7 +1674,6 @@ jobs:
           uv run --no-sync python -c 'import os, redis; assert redis.__version__ == os.environ["REDIS_PY_VERSION"], redis.__version__'
 
       - name: Run Redis compatibility tests
-        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 15
         run: |
           uv run --no-sync pytest \
@@ -1744,7 +1685,7 @@ jobs:
   unit-passed:
     name: unit passed
     permissions: {}
-    needs: [rust-bridge, plan, unit, unit-python-310, lint-runtime, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
+    needs: [rust-bridge, plan, unit, unit-python-310, lint-runtime, ui-unit, dashboard-build, helm, openai-sdk-compat, redis-compat]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2

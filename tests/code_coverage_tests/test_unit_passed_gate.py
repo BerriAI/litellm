@@ -80,16 +80,18 @@ def test_the_gate_waits_for_every_other_job_and_reports_even_when_they_fail(tier
 
 @pytest.mark.parametrize(
     ("skipped_by_plan", "passes"),
-    ((["unit", "docs"], True), (["docs"], False), ([], False)),
+    ((["unit", "helm"], True), (["helm"], False), ([], False)),
     ids=("planned skips pass", "an unplanned skip fails", "no plan fails"),
 )
-def test_the_unit_gate_accepts_a_skipped_job_only_when_the_plan_skipped_it(skipped_by_plan: list[str], passes: bool) -> None:
+def test_the_unit_gate_accepts_a_skipped_job_only_when_the_plan_skipped_it(
+    skipped_by_plan: list[str], passes: bool
+) -> None:
     tier: Final = _TIERS[1]
     needs: Final = {
         **{job: {"result": "success", "outputs": {}} for job in _needed_jobs(tier)},
         "plan": {"result": "success", "outputs": {"skipped": json.dumps(skipped_by_plan)}},
         "unit": {"result": "skipped", "outputs": {}},
-        "docs": {"result": "skipped", "outputs": {}},
+        "helm": {"result": "skipped", "outputs": {}},
     }
 
     result: Final = subprocess.run(
@@ -104,34 +106,114 @@ def test_the_unit_gate_accepts_a_skipped_job_only_when_the_plan_skipped_it(skipp
     assert (result.returncode == 0) is passes, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize(
-    ("base_ref", "skipped"),
-    (
-        ("main", []),
-        ("litellm_feature", []),
-        ("", []),
-        ("rc/1.90.0", ["lint-runtime"]),
-        ("stable/1.86.x", ["lint-runtime"]),
-        ("lts/1.108.x", ["lint-runtime"]),
-    ),
-)
-def test_the_unit_plan_skips_lint_runtime_only_on_release_branches(
-    tmp_path: Path, base_ref: str, skipped: list[str]
-) -> None:
-    plan_steps: Final = _jobs(_TIERS[1])["plan"]["steps"]
+def _run_plan_step(tmp_path: Path, step_id: str, plan_steps: object, env: dict[str, str]) -> dict[str, str]:
     assert isinstance(plan_steps, list)
-    step: Final = next(step for step in plan_steps if step.get("id") == "plan")
+    step: Final = next(step for step in plan_steps if step.get("id") == step_id)
     output: Final = tmp_path / "github_output"
-
     subprocess.run(
         ("bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]),
-        env={**os.environ, "BASE_REF": base_ref, "GITHUB_OUTPUT": str(output)},
+        env={**os.environ, **env, "GITHUB_OUTPUT": str(output)},
         capture_output=True,
         text=True,
         timeout=30,
         check=True,
     )
+    return dict(line.split("=", 1) for line in output.read_text().splitlines())
 
-    outputs: Final = dict(line.split("=", 1) for line in output.read_text().splitlines())
+
+_EVERY_CHANGE_RUNS: Final = {
+    "BACKEND": "run",
+    "UI": "run",
+    "DASHBOARD_BUILD": "run",
+    "REDIS_COMPAT": "run",
+    "PYTHON_310": "run",
+    "HELM": "run",
+}
+
+
+@pytest.mark.parametrize(
+    ("decisions", "skipped"),
+    (
+        ({}, []),
+        ({"BACKEND": "", "UI": "", "HELM": ""}, []),
+        (
+            {"UI": "skip", "DASHBOARD_BUILD": "skip", "REDIS_COMPAT": "skip", "PYTHON_310": "skip", "HELM": "skip"},
+            ["ui-unit", "dashboard-build", "redis-compat", "unit-python-310", "helm"],
+        ),
+        (
+            {key: "skip" for key in _EVERY_CHANGE_RUNS},
+            [
+                "unit",
+                "lint-runtime",
+                "openai-sdk-compat",
+                "ui-unit",
+                "dashboard-build",
+                "redis-compat",
+                "unit-python-310",
+                "helm",
+            ],
+        ),
+        ({"HELM": "skip"}, ["helm"]),
+    ),
+    ids=("everything changed", "undecided runs", "backend-only change", "docs-only change", "one category skipped"),
+)
+def test_the_unit_plan_skips_exactly_the_jobs_whose_files_did_not_change(
+    tmp_path: Path, decisions: dict[str, str], skipped: list[str]
+) -> None:
+    outputs: Final = _run_plan_step(
+        tmp_path, "plan", _jobs(_TIERS[1])["plan"]["steps"], {"BASE_REF": "main", **_EVERY_CHANGE_RUNS, **decisions}
+    )
+
     assert json.loads(outputs["skipped"]) == skipped
-    assert outputs["lint-runtime"] == ("false" if skipped else "true")
+    assert set(skipped) <= set(_needed_jobs(_TIERS[1]))
+
+
+@pytest.mark.parametrize(
+    ("base_ref", "release_base"),
+    (
+        ("main", "false"),
+        ("litellm_feature", "false"),
+        ("", "false"),
+        ("rc/1.90.0", "true"),
+        ("stable/1.86.x", "true"),
+        ("lts/1.108.x", "true"),
+    ),
+)
+def test_the_unit_plan_marks_release_branch_bases_without_skipping_lint_runtime(
+    tmp_path: Path, base_ref: str, release_base: str
+) -> None:
+    outputs: Final = _run_plan_step(
+        tmp_path, "plan", _jobs(_TIERS[1])["plan"]["steps"], {"BASE_REF": base_ref, **_EVERY_CHANGE_RUNS}
+    )
+
+    assert outputs["release-base"] == release_base
+    assert json.loads(outputs["skipped"]) == []
+
+
+@pytest.mark.parametrize(
+    ("ui", "skipped"),
+    (
+        ("run", ["e2e-harness", "ui-api-types"]),
+        ("", ["e2e-harness", "ui-api-types"]),
+        ("skip", ["e2e-harness", "ui-api-types", "ui"]),
+    ),
+    ids=("dashboard changed", "undecided runs", "dashboard untouched"),
+)
+def test_the_lint_plan_skips_the_ui_lint_only_when_no_dashboard_file_changed(
+    tmp_path: Path, ui: str, skipped: list[str]
+) -> None:
+    fake_bin: Final = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh: Final = fake_bin / "gh"
+    fake_gh.write_text("#!/usr/bin/env bash\nexit 0\n")
+    fake_gh.chmod(0o755)
+
+    outputs: Final = _run_plan_step(
+        tmp_path,
+        "plan",
+        _jobs(_TIERS[0])["plan"]["steps"],
+        {"PR_NUMBER": "1", "UI": ui, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert outputs["mode"] == "core"
+    assert json.loads(outputs["skipped"]) == skipped
