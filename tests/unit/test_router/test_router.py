@@ -19,6 +19,7 @@ from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from urllib.parse import parse_qs
 
 import httpx
 import openai
@@ -22601,3 +22602,92 @@ async def test_a_bedrock_region_its_drop_list_names_is_the_region_called(
 
     assert bedrock_route.calls.last.request.url.host == "bedrock-runtime.eu-west-1.amazonaws.com"
     assert b"bucket_name" not in bedrock_route.calls.last.request.content
+
+
+_STS_CALLER_IDENTITY_REPLY: Final = b"""<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <GetCallerIdentityResult>
+    <Arn>arn:aws:iam::111111111111:user/ambient</Arn><UserId>AIDAAMBIENT</UserId><Account>111111111111</Account>
+  </GetCallerIdentityResult>
+</GetCallerIdentityResponse>"""
+
+_STS_ASSUME_ROLE_REPLY: Final = b"""<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleResult>
+    <Credentials>
+      <AccessKeyId>ASIAREGIONROLE</AccessKeyId><SecretAccessKey>role-secret</SecretAccessKey>
+      <SessionToken>role-session-token</SessionToken><Expiration>2099-01-01T00:00:00Z</Expiration>
+    </Credentials>
+  </AssumeRoleResult>
+</AssumeRoleResponse>"""
+
+
+@pytest.mark.asyncio
+async def test_a_bedrock_role_external_id_and_sts_endpoint_its_drop_list_names_are_the_ones_assumed(
+    respx_mock: respx.MockRouter, _router_httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAAMBIENT")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret")
+    bedrock_route: Final = respx_mock.post(host__regex=r"bedrock-runtime").respond(json=_BEDROCK_CONVERSE_REPLY)
+    role_arn: Final = "arn:aws:iam::222222222222:role/region-external-id-role"
+    with recording_service() as ambient_sts, recording_service() as configured_sts:
+        ambient_sts.default_response = ResponseSpec(_STS_CALLER_IDENTITY_REPLY, headers={"Content-Type": "text/xml"})
+        ambient_sts.expected_requests = None
+        configured_sts.default_response = ResponseSpec(_STS_ASSUME_ROLE_REPLY, headers={"Content-Type": "text/xml"})
+        monkeypatch.setenv("AWS_ENDPOINT_URL_STS", ambient_sts.base_url)
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "claude-bedrock-role",
+                    "litellm_params": {
+                        "model": "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+                        "aws_region_name": "eu-west-1",
+                        "aws_role_name": role_arn,
+                        "aws_external_id": "region-external-id",
+                        "aws_sts_endpoint": configured_sts.base_url,
+                        "additional_drop_params": ["aws_role_name", "aws_external_id", "aws_sts_endpoint"],
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+
+        await router.acompletion(model="claude-bedrock-role", messages=[{"role": "user", "content": "Say hi"}])
+
+        assume_role: Final = parse_qs(configured_sts.requests[0].raw_body.decode())
+    assert assume_role["Action"] == ["AssumeRole"]
+    assert assume_role["RoleArn"] == [role_arn]
+    assert assume_role["ExternalId"] == ["region-external-id"]
+    assert "Credential=ASIAREGIONROLE/" in bedrock_route.calls.last.request.headers["Authorization"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["chat", "responses"])
+async def test_drop_listed_vertex_alias_settings_the_deployment_sets_are_the_ones_called(
+    vertex_service_account: str, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    for name in ("VERTEXAI_LOCATION", "VERTEX_LOCATION", "VERTEXAI_PROJECT", "VERTEXAI_CREDENTIALS"):
+        monkeypatch.delenv(name, raising=False)
+    with recording_service() as vertex:
+        vertex.enqueue(ResponseSpec(_VERTEX_CLAUDE_REPLY))
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "claude-eu",
+                    "litellm_params": {
+                        "model": "vertex_ai/claude-haiku-5-5",
+                        "api_base": vertex.base_url,
+                        "vertex_ai_project": "alias-project",
+                        "vertex_ai_location": "eu",
+                        "vertex_ai_credentials": vertex_service_account,
+                        "additional_drop_params": ["vertex_ai_project", "vertex_ai_location", "vertex_ai_credentials"],
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+
+        await _call_vertex_claude_route(router, route, {})
+
+    assert "/projects/alias-project/locations/eu/" in vertex.requests[0].path
+    assert vertex.requests[0].headers["authorization"] == "Bearer region-access-token"
