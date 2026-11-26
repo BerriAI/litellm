@@ -795,6 +795,30 @@ def test_vertex_text_only_live_model_default_setup_requests_text(
 
 
 @pytest.mark.parametrize(
+    "gemini_entry, vertex_entry, expected",
+    [
+        ({"mode": "realtime"}, {"mode": "audio_transcription"}, ["TEXT"]),
+        ({"mode": "audio_transcription"}, {"mode": "realtime"}, ["AUDIO"]),
+    ],
+)
+def test_vertex_default_setup_follows_the_vertex_cost_map_row_over_the_ai_studio_row(
+    monkeypatch: pytest.MonkeyPatch,
+    gemini_entry: dict[str, object],
+    vertex_entry: dict[str, object],
+    expected: list[str],
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {f"gemini/{_SYNTHETIC_TRANSCRIBE_MODEL}": gemini_entry, f"vertex_ai/{_SYNTHETIC_TRANSCRIBE_MODEL}": vertex_entry},
+    )
+
+    setup: Final = json.loads(_vertex_config().session_configuration_request(_SYNTHETIC_TRANSCRIBE_MODEL))["setup"]
+
+    assert setup["generationConfig"]["responseModalities"] == expected
+
+
+@pytest.mark.parametrize(
     "entry",
     [
         {"mode": "realtime"},

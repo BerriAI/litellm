@@ -62,6 +62,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     def _supports_avatars(self) -> bool:
         return True
 
+    @classmethod
+    def _cost_map_provider_prefixes(cls) -> tuple[str, ...]:
+        return ("vertex_ai", "gemini")
+
     # ------------------------------------------------------------------
     # URL
     # ------------------------------------------------------------------

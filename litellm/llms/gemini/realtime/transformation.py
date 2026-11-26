@@ -266,7 +266,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def _rejects_undocumented_voices(self, model: str) -> bool:
         """Google AI Studio closes the socket (1007) on an unknown voice only for its native-audio Live models."""
-        return bool(GeminiRealtimeConfig._model_cost_entry(model).get("gemini_native_audio"))
+        return bool(self._model_cost_entry(model).get("gemini_native_audio"))
 
     @staticmethod
     def _usage_detail_alias(details: object, defaults: dict[str, int]) -> dict[str, object]:
@@ -573,21 +573,23 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         return normalized
 
-    @staticmethod
-    def _model_cost_entry(model: str) -> Mapping[str, object]:
+    @classmethod
+    def _cost_map_provider_prefixes(cls) -> tuple[str, ...]:
+        return ("gemini",)
+
+    @classmethod
+    def _model_cost_entry(cls, model: str) -> Mapping[str, object]:
         model_cost: Final[Mapping[str, Mapping[str, object]]] = litellm.model_cost
         stripped: Final = model.split("/", 1)[-1]
-        return (
-            model_cost.get(model)
-            or model_cost.get(stripped)
-            or model_cost.get(f"gemini/{stripped}")
-            or model_cost.get(f"vertex_ai/{stripped}")
-            or {}
-        )
+        prefixed: Final = tuple(f"{prefix}/{stripped}" for prefix in cls._cost_map_provider_prefixes())
+        for key in (model, stripped, *prefixed):
+            if entry := model_cost.get(key):
+                return entry
+        return {}
 
-    @staticmethod
-    def _is_audio_only_live_model(model: str) -> bool:
-        entry: Final = GeminiRealtimeConfig._model_cost_entry(model)
+    @classmethod
+    def _is_audio_only_live_model(cls, model: str) -> bool:
+        entry: Final = cls._model_cost_entry(model)
         return bool(entry.get("gemini_native_audio") or entry.get("gemini_audio_only_live"))
 
     @staticmethod
@@ -601,22 +603,21 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             and "audio" not in output_modalities
         )
 
-    @staticmethod
-    def _is_text_only_live_model(model: str) -> bool:
-        entry: Final = GeminiRealtimeConfig._model_cost_entry(model)
-        return entry.get("mode") == "audio_transcription" or GeminiRealtimeConfig._is_realtime_text_output_entry(entry)
+    @classmethod
+    def _is_text_only_live_model(cls, model: str) -> bool:
+        entry: Final = cls._model_cost_entry(model)
+        return entry.get("mode") == "audio_transcription" or cls._is_realtime_text_output_entry(entry)
 
-    @staticmethod
-    def _is_transcription_live_model(model: str) -> bool:
-        entry: Final = GeminiRealtimeConfig._model_cost_entry(model)
+    @classmethod
+    def _is_transcription_live_model(cls, model: str) -> bool:
+        entry: Final = cls._model_cost_entry(model)
         return entry.get("mode") == "audio_transcription" or (
-            GeminiRealtimeConfig._is_realtime_text_output_entry(entry)
-            and entry.get("supported_modalities") == ["audio"]
+            cls._is_realtime_text_output_entry(entry) and entry.get("supported_modalities") == ["audio"]
         )
 
-    @staticmethod
-    def _default_response_modality(model: str) -> GeminiResponseModalities:
-        return "TEXT" if GeminiRealtimeConfig._is_text_only_live_model(model) else "AUDIO"
+    @classmethod
+    def _default_response_modality(cls, model: str) -> GeminiResponseModalities:
+        return "TEXT" if cls._is_text_only_live_model(model) else "AUDIO"
 
     @staticmethod
     def _requested_response_modalities(value: object) -> tuple[str, ...]:
@@ -626,9 +627,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             return ()
         return tuple(str(modality).upper() for modality in _JSON_ARRAY.validate_python(value))
 
-    @staticmethod
+    @classmethod
     def _unsupported_response_modalities(
-        model: str, requested: tuple[str, ...], *, avatar_video: bool = False
+        cls, model: str, requested: tuple[str, ...], *, avatar_video: bool = False
     ) -> tuple[str, ...]:
         producible: Final = (
             _GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES if avatar_video else _GEMINI_LIVE_RESPONSE_MODALITIES
@@ -636,9 +637,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         unknown: Final = tuple(modality for modality in requested if modality not in producible)
         if unknown:
             return unknown
-        if GeminiRealtimeConfig._is_audio_only_live_model(model) and frozenset(requested) == frozenset(("TEXT",)):
+        if cls._is_audio_only_live_model(model) and frozenset(requested) == frozenset(("TEXT",)):
             return ("TEXT",)
-        if GeminiRealtimeConfig._is_text_only_live_model(model) and frozenset(requested) == frozenset(("AUDIO",)):
+        if cls._is_text_only_live_model(model) and frozenset(requested) == frozenset(("AUDIO",)):
             return ("AUDIO",)
         return ()
 
@@ -678,7 +679,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def _modality_rejection(self, model: str, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
         param: Final = "output_modalities" if "output_modalities" in session else "modalities"
-        unsupported: Final = GeminiRealtimeConfig._unsupported_response_modalities(
+        unsupported: Final = self._unsupported_response_modalities(
             model,
             GeminiRealtimeConfig._requested_response_modalities(session.get(param)),
             avatar_video=self._supports_avatars() and bool(session.get("avatar")),
@@ -710,23 +711,23 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             param=param,
         )
 
-    @staticmethod
+    @classmethod
     def _coerce_response_modalities(
-        model: str, modalities: Sequence[object], *, avatar_video: bool = False
+        cls, model: str, modalities: Sequence[object], *, avatar_video: bool = False
     ) -> tuple[str, ...]:
         """Drop modalities Gemini Live cannot produce at all, swap the ones this
         model cannot (TEXT to AUDIO for audio-only models, AUDIO to TEXT for
         text-only ones such as transcribe-live), then keep a single modality
         because Gemini Live rejects a setup naming two."""
         return GeminiRealtimeConfig._single_response_modality(
-            GeminiRealtimeConfig._swap_unsupported_response_modalities(
-                model, GeminiRealtimeConfig._known_response_modalities(model, modalities, avatar_video=avatar_video)
+            cls._swap_unsupported_response_modalities(
+                model, cls._known_response_modalities(model, modalities, avatar_video=avatar_video)
             )
         )
 
-    @staticmethod
+    @classmethod
     def _known_response_modalities(
-        model: str, modalities: Sequence[object], *, avatar_video: bool = False
+        cls, model: str, modalities: Sequence[object], *, avatar_video: bool = False
     ) -> tuple[str, ...]:
         normalized: Final = tuple(str(modality).upper() for modality in modalities)
         producible: Final = (
@@ -739,17 +740,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 model,
                 ", ".join(modality for modality in normalized if modality not in producible),
             )
-        return known or (GeminiRealtimeConfig._default_response_modality(model),)
+        return known or (cls._default_response_modality(model),)
 
-    @staticmethod
-    def _swap_unsupported_response_modalities(model: str, normalized: tuple[str, ...]) -> tuple[str, ...]:
-        if GeminiRealtimeConfig._is_audio_only_live_model(model) and "TEXT" in normalized:
+    @classmethod
+    def _swap_unsupported_response_modalities(cls, model: str, normalized: tuple[str, ...]) -> tuple[str, ...]:
+        if cls._is_audio_only_live_model(model) and "TEXT" in normalized:
             verbose_logger.warning(
                 "Gemini Live: %s only produces audio; downgrading the requested TEXT response modality to AUDIO",
                 model,
             )
             return tuple(modality for modality in normalized if modality != "TEXT") or ("AUDIO",)
-        if GeminiRealtimeConfig._is_text_only_live_model(model) and "AUDIO" in normalized:
+        if cls._is_text_only_live_model(model) and "AUDIO" in normalized:
             return tuple(modality for modality in normalized if modality != "AUDIO") or ("TEXT",)
         return normalized
 
@@ -765,14 +766,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         return (chosen,)
 
-    @staticmethod
-    def _finalize_gemini_live_setup(model: str, setup: dict[str, object]) -> dict[str, object]:
+    @classmethod
+    def _finalize_gemini_live_setup(cls, model: str, setup: dict[str, object]) -> dict[str, object]:
         generation_config: Final = setup.get("generationConfig")
         if isinstance(generation_config, dict):
             modalities: Final = generation_config.get("responseModalities")
             if isinstance(modalities, list):
                 avatar_config: Final = as_str_mapping(setup.get("avatarConfig")) or {}
-                generation_config["responseModalities"] = GeminiRealtimeConfig._coerce_response_modalities(
+                generation_config["responseModalities"] = cls._coerce_response_modalities(
                     model, modalities, avatar_video="avatarName" in avatar_config
                 )
         return setup
@@ -809,7 +810,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         if session_configuration_request is None:
             generation_config: Final = new_overrides.setdefault("generationConfig", {})
-            generation_config.setdefault("responseModalities", [GeminiRealtimeConfig._default_response_modality(model)])
+            generation_config.setdefault("responseModalities", [self._default_response_modality(model)])
             new_overrides.setdefault("inputAudioTranscription", {})
             new_overrides["model"] = f"models/{model}"
             verbose_logger.debug("Gemini Realtime: Sending initial setup with tools to backend")
@@ -2107,9 +2108,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         ```
         """
 
-        response_modalities: Final[list[GeminiResponseModalities]] = [
-            GeminiRealtimeConfig._default_response_modality(model)
-        ]
+        response_modalities: Final[list[GeminiResponseModalities]] = [self._default_response_modality(model)]
         output_audio_transcription: Final = False
         # if "audio" in model: ## UNCOMMENT THIS WHEN AUDIO IS SUPPORTED
         #     output_audio_transcription = True
