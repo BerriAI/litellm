@@ -106,9 +106,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
             custom_llm_provider="vertex_ai",
         )
 
-        default_headers: Final[
-            dict[str, object]
-        ] = {  # mutable-ok: a caller Authorization header is assigned into it below
+        default_headers: Final[dict[str, object]] = {  # mutable-ok: Authorization is reassigned below
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
             "X-Goog-User-Project": project_id,

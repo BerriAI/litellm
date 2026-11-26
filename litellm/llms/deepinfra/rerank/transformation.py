@@ -110,9 +110,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         if api_key is None:
             raise ValueError("Deepinfra API key is required. Please set 'DEEPINFRA_API_KEY' environment variable")
 
-        default_headers: Final[
-            dict[str, object]
-        ] = {  # mutable-ok: a caller Authorization header is assigned into it below
+        default_headers: Final[dict[str, object]] = {  # mutable-ok: Authorization is reassigned below
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
