@@ -34,6 +34,7 @@ config:
     master_key: gateway-key
     max_request_size_mb: 1
     allowed_routes: [/health, /v1/messages]
+    use_x_forwarded_for: true
     enable_jwt_auth: true
     store_model_in_db: false
     supported_db_objects: [models]

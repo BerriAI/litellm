@@ -202,7 +202,14 @@ impl Admit {
         if let Some(reason) = checks::HEAD.iter().find_map(|check| check(&self, &parts)) {
             return Err(refused(parts, body, reason));
         }
-        if request_allowlist::checked(&self.allowlists, parts.uri.path()).is_err() {
+        if request_allowlist::checked(
+            &self.allowlists,
+            parts.uri.path(),
+            &parts.headers,
+            &parts.extensions,
+        )
+        .is_err()
+        {
             return Ok(Request::from_parts(parts, body));
         }
         let authenticated = self.auth.authenticate_parts(&parts).await;
