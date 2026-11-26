@@ -4,6 +4,8 @@
 mod error;
 mod key;
 mod object_permission;
+mod team;
 
 pub use error::Error;
 pub use key::KeyDatabase;
+pub use team::TeamDatabase;

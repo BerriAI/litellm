@@ -498,14 +498,155 @@ record! {
     }
 }
 
+/// One window of a team's `budget_limits`, as `BudgetLimitEntry` dumps it. The model leaves
+/// `window_start` out of its dump until the window has one, so this is no [`record!`], which
+/// writes every field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CachedBudgetLimit {
+    pub budget_duration: String,
+    pub max_budget: f64,
+    pub reset_at: Option<Timestamp>,
+    pub window_start: Option<Timestamp>,
+}
+
+impl FromValue for CachedBudgetLimit {
+    fn from_value(value: &Value) -> Result<Self, DecodeError> {
+        let Value::Dict(entries) = value else {
+            return Err(DecodeError::Shape("CachedBudgetLimit"));
+        };
+        let named = fields(entries);
+        let read = |name: &'static str| named.get(name).copied().unwrap_or(&Value::None);
+        Ok(Self {
+            budget_duration: Field::read(read("budget_duration"))
+                .ok_or(DecodeError::Shape("budget_duration"))?,
+            max_budget: Field::read(read("max_budget")).ok_or(DecodeError::Shape("max_budget"))?,
+            reset_at: Field::read(read("reset_at")).ok_or(DecodeError::Shape("reset_at"))?,
+            window_start: Field::read(read("window_start"))
+                .ok_or(DecodeError::Shape("window_start"))?,
+        })
+    }
+}
+
+impl IntoValue for CachedBudgetLimit {
+    fn into_value(self) -> Value {
+        let window_start = self
+            .window_start
+            .map(|at| ("window_start".to_owned(), Field::write(at)));
+        Value::Dict(
+            [
+                (
+                    "budget_duration".to_owned(),
+                    Field::write(self.budget_duration),
+                ),
+                ("max_budget".to_owned(), Field::write(self.max_budget)),
+                ("reset_at".to_owned(), Field::write(self.reset_at)),
+            ]
+            .into_iter()
+            .chain(window_start)
+            .map(|(name, value)| (Value::Str(name), value))
+            .collect(),
+        )
+    }
+}
+
+impl Field for CachedBudgetLimit {
+    fn read(value: &Value) -> Option<Self> {
+        Self::from_value(value).ok()
+    }
+
+    fn write(self) -> Value {
+        self.into_value()
+    }
+}
+
+record! {
+    /// A team's model alias table, as `LiteLLM_ModelTable` dumps it nested in the team.
+    pub struct CachedModelTable {
+        id: Option<i64>,
+        #[redact(with = "[REDACTED]")]
+        model_aliases: Option<Value>,
+        created_by: String = required!("created_by"),
+        updated_by: String = required!("updated_by"),
+        #[redact(with = "[REDACTED]")]
+        team: Option<Value>,
+    }
+}
+
+record! {
+    /// `LiteLLM_TeamTableCachedObj.model_dump(mode="json")`, the value under
+    /// [`AuthObject::Team`](super::AuthObject::Team).
+    pub struct CachedTeam {
+        team_alias: Option<String>,
+        team_id: String = required!("team_id"),
+        organization_id: Option<String>,
+        admins: Vec<String>,
+        members: Vec<String>,
+        members_with_roles: Vec<CachedMember>,
+        team_member_permissions: Option<Vec<String>>,
+        metadata: Option<Bag>,
+        tpm_limit: Option<i64>,
+        rpm_limit: Option<i64>,
+        tpd_limit: Option<i64>,
+        max_budget: Option<f64>,
+        soft_budget: Option<f64>,
+        budget_duration: Option<String>,
+        budget_limits: Option<Vec<CachedBudgetLimit>>,
+        models: Vec<String>,
+        blocked: bool,
+        router_settings: Option<Bag>,
+        access_group_ids: Option<Vec<String>>,
+        default_team_member_models: Option<Vec<String>>,
+        spend: Option<f64>,
+        max_parallel_requests: Option<i64>,
+        budget_reset_at: Option<Timestamp>,
+        model_id: Option<i64>,
+        model_spend: Option<Bag> = Some(Bag::default()),
+        model_max_budget: Option<Bag> = Some(Bag::default()),
+        policies: Option<Vec<String>>,
+        allow_team_guardrail_config: Option<bool> = Some(false),
+        litellm_model_table: Option<CachedModelTable>,
+        object_permission: Option<CachedObjectPermission>,
+        object_permission_id: Option<String>,
+        updated_at: Option<Timestamp>,
+        created_at: Option<Timestamp>,
+        last_refreshed_at: Option<f64>,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
     use litellm_python_compat::{Value, json};
     use rstest::rstest;
 
-    use super::{CachedKey, CachedMember, CachedObjectPermission};
+    use super::{Bag, CachedKey, CachedMember, CachedObjectPermission, CachedTeam};
     use crate::{DecodeError, FromValue, IntoValue};
+
+    #[rstest]
+    fn a_team_entry_needs_its_id_and_takes_the_models_defaults_for_the_rest() {
+        let team = CachedTeam::from_value(&json::loads(r#"{"team_id": "team"}"#).unwrap()).unwrap();
+
+        assert_eq!(
+            (
+                team.team_id.as_str(),
+                team.blocked,
+                team.models.len(),
+                team.model_spend,
+                team.model_max_budget,
+                team.allow_team_guardrail_config,
+                CachedTeam::from_value(&json::loads("{}").unwrap()).is_err(),
+            ),
+            (
+                "team",
+                false,
+                0,
+                Some(Bag::default()),
+                Some(Bag::default()),
+                Some(false),
+                true,
+            )
+        );
+    }
 
     fn key(entry: &str) -> Result<CachedKey, DecodeError> {
         CachedKey::from_value(&json::loads(entry).unwrap())
