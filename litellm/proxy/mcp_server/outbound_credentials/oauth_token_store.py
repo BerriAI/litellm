@@ -16,12 +16,10 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Final, Protocol, TypeVar, cast
+from typing import Final, Protocol
 
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy.mcp_server.outbound_credentials.types import CredError
-
-_RefreshOutcome = TypeVar("_RefreshOutcome")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -241,9 +239,9 @@ class RefreshCoordinator(Protocol):
         self,
         user_id: str,
         server_id: str,
-        refresh: Callable[[], Awaitable[_RefreshOutcome]],
-        reread: Callable[[], Awaitable[_RefreshOutcome]],
-    ) -> _RefreshOutcome: ...
+        refresh: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
+        reread: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
+    ) -> Result[OAuthToken, CredError]: ...
 
 
 class InProcessRefreshCoordinator:
@@ -256,21 +254,21 @@ class InProcessRefreshCoordinator:
     def __init__(self) -> None:
         # In-flight refreshes, one task per (user, server); each entry is removed by the task's
         # done-callback, so the map is bounded by concurrent refreshes, not by distinct keys seen.
-        self._inflight: dict[tuple[str, str], asyncio.Future[object]] = {}
+        self._inflight: dict[tuple[str, str], asyncio.Future[Result[OAuthToken, CredError]]] = {}
 
     async def run(
         self,
         user_id: str,
         server_id: str,
-        refresh: Callable[[], Awaitable[_RefreshOutcome]],
-        reread: Callable[[], Awaitable[_RefreshOutcome]],
-    ) -> _RefreshOutcome:
+        refresh: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
+        reread: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
+    ) -> Result[OAuthToken, CredError]:
         key: Final = (user_id, server_id)
-        task = cast(asyncio.Future[_RefreshOutcome] | None, self._inflight.get(key))
+        task = self._inflight.get(key)
         if task is None:
             # The task is detached from the caller, so a cancelled caller does not abort the refresh.
             task = asyncio.ensure_future(refresh())
-            self._inflight[key] = cast(asyncio.Future[object], task)
+            self._inflight[key] = task
             task.add_done_callback(lambda _t, k=key: self._inflight.pop(k, None))
         return await task
 

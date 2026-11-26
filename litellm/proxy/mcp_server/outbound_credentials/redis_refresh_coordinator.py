@@ -26,9 +26,11 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import KW_ONLY, dataclass
 from enum import Enum
-from typing import Final, Protocol, TypeVar
+from typing import Final, Protocol
 
-_RefreshOutcome = TypeVar("_RefreshOutcome")
+from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+from litellm.proxy.mcp_server.outbound_credentials.result import Result
+from litellm.proxy.mcp_server.outbound_credentials.types import CredError
 
 
 class LockAcquisition(Enum):
@@ -84,9 +86,9 @@ class RedisRefreshCoordinator:
         self,
         user_id: str,
         server_id: str,
-        refresh: Callable[[], Awaitable[_RefreshOutcome]],
-        reread: Callable[[], Awaitable[_RefreshOutcome]],
-    ) -> _RefreshOutcome:
+        refresh: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
+        reread: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
+    ) -> Result[OAuthToken, CredError]:
         key: Final = self._key(user_id, server_id)
         token: Final = self.new_token()
         match await self.lock.acquire(key, token, self.lock_ttl_seconds):
@@ -109,8 +111,8 @@ class RedisRefreshCoordinator:
         self,
         key: str,
         token: str,
-        refresh: Callable[[], Awaitable[_RefreshOutcome]],
-    ) -> _RefreshOutcome:
+        refresh: Callable[[], Awaitable[Result[OAuthToken, CredError]]],
+    ) -> Result[OAuthToken, CredError]:
         refresh_task: Final = asyncio.ensure_future(refresh())
         renewal_task: Final = asyncio.create_task(self._renew_lease_until_done(key, token, refresh_task))
         try:
@@ -125,7 +127,7 @@ class RedisRefreshCoordinator:
         self,
         key: str,
         token: str,
-        refresh_task: asyncio.Future[_RefreshOutcome],
+        refresh_task: asyncio.Future[Result[OAuthToken, CredError]],
     ) -> None:
         budget_deadline: Final = self.clock() + self.refresh_budget_seconds
         while not refresh_task.done() and self.clock() < budget_deadline:

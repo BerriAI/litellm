@@ -211,6 +211,15 @@ class _FakeTokenStore:
     async def fetch(self, user_id: str, server_id: str):
         return self._by_user.get((user_id, server_id))
 
+    async def peek(self, user_id: str, server_id: str):
+        return self._by_user.get((user_id, server_id))
+
+    async def invalidate(self, user_id: str, server_id: str):
+        return None
+
+    async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+        return Error(CredError.of_unauthorized("missing"))
+
 
 @pytest.mark.asyncio
 async def test_authorization_code_emits_bearer_for_a_stored_token():
@@ -308,6 +317,9 @@ async def test_has_user_token_reflects_the_stored_token():
 async def test_has_user_token_defers_an_unknown_refresh_outcome_to_egress():
     class _Unavailable:
         async def fetch(self, user_id: str, server_id: str):
+            raise TokenStoreUnavailable("down")
+
+        async def peek(self, user_id: str, server_id: str):
             raise TokenStoreUnavailable("down")
 
     provider = UpstreamCredentialProvider(oauth_token_store=_Unavailable())

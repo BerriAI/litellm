@@ -20,11 +20,10 @@ v2: no imports from v1.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
-from typing import Final, cast
+from typing import Final
 
 import httpx
 import httpx2
@@ -43,7 +42,7 @@ from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import (
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
     OAuthTokenResolutionError,
-    OAuthTokenStore,
+    ReactiveOAuthTokenStore,
     TokenStoreUnavailable,
 )
 from litellm.proxy.mcp_server.outbound_credentials.result import (
@@ -113,6 +112,17 @@ class _NullOAuthTokenStore:
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         return None
 
+    async def peek(self, user_id: str, server_id: str) -> OAuthToken | None:
+        return None
+
+    async def invalidate(self, user_id: str, server_id: str) -> None:
+        return None
+
+    async def refresh_now(
+        self, user_id: str, server_id: str, failed_access_token: str
+    ) -> Result[OAuthToken, CredError]:
+        return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
+
 
 class _NullTokenExchanger:
     """Fail-closed default: with no exchanger wired, token_exchange cannot produce a credential."""
@@ -139,14 +149,14 @@ class UpstreamCredentialProvider:
 
     def __init__(
         self,
-        oauth_token_store: OAuthTokenStore | None = None,
+        oauth_token_store: ReactiveOAuthTokenStore | None = None,
         token_exchanger: TokenExchanger | None = None,
         token_endpoint: TokenEndpointClient | None = None,
         exchanged_tokens: ExchangedTokenCache | None = None,
         client_credentials_source: ClientCredentialsTokenSource | None = None,
         sso_assertion_store: SSOAssertionStore | None = None,
     ) -> None:
-        self._oauth_token_store: OAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
+        self._oauth_token_store: ReactiveOAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
         self._token_exchanger: TokenExchanger = token_exchanger or _NullTokenExchanger()
         self._token_endpoint: TokenEndpointClient = token_endpoint or TokenEndpointClient()
         self._exchanged_tokens: ExchangedTokenCache = exchanged_tokens or ExchangedTokenCache()
@@ -190,10 +200,7 @@ class UpstreamCredentialProvider:
         retryable or configuration error instead of the preemptive check downgrading it to reauth.
         """
         try:
-            peek = getattr(self._oauth_token_store, "peek", None)
-            if peek is not None:
-                return await peek(subject.subject_id, server.server_id) is not None
-            return await self._oauth_token_store.fetch(subject.subject_id, server.server_id) is not None
+            return await self._oauth_token_store.peek(subject.subject_id, server.server_id) is not None
         except (OAuthTokenResolutionError, TokenStoreUnavailable):
             return True
 
@@ -352,13 +359,7 @@ class UpstreamCredentialProvider:
             return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
 
         async def refresh_now(failed_access_token: str) -> Result[OAuthToken, CredError]:
-            refresh: Final = cast(
-                Callable[[str, str, str], Awaitable[Result[OAuthToken, CredError]]] | None,
-                getattr(self._oauth_token_store, "refresh_now", None),
-            )
-            if refresh is None:
-                return Error(CredError.of_misconfigured("per-user OAuth token store cannot refresh a rejected token"))
-            return await refresh(subject.subject_id, server.server_id, failed_access_token)
+            return await self._oauth_token_store.refresh_now(subject.subject_id, server.server_id, failed_access_token)
 
         return Ok(PerUserOAuthBearerAuth(token.access_token, refresh_now, config))
 

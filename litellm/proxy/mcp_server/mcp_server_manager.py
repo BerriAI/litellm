@@ -7154,12 +7154,9 @@ class MCPServerManager:
                             ) from e
                         auth_info: Final = _extract_upstream_auth_failure(e)
                         recovery_error: Final = _extract_per_user_oauth_recovery_error(e) if managed_per_user else None
-                        if (
-                            managed_per_user
-                            and recovery_error is not None
-                            and auth_info is not None
-                            and auth_info[0] == 401
-                        ):
+                        has_recovery_error: Final = managed_per_user and recovery_error is not None
+                        has_auth_rejection: Final = auth_info is not None and auth_info[0] == 401
+                        if has_recovery_error and has_auth_rejection:
                             if recovery_error.tag == "unauthorized":
                                 _, www_authenticate = auth_info
                                 raise MCPUpstreamAuthError(
