@@ -21,7 +21,9 @@ into an open ``thinking`` block, crashing Anthropic SDK clients (Claude Code)
 with "Content block is not a text block".
 """
 
-from collections.abc import Mapping, Sequence
+import json
+import time
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, List, Optional, Tuple
@@ -30,9 +32,12 @@ from unittest.mock import MagicMock
 import pytest
 
 
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
 )
+from litellm.llms.openrouter.chat.transformation import OpenRouterChatCompletionStreamingHandler
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Delta,
@@ -1432,4 +1437,238 @@ async def test_unsigned_thinking_blocks_close_with_an_empty_signature_delta(is_a
         for index in _thinking_starts(events)
     ]
     assert _signature_deltas(events) == [""]
+    _assert_deltas_match_their_block_type(events)
+
+
+def _openrouter_sse_line(delta: Mapping[str, object], finish_reason: Optional[str] = None) -> str:
+    return "data: " + json.dumps(
+        {
+            "id": "gen-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-haiku-4.5",
+            "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason}],
+        }
+    )
+
+
+def _openrouter_reasoning_text_line(reasoning_format: str) -> str:
+    return _openrouter_sse_line(
+        {
+            "content": "",
+            "role": "assistant",
+            "reasoning": "I need to multiply.",
+            "reasoning_details": [
+                {"type": "reasoning.text", "text": "I need to multiply.", "format": reasoning_format, "index": 0}
+            ],
+        }
+    )
+
+
+_OPENROUTER_MULTIPLY_TOOL_CALL_LINES: Final = (
+    _openrouter_sse_line(
+        {
+            "content": None,
+            "role": "assistant",
+            "tool_calls": [
+                {"index": 0, "id": "toolu_1", "type": "function", "function": {"name": "multiply", "arguments": ""}}
+            ],
+        }
+    ),
+    _openrouter_sse_line(
+        {"content": None, "role": "assistant", "tool_calls": [{"index": 0, "function": {"arguments": '{"a": 17, "b": 23}'}}]}
+    ),
+    _openrouter_sse_line({"content": "", "role": "assistant", "reasoning": None}, finish_reason="tool_calls"),
+    "data: [DONE]",
+)
+
+_OPENROUTER_REASONING_THEN_TOOL_CALL_STREAMS: Final = MappingProxyType(
+    {
+        "claude-signature-piece": (
+            _openrouter_reasoning_text_line("anthropic-claude-v1"),
+            _openrouter_sse_line(
+                {
+                    "content": "",
+                    "role": "assistant",
+                    "reasoning_details": [
+                        {"type": "reasoning.text", "signature": "sig-abc", "format": "anthropic-claude-v1", "index": 0}
+                    ],
+                }
+            ),
+            *_OPENROUTER_MULTIPLY_TOOL_CALL_LINES,
+        ),
+        "gemini-encrypted-piece": (
+            _openrouter_reasoning_text_line("google-gemini-v1"),
+            _openrouter_sse_line(
+                {
+                    "content": "",
+                    "role": "assistant",
+                    "reasoning": None,
+                    "reasoning_details": [
+                        {
+                            "type": "reasoning.encrypted",
+                            "data": "blob-xyz",
+                            "id": "toolu_1",
+                            "format": "google-gemini-v1",
+                            "index": 0,
+                        }
+                    ],
+                }
+            ),
+            *_OPENROUTER_MULTIPLY_TOOL_CALL_LINES,
+        ),
+    }
+)
+
+
+async def _async_lines(lines: Sequence[str]) -> AsyncIterator[str]:
+    for line in lines:
+        yield line
+
+
+def _openrouter_chat_stream(lines: Sequence[str], is_async: bool) -> CustomStreamWrapper:
+    return CustomStreamWrapper(
+        completion_stream=OpenRouterChatCompletionStreamingHandler(
+            streaming_response=_async_lines(lines) if is_async else iter(lines),
+            sync_stream=not is_async,
+        ),
+        model="anthropic/claude-haiku-4.5",
+        custom_llm_provider="openrouter",
+        logging_obj=Logging(
+            model="anthropic/claude-haiku-4.5",
+            messages=[{"role": "user", "content": "Use the multiply tool to compute 17*23."}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="openrouter-tool-turn",
+            function_id="openrouter-tool-turn",
+        ),
+    )
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "stream", list(_OPENROUTER_REASONING_THEN_TOOL_CALL_STREAMS), ids=list(_OPENROUTER_REASONING_THEN_TOOL_CALL_STREAMS)
+)
+@pytest.mark.asyncio
+async def test_openrouter_reasoning_details_piece_before_tool_call_opens_no_extra_block(is_async: bool, stream: str):
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=_openrouter_chat_stream(_OPENROUTER_REASONING_THEN_TOOL_CALL_STREAMS[stream], is_async),
+        model="openrouter/anthropic/claude-haiku-4.5",
+    )
+
+    events: Final = await _drain_async(wrapper) if is_async else _drain_sync(wrapper)
+
+    assert [event["content_block"]["type"] for event in events if event.get("type") == "content_block_start"] == [
+        "thinking",
+        "tool_use",
+    ]
+    assert _thinking_blocks_as_accumulated(events) == (_AccumulatedThinking(thinking="I need to multiply.", signature=""),)
+    assert _signature_deltas(events) == [""]
+    assert "".join(
+        event["delta"]["partial_json"]
+        for event in events
+        if event.get("type") == "content_block_delta" and event["delta"]["type"] == "input_json_delta"
+    ) == '{"a": 17, "b": 23}'
+    _assert_deltas_match_their_block_type(events)
+
+
+_OPENROUTER_SIGNATURE_DETAIL: Final = {
+    "type": "reasoning.text",
+    "signature": "sig-abc",
+    "format": "anthropic-claude-v1",
+    "index": 0,
+}
+
+_OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS: Final = MappingProxyType(
+    {
+        "signature-with-answer-text": (
+            _openrouter_reasoning_text_line("anthropic-claude-v1"),
+            _openrouter_sse_line({"content": "The answer is 391.", "reasoning_details": [_OPENROUTER_SIGNATURE_DETAIL]}),
+            _openrouter_sse_line({"content": ""}, finish_reason="stop"),
+            "data: [DONE]",
+        ),
+        "signature-with-thinking-text": (
+            _openrouter_sse_line(
+                {
+                    "content": "",
+                    "role": "assistant",
+                    "reasoning": "I need to multiply.",
+                    "reasoning_details": [{**_OPENROUTER_SIGNATURE_DETAIL, "text": "I need to multiply."}],
+                }
+            ),
+            _openrouter_sse_line({"content": "The answer is 391."}),
+            _openrouter_sse_line({"content": ""}, finish_reason="stop"),
+            "data: [DONE]",
+        ),
+        "signature-answer-and-finish-in-one-frame": (
+            _openrouter_reasoning_text_line("anthropic-claude-v1"),
+            _openrouter_sse_line(
+                {"content": "The answer is 391.", "reasoning_details": [_OPENROUTER_SIGNATURE_DETAIL]},
+                finish_reason="stop",
+            ),
+            "data: [DONE]",
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "stream",
+    list(_OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS),
+    ids=list(_OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS),
+)
+@pytest.mark.asyncio
+async def test_openrouter_signature_bundled_with_another_payload_keeps_that_payload(is_async: bool, stream: str):
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=_openrouter_chat_stream(
+            _OPENROUTER_SIGNATURE_BUNDLED_WITH_ANOTHER_PAYLOAD_STREAMS[stream], is_async
+        ),
+        model="openrouter/anthropic/claude-haiku-4.5",
+    )
+
+    events: Final = await _drain_async(wrapper) if is_async else _drain_sync(wrapper)
+
+    assert [event["content_block"]["type"] for event in events if event.get("type") == "content_block_start"] == [
+        "thinking",
+        "text",
+    ]
+    assert _thinking_blocks_as_accumulated(events) == (_AccumulatedThinking(thinking="I need to multiply.", signature=""),)
+    assert "".join(_text_deltas(events)) == "The answer is 391."
+    assert [event["delta"]["stop_reason"] for event in events if event.get("type") == "message_delta"] == ["end_turn"]
+    _assert_deltas_match_their_block_type(events)
+
+
+_OPENROUTER_SIGNATURE_BESIDE_ANOTHER_CHOICE_LINES: Final = (
+    _openrouter_reasoning_text_line("anthropic-claude-v1"),
+    "data: "
+    + json.dumps(
+        {
+            "id": "gen-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "anthropic/claude-haiku-4.5",
+            "choices": [
+                {"index": 0, "delta": {"content": "", "reasoning_details": [_OPENROUTER_SIGNATURE_DETAIL]}},
+                {"index": 1, "delta": {"content": "The other answer."}},
+            ],
+        }
+    ),
+    _openrouter_sse_line({"content": ""}, finish_reason="stop"),
+    "data: [DONE]",
+)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_openrouter_signature_only_first_choice_keeps_the_other_choice_text(is_async: bool):
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=_openrouter_chat_stream(_OPENROUTER_SIGNATURE_BESIDE_ANOTHER_CHOICE_LINES, is_async),
+        model="openrouter/anthropic/claude-haiku-4.5",
+    )
+
+    events: Final = await _drain_async(wrapper) if is_async else _drain_sync(wrapper)
+
+    assert "".join(_text_deltas(events)) == "The other answer."
     _assert_deltas_match_their_block_type(events)
