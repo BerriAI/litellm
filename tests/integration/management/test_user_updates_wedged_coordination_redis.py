@@ -16,7 +16,7 @@ from pydantic import JsonValue
 from redis import Redis
 from redis.client import PubSub
 
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import _BULK_EVICTION_WAIT_SECONDS
+from litellm.proxy.common_utils.cache_invalidation_pubsub import _BULK_EVICTION_WAIT_SECONDS
 from tests.integration._support.budget import case_timeout_seconds
 from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
@@ -80,8 +80,8 @@ def _burst_call(
     "mgmt.user.bulk_update.budget_change_returns_promptly_with_wedged_coordination_redis",
     "mgmt.customer.update.budget_change_returns_promptly_with_wedged_coordination_redis",
     "mgmt.key.reset_spend.returns_promptly_with_wedged_coordination_redis",
-    "mgmt.auth_cache_invalidation.publish_parked_by_short_redis_wedge_lands_after_recovery",
-    "mgmt.auth_cache_invalidation.burst_with_worker_kill_keeps_serving_while_redis_wedged",
+    "mgmt.cache_invalidation.publish_parked_by_short_redis_wedge_lands_after_recovery",
+    "mgmt.cache_invalidation.burst_with_worker_kill_keeps_serving_while_redis_wedged",
 )
 def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
     gateway: Gateway, tmp_path: Path, record_property: Callable[[str, object], None]
@@ -270,11 +270,11 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                         proxy_log,
                         lambda text: (
                             all(
-                                text.count(f"publish for {user} failed") >= _WEDGED_PUBLISHES_PER_BURST_USER
+                                text.count(f'publish for "{user}" failed') >= _WEDGED_PUBLISHES_PER_BURST_USER
                                 for user in wedged_users
                             )
                             and all(
-                                text.count(f"publish for {team_key} failed") >= wedged_team_updates
+                                text.count(f'publish for "{team_key}" failed') >= wedged_team_updates
                                 for team_key in wedged_team_keys
                             )
                         ),

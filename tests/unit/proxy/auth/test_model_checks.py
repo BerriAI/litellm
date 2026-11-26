@@ -1,5 +1,6 @@
 import datetime
 import ipaddress
+import itertools
 import json
 import ssl
 import threading
@@ -1212,6 +1213,31 @@ def test_get_complete_model_list_excludes_wildcard_routes_without_router():
     assert "bedrock/*" not in result
     assert "gpt-4" in result
     assert any(m.startswith("bedrock/") for m in result)
+
+
+def test_get_complete_model_list_lists_named_models_before_any_wildcard_route():
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+            {"model_name": "named-chat-model", "litellm_params": {"model": "openai/named-chat-model"}},
+        ]
+    )
+
+    result: Final = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["openai/*", "named-chat-model"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=True,
+        llm_router=router,
+    )
+
+    assert list(itertools.takewhile(lambda model: "*" not in model, result)) == ["named-chat-model"]
+    assert "openai/*" in result
 
 
 def test_get_complete_model_list_includes_wildcard_routes_when_requested():

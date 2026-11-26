@@ -738,11 +738,13 @@ async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs(
             litellm_logging_obj=MagicMock(),
             input=[{"type": "message", "role": "user", "content": "hi"}],
             previous_response_id="resp_prev",
+            generate=False,
         )
 
         mock_ws.assert_awaited_once()
         assert "input" not in mock_ws.call_args.kwargs
         assert "previous_response_id" not in mock_ws.call_args.kwargs
+        assert "generate" not in mock_ws.call_args.kwargs
 
 
 @pytest.mark.asyncio

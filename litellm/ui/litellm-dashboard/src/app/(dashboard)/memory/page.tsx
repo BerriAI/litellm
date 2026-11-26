@@ -12,7 +12,7 @@ export default function Memory() {
   const canViewMemory = useCan("viewMemory");
 
   if (!canViewMemory) {
-    return <AdminOnlyNotice pageTitle={t("memory.page.title")} />;
+    return <AdminOnlyNotice framed pageTitle={t("memory.page.title")} />;
   }
 
   return <MemoryView accessToken={accessToken} userID={userId} userRole={userRole} />;

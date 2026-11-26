@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, NoReturn
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import (
@@ -49,7 +49,7 @@ def app_scope(
     )
 
 
-def raise_app_failure(error: AppFailure) -> None:
+def raise_app_failure(error: AppFailure) -> NoReturn:
     raise ProxyException(
         message=error.detail,
         type="auth_error",
@@ -100,7 +100,6 @@ async def resolve_app_hierarchy(
     route: str,
     authenticated: UserAPIKeyAuth,
 ) -> CustomerHierarchyAuth | None:
-    import litellm
     from litellm.proxy.proxy_server import get_current_spend, user_api_key_cache
 
     assertion: Final = selected_app_assertion(headers)
@@ -147,7 +146,31 @@ async def resolve_app_hierarchy(
         if hierarchy is not None and hierarchy.customer_member_id and org is not None
         else None
     )
+    from litellm.proxy.management_helpers.app_groups import AppGroupStore
+
+    groups: Final = AppGroupStore(store) if app.app_group_id is not None else None
+    group: Final = await groups.get(app.app_group_id) if groups is not None and app.app_group_id is not None else None
+    if isinstance(group, AppFailure):
+        raise_app_failure(group)
+    group_org: Final = (
+        await groups.organization(group.app_group_id, hierarchy.customer_org_id)
+        if groups is not None and group is not None and hierarchy is not None and hierarchy.customer_org_id
+        else None
+    )
     app_scopes: Final = (
+        *((app_scope("app_group", group.app_group_id, group.spend, group.budget),) if group is not None else ()),
+        *(
+            (
+                app_scope(
+                    "app_group_customer_org",
+                    app_scope_id(group_org.app_group_id, group_org.customer_org_id),
+                    group_org.spend,
+                    group_org.budget,
+                ),
+            )
+            if group_org is not None
+            else ()
+        ),
         app_scope("app", app.app_id, app.spend, app.budget),
         *(
             (
@@ -179,16 +202,22 @@ async def resolve_app_hierarchy(
         partial(get_current_spend, recheck_recorded_spend=True),
     )
     base: Final = hierarchy or CustomerHierarchyAuth(scopes=())
-    combined: Final = base.model_copy(
-        update={
-            "app_id": app.app_id,
-            "app_alias": app.alias,
-            "app_customer_margin": app.customer_margin,
-            "scopes": (*base.scopes, *app_hierarchy.scopes),
-        }
-    )
+
+    def combined(app_scopes: Sequence[CustomerScopeAuth]) -> CustomerHierarchyAuth:
+        return base.model_copy(
+            update={
+                "app_id": app.app_id,
+                "app_group_id": app.app_group_id,
+                "app_alias": app.alias,
+                "app_customer_margin": app.customer_margin,
+                "scopes": (*base.scopes, *app_scopes),
+            }
+        )
+
     try:
-        await check_customer_hierarchy_access(app_hierarchy, llm_router, request_model, route, metadata)
-    except litellm.BudgetExceededError as error:
-        raise CustomerBudgetExceededError(combined, error) from error
-    return combined
+        admitted: Final = await check_customer_hierarchy_access(
+            app_hierarchy, llm_router, request_model, route, metadata
+        )
+    except CustomerBudgetExceededError as error:
+        raise CustomerBudgetExceededError(combined(error.customer_hierarchy.scopes), error) from error
+    return combined(admitted.scopes)

@@ -341,18 +341,26 @@ def validate_router_connection(model: str, provider: str | None, request: Mappin
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
 
 
-def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
+def _ir_request(
+    request: DecisionsRequestFormat, safety_identifier: str | None, drop_params: bool
+) -> DecisionsIRRequest:
     match request:
         case DecisionsRequestBody():
-            return replace(systemone_request_to_ir(request), safety_identifier=safety_identifier)
+            return replace(
+                systemone_request_to_ir(request), safety_identifier=safety_identifier, drop_params=drop_params
+            )
         case OpenAIDecisionRequestBody():
-            return openai_request_to_ir(request)
+            return replace(openai_request_to_ir(request), drop_params=drop_params)
         case _:
             assert_never(request)
 
 
+def _caller_drops_params(kwargs: Mapping[str, object]) -> bool:
+    return normalize_drop_params(kwargs.get("drop_params")) is True
+
+
 def _drops_params(kwargs: Mapping[str, object]) -> bool:
-    return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
+    return litellm.drop_params is True or _caller_drops_params(kwargs)
 
 
 def _request_safety_identifier(
@@ -741,6 +749,16 @@ def log_caller_request(kwargs: Mapping[str, object], caller_request: object) -> 
         logging_obj.update_messages([_logged_request_message(caller_request)])
 
 
+def _config_for_shape(provider_config: BaseDecisionsConfig, fields: RequestFields) -> BaseDecisionsConfig:
+    match fields:
+        case SystemOneRequestFields():
+            return provider_config.systemone_config()
+        case OpenAIDecisionRequestFields():
+            return provider_config
+        case _:
+            assert_never(fields)
+
+
 def prepare_call(
     *,
     model: str,
@@ -764,7 +782,7 @@ def prepare_call(
         api_key=api_key,
         litellm_params=GenericLiteLLMParams(use_litellm_proxy=kwargs.get("use_litellm_proxy") is True),
     )
-    provider_config: Final = get_decisions_provider_config(upstream_model, provider)
+    provider_config: Final = _config_for_shape(get_decisions_provider_config(upstream_model, provider), fields)
     if not upstream_model:
         raise litellm.BadRequestError(
             message="A model name is required for the Decisions API",
@@ -804,13 +822,15 @@ def prepare_call(
     resolved_api_key: Final = provider_config.resolve_credential(static_api_key, resolved_api_base, kwargs)
     if resolved_api_key is None and provider_config.api_key_required:
         raise litellm.AuthenticationError(
-            message=f"Missing API key for Decisions provider '{provider}'",
+            message=provider_config.missing_api_key_message(provider),
             model=model,
             llm_provider=provider,
         )
 
     caller_ir_request: Final = _without_malformed_images(
-        _without_unsupported_breakpoints(_ir_request(request, request_safety_identifier), provider_config),
+        _without_unsupported_breakpoints(
+            _ir_request(request, request_safety_identifier, _caller_drops_params(kwargs)), provider_config
+        ),
         _drops_params(kwargs),
     )
     if isinstance(caller_ir_request, _MalformedImages):

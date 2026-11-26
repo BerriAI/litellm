@@ -53,7 +53,7 @@ class ENTERPRISE_BlockedUserList(CustomLogger):
                     f"An error occurred: {str(e)}, blocked_user_list={blocked_user_list}"
                 )
 
-    def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
+    def print_verbose(self, print_statement: object, level: Literal["INFO", "DEBUG"] = "DEBUG"):
         if level == "INFO":
             verbose_proxy_logger.info(print_statement)
         elif level == "DEBUG":

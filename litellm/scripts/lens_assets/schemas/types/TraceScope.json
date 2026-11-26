@@ -1,28 +1,36 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TraceScope",
+  "type": "object",
   "properties": {
     "all_teams": {
+      "type": "integer",
       "enum": [
         0,
         1
-      ],
-      "type": "integer"
-    },
-    "team_ids": {
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
+      ]
     },
     "user_id": {
       "type": "string"
+    },
+    "team_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "filter_team_id": {
+      "type": "string",
+      "default": ""
+    },
+    "filter_api_key_hash": {
+      "type": "string",
+      "default": ""
     }
   },
   "required": [
     "all_teams",
     "user_id",
     "team_ids"
-  ],
-  "title": "TraceScope",
-  "type": "object"
+  ]
 }
