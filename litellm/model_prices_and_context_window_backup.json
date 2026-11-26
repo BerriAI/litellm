@@ -24123,6 +24123,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -78842,6 +78844,8 @@
         "source": "https://aihubmix.com/api/v1/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -89586,6 +89590,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -93380,6 +93386,8 @@
         "source": "https://ie-api.gmicloud.ai/v1/artifact/get_public_artifacts"
     },
     "gmi/openai/gpt-5.4-pro": {
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "input_cost_per_token": 3e-05,
         "litellm_provider": "gmi",
         "max_input_tokens": 409600,
@@ -105151,6 +105159,11 @@
         "source": "https://replicate.com/openai/gpt-4o-transcribe"
     },
     "replicate/openai/gpt-5-pro": {
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
+        "reasoning_effort_levels": [
+            "high"
+        ],
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "replicate",
         "mode": "chat",

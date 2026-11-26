@@ -1266,25 +1266,23 @@ class LiteLLMAnthropicMessagesAdapter:
         excludes_effort: Callable[[str], bool],
         *,
         drop_params: bool,
+        report_drops: bool,
     ) -> str | None:
         effort: Final = reasoning_effort_within_thinking_budget(output_effort, budget_effort)
         if not drop_params or effort is None or effort == budget_effort:
             return effort
-        if effort not in KNOWN_REASONING_EFFORTS:
-            warn_dropped_reasoning(
-                "output_config.effort", effort, model, "no reasoning API defines it", drop_params_gated=True
-            )
-            return budget_effort
-        if excludes_effort(effort):
-            warn_dropped_reasoning(
-                "output_config.effort",
-                effort,
-                model,
-                "its model cost map entry does not list it",
-                drop_params_gated=True,
-            )
-            return budget_effort
-        return effort
+        drop_reason: Final = (
+            "no reasoning API defines it"
+            if effort not in KNOWN_REASONING_EFFORTS
+            else "its model cost map entry does not list it"
+            if excludes_effort(effort)
+            else None
+        )
+        if drop_reason is None:
+            return effort
+        if report_drops:
+            warn_dropped_reasoning("output_config.effort", effort, model, drop_reason, drop_params_gated=True)
+        return budget_effort
 
     @staticmethod
     def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
@@ -1373,6 +1371,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     deployment_model_info=deployment_model_info,
                 ),
                 drop_params=drop_params,
+                report_drops=report_reasoning_drops,
             )
             if thinking
             else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)

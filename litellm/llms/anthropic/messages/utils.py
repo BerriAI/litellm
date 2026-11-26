@@ -592,10 +592,17 @@ def model_excludes_effort(
 
     if deployment_rounds_reasoning_effort(deployment_model_info):
         return False
-    levels: Final = deployment_reasoning_efforts(model, custom_llm_provider, deployment_model_info) or ()
+    row_model: Final = _cost_map_model(model, deployment_model_info)
+    levels: Final = deployment_reasoning_efforts(row_model, custom_llm_provider, deployment_model_info) or ()
     return (bool(levels) and effort not in levels) or is_unconfirmed_none(
-        effort, model, custom_llm_provider, deployment_model_info=deployment_model_info
+        effort, row_model, custom_llm_provider, deployment_model_info=deployment_model_info
     )
+
+
+def _cost_map_model(model: str, deployment_model_info: object) -> str:
+    own_info: Final = as_str_mapping(deployment_model_info)
+    base_model: Final = own_info.get("base_model") if own_info is not None else None
+    return base_model if isinstance(base_model, str) and base_model else model
 
 
 def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, deployment_model_info: object) -> bool:

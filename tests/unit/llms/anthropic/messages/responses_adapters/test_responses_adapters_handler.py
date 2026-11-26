@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import litellm
 from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
@@ -655,6 +656,7 @@ def test_build_responses_kwargs_lets_the_budget_decide_when_drop_params_drops_th
 
 
 LOW_BUDGET_THINKING: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}
+HIGH_BUDGET_THINKING: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET}
 
 
 @pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
@@ -679,6 +681,48 @@ def test_build_responses_kwargs_sends_what_the_budget_alone_sends_when_the_model
     assert sent_reasoning(cast(AnthropicOutputConfig, {"effort": effort})) == (
         sent_reasoning(None) if drop_params or effort == "minimal" else {"effort": effort}
     )
+
+
+@pytest.mark.parametrize(
+    "base_model_kwargs",
+    [{"base_model": "azure/gpt-5.4-pro"}, {"model_info": {"base_model": "azure/gpt-5.4-pro"}}],
+    ids=["litellm_params", "model_info"],
+)
+def test_build_responses_kwargs_sends_a_custom_named_deployment_the_effort_its_base_model_gets(
+    base_model_kwargs: dict[str, object],
+) -> None:
+    def sent_reasoning(model: str, deployment_kwargs: Mapping[str, object]) -> object:
+        return _build_responses_kwargs(
+            max_tokens=8000,
+            messages=MESSAGES,
+            model=model,
+            output_config=cast(AnthropicOutputConfig, {"effort": "low"}),
+            thinking=HIGH_BUDGET_THINKING,
+            extra_kwargs={"custom_llm_provider": "azure", "drop_params": True, **deployment_kwargs},
+        ).get("reasoning")
+
+    assert sent_reasoning("azure/my-pro-deployment", base_model_kwargs) == sent_reasoning("azure/gpt-5.4-pro", {})
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize(
+    "model_info",
+    [REASONS_WITHOUT_CONFIRMING_NONE, {"reasoning_effort_levels": ["low", "medium", "high"]}],
+    ids=["undeclared", "declared-levels"],
+)
+def test_build_responses_kwargs_lets_the_budget_decide_beside_a_default_effort(
+    model_info: dict[str, object], drop_params: bool
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=8000,
+        messages=MESSAGES,
+        model="openai/reasoner-without-levels",
+        output_config=cast(AnthropicOutputConfig, {"effort": "default"}),
+        thinking=MEDIUM_BUDGET_THINKING,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params, "model_info": model_info},
+    )
+
+    assert cast(Mapping[str, object], responses_kwargs["reasoning"])["effort"] == "medium"
 
 
 @pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
