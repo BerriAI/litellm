@@ -60,12 +60,6 @@ _MALFORMED_BODY: Final = _TripoClientFault(
     message="The request body is malformed",
     suggestion="Refer to the API documentation for request schema",
 )
-_STREAMING_REJECTED: Final = _TripoClientFault(
-    http_status=status.HTTP_400_BAD_REQUEST,
-    code=1004,
-    message="Streaming is not supported for Tripo requests",
-    suggestion="Refer to the API documentation for parameter requirements",
-)
 
 
 def is_tripo_pass_through_route(route: str) -> bool:
@@ -88,10 +82,6 @@ def tripo_error_response(fault: _TripoClientFault, headers: dict[str, str] | Non
         content=dict(tripo_error_content(fault, token_hex(16))),
         headers=headers,
     )
-
-
-def tripo_streaming_rejected_response() -> JSONResponse:
-    return tripo_error_response(_STREAMING_REJECTED)
 
 
 def uses_tripo_error_envelope(request: Request, exc: ProxyException) -> bool:

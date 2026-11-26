@@ -146,7 +146,6 @@ from litellm.proxy.common_utils.token_count_log import (
     logged_provider_token_count,
     rejected_token_count,
 )
-from litellm.proxy.common_utils.tripo_error_payload import tripo_streaming_rejected_response
 from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
     without_injected_usage_frames,
@@ -701,9 +700,6 @@ async def tripo_proxy_route(
         if content_type and not HttpPassThroughEndpointHelpers.is_multipart(request)
         else {}
     )
-    if not HttpPassThroughEndpointHelpers.is_multipart(request):
-        if is_passthrough_request_streaming(await read_request_body(request)):
-            return tripo_streaming_rejected_response()
     return await pass_through_request(
         request=request,
         target=str(target),

@@ -1417,6 +1417,16 @@ def _prepare_passthrough_client_body(
     return _PassthroughClientBody(scoped_body, eu_jev_body)
 
 
+def _passthrough_streams(custom_llm_provider: str | None, parsed_body: dict, stream: bool | None) -> bool | None:
+    # Tripo ignores this field and still returns one JSON task body. Following it would skip task billing.
+    if custom_llm_provider == "tripo":
+        return False
+    return HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
+        parsed_body=parsed_body,
+        stream=stream,
+    )
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1597,12 +1607,7 @@ async def pass_through_request(
         if _parsed_body is None:
             _parsed_body = {}
         _parsed_body["litellm_logging_obj"] = logging_obj
-        is_streaming_pass_through: Final = bool(
-            HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
-                parsed_body=_parsed_body,
-                stream=stream,
-            )
-        )
+        is_streaming_pass_through: Final = bool(_passthrough_streams(custom_llm_provider, _parsed_body, stream))
         typed_body: Final[Mapping[str, object]] = cast(Mapping[str, object], _parsed_body)  # cast-ok: json
         _parsed_body = guardrail_request_data_with_streaming(typed_body, is_streaming=is_streaming_pass_through)
 
@@ -1835,12 +1840,9 @@ async def pass_through_request(
                 "headers": redact_credential_headers(outbound_headers),
             },
         )
-        stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
-            parsed_body=_parsed_body or {},
-            stream=stream,
-        )
+        response_streams: Final = bool(_passthrough_streams(custom_llm_provider, _parsed_body or {}, stream))
 
-        if stream:
+        if response_streams:
             logging_obj.stream = True
             logging_obj.model_call_details["stream"] = True
 
@@ -1874,7 +1876,7 @@ async def pass_through_request(
                     )
                 )
 
-                response = await async_client.send(req, stream=stream)
+                response = await async_client.send(req, stream=True)
 
             upstream_usage = apply_upstream_reported_usage(
                 logging_obj=logging_obj,

@@ -187,7 +187,7 @@ async def test_tripo_authorizes_selected_deployment_before_forwarding(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", ["tripo", "cn.tripo"])
 @pytest.mark.parametrize("stream", [True, 1, "true", "false"])
-async def test_tripo_rejects_streaming_before_forwarding(
+async def test_tripo_forwards_stream_flag_and_returns_the_json_task(
     monkeypatch: pytest.MonkeyPatch, prefix: str, stream: bool | int | str
 ) -> None:
     import json
@@ -195,6 +195,7 @@ async def test_tripo_rejects_streaming_before_forwarding(
 
     import httpx
     from starlette.requests import Request
+    from starlette.responses import StreamingResponse
     from starlette.types import Message
 
     import litellm
@@ -204,14 +205,16 @@ async def test_tripo_rejects_streaming_before_forwarding(
     from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import PassthroughEndpointRouter
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
+    domain: Final = "openapi.tripo3d.com" if prefix == "cn.tripo" else "openapi.tripo3d.ai"
     router: Final = litellm.Router(model_list=[{
         "model_name": "tripo-stream-test",
         "litellm_params": {
             "model": "tripo/task", "custom_llm_provider": "tripo", "api_key": "test-key",
-            "api_base": "https://openapi.tripo3d.com/v3" if prefix == "cn.tripo" else "https://openapi.tripo3d.ai/v3",
+            "api_base": f"https://{domain}/v3",
             "use_in_pass_through": True,
         },
     }])
+    task: Final = {"code": 0, "data": {"task_id": "96ac02ef-dccb-42b4-917c-61bc9e601353"}}
 
     async def receive() -> Message:
         return {
@@ -232,23 +235,18 @@ async def test_tripo_rejects_streaming_before_forwarding(
     client_cache: Final = litellm.in_memory_llm_clients_cache.cache_dict
     cache_key: Final = next(key for key, value in client_cache.items() if value is handler)
 
-    def upstream(request: httpx.Request) -> httpx.Response:
-        pytest.fail("Streaming request reached upstream")
+    def upstream(upstream_request: httpx.Request) -> httpx.Response:
+        assert json.loads(upstream_request.content) == {"prompt": "a chair", "stream": stream}
+        assert str(upstream_request.url) == f"https://{domain}/v3/generation/text-to-model"
+        return httpx.Response(200, json=task, request=upstream_request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
         monkeypatch.setitem(client_cache, cache_key, SimpleNamespace(client=client))
-        rejected: Final = await endpoints.tripo_proxy_route(
+        result: Final = await endpoints.tripo_proxy_route(
             endpoint="v3/generation/text-to-model", request=request,
             user_api_key_dict=UserAPIKeyAuth(models=["tripo-stream-test"]),
             credentials_router=PassthroughEndpointRouter(llm_router_getter=lambda: router),
         )
-    body: Final = json.loads(rejected.body)
-    assert rejected.status_code == 400
-    assert body == {
-        "code": 1004,
-        "status": "error",
-        "message": "Streaming is not supported for Tripo requests",
-        "suggestion": "Refer to the API documentation for parameter requirements",
-        "request_id": body["request_id"],
-    }
-    assert len(body["request_id"]) == 32
+    assert not isinstance(result, StreamingResponse)
+    assert result.status_code == 200
+    assert json.loads(result.body) == task
