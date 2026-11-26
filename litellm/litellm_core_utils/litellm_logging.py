@@ -1761,8 +1761,8 @@ class Logging(LiteLLMLoggingBaseClass):
     def update_from_kwargs(
         self,
         kwargs: Mapping[str, object],
-        litellm_params: dict[str, object] | None = None,
-        optional_params: dict[str, object] | None = None,
+        litellm_params: dict[str, object] | None = None,  # mutable-ok: "metadata" is popped from it below
+        optional_params: dict[str, object] | None = None,  # mutable-ok: kept as the logging object's own dict
         model: str | None = None,
         user: object = None,
         **additional_params: object,
@@ -6103,11 +6103,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             if callback == "logfire" and logfireLogger is not None:
                 verbose_logger.debug("reaches logfire for failure logging!")
-                logfire_kwargs: dict[str, object] = {}
-                for k, v in self._model_call_details_view.items():
-                    if k != "original_response":  # copy.deepcopy raises errors as this could be a coroutine
-                        logfire_kwargs[k] = v
-                logfire_kwargs["exception"] = exception
+                logfire_kwargs: Final[Mapping[str, object]] = {
+                    # copy.deepcopy raises errors on original_response as this could be a coroutine
+                    **{k: v for k, v in self._model_call_details_view.items() if k != "original_response"},
+                    "exception": exception,
+                }
 
                 logfireLogger.log_event(
                     kwargs=logfire_kwargs,

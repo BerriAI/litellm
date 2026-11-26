@@ -115,7 +115,9 @@ def create_sync_endpoint_function(endpoint_config: EndpointConfig) -> Callable[.
                 raise ValueError(f"Container provider config not found for: {resolved_custom_llm_provider}")
 
             # Build optional params for logging
-            optional_params: Final[dict[str, object]] = {k: kwargs.get(k) for k in path_params if k in kwargs}
+            optional_params: Final[dict[str, object]] = {  # mutable-ok: kept as the logging object's own dict
+                k: kwargs.get(k) for k in path_params if k in kwargs
+            }
 
             # Pre-call logging
             litellm_logging_obj.update_from_kwargs(
