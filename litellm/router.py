@@ -238,6 +238,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_caller_timeout_408,
     is_failure_outside_selected_deployment,
     is_video_lookup_not_found,
+    mark_deployment_selection_failure,
     set_cooldown_deployments,
 )
 from litellm.router_utils.deployment_pricing import (
@@ -14797,6 +14798,7 @@ class Router:
             phase_event(_DEPLOYMENT_SELECTED_EVENT, pick_attributes)
             return deployment
         except Exception as e:
+            mark_deployment_selection_failure(e)
             traceback_exception: Final = traceback.format_exc()
             # if router rejects call -> log to langfuse/otel/etc.
             if request_kwargs is not None:
@@ -14961,6 +14963,7 @@ class Router:
 
             return deployment
         except Exception as e:
+            mark_deployment_selection_failure(e)
             traceback_exception: Final = traceback.format_exc()
             if request_kwargs is not None:
                 logging_obj: Final = request_kwargs.get("litellm_logging_obj", None)
