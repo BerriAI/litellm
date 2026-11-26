@@ -7,8 +7,8 @@ import asyncio
 import math
 import os
 import sys
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from types import MappingProxyType
@@ -21,7 +21,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching.redis_batch import active_request_redis_batches
+from litellm.caching.redis_batch import Batch, active_request_redis_batches
 from litellm.constants import (
     AUTH_OBJECTS_TARGET,
     IMAGE_CALL_TYPES,
@@ -61,16 +61,20 @@ from litellm.llms.azure.common_utils import caused_by_entra_rejection
 from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.llms.github_copilot.per_user_auth import is_github_copilot_per_user_request
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTable
+from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.models.user import LiteLLM_UserTable
 from litellm.models.verification_token import LiteLLM_DeletedVerificationToken
-from litellm.proxy.spend_tracking.team_member_budget import hours_until
-from litellm.repositories.base_repository import BaseRepository
+from litellm.proxy.spend_tracking.team_member_budget import TeamMemberBudget, hours_until, team_member_budget
+from litellm.redis.stores.spend_counters.types import team_member_counter
+from litellm.repositories.base_repository import BaseRepository, record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router_api import deployment_metadata
@@ -164,6 +168,28 @@ class _PaginatedPrismaTable(Protocol[_TableRowT]):
     ) -> list[_TableRowT]: ...
 
     async def count(self) -> int: ...
+
+
+@dataclass(frozen=True, slots=True)
+class TeamMemberSweepIO:
+    fetch_page: Callable[[int, int], Awaitable[tuple[Sequence[LiteLLM_TeamMembership], int | None]]]
+    fetch_teams: Callable[[Sequence[str]], Awaitable[Mapping[str, LiteLLM_TeamTable]]]
+    fetch_default: Callable[[str], Awaitable[LiteLLM_BudgetTable | None]]
+    fetch_emails: Callable[[Sequence[str]], Awaitable[Mapping[str, str | None]]]
+    read_counters: Callable[[Sequence[str]], Awaitable[Mapping[str, float | None] | None]]
+
+
+def _present(values: Iterable[str | None]) -> Iterator[str]:
+    return (value for value in values if value is not None)
+
+
+def _budgeted_members(
+    candidates: Iterable[tuple[LiteLLM_TeamMembership, LiteLLM_BudgetTable | None]], now: datetime
+) -> Iterator[tuple[LiteLLM_TeamMembership, TeamMemberBudget]]:
+    for membership, team_default in candidates:
+        budget: Final = team_member_budget(membership=membership, team_default_budget=team_default, now=now)
+        if budget is not None:
+            yield membership, budget
 
 
 def _paginated_table(repository: BaseRepository[_TableRowT]) -> _PaginatedPrismaTable[_TableRowT]:
@@ -4462,7 +4488,7 @@ class PrometheusLogger(CustomLogger):
         self,
         data_fetch_function: Callable[..., Awaitable[tuple[Sequence[_BudgetRowT], int | None]]],
         set_metrics_function: Callable[[Sequence[_BudgetRowT]], Awaitable[None]],
-        data_type: Literal["teams", "keys", "users", "orgs", "customers"],
+        data_type: Literal["teams", "keys", "users", "orgs", "customers", "team_members"],
     ):
         """
         Generic method to initialize budget metrics for teams or API keys.
@@ -4664,6 +4690,129 @@ class PrometheusLogger(CustomLogger):
             data_type="customers",
         )
 
+    async def _initialize_team_member_budget_metrics(self) -> None:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None or self._team_member_budget_gauges_are_noop():
+            return
+        await self._sweep_team_member_budget_metrics(
+            self._team_member_sweep_io(prisma_client), now=datetime.now(timezone.utc)
+        )
+
+    def _team_member_sweep_io(self, prisma_client: PrismaClient) -> TeamMemberSweepIO:
+        from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+        from litellm.proxy.proxy_server import spend_counter_store, user_api_key_cache
+
+        memberships_table: Final = TeamMembershipRepository(prisma_client).table
+        teams: Final = TeamRepository(prisma_client)
+        users: Final = UserRepository(prisma_client)
+
+        async def fetch_page(page_size: int, page: int) -> tuple[Sequence[LiteLLM_TeamMembership], int | None]:
+            rows: Final = await memberships_table.find_many(
+                skip=(page - 1) * page_size,
+                take=page_size,
+                order=[{"team_id": "asc"}, {"user_id": "asc"}],
+                include={"litellm_budget_table": True},
+            )
+            total_count: Final = await memberships_table.count() if page == 1 else None
+            return tuple(LiteLLM_TeamMembership.model_validate(record_to_dict(row)) for row in rows), total_count
+
+        async def fetch_teams(team_ids: Sequence[str]) -> Mapping[str, LiteLLM_TeamTable]:
+            found: Final = await teams.find_many_in("team_id", team_ids)
+            return MappingProxyType({team.team_id: team for team in found})
+
+        async def fetch_default(budget_id: str) -> LiteLLM_BudgetTable | None:
+            return await get_team_member_default_budget(
+                budget_id=budget_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                raise_on_lookup_error=True,
+            )
+
+        async def fetch_emails(user_ids: Sequence[str]) -> Mapping[str, str | None]:
+            found: Final = await users.find_many_in("user_id", user_ids)
+            return MappingProxyType({user.user_id: user.user_email for user in found})
+
+        async def read_counters(counter_keys: Sequence[str]) -> Mapping[str, float | None] | None:
+            try:
+                return await spend_counter_store.read_many(counter_keys, batch=Batch.NONE)
+            except Exception as e:  # noqa: BLE001  # a failed counter read falls back to the stored member spend
+                verbose_logger.debug("[Non-Blocking] Prometheus: team member counter read failed: %s", e)
+                return None
+
+        return TeamMemberSweepIO(
+            fetch_page=fetch_page,
+            fetch_teams=fetch_teams,
+            fetch_default=fetch_default,
+            fetch_emails=fetch_emails,
+            read_counters=read_counters,
+        )
+
+    async def _sweep_team_member_budget_metrics(self, io: TeamMemberSweepIO, now: datetime) -> None:
+        async def set_page(memberships: Sequence[LiteLLM_TeamMembership]) -> None:
+            await self._set_team_member_page_budget_metrics(io, memberships, now)
+
+        await self._initialize_budget_metrics(
+            data_fetch_function=io.fetch_page,
+            set_metrics_function=set_page,
+            data_type="team_members",
+        )
+
+    async def _set_team_member_page_budget_metrics(
+        self, io: TeamMemberSweepIO, memberships: Sequence[LiteLLM_TeamMembership], now: datetime
+    ) -> None:
+        from litellm.proxy.management_endpoints.team_admin_field_permissions import stored_team_member_budget_id
+
+        if not memberships:
+            return
+        teams: Final = await io.fetch_teams(tuple(dict.fromkeys(membership.team_id for membership in memberships)))
+        default_ids: Final = MappingProxyType(
+            {team_id: stored_team_member_budget_id(team) for team_id, team in teams.items()}
+        )
+        distinct_default_ids: Final = tuple(frozenset(_present(default_ids.values())))
+        default_lookups: Final = await asyncio.gather(
+            *(io.fetch_default(budget_id) for budget_id in distinct_default_ids), return_exceptions=True
+        )
+        defaults: Final = MappingProxyType(
+            {
+                budget_id: budget
+                for budget_id, budget in zip(distinct_default_ids, default_lookups, strict=True)
+                if isinstance(budget, LiteLLM_BudgetTable)
+            }
+        )
+
+        def default_for(team_id: str) -> LiteLLM_BudgetTable | None:
+            default_id: Final = default_ids.get(team_id)
+            return defaults.get(default_id) if default_id is not None else None
+
+        budgeted: Final = tuple(
+            _budgeted_members(((membership, default_for(membership.team_id)) for membership in memberships), now)
+        )
+        if not budgeted:
+            return
+        emails: Final = await io.fetch_emails(tuple(dict.fromkeys(membership.user_id for membership, _ in budgeted)))
+        counters: Final = await io.read_counters(
+            tuple(team_member_counter(membership.user_id, membership.team_id) for membership, _ in budgeted)
+        )
+        for membership, budget in budgeted:
+            team: Final = teams.get(membership.team_id)
+            stored_spend: Final = membership.spend or 0.0
+            counter_spend: Final = (
+                counters.get(team_member_counter(membership.user_id, membership.team_id))
+                if counters is not None
+                else None
+            )
+            self._set_team_member_budget_metrics(
+                team_id=membership.team_id,
+                team_alias=team.team_alias if team is not None else None,
+                user_id=membership.user_id,
+                user_email=emails.get(membership.user_id),
+                max_budget=budget.max_budget,
+                spend=max(counter_spend, stored_spend) if counter_spend is not None else stored_spend,
+                budget_reset_at=budget.budget_reset_at,
+                now=now,
+            )
+
     async def initialize_remaining_budget_metrics(self):
         """
         Handler for initializing remaining budget metrics for all teams to avoid metric discrepancies.
@@ -4696,6 +4845,7 @@ class PrometheusLogger(CustomLogger):
         """
         verbose_logger.debug("Emitting key, team, user, org, customer budget metrics....")
         await self._initialize_team_budget_metrics()
+        await self._initialize_team_member_budget_metrics()
         await self._initialize_api_key_budget_metrics()
         await self._initialize_user_budget_metrics()
         await self._initialize_org_budget_metrics()
