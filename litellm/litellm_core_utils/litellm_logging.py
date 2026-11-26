@@ -2152,7 +2152,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 model=self.model,
                 litellm_logging_obj=self,
             )
-        except Exception as e:  # noqa: BLE001  # a malformed price or cost config leaves the cost unset
+        except Exception as e:  # noqa: BLE001  # any pricing error leaves the cost unset instead of failing logging
             self.model_call_details["response_cost_failure_debug_information"] = (
                 StandardLoggingModelCostFailureDebugInformation(
                     error_str=str(e),
