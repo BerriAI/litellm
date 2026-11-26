@@ -29,6 +29,7 @@ from integration._support.otlp_sink import (
     SpanSinks,
     configure_sink,
     langfuse_callback_variables,
+    recorded_requests,
     recorded_spans,
     spans_for_trace,
 )
@@ -314,7 +315,9 @@ def test_a_successful_destination_request_records_no_failure(
         key: Final = scenario.key(metadata={"logging": _langfuse_destination(audit_sinks, "success_and_failure")})
         since: Final = (recorded_spans(audit_sinks.operator)[0], recorded_spans(audit_sinks.tenant)[0])
 
-        trace_id: Final = _expect_status(rig.proxy, key, model, 200, path, stream)
+        trace_id, response = _send(rig.proxy, key, model, path, stream)
+        assert response.status_code == 200, response.text
+        assert "langfuse-echo" in response.text, response.text
         held(lambda: _trace(audit_sinks.operator, since[0], trace_id), _has_server_span, holding=3, seconds=40)
         held(lambda: _trace(audit_sinks.tenant, since[1], trace_id), _has_server_span, holding=3, seconds=40)
         operator: Final = _trace(audit_sinks.operator, since[0], trace_id)
@@ -380,10 +383,16 @@ def test_a_destination_outage_and_a_worker_kill_mid_burst_keep_one_failure_recor
             assert response.status_code == FAILURE_STATUS[failure], response.text
             return trace_id, side, response.status_code
 
+        exports_before_outage: Final = len(recorded_requests(audit_sinks.tenant))
         configure_sink(audit_sinks.tenant, status=503)
         try:
             with ThreadPoolExecutor(max_workers=12) as pool:
                 outage: Final = tuple(pool.map(call, range(24)))
+            eventually(
+                lambda: len(recorded_requests(audit_sinks.tenant)),
+                lambda exports: exports > exports_before_outage,
+                seconds=30,
+            )
         finally:
             configure_sink(audit_sinks.tenant, status=200)
         assert all(status is not None for _, _, status in outage), outage
