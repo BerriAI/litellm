@@ -61,6 +61,18 @@ def test_fireworks_serverless_model_resolves_to_its_registry_row(
     assert info.get("supported_endpoints") == row.get("supported_endpoints")
 
 
+def test_fireworks_inkling_mini_declared_capabilities_override_provider_defaults(
+    local_model_cost_map: None, prices: CostMap
+) -> None:
+    model: Final = "fireworks_ai/accounts/fireworks/models/inkling-2-mini"
+    row: Final = prices[model]
+
+    assert (litellm.supports_function_calling(model), litellm.supports_vision(model)) == (
+        row["supports_function_calling"],
+        row["supports_vision"],
+    )
+
+
 @pytest.mark.parametrize(
     ("model", "provider", "mode"),
     (
