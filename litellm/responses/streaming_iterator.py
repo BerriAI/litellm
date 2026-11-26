@@ -1361,14 +1361,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._settled_after_consumer_left = True
         if self._unclaimed_close is not None:
             self._unclaimed_close.cancel()
-        if (
-            not drain
-            or not self._outlives_its_consumer
-            or self._replays_stored_stream
-            or self._reached_its_end()
-            or requests_background(self.request_data)
-            or is_background_response(self._created_response)
-        ):
+        if not drain or not self._can_be_read_on():
             await self._close_upstream()
             return False
         with anyio.move_on_after(RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS):
@@ -1379,6 +1372,11 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 verbose_logger.debug("Responses API stream ended while draining after a client disconnect: %r", e)
         await self._close_upstream()
         return self._completed_response_logged
+
+    def _can_be_read_on(self) -> bool:
+        if not self._outlives_its_consumer or self._replays_stored_stream or self._reached_its_end():
+            return False
+        return not (requests_background(self.request_data) or is_background_response(self._created_response))
 
     def _reached_its_end(self) -> bool:
         return self.finished or self.completed_response is not None or self._failure_handled
