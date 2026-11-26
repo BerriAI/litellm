@@ -80868,6 +80868,8 @@
         "supports_vision": true
     },
     "vertex_ai/gemini-2.0-flash": {
+        "cache_read_input_audio_token_cost": 2.5e-07,
+        "cache_read_input_token_cost": 3.75e-08,
         "supports_media_in_tool_response": false,
         "supports_part_media_resolution": false,
         "deprecation_date": "2026-06-01",
@@ -80885,6 +80887,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/gemini-2.0-flash-lite": {
+        "cache_read_input_audio_token_cost": 1.875e-08,
+        "cache_read_input_token_cost": 1.875e-08,
         "deprecation_date": "2026-06-01",
         "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "successor_model": "vertex_ai/gemini-3.5-flash-lite",
