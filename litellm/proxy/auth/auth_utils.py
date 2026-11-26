@@ -2545,6 +2545,8 @@ _MODEL_ROUTING_ID_FIELDS: Final = (
     "vector_store_id",
     "video_id",
     "character_id",
+    "interaction_id",
+    "previous_interaction_id",
 )
 
 
@@ -2659,6 +2661,16 @@ def _extract_models_from_managed_resource_id(
         except Exception as e:
             verbose_proxy_logger.debug("Unable to extract model from managed video/character ID: %s", str(e))
 
+    if resource_id_field in ("interaction_id", "previous_interaction_id"):
+        from litellm.interactions.id_utils import decode_interaction_id
+
+        interaction_deployment_id: Final = decode_interaction_id(resource_id)["deployment_id"]
+        if interaction_deployment_id is not None:
+            _append_model_candidates(
+                candidates=candidates,
+                value=_group_of_interaction_deployment_id(interaction_deployment_id, llm_router),
+            )
+
     return _dedupe_model_candidates(candidates)
 
 
@@ -2698,6 +2710,13 @@ def _group_of_deployment_selector(selector: object, llm_router: Router | None) -
     return selector if deployment is None else deployment.model_name
 
 
+def _group_of_interaction_deployment_id(deployment_id: str, llm_router: Router | None) -> str:
+    if llm_router is None:
+        return deployment_id
+    deployment: Final = llm_router.registry().deployment(deployment_id)
+    return deployment_id if deployment is None else deployment.model_name
+
+
 def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | None) -> str | None:
     if model_id is None or llm_router is None:
         return model_id
@@ -2732,6 +2751,46 @@ def _cache_prediction_model_candidates(
         current_deployment_id=current_id, candidate_deployment_id=candidate_id, llm_router=llm_router, team_id=team_id
     )
     return tuple(deployment.model_name for deployment in deployments) if deployments is not None else ()
+
+
+def _interaction_selector_candidate(
+    selector: object,
+    *,
+    normalize_deployment_id: bool,
+    llm_router: Router | None,
+) -> object:
+    if normalize_deployment_id and isinstance(selector, str):
+        return _group_of_deployment_selector(selector, llm_router)
+    return selector
+
+
+def _extract_resource_id_candidates(
+    request_data: Mapping[str, object],
+    route: str,
+    *,
+    uses_model_routing_sources: bool,
+    llm_router: Router | None,
+) -> tuple[str, ...]:
+    if uses_model_routing_sources:
+        return tuple(
+            chain.from_iterable(
+                _extract_models_from_managed_resource_id(
+                    request_data.get(field),
+                    resource_id_field=field,
+                    llm_router=llm_router,
+                )
+                for field in _MODEL_ROUTING_ID_FIELDS
+            )
+        )
+    if route.rstrip("/").endswith("/interactions"):
+        return tuple(
+            _extract_models_from_managed_resource_id(
+                request_data.get("previous_interaction_id"),
+                resource_id_field="previous_interaction_id",
+                llm_router=llm_router,
+            )
+        )
+    return ()
 
 
 def _extract_model_candidates_from_request(
@@ -2781,9 +2840,11 @@ def _extract_model_candidates_from_request(
     body_model: Final = request_data.get("model")
     _append_model_candidates(
         candidates,
-        _group_of_deployment_selector(body_model, llm_router)
-        if selects_by_interaction_id and isinstance(body_model, str)
-        else body_model,
+        _interaction_selector_candidate(
+            body_model,
+            normalize_deployment_id=selects_by_interaction_id,
+            llm_router=llm_router,
+        ),
     )
     if uses_body_target_model_sources or not body_model:
         _append_model_candidates(candidates, request_data.get("target_model_names"))
@@ -2795,31 +2856,33 @@ def _extract_model_candidates_from_request(
     if uses_completion_model_sources and isinstance(completion, Mapping):
         _append_model_candidates(candidates, completion.get("model"))
 
-    if uses_model_routing_sources:
-        if uses_header_or_query_model_sources:
-            for selector in (
-                _get_case_insensitive_mapping_value(request_query_params, "model"),
-                _get_case_insensitive_mapping_value(request_headers, MODEL_ROUTING_HEADER_NAME),
-            ):
-                _append_model_candidates(
-                    candidates,
-                    _group_of_deployment_selector(selector, llm_router) if selects_by_interaction_id else selector,
-                )
-        if uses_query_target_model_sources:
+    if uses_model_routing_sources and uses_header_or_query_model_sources:
+        for selector in (
+            _get_case_insensitive_mapping_value(request_query_params, "model"),
+            _get_case_insensitive_mapping_value(request_headers, MODEL_ROUTING_HEADER_NAME),
+        ):
             _append_model_candidates(
                 candidates,
-                _get_case_insensitive_mapping_value(request_query_params, "target_model_names"),
-            )
-
-        for field in _MODEL_ROUTING_ID_FIELDS:
-            _append_model_candidates(
-                candidates,
-                _extract_models_from_managed_resource_id(
-                    request_data.get(field),
-                    resource_id_field=field,
+                _interaction_selector_candidate(
+                    selector,
+                    normalize_deployment_id=selects_by_interaction_id,
                     llm_router=llm_router,
                 ),
             )
+    if uses_model_routing_sources and uses_query_target_model_sources:
+        _append_model_candidates(
+            candidates,
+            _get_case_insensitive_mapping_value(request_query_params, "target_model_names"),
+        )
+    _append_model_candidates(
+        candidates,
+        _extract_resource_id_candidates(
+            request_data,
+            route,
+            uses_model_routing_sources=uses_model_routing_sources,
+            llm_router=llm_router,
+        ),
+    )
 
     return _dedupe_model_candidates(candidates)
 

@@ -1,12 +1,14 @@
-from collections.abc import Mapping
+import json
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import JSONResponse, ORJSONResponse
+from fastapi.responses import JSONResponse, ORJSONResponse, StreamingResponse
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
+from litellm.interactions.id_utils import decode_interaction_id, encode_interaction_id
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
 from litellm.proxy._types import ProxyException, TokenCountRequest
@@ -550,23 +552,23 @@ async def create_interaction(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Create a new interaction using Google's Interactions API.
-    
+    Create a new interaction using Google\x27s Interactions API.
+
     Per OpenAPI spec: POST /{api_version}/interactions
-    
+
     Supports both model interactions and agent interactions:
     - Model: Provide `model` parameter (e.g., "gemini-2.5-flash")
     - Agent: Provide `agent` parameter (e.g., "deep-research-pro-preview-12-2025")
-    
+
     Example:
     ```bash
-    curl -X POST "http://localhost:4000/v1beta/interactions" \
-        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-        -H "Content-Type: application/json" \
-        -d '{
+    curl -X POST "http://localhost:4000/v1beta/interactions" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
+        -H "Content-Type: application/json" \\
+        -d \x27{
             "model": "gemini/gemini-2.5-flash",
             "input": "Hello, how are you?"
-        }'
+        }\x27
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -589,9 +591,14 @@ async def create_interaction(
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = "gemini"
 
+    prepared: Final = _prepare_create_interaction_routing(data, llm_router)
+    if prepared.previous_interaction_id is not None:
+        data["previous_interaction_id"] = prepared.previous_interaction_id
+    if prepared.model_override is not None:
+        data["model"] = prepared.model_override
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -601,7 +608,7 @@ async def create_interaction(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=prepared.routing_model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -616,10 +623,244 @@ async def create_interaction(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return _encode_interaction_payload(response, _routed_deployment_id(response, fastapi_response))
+
+
+class _PreparedInteractionRouting(NamedTuple):
+    routing_model: str | None
+    previous_interaction_id: str | None = None
+    model_override: str | None = None
+
+
+def _prepare_create_interaction_routing(
+    data: Mapping[str, object],
+    llm_router: object,
+) -> _PreparedInteractionRouting:
+    typed_data: Final = _REQUEST_BODY.validate_python(data)
+    raw_model: Final = typed_data.get("model")
+    explicit_model: Final = raw_model if isinstance(raw_model, str) else None
+    raw_prev: Final = typed_data.get("previous_interaction_id")
+    if not isinstance(raw_prev, str):
+        return _PreparedInteractionRouting(routing_model=explicit_model)
+    decoded_prev: Final = decode_interaction_id(raw_prev)
+    prev_deployment_id: Final = decoded_prev["deployment_id"]
+    if prev_deployment_id is None:
+        return _PreparedInteractionRouting(routing_model=explicit_model)
+    raw_prev_id: Final = decoded_prev["interaction_id"]
+    if (
+        explicit_model is None
+        or not explicit_model
+        or _selector_matches_deployment_group(explicit_model, prev_deployment_id, llm_router)
+    ):
+        return _PreparedInteractionRouting(
+            routing_model=prev_deployment_id,
+            previous_interaction_id=raw_prev_id,
+            model_override=prev_deployment_id,
+        )
+    return _PreparedInteractionRouting(
+        routing_model=explicit_model,
+        previous_interaction_id=raw_prev_id,
+    )
 
 
 def _interaction_model_group(request: Request) -> str | None:
     return request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME)
+
+
+def _selector_matches_deployment_group(selector: str, deployment_id: str, llm_router: object) -> bool:
+    from litellm.router import Router  # noqa: PLC0415  # cycle-avoidance inline import
+
+    if not isinstance(llm_router, Router):
+        return False
+    deployment: Final = llm_router.registry().deployment(deployment_id)
+    if deployment is None:
+        return False
+    return selector in (deployment.model_name, deployment.model_info.team_public_model_name)
+
+
+def _resolve_interaction_selector(
+    request: Request, encoded_deployment_id: str | None, llm_router: object
+) -> str | None:
+    explicit: Final = _interaction_model_group(request)
+    if not explicit:
+        return encoded_deployment_id
+    if encoded_deployment_id is not None and _selector_matches_deployment_group(
+        explicit, encoded_deployment_id, llm_router
+    ):
+        return encoded_deployment_id
+    return explicit
+
+
+def _routed_deployment_id(response: object, fastapi_response: Response) -> str | None:
+    header_id: Final = fastapi_response.headers.get("x-litellm-model-id")
+    if header_id:
+        return header_id
+    if isinstance(response, Response):
+        resp_header_id: Final = response.headers.get("x-litellm-model-id")
+        if resp_header_id:
+            return resp_header_id
+    hidden_params: Final[object] = getattr(response, "hidden_params", None)
+    if isinstance(hidden_params, Mapping):
+        try:
+            typed_hidden: Final = _REQUEST_BODY.validate_python(hidden_params)
+        except ValidationError:
+            return None
+        model_id: Final = typed_hidden.get("model_id")
+        if isinstance(model_id, str) and model_id:
+            return model_id
+    return None
+
+
+def _validate_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _REQUEST_BODY.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _rewrite_interaction_mapping_ids(payload: Mapping[str, object], deployment_id: str) -> Mapping[str, object]:
+    updates: Final[dict[str, object]] = {}  # mutable-ok: built locally and returned as Mapping
+    raw_id: Final = payload.get("id")
+    if isinstance(raw_id, str) and raw_id:
+        updates["id"] = encode_interaction_id(raw_id, deployment_id)
+    raw_iid: Final = payload.get("interaction_id")
+    if isinstance(raw_iid, str) and raw_iid:
+        updates["interaction_id"] = encode_interaction_id(raw_iid, deployment_id)
+    typed_nested: Final = _validate_mapping(payload.get("interaction"))
+    if typed_nested is not None:
+        nested_id: Final = typed_nested.get("id")
+        if isinstance(nested_id, str) and nested_id:
+            updates["interaction"] = {**typed_nested, "id": encode_interaction_id(nested_id, deployment_id)}
+    return {**payload, **updates} if updates else payload
+
+
+def _rewrite_sse_line(line: str, deployment_id: str) -> str:
+    if not line.startswith("data: "):
+        return line
+    body: Final = line.removeprefix("data: ")
+    stripped: Final = body.strip()
+    if not stripped.startswith("{"):
+        return line
+    try:
+        parsed: Final = _REQUEST_BODY.validate_json(stripped)
+    except ValidationError:
+        return line
+    rewritten: Final = _rewrite_interaction_mapping_ids(parsed, deployment_id)
+    if rewritten is parsed:
+        return line
+    trailing: Final = "\r\n" if body.endswith("\r\n") else ("\n" if body.endswith("\n") else "")
+    encoded_json: Final = json.dumps(rewritten, separators=(",", ":"))
+    return f"data: {encoded_json}{trailing}"
+
+
+async def _encode_interaction_sse_stream(
+    body_iterator: AsyncIterable[str | bytes | memoryview], deployment_id: str
+) -> AsyncIterator[str]:
+    buffer = ""  # rebind-ok: incremental SSE line buffering across stream chunks
+    async for raw_chunk in body_iterator:
+        if isinstance(raw_chunk, bytes):
+            text = raw_chunk.decode("utf-8", errors="replace")
+        elif isinstance(raw_chunk, memoryview):
+            text = bytes(raw_chunk).decode("utf-8", errors="replace")
+        else:
+            text = raw_chunk
+        buffer += text
+        while "\n" in buffer:
+            idx = buffer.index("\n") + 1
+            line = buffer[:idx]
+            buffer = buffer[idx:]
+            yield _rewrite_sse_line(line, deployment_id)
+    if buffer:
+        yield _rewrite_sse_line(buffer, deployment_id)
+
+
+def _encode_interaction_payload(payload: object, deployment_id: str | None) -> object:
+    if not deployment_id:
+        return payload
+    if isinstance(payload, StreamingResponse):
+        passthrough_headers: Final = {k: v for k, v in payload.headers.items() if k.lower() != "content-type"}
+        return StreamingResponse(
+            content=_encode_interaction_sse_stream(payload.body_iterator, deployment_id),
+            status_code=payload.status_code,
+            headers=passthrough_headers,
+            media_type=payload.media_type,
+            background=payload.background,
+        )
+    typed_payload: Final = _validate_mapping(payload)
+    if typed_payload is not None:
+        return _rewrite_interaction_mapping_ids(typed_payload, deployment_id)
+    if isinstance(payload, BaseModel) and hasattr(payload, "id"):
+        raw_id: Final[object] = getattr(payload, "id", None)
+        if isinstance(raw_id, str) and raw_id:
+            return payload.model_copy(update={"id": encode_interaction_id(raw_id, deployment_id)})
+    return payload
+
+
+async def _run_interaction_by_id(
+    *,
+    request: Request,
+    interaction_id: str,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    route_type: Literal["aget_interaction", "adelete_interaction", "acancel_interaction"],
+) -> object:
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    decoded: Final = decode_interaction_id(interaction_id)
+    encoded_deployment_id: Final = decoded["deployment_id"]
+    model: Final = _resolve_interaction_selector(request, encoded_deployment_id, llm_router)
+    data: Final = {
+        "interaction_id": decoded["interaction_id"],
+        "custom_llm_provider": "gemini",
+        "model": model,
+    }
+
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        response: Final = await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type=route_type,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor.handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+    else:
+        if encoded_deployment_id is not None and route_type in ("aget_interaction", "acancel_interaction"):
+            return _encode_interaction_payload(
+                response, _routed_deployment_id(response, fastapi_response) or encoded_deployment_id
+            )
+        return response
 
 
 @router.get(
@@ -645,50 +886,13 @@ async def get_interaction(
 
     Per OpenAPI spec: GET /{api_version}/interactions/{interaction_id}
     """
-    from litellm.proxy.proxy_server import (
-        general_settings,
-        llm_router,
-        proxy_config,
-        proxy_logging_obj,
-        select_data_generator,
-        user_api_base,
-        user_max_tokens,
-        user_model,
-        user_request_timeout,
-        user_temperature,
-        version,
+    return await _run_interaction_by_id(
+        request=request,
+        interaction_id=interaction_id,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+        route_type="aget_interaction",
     )
-
-    model: Final = _interaction_model_group(request)
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini", "model": model}
-
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-    try:
-        return await processor.base_process_llm_request(
-            request=request,
-            fastapi_response=fastapi_response,
-            user_api_key_dict=user_api_key_dict,
-            route_type="aget_interaction",
-            proxy_logging_obj=proxy_logging_obj,
-            llm_router=llm_router,
-            general_settings=general_settings,
-            proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
-            model=model,
-            user_model=user_model,
-            user_temperature=user_temperature,
-            user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
-            version=version,
-        )
-    except Exception as e:
-        raise await processor.handle_llm_api_exception(
-            e=e,
-            user_api_key_dict=user_api_key_dict,
-            proxy_logging_obj=proxy_logging_obj,
-            version=version,
-        )
 
 
 @router.delete(
@@ -714,50 +918,13 @@ async def delete_interaction(
 
     Per OpenAPI spec: DELETE /{api_version}/interactions/{interaction_id}
     """
-    from litellm.proxy.proxy_server import (
-        general_settings,
-        llm_router,
-        proxy_config,
-        proxy_logging_obj,
-        select_data_generator,
-        user_api_base,
-        user_max_tokens,
-        user_model,
-        user_request_timeout,
-        user_temperature,
-        version,
+    return await _run_interaction_by_id(
+        request=request,
+        interaction_id=interaction_id,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+        route_type="adelete_interaction",
     )
-
-    model: Final = _interaction_model_group(request)
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini", "model": model}
-
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-    try:
-        return await processor.base_process_llm_request(
-            request=request,
-            fastapi_response=fastapi_response,
-            user_api_key_dict=user_api_key_dict,
-            route_type="adelete_interaction",
-            proxy_logging_obj=proxy_logging_obj,
-            llm_router=llm_router,
-            general_settings=general_settings,
-            proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
-            model=model,
-            user_model=user_model,
-            user_temperature=user_temperature,
-            user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
-            version=version,
-        )
-    except Exception as e:
-        raise await processor.handle_llm_api_exception(
-            e=e,
-            user_api_key_dict=user_api_key_dict,
-            proxy_logging_obj=proxy_logging_obj,
-            version=version,
-        )
 
 
 @router.post(
@@ -783,47 +950,10 @@ async def cancel_interaction(
 
     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}/cancel
     """
-    from litellm.proxy.proxy_server import (
-        general_settings,
-        llm_router,
-        proxy_config,
-        proxy_logging_obj,
-        select_data_generator,
-        user_api_base,
-        user_max_tokens,
-        user_model,
-        user_request_timeout,
-        user_temperature,
-        version,
+    return await _run_interaction_by_id(
+        request=request,
+        interaction_id=interaction_id,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+        route_type="acancel_interaction",
     )
-
-    model: Final = _interaction_model_group(request)
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": "gemini", "model": model}
-
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-    try:
-        return await processor.base_process_llm_request(
-            request=request,
-            fastapi_response=fastapi_response,
-            user_api_key_dict=user_api_key_dict,
-            route_type="acancel_interaction",
-            proxy_logging_obj=proxy_logging_obj,
-            llm_router=llm_router,
-            general_settings=general_settings,
-            proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
-            model=model,
-            user_model=user_model,
-            user_temperature=user_temperature,
-            user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
-            version=version,
-        )
-    except Exception as e:
-        raise await processor.handle_llm_api_exception(
-            e=e,
-            user_api_key_dict=user_api_key_dict,
-            proxy_logging_obj=proxy_logging_obj,
-            version=version,
-        )
