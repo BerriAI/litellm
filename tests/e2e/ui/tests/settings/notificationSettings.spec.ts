@@ -55,7 +55,7 @@ async function openSettingsTab(page: BrowserPage, tab: string) {
 const emailCard = (panel: Locator, title: string) =>
   panel
     .locator('[data-slot="card"]')
-    .filter({ has: panel.getByText(title, { exact: true }) });
+    .filter({ has: panel.page().getByText(title, { exact: true }) });
 
 const stubSuccess = (page: BrowserPage, path: string) =>
   page.route(`**${path}`, (route) =>
