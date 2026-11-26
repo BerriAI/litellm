@@ -179,7 +179,6 @@ from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
 )
-from litellm.realtime_api.main import realtime_health_check
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper

@@ -9,6 +9,18 @@ LAZY_ATTRIBUTES: Final[Mapping[str, Mapping[str, tuple[str, str]]]] = MappingPro
         "litellm": MappingProxyType(
             {
                 "completion_cost": (".cost_calculator", "completion_cost"),
+                "_arealtime": (".realtime_api.main", "_arealtime"),
+                "acreate_realtime_client_secret": (".realtime_api.main", "acreate_realtime_client_secret"),
+                "acreate_realtime_transcription_session": (
+                    ".realtime_api.main",
+                    "acreate_realtime_transcription_session",
+                ),
+                "acreate_realtime_translation_client_secret": (
+                    ".realtime_api.main",
+                    "acreate_realtime_translation_client_secret",
+                ),
+                "arealtime_calls": (".realtime_api.main", "arealtime_calls"),
+                "arealtime_translation_calls": (".realtime_api.main", "arealtime_translation_calls"),
                 "cost_per_token": (".cost_calculator", "cost_per_token"),
                 "response_cost_calculator": (".cost_calculator", "response_cost_calculator"),
                 "Logging": ("litellm.litellm_core_utils.litellm_logging", "Logging"),
