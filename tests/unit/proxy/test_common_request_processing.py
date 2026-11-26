@@ -11976,7 +11976,9 @@ class TestStreamingClientDisconnectBilling:
         assert partial_response.usage.total_tokens > 0
 
     @pytest.mark.asyncio
-    async def test_disconnect_before_any_output_bills_the_usage_the_provider_reports_and_releases_the_slot_once(self):
+    async def test_disconnect_before_any_output_bills_the_usage_the_provider_reports_and_releases_the_slot_once(
+        self, monkeypatch
+    ):
         from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
         from litellm.responses.streaming_iterator import (
             ResponsesAPIStreamingIterator,
@@ -12065,6 +12067,14 @@ class TestStreamingClientDisconnectBilling:
         await stream.aclose()
         client_left.set()
         slot_releases: Final = CountsExplicitSlotReleases()
+        reservations_released_early: Final[list[object]] = []
+
+        async def record_early_release(budget_reservation: object) -> None:
+            reservations_released_early.append(budget_reservation)
+
+        monkeypatch.setattr(
+            "litellm.proxy.common_request_processing.release_budget_reservation_on_cancel", record_early_release
+        )
 
         await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
             request=None,
@@ -12072,8 +12082,9 @@ class TestStreamingClientDisconnectBilling:
             response=stream,
             stream_completed=False,
             client_disconnected=True,
-            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-cut"),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-cut", budget_reservation={"reserved_cost": 1.0}),
             proxy_logging_obj=slot_releases,
+            release_reservation_if_unbilled=True,
         )
         await asyncio.wait_for(recorder.logged.wait(), timeout=10)
 
@@ -12084,6 +12095,9 @@ class TestStreamingClientDisconnectBilling:
         assert logged["response"]["usage"]["prompt_tokens_details"]["cached_tokens"] == 1024
         assert slot_releases.releases == 0, (
             "the success event releases the slot, a second release would free another request's"
+        )
+        assert reservations_released_early == [], (
+            "the budget reservation is settled by the provider's usage, never refunded while the provider still generates"
         )
         assert upstream.closed is True
 
