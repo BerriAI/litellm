@@ -1262,6 +1262,32 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert data["messages"][2]["content"] == [{"type": "text", "text": "Mid-turn: admin <EMAIL>"}]
 
     @pytest.mark.asyncio
+    async def test_masked_rewrite_keeps_the_callers_tool_use_ids(self):
+        handler: Final = AnthropicMessagesHandler()
+        data: Final = {
+            "model": "kimi-k2",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "list files for bob@example.com"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {"command": "ls"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "README.md"}],
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=MockStructuredMaskingGuardrail())
+
+        assert data["messages"][0]["content"] == [{"type": "text", "text": "list files for <EMAIL>"}]
+        assert data["messages"][1]["content"][0]["id"] == "functions.Bash:0"
+        assert data["messages"][2]["content"][0]["tool_use_id"] == "functions.Bash:0"
+
+    @pytest.mark.asyncio
     async def test_unmodified_structured_copy_leaves_top_level_system_untouched(self):
         handler = AnthropicMessagesHandler()
         guardrail = MockStructuredMaskingGuardrail()

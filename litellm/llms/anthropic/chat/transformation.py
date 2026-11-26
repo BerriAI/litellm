@@ -2525,7 +2525,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         call_params: Final = _REQUEST_PARAMS_ADAPTER.validate_python(litellm_params)
         drop_params: Final = drops_unsupported_params(call_params.get("drop_params"))
-        api_base: Final = call_params.get("api_base")
+        api_base: Final = call_params.get("api_base") or litellm.api_base
         rewrites_tool_use_ids: Final = renames_tool_use_ids_up_front(
             model, self._resolved_provider, api_base if isinstance(api_base, str) else None
         )

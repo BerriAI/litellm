@@ -3963,6 +3963,21 @@ def test_anthropic_chat_renames_tool_call_ids_only_for_an_upstream_that_enforces
     assert _sent_tool_use_ids(route.calls.last.request) == (sent_id, sent_id)
 
 
+def test_anthropic_chat_keeps_tool_call_ids_when_the_global_api_base_points_at_another_backend(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setattr(litellm, "api_base", "http://vllm.test")
+    route: Final = respx_mock.post("http://vllm.test/v1/messages").mock(
+        return_value=httpx.Response(200, json=_DONE_MESSAGE)
+    )
+
+    litellm.completion(model="anthropic/kimi-k2", messages=_KIMI_TOOL_ROUND, tools=[_BASH_TOOL], api_key="sk-test")
+
+    assert _sent_tool_use_ids(route.calls.last.request) == ("functions.Bash:0", "functions.Bash:0")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("stream", [False, True], ids=["complete", "stream"])
