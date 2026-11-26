@@ -65,9 +65,9 @@ class ValkeySemanticCache(RedisSemanticCache):
         embedding_model: str = "text-embedding-ada-002",
         index_name: str | None = None,
         ssl: bool = False,
-        startup_nodes: list | None = None,
-        sync_client: Redis | None = None,
-        async_client: AsyncRedis | None = None,
+        startup_nodes: Sequence[object] | None = None,
+        sync_client: "Redis[bytes] | Redis[str] | None" = None,
+        async_client: "AsyncRedis[bytes] | AsyncRedis[str] | None" = None,
         embedding_max_input_tokens: int | None = None,
         embedding_timeout: float | None = None,
         **kwargs: object,
@@ -160,7 +160,7 @@ class ValkeySemanticCache(RedisSemanticCache):
                     return int(flat[i + 1])
         return None
 
-    def _assert_dim_matches(self, info: dict, dim: int) -> None:
+    def _assert_dim_matches(self, info: dict[str, object], dim: int) -> None:
         existing_dim: Final = self._extract_index_dim(info)
         if existing_dim is not None and existing_dim != dim:
             raise ValueError(

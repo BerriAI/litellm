@@ -1686,7 +1686,7 @@ def _get_deployment_default_limit(model_name: str, field: str) -> int | None:
     deployments: Final = llm_router.registry().deployments(model_name)
     if not deployments:
         return None
-    limits: Final = []
+    limits: Final[list[int]] = []
     for deployment in deployments:
         raw = deployment.get("litellm_params", {}).get(field)
         if raw is not None:
@@ -1794,7 +1794,7 @@ ESTIMATED_OUTPUT_TOKENS_METADATA_FIELDS: Final = frozenset(
     {ESTIMATED_OUTPUT_TOKENS_FIELD, ESTIMATED_OUTPUT_TOKENS_PER_MODEL_FIELD}
 )
 
-_ESTIMATED_OUTPUT_TOKENS_ADAPTER: Final = TypeAdapter(PositiveInt)
+_ESTIMATED_OUTPUT_TOKENS_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(PositiveInt)
 _ESTIMATED_OUTPUT_TOKENS_PER_MODEL_ADAPTER: Final = TypeAdapter(Mapping[str, PositiveInt])
 
 
@@ -2996,3 +2996,18 @@ def abbreviate_api_key(api_key: str) -> str:
     if len(api_key) < MINIMUM_CUSTOM_KEY_LENGTH:
         return "sk-..."
     return f"sk-...{api_key[-4:]}"
+
+
+_TEAM_METADATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_MODELS_COUNTING_CACHED_TOKENS: Final[TypeAdapter[Mapping[str, bool]]] = TypeAdapter(Mapping[str, bool])
+
+
+def team_models_counting_cached_tokens(team_metadata: object) -> Mapping[str, bool]:
+    """The team's ``model_tpm_limit_counts_cached_tokens`` setting, empty when unset or malformed."""
+    try:
+        metadata: Final = _TEAM_METADATA.validate_python(team_metadata or {})
+        return _MODELS_COUNTING_CACHED_TOKENS.validate_python(
+            metadata.get("model_tpm_limit_counts_cached_tokens") or {}, strict=True
+        )
+    except ValidationError:
+        return MappingProxyType({})

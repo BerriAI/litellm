@@ -5,6 +5,8 @@ pub enum Error {
     #[error(transparent)]
     Config(#[from] litellm_config_load::Error),
     #[error(transparent)]
+    Environment(#[from] litellm_config::Error),
+    #[error(transparent)]
     Redis(#[from] litellm_redis_resolve::Error),
     #[error(transparent)]
     RedisConnect(#[from] litellm_redis_connect::Error),

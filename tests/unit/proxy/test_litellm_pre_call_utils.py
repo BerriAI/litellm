@@ -29,6 +29,7 @@ from litellm.constants import (
     SERVER_STREAMING_CLASSIFICATION_KEY,
     SERVER_STREAMING_CLASSIFICATION_MARKER,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
 )
@@ -1787,6 +1788,36 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
     # not retain the attacker-injected control field.
     snapshot_body = updated["proxy_server_request"]["body"]
     assert control_field not in snapshot_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path, metadata_variable_name",
+    [("/v1/messages", "litellm_metadata"), ("/v1/chat/completions", "metadata")],
+)
+async def test_add_litellm_data_to_request_strips_agentic_loop_controls_from_client_metadata(
+    path, metadata_variable_name
+):
+    forged: Final = {"_agentic_loop_depth": 5, "max_agentic_loops": 9999, "trace_id": "kept"}
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "anthropic-claude",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": dict(forged),
+            "litellm_metadata": dict(forged),
+        },
+        request=_make_request_mock(path, {"Content-Type": "application/json"}),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    forwarded = {**updated.get("metadata", {}), **updated.get("litellm_metadata", {})}
+    assert updated[metadata_variable_name]["trace_id"] == "kept"
+    assert "_agentic_loop_depth" not in forwarded
+    assert "max_agentic_loops" not in forwarded
 
 
 @pytest.mark.asyncio
@@ -7708,6 +7739,11 @@ def test_forwarded_traceparent_shows_in_the_logged_request_body(
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": True}, True),
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": " False "}, None),
         ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, {"drop_params": "true"}, True),
+        ("GitHubCopilotChat/0.74.0", None, {}, True),
+        ("GitHubCopilotChat/0.74.0", False, {}, False),
+        ("GitHubCopilotChat/0.74.0", None, {"drop_params": False}, None),
+        ("GitHubCopilotChat/0.74.0", None, {"drop_params": True}, True),
+        ("relay/1.0 (forwarding GitHubCopilotChat/0.74.0)", None, {}, None),
         ("PostmanRuntime/7.53.0", None, {}, None),
         (None, None, {}, None),
     ],
@@ -7715,9 +7751,10 @@ def test_forwarded_traceparent_shows_in_the_logged_request_body(
 async def test_add_litellm_data_to_request_agentic_cli_drop_params(
     user_agent, request_drop_params, operator_settings, expected_drop_params
 ):
-    """Claude Code sends Anthropic-specific params and Codex sends
-    service_tier, both of which fail on providers that reject them, so those
-    user agents must turn on drop_params automatically, without overriding an
+    """Claude Code sends Anthropic-specific params, Codex sends service_tier and
+    VS Code Copilot Chat sends cot_id on old assistant turns, all of which fail on
+    providers that reject them, so those user agents must turn on drop_params
+    automatically, without overriding an
     explicit caller value, an explicit operator-level litellm_settings value,
     or affecting other clients.
     """
@@ -8610,8 +8647,8 @@ async def test_key_level_callback_vars_survive_the_strip():
     [
         pytest.param(
             {"ttl": 600},
-            {"use-cache": True, "namespace": "team-a"},
-            {"use-cache": True, "namespace": "team-a", "ttl": 600},
+            {"use-cache": True},
+            {"use-cache": True, "ttl": 600},
             True,
             id="key-control-added-to-request-opt-in",
         ),
@@ -8693,6 +8730,13 @@ async def test_key_level_callback_vars_survive_the_strip():
             True,
             id="request-s-max-age-kept-when-the-key-has-no-s-maxage",
         ),
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": True, "namespace": "litellm:another-key-hash:acompletion"},
+            {"use-cache": True, "ttl": 600},
+            True,
+            id="request-namespace-is-dropped-so-the-key-stays-in-its-own-partition",
+        ),
     ],
 )
 async def test_key_cache_controls_merge_into_request_cache_controls(
@@ -8732,6 +8776,7 @@ async def test_key_cache_controls_merge_into_request_cache_controls(
         ({"enabled": False, "ttl": 0}, None, {"enabled": True}, "key", False),
         ({"enabled": False, "similarity_threshold": "0"}, None, {"enabled": True}, "key", False),
         ({"ttl": 0}, {"enabled": False}, {"enabled": True}, "user", False),
+        ({"ttl": 30}, None, {"enabled": False}, "key", True),
         ({}, None, {"enabled": False}, "team", False),
         (None, None, None, "global", True),
     ],
@@ -8770,6 +8815,135 @@ async def test_semantic_cache_uses_authenticated_policy_and_reports_scope(
     headers = ProxyBaseLLMRequestProcessing.get_custom_headers(user_api_key_dict=key, request_data=updated)
     assert headers["x-litellm-cache-scope"] == scope
     assert cache.should_use_cache(**updated) is uses_cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_metadata, user_enabled, team_enabled, controls, scope, uses_cache",
+    [
+        pytest.param(
+            {"cache_params": {"similarity_threshold": 0}},
+            None,
+            False,
+            {"use-cache": True},
+            "team",
+            False,
+            id="team-disables",
+        ),
+        pytest.param(None, True, False, {}, "user", True, id="user-enables"),
+        pytest.param(
+            {"cache_params": {"enabled": False}}, True, True, {"use-cache": True}, "key", False, id="key-disables"
+        ),
+        pytest.param({"cache_params": {"enabled": True}}, False, False, {}, "key", True, id="key-enables"),
+        pytest.param(
+            {"cache": {"use-cache": False}}, None, True, {"use-cache": True}, "team", False, id="legacy-key-opt-out"
+        ),
+        pytest.param(
+            {"cache": {"use-cache": False}},
+            None,
+            True,
+            {},
+            "team",
+            False,
+            id="legacy-key-opt-out-without-request-control",
+        ),
+        pytest.param(None, None, None, {"use-cache": True}, None, True, id="legacy-opt-in"),
+        pytest.param(None, None, None, {}, None, False, id="global-default-off"),
+    ],
+)
+async def test_exact_cache_resolves_authenticated_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: dict[str, object] | None,
+    user_enabled: bool | None,
+    team_enabled: bool | None,
+    controls: dict[str, object],
+    scope: str | None,
+    uses_cache: bool,
+) -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
+    from litellm.types.semantic_cache import SemanticCacheParams
+
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off)
+    monkeypatch.setattr(litellm, "cache", cache)
+    key: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata=key_metadata or {},
+        allowed_cache_controls=["no-cache", "no-store"]
+        if key_metadata is not None and "cache" in key_metadata
+        else None,
+        user_semantic_cache_params=(SemanticCacheParams(enabled=user_enabled) if user_enabled is not None else None),
+        team_metadata={"cache_params": {"enabled": team_enabled}},
+    )
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-6.1-sol", "cache": controls},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    await PROXY_CacheControlCheck().async_pre_call_hook(key, DualCache(), updated, "completion")
+
+    headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(user_api_key_dict=key, request_data=updated)
+    assert headers.get("x-litellm-cache-scope") == scope
+    assert cache.should_use_cache(**updated) is uses_cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_params, user_params, team_params, scope, enabled, ttl",
+    [
+        pytest.param({"ttl": 30}, None, {"enabled": False}, "key", False, 30, id="key-ttl-inherits-team-disabled"),
+        pytest.param({"enabled": True}, None, {"ttl": 30}, "key", True, 30, id="key-enabled-inherits-team-ttl"),
+        pytest.param(
+            {"ttl": 30}, {"enabled": False, "ttl": 45}, {"enabled": True}, "key", False, 30, id="managed-user-disables"
+        ),
+        pytest.param(
+            {"enabled": None},
+            {"enabled": None, "ttl": 45},
+            {"enabled": False, "ttl": 30},
+            "user",
+            False,
+            45,
+            id="null-enabled-inherits-team",
+        ),
+    ],
+)
+async def test_exact_cache_inherits_each_authenticated_setting(
+    monkeypatch: pytest.MonkeyPatch,
+    key_params: dict[str, object],
+    user_params: dict[str, object] | None,
+    team_params: dict[str, object],
+    scope: str,
+    enabled: bool,
+    ttl: int,
+) -> None:
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.semantic_cache import SemanticCacheParams
+
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    key: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"cache_params": key_params},
+        user_semantic_cache_params=SemanticCacheParams.model_validate(user_params) if user_params is not None else None,
+        team_metadata={"cache_params": team_params},
+    )
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-6.1-sol"},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(user_api_key_dict=key, request_data=updated)
+    assert headers["x-litellm-cache-scope"] == scope
+    assert cache.should_use_cache(**updated) is enabled
+    assert cache.response_cache_max_age(updated) == ttl
 
 
 @pytest.mark.asyncio
@@ -9595,6 +9769,33 @@ def test_vertex_sends_exactly_one_authorization_header():
     vertex_request_headers.update(forwarded)
 
     assert _authorization_values(vertex_request_headers) == [GOOGLE_ACCESS_TOKEN]
+
+
+@pytest.mark.asyncio
+async def test_mixpanel_vars_under_another_callback_never_reach_the_trusted_field() -> None:
+    key_with_langfuse_callback: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {"langfuse_public_key": "pk", "mixpanel_project_token": "tok"},
+                }
+            ]
+        },
+    )
+
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hello"}]},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key_with_langfuse_callback,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"langfuse_public_key": "pk"}
 
 
 @pytest.mark.asyncio
@@ -10627,6 +10828,32 @@ async def test_client_supplied_omit_marker_never_reaches_the_spend_log(
         if general_settings.get("missing_session_id") == "generate"
         else "per-call-random-trace-id"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("general_settings", [{}, {"missing_session_id": "omit"}])
+@pytest.mark.parametrize("sent_in", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/messages"])
+async def test_client_supplied_inherited_session_marker_keeps_the_switchyard_session(
+    path: str, sent_in: str, general_settings: dict[str, str]
+):
+    """The inherited-session marker is proxy-owned: only a proxy sub-call carries it. A caller that sends it must not
+    take its own request out of session-scoped routing."""
+    from litellm.router_strategy.switchyard_router.switchyard_router import switchyard_headers
+
+    async def switchyard_session(client_metadata: dict[str, object]) -> str | None:
+        updated = await add_litellm_data_to_request(
+            data={"model": "gpt-4o", "messages": [], "litellm_session_id": "caller-session", sent_in: client_metadata},
+            request=_request_for(path),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings=general_settings,
+        )
+        return switchyard_headers(updated).get("x-switchyard-session-id")
+
+    unmarked: Final = await switchyard_session({})
+    assert unmarked is not None
+    assert await switchyard_session({SESSION_ID_INHERITED_METADATA_KEY: True}) == unmarked
 
 
 def test_default_team_settings_bool_turn_off_message_logging_redacts():
@@ -12343,7 +12570,10 @@ def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
 def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
     token_fields: dict[str, object], expected: str
 ) -> None:
-    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
+    from litellm.proxy.litellm_pre_call_utils import (
+        _update_model_if_key_alias_exists,
+        _update_model_if_team_alias_exists,
+    )
     from litellm.proxy.litellm_pre_call_utils import request_served_model
 
     valid_token: Final = UserAPIKeyAuth(**token_fields)
@@ -12364,3 +12594,69 @@ def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pyte
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
 
     assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
+
+
+def _forwarded_x_app_stamp(stamp: object) -> tuple[bool, frozenset[str], bool, bool] | None:
+    from litellm.types.router import ForwardedClientHeaders
+
+    if stamp is None:
+        return None
+    parsed: Final = ForwardedClientHeaders.model_validate(stamp)
+    return (
+        parsed.model_group_scoped,
+        frozenset(parsed.digests),
+        parsed.still_forwarded("X-App", "cli-secret"),
+        parsed.still_forwarded("x-app", "set-by-hook"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("general_settings", "model_group_scope", "expected_stamp", "expected_headers"),
+    (
+        pytest.param(
+            {"forward_client_headers_to_llm_api": True},
+            None,
+            (False, frozenset({"x-app"}), True, False),
+            {"x-app": "cli-secret"},
+            id="global",
+        ),
+        pytest.param(
+            {}, ["claude"], (True, frozenset({"x-app"}), True, False), {"x-app": "cli-secret"}, id="model-group"
+        ),
+        pytest.param({}, None, None, None, id="not-forwarded"),
+    ),
+)
+async def test_add_litellm_data_to_request_stamps_only_the_client_headers_it_forwards(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: dict[str, object],
+    model_group_scope: list[str] | None,
+    expected_stamp: tuple[bool, frozenset[str], bool, bool] | None,
+    expected_headers: dict[str, str] | None,
+):
+    from litellm.types.router import ForwardedClientHeaders, ModelGroupSettings
+
+    monkeypatch.setattr(
+        litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=model_group_scope)
+    )
+    forged_stamp: Final = ForwardedClientHeaders.of({"x-forged": "value"}, model_group_scoped=True).model_dump()
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "claude",
+            "messages": [{"role": "user", "content": "hello"}],
+            "proxy_server_request": {"forwarded_client_headers": forged_stamp},
+        },
+        request=_make_request_mock(
+            "/v1/chat/completions",
+            {"Content-Type": "application/json", "x-litellm-api-key": "Bearer sk-virtual-key", "x-app": "cli-secret"},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings=general_settings,
+        version="test-version",
+    )
+
+    stamp: Final = updated["proxy_server_request"].get("forwarded_client_headers")
+    assert (_forwarded_x_app_stamp(stamp), updated.get("headers")) == (expected_stamp, expected_headers)
+    assert "cli-secret" not in json.dumps(stamp)

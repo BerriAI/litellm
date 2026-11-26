@@ -69,7 +69,7 @@ def _prepare_azure_extra_body(
 async def acreate_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: dict | None = {},
+    hyperparameters: dict[str, object] | None = {},
     suffix: str | None = None,
     validation_file: str | None = None,
     integrations: list[str] | None = None,
@@ -77,7 +77,7 @@ async def acreate_fine_tuning_job(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMFineTuningJob:
     """
     Async: Creates and executes a batch from an uploaded file of request
@@ -117,7 +117,15 @@ async def acreate_fine_tuning_job(
         raise e
 
 
-def _build_fine_tuning_job_data(model, training_file, hyperparameters, suffix, validation_file, integrations, seed):
+def _build_fine_tuning_job_data(
+    model: str,
+    training_file: str,
+    hyperparameters: Hyperparameters,
+    suffix: str | None,
+    validation_file: str | None,
+    integrations: list[str] | None,
+    seed: int | None,
+) -> FineTuningJobCreate:
     return FineTuningJobCreate(
         model=model,
         training_file=training_file,
@@ -330,7 +338,7 @@ async def acancel_fine_tuning_job(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMFineTuningJob:
     """
     Async: Immediately cancel a fine-tune job.
@@ -482,7 +490,7 @@ async def alist_fine_tuning_jobs(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Async: List your organization's fine-tuning jobs
@@ -640,7 +648,7 @@ async def aretrieve_fine_tuning_job(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMFineTuningJob:
     """
     Async: Get info about a fine-tuning job.

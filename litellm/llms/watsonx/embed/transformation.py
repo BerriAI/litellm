@@ -39,13 +39,13 @@ def _embedding_body(response: _WatsonXEmbeddingHTTPResponse) -> _WatsonXEmbeddin
 
 
 class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return []
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: object,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -55,9 +55,9 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        headers: object,
+    ) -> dict[str, object]:
         watsonx_api_params: Final = get_api_params(params=optional_params, model=model)
         watsonx_auth_payload: Final = self._prepare_payload(
             model=model,
@@ -85,7 +85,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: object,
         stream: bool | None = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
@@ -106,9 +106,9 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: object,
+        optional_params: object,
+        litellm_params: object,
     ) -> EmbeddingResponse:
         logging_obj.post_call(
             original_response=raw_response.text,
@@ -117,15 +117,14 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         if model_response is None:
             model_response = EmbeddingResponse(model=json_resp.get("model_id", None))
         results: Final = _JSON_OBJECTS.validate_python(json_resp.get("results", []))
-        embedding_response: Final = []
-        for idx, result in enumerate(results):
-            embedding_response.append(
-                {
-                    "object": "embedding",
-                    "index": idx,
-                    "embedding": result["embedding"],
-                }
-            )
+        embedding_response: Final = [
+            {
+                "object": "embedding",
+                "index": idx,
+                "embedding": result["embedding"],
+            }
+            for idx, result in enumerate(results)
+        ]
         model_response.object = "list"
         model_response.data = embedding_response
         input_tokens: Final = _TOKEN_COUNT.validate_python(json_resp.get("input_token_count", 0) or 0)

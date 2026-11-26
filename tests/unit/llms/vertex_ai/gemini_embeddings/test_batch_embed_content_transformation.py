@@ -23,10 +23,11 @@ from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.llms.vertex_ai.common_utils import gemini_video_metadata_from_openai
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
-    file_reference_name,
     _is_multimodal_input,
+    file_reference_name,
     process_embed_content_response,
     process_response,
     transform_openai_input_gemini_content,
@@ -42,6 +43,10 @@ PDF_GCS_URL = "gs://my-bucket/invoice.pdf"
 VIDEO_DATA_URI = "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA"
 AUDIO_DATA_URI = "data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA"
 FILES_URI = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
+AUDIO_TRACK_EXTRACTION_ON: Final = (
+    {"audio_track_extraction": True},
+    {"extra_body": {"embedContentConfig": {"audioTrackExtraction": True}}},
+)
 
 
 def _prompt_cost(model: str, usage: Usage) -> float:
@@ -619,9 +624,7 @@ class TestFileContentBlocks:
             ({"type": "image_url", "image_url": {"url": IMAGE_DATA_URI}}, "Input should be 'file'"),
         ],
     )
-    def test_malformed_block_answers_400_naming_the_field(
-        self, block: dict[str, object], named_in_error: str
-    ) -> None:
+    def test_malformed_block_answers_400_naming_the_field(self, block: dict[str, object], named_in_error: str) -> None:
         with pytest.raises(BadRequestError, match=named_in_error):
             _build_part_for_input(block)
 
@@ -639,6 +642,152 @@ class TestFileContentBlocks:
         block: Final = _file_block(file_data=VIDEO_DATA_URI, detail="high", video_metadata={"fps": "fast"})
         with pytest.raises(BadRequestError, match=r"video_metadata\.fps"):
             _build_part_for_input(block, drop_params=True)
+
+    @pytest.mark.parametrize(
+        "video_metadata, named_in_error",
+        [
+            ({"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}, r"\(1s\) at 0\.2 fps rounds to 0 frames"),
+            ({"fps": 1, "start_offset": "0s", "end_offset": "0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
+            ({"fps": 5, "start_offset": "6.1s", "end_offset": "6.19s"}, r"\(0\.09s\) at 5 fps rounds to 0 frames"),
+            ({"end_offset": "0.4s"}, r"\(0\.4s\) at 1 fps rounds to 0 frames"),
+            ({"start_offset": "-10s", "end_offset": " 0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
+            ({"start_offset": "5.s", "end_offset": "+5.2s"}, r"\(0\.2s\) at 1 fps rounds to 0 frames"),
+            (
+                {"start_offset": "0s", "end_offset": "0s"},
+                r": end_offset \(0s\) must be later than the window start \(0s\)",
+            ),
+            (
+                {"start_offset": "10s", "end_offset": "0s"},
+                r": end_offset \(0s\) must be later than the window start \(10s\)",
+            ),
+            (
+                {"start_offset": "-0s", "end_offset": "-1s"},
+                r": end_offset \(-1s\) must be later than the window start \(0s\)",
+            ),
+            ({"fps": 0, "start_offset": "0s", "end_offset": "10s"}, r"\.fps: must be greater than 0, got 0"),
+            ({"fps": -1}, r"\.fps: must be greater than 0, got -1"),
+            ({"fps": float("nan")}, r"\.fps: Input should be a finite number"),
+        ],
+    )
+    def test_video_metadata_that_samples_no_frames_answers_400_naming_the_field(
+        self, video_metadata: dict[str, object], named_in_error: str
+    ) -> None:
+        with pytest.raises(BadRequestError, match=rf"file\.video_metadata.*{named_in_error}"):
+            _build_part_for_input(_file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata))
+
+    @pytest.mark.parametrize(
+        "video_metadata",
+        [
+            {"fps": 0.2, "start_offset": "0s", "end_offset": "2.5s"},
+            {"fps": 5, "start_offset": "6.1s", "end_offset": "6.2s"},
+            {"fps": 1, "start_offset": "0s", "end_offset": "0.5s"},
+            {"end_offset": "0.5s"},
+            {"fps": 25, "start_offset": "0s", "end_offset": "1s"},
+            {"start_offset": "-1s", "end_offset": "1s"},
+            {"start_offset": "3s"},
+            {"start_offset": "5.s", "end_offset": "+6s"},
+            {"start_offset": "1000ms", "end_offset": "0.1s"},
+            {"end_offset": "1e-1s"},
+            {"end_offset": "0.3s "},
+        ],
+    )
+    def test_video_metadata_that_samples_a_frame_is_forwarded_as_given(self, video_metadata: dict[str, object]) -> None:
+        part: Final = _build_part_for_input(_file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata))
+        assert part["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
+
+    @pytest.mark.parametrize(
+        "video_metadata",
+        [{"fps": 1, "start_offset": "0s", "end_offset": "0.4s"}, {"end_offset": "0.1s"}, {"fps": 0}, {"fps": -1}],
+    )
+    def test_frame_checks_skip_a_file_that_is_not_a_video(self, video_metadata: dict[str, object]) -> None:
+        part: Final = _build_part_for_input(_file_block(file_data=AUDIO_DATA_URI, video_metadata=video_metadata))
+        assert part["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
+
+    def test_a_window_that_ends_before_it_starts_answers_400_on_audio_too(self) -> None:
+        block: Final = _file_block(file_data=AUDIO_DATA_URI, video_metadata={"start_offset": "5s", "end_offset": "2s"})
+        with pytest.raises(
+            BadRequestError, match=r"file\.video_metadata: end_offset \(2s\) must be later than the window start \(5s\)"
+        ):
+            _build_part_for_input(block)
+
+    @pytest.mark.parametrize(
+        "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
+    )
+    @pytest.mark.parametrize("optional_params", AUDIO_TRACK_EXTRACTION_ON)
+    @pytest.mark.parametrize(
+        ("video_metadata", "named_in_error"),
+        [
+            ({"fps": 1, "start_offset": "0s", "end_offset": "0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
+            ({"fps": 0.2, "start_offset": "3s", "end_offset": "3.5s"}, r"\(0\.5s\) at 0\.2 fps rounds to 0 frames"),
+            ({"fps": 0, "end_offset": "10s"}, r"\.fps: must be greater than 0, got 0"),
+        ],
+    )
+    def test_audio_track_extraction_still_answers_400_for_a_sub_second_window_with_no_frames(
+        self,
+        transform: Callable[..., object],
+        optional_params: dict[str, object],
+        video_metadata: dict[str, object],
+        named_in_error: str,
+    ) -> None:
+        block: Final = _file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata)
+        with pytest.raises(BadRequestError, match=named_in_error):
+            transform(input=[block], model=self.MODEL, optional_params=optional_params)
+
+    @pytest.mark.parametrize(
+        ("transform", "parts_of"),
+        [
+            (transform_openai_input_gemini_content, lambda request: request["requests"][0]["content"]["parts"]),
+            (transform_openai_input_gemini_embed_content, lambda request: request["content"]["parts"]),
+        ],
+    )
+    @pytest.mark.parametrize("optional_params", AUDIO_TRACK_EXTRACTION_ON)
+    @pytest.mark.parametrize(
+        "video_metadata",
+        [
+            {"fps": 0.2, "start_offset": "0s", "end_offset": "1s"},
+            {"fps": 0.25, "start_offset": "0s", "end_offset": "1.9s"},
+            {"fps": 0.2, "start_offset": "3s", "end_offset": "5s"},
+        ],
+    )
+    def test_audio_track_extraction_forwards_a_window_of_a_second_or_more_with_no_frames(
+        self,
+        transform: Callable[..., Mapping[str, object]],
+        parts_of: Callable[[Mapping[str, object]], list[Mapping[str, object]]],
+        optional_params: dict[str, object],
+        video_metadata: dict[str, object],
+    ) -> None:
+        block: Final = _file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata)
+        request: Final = transform(input=[block], model=self.MODEL, optional_params=optional_params)
+        assert parts_of(request)[0]["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
+
+    def test_audio_track_extraction_set_in_one_extra_body_request_applies_to_that_input_only(self) -> None:
+        video_metadata: Final = {"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}
+        block: Final = _file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata)
+        extra_body: Final = {"requests": [{"embedContentConfig": {"audioTrackExtraction": True}}]}
+
+        request: Final = transform_openai_input_gemini_content(
+            input=[block], model=self.MODEL, optional_params={"extra_body": extra_body}
+        )
+
+        assert request["requests"][0]["content"]["parts"][0]["video_metadata"] == gemini_video_metadata_from_openai(
+            video_metadata
+        )
+        with pytest.raises(BadRequestError, match="rounds to 0 frames"):
+            transform_openai_input_gemini_content(
+                input=["text", block], model=self.MODEL, optional_params={"extra_body": extra_body}
+            )
+
+    @pytest.mark.parametrize(
+        "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
+    )
+    def test_transforms_answer_400_for_a_window_that_samples_no_frames_even_with_drop_params(
+        self, transform: Callable[..., object]
+    ) -> None:
+        block: Final = _file_block(
+            file_data=VIDEO_DATA_URI, video_metadata={"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}
+        )
+        with pytest.raises(BadRequestError, match="rounds to 0 frames"):
+            transform(input=[block], model=self.MODEL, optional_params={}, drop_params=True)
 
     @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
@@ -751,6 +900,121 @@ def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
     expected_prompt_tokens: Final = litellm.token_counter(model="gemini/gemini-embedding-001", text="Hello, world!")
     assert response.usage.prompt_tokens == expected_prompt_tokens
     assert response.usage.total_tokens == expected_prompt_tokens
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_embedding_merges_extra_body_requests_into_the_request_for_the_same_input(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1]}, {"values": [0.2]}]}))
+
+    litellm.embedding(
+        model="gemini/gemini-embedding-001",
+        input=["hello", "world"],
+        dimensions=128,
+        api_key="gemini-test-key",
+        extra_body={
+            "title": "greeting",
+            "taskType": "SEMANTIC_SIMILARITY",
+            "requests": [
+                {
+                    "content": {"parts": [{"text": "text the guardrails never saw"}]},
+                    "taskType": "RETRIEVAL_QUERY",
+                    "outputDimensionality": 256,
+                }
+            ],
+        },
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "requests": [
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": "hello"}]},
+                "taskType": "RETRIEVAL_QUERY",
+                "outputDimensionality": 128,
+                "title": "greeting",
+            },
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": "world"}]},
+                "taskType": "SEMANTIC_SIMILARITY",
+                "outputDimensionality": 128,
+                "title": "greeting",
+            },
+        ]
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_embedding_keeps_a_shared_extra_body_config_beside_the_config_of_one_request(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1]}, {"values": [0.2]}]}))
+
+    litellm.embedding(
+        model="gemini/gemini-embedding-2",
+        input=["hello", "world"],
+        api_key="gemini-test-key",
+        extra_body={
+            "embedContentConfig": {"autoTruncate": False, "documentOcr": False},
+            "requests": [{"embedContentConfig": {"documentOcr": True}}],
+        },
+    )
+
+    assert [request["embedContentConfig"] for request in json.loads(route.calls.last.request.content)["requests"]] == [
+        {"autoTruncate": False, "documentOcr": True},
+        {"autoTruncate": False, "documentOcr": False},
+    ]
+
+
+def test_a_named_config_param_leaves_the_config_field_one_request_sets_over_the_shared_one() -> None:
+    body: Final = transform_openai_input_gemini_content(
+        input=["first", "second"],
+        model="gemini-embedding-2",
+        optional_params={
+            "auto_truncate": False,
+            "extra_body": {
+                "embedContentConfig": {"documentOcr": False},
+                "requests": [{"embedContentConfig": {"documentOcr": True, "autoTruncate": True}}],
+            },
+        },
+    )
+
+    assert [request["embedContentConfig"] for request in body["requests"]] == [
+        {"documentOcr": True, "autoTruncate": False},
+        {"documentOcr": False, "autoTruncate": False},
+    ]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_embedding_still_sends_an_extra_body_requests_field_that_is_not_a_list(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1]}]}))
+
+    litellm.embedding(
+        model="gemini/gemini-embedding-001",
+        input=["hello"],
+        api_key="gemini-test-key",
+        extra_body={"requests": {"taskType": "RETRIEVAL_QUERY"}},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "requests": [
+            {
+                "model": "models/gemini-embedding-001",
+                "content": {"parts": [{"text": "hello"}]},
+                "requests": {"taskType": "RETRIEVAL_QUERY"},
+            }
+        ]
+    }
 
 
 @pytest.mark.parametrize(
@@ -959,10 +1223,13 @@ def test_gemini_batch_embedding_gives_each_input_a_non_negative_share(
         _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}], "usageMetadata": dict(usage_metadata)},
     )
 
-    assert tuple(
-        (usage.prompt_tokens, usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
-        for usage in response.item_usage
-    ) == expected
+    assert (
+        tuple(
+            (usage.prompt_tokens, usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
+            for usage in response.item_usage
+        )
+        == expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -1095,17 +1362,20 @@ async def test_gemini_batch_embedding_cache_hits_report_each_inputs_own_modality
     )
 
     assert calls == 1
-    assert tuple(
-        (
-            item,
+    assert (
+        tuple(
             (
-                hit.usage.prompt_tokens,
-                hit.usage.prompt_tokens_details.text_tokens,
-                hit.usage.prompt_tokens_details.image_tokens,
-            ),
+                item,
+                (
+                    hit.usage.prompt_tokens,
+                    hit.usage.prompt_tokens_details.text_tokens,
+                    hit.usage.prompt_tokens_details.image_tokens,
+                ),
+            )
+            for (item, _), hit in zip(expected_hits, hits, strict=True)
         )
-        for (item, _), hit in zip(expected_hits, hits, strict=True)
-    ) == expected_hits
+        == expected_hits
+    )
 
 
 @pytest.mark.asyncio
@@ -1260,7 +1530,8 @@ def test_gemini_batch_embedding_sends_an_embed_content_config_with_non_string_ke
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
     ).mock(
         return_value=httpx.Response(
-            400, json={"error": {"code": 400, "message": "Invalid JSON payload received.", "status": "INVALID_ARGUMENT"}}
+            400,
+            json={"error": {"code": 400, "message": "Invalid JSON payload received.", "status": "INVALID_ARGUMENT"}},
         )
     )
 

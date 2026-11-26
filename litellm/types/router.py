@@ -5,7 +5,10 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 import functools
+import hashlib
+import hmac
 import re
+import secrets
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -606,6 +609,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
 
     custom_llm_provider: str | None = None
+    oauth_client_credentials: bool | None = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = Field(default=None, repr=False)
+    oauth_scope: str | None = None
     responses_api_version: str | None = None
     tpm: int | None = None
     rpm: int | None = None
@@ -980,6 +988,7 @@ class Deployment(LiteLLMBaseModel):
 class DiscoveredDeploymentModelInfo:
     deployment: Mapping[str, object]
     limits: Mapping[str, int]
+    limits_by_model: Mapping[str, Mapping[str, int]] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1270,7 +1279,7 @@ class RouterRateLimitError(ValueError):
         model: str,
         cooldown_time: float,
         enable_pre_call_checks: bool,
-        cooldown_list: list,
+        cooldown_list: Sequence[object],
         model_ids: Sequence[str] = (),
         cooldown_deployments: Sequence[CooldownDeploymentInfo] | None = None,
     ) -> None:
@@ -1554,7 +1563,7 @@ class AdaptiveRouterWeights(LiteLLMBaseModel):
 
     @field_validator("cost")
     @classmethod
-    def _weights_sum_to_one(cls, v, info):
+    def _weights_sum_to_one(cls, v: float, info):
         q: Final = info.data.get("quality", 0.7)
         if abs(q + v - 1.0) > 0.001:
             raise ValueError(f"weights must sum to 1.0, got quality={q} + cost={v} = {q + v}")
@@ -1609,3 +1618,34 @@ def server_owned_param_kind(param: str) -> str:
     if param in _github_copilot_oauth_litellm_params:
         return "GitHub Copilot authentication"
     return "workload identity federation or OAuth token exchange"
+
+
+_FORWARDED_HEADER_DIGEST_KEY: Final = secrets.token_bytes(32)
+
+
+def _forwarded_header_digest(value: object) -> str:
+    return hmac.new(_FORWARDED_HEADER_DIGEST_KEY, str(value).encode(), hashlib.sha256).hexdigest()
+
+
+class ForwardedClientHeaders(BaseModel):
+    """The client headers the proxy copied into a request's ``headers``, stamped on its ``proxy_server_request``
+    as a keyed digest of each value under its lowercased name, so the logged stamp reveals no header value.
+    ``model_group_scoped`` is true when only a model group's ``forward_client_headers_to_llm_api`` scope admitted
+    them, so a fallback group re-checks that scope."""
+
+    model_config = ConfigDict(frozen=True)
+
+    digests: Mapping[str, str]
+    model_group_scoped: bool
+
+    @classmethod
+    def of(cls, headers: Mapping[str, object], *, model_group_scoped: bool) -> "ForwardedClientHeaders":
+        return cls(
+            digests={name.lower(): _forwarded_header_digest(value) for name, value in headers.items()},
+            model_group_scoped=model_group_scoped,
+        )
+
+    def still_forwarded(self, name: str, value: object) -> bool:
+        """Whether ``name`` still holds the value the proxy forwarded, rather than one a later hook set."""
+        stamped: Final = self.digests.get(name.lower())
+        return stamped is not None and hmac.compare_digest(stamped, _forwarded_header_digest(value))

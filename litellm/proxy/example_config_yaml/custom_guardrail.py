@@ -5,7 +5,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
 # Global counter for tracking which guardrail was called (for load balancing tests)
 guardrail_lb_call_count: Final[Dict[str, int]] = {"A": 0, "B": 0}
@@ -18,9 +18,9 @@ class GuardrailForLBTestingA(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Optional[Union[Exception, str, dict[str, object]]]:
         guardrail_lb_call_count["A"] += 1
         verbose_proxy_logger.info("GuardrailForLBTestingA called. Total A calls: %s", guardrail_lb_call_count["A"])
         return data
@@ -33,9 +33,9 @@ class GuardrailForLBTestingB(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Optional[Union[Exception, str, dict[str, object]]]:
         guardrail_lb_call_count["B"] += 1
         verbose_proxy_logger.info("GuardrailForLBTestingB called. Total B calls: %s", guardrail_lb_call_count["B"])
         return data
@@ -57,7 +57,7 @@ class myCustomGuardrail(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Optional[Union[Exception, str, dict[str, object]]]:
         """
         Runs before the LLM API call
         Runs on only Input
@@ -103,9 +103,9 @@ class myCustomGuardrail(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """
         Runs on response from LLM API call

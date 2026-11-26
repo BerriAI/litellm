@@ -1,0 +1,52 @@
+{
+  "published": [
+    {
+      "object_type": "litellm_proxymodeltable",
+      "model_ids": [
+        "9f8d6a62-1d1b-4c5e-9a43-2f3c1e8f0b7a"
+      ],
+      "payload": "{\"object_type\": \"litellm_proxymodeltable\", \"model_ids\": [\"9f8d6a62-1d1b-4c5e-9a43-2f3c1e8f0b7a\"]}"
+    },
+    {
+      "object_type": "litellm_proxymodeltable",
+      "model_ids": [],
+      "payload": "{\"object_type\": \"litellm_proxymodeltable\", \"model_ids\": []}"
+    },
+    {
+      "object_type": "litellm_credentialstable",
+      "model_ids": [],
+      "payload": "{\"object_type\": \"litellm_credentialstable\", \"model_ids\": []}"
+    },
+    {
+      "object_type": "general_settings",
+      "model_ids": [],
+      "payload": "{\"object_type\": \"general_settings\", \"model_ids\": []}"
+    },
+    {
+      "object_type": "litellm_proxymodeltable",
+      "model_ids": [
+        "m-1",
+        "m-é"
+      ],
+      "payload": "{\"object_type\": \"litellm_proxymodeltable\", \"model_ids\": [\"m-1\", \"m-\\u00e9\"]}"
+    }
+  ],
+  "accepted": [
+    {
+      "payload": "{\"object_type\": \"litellm_proxymodeltable\", \"model_ids\": [\"m-1\"], \"unknown\": true}",
+      "object_type": "litellm_proxymodeltable",
+      "model_ids": [
+        "m-1"
+      ]
+    }
+  ],
+  "ignored": [
+    "not json",
+    "[]",
+    "{\"model_ids\": [\"m-1\"]}",
+    "{\"object_type\": 5}",
+    "{\"object_type\": \"litellm_proxymodeltable\", \"model_ids\": \"m-1\"}",
+    "{\"object_type\": \"litellm_proxymodeltable\", \"model_ids\": null}",
+    "{\"object_type\": \"litellm_proxymodeltable\", \"model_ids\": [1]}"
+  ]
+}

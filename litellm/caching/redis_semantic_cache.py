@@ -14,8 +14,10 @@ import asyncio
 import json
 import os
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Final, cast
+from importlib.metadata import PackageNotFoundError, version
+from typing import TYPE_CHECKING, Final, NamedTuple, cast
 
+from packaging.specifiers import SpecifierSet
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
@@ -40,6 +42,40 @@ from .base_cache import BaseCache
 if TYPE_CHECKING:
     from litellm.router import Router
 
+SUPPORTED_REDISVL_VERSIONS: Final = ">=0.26.0,<1.0"
+REDISVL_VERSIONS_WITH_WRONG_ASYNC_HITS: Final = ">=0.5.1,<0.13.0"
+
+
+class _RedisvlCacheClasses(NamedTuple):
+    semantic_cache: Callable[..., object]
+    vectorizer: Callable[..., object]
+
+
+def _redisvl_cache_classes() -> _RedisvlCacheClasses:
+    try:
+        from redisvl.extensions.cache.llm import SemanticCache
+        from redisvl.utils.vectorize import CustomVectorizer
+    except ImportError:
+        from redisvl.extensions.llmcache import SemanticCache
+        from redisvl.utils.vectorize import CustomTextVectorizer as CustomVectorizer
+    return _RedisvlCacheClasses(semantic_cache=SemanticCache, vectorizer=CustomVectorizer)
+
+
+def _installed_redisvl_version() -> str | None:
+    try:
+        return version("redisvl")
+    except PackageNotFoundError:
+        return None
+
+
+def _refusal_for_redisvl(installed_redisvl: str | None) -> str | None:
+    if installed_redisvl is None or installed_redisvl not in SpecifierSet(REDISVL_VERSIONS_WITH_WRONG_ASYNC_HITS):
+        return None
+    return (
+        f"Redis semantic cache is off because redisvl {installed_redisvl} returns async hits for other prompts, "
+        f"install a fixed one with `pip install 'redisvl{SUPPORTED_REDISVL_VERSIONS}'`"
+    )
+
 
 _CACHE_RESPONSE_ADAPTER: Final[TypeAdapter[str | bytes | None]] = TypeAdapter(
     str | bytes | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
@@ -60,6 +96,7 @@ class RedisSemanticCache(BaseCache):
     CACHE_KEY_FIELD_NAME: str = "litellm_cache_key"
     embedding_max_input_tokens: int | None = None
     embedding_timeout: float = SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
+    _redisvl_refusal: str | None = None
 
     def __init__(
         self,
@@ -137,12 +174,24 @@ class RedisSemanticCache(BaseCache):
         print_verbose(f"Redis semantic-cache redis_url: {redis_url}")
 
         # Defer redisvl index construction until first use. redisvl's
-        # CustomTextVectorizer eagerly embeds a probe string at construction;
+        # CustomVectorizer eagerly embeds a probe string at construction;
         # building lazily ensures that probe runs after llm_router is wired so
         # per-deployment auth (e.g. Bedrock aws_role_name) is applied.
         self._index_name = index_name
         self._redis_url = redis_url
         self._llmcache = None
+
+        installed_redisvl: Final = _installed_redisvl_version()
+        self._redisvl_refusal = _refusal_for_redisvl(installed_redisvl)
+        if self._redisvl_refusal is not None:
+            verbose_logger.error(self._redisvl_refusal)
+        elif installed_redisvl is not None and installed_redisvl not in SpecifierSet(SUPPORTED_REDISVL_VERSIONS):
+            verbose_logger.warning(
+                "Redis semantic cache supports redisvl%s but found %s, install one with `pip install 'redisvl%s'`",
+                SUPPORTED_REDISVL_VERSIONS,
+                installed_redisvl,
+                SUPPORTED_REDISVL_VERSIONS,
+            )
 
     @property
     def llmcache(self) -> object:
@@ -155,16 +204,14 @@ class RedisSemanticCache(BaseCache):
         self._llmcache = value
 
     def _build_llmcache(self) -> object:
-        # CustomTextVectorizer probes its embedding dimension at construction by
+        # CustomVectorizer probes its embedding dimension at construction by
         # embedding "dimension test", so the first cache request issues one extra
         # billable embedding on top of the request's own.
-        from redisvl.extensions.llmcache import SemanticCache
-        from redisvl.utils.vectorize import CustomTextVectorizer
-
+        redisvl_classes: Final = _redisvl_cache_classes()
         try:
-            cache_vectorizer: Final = CustomTextVectorizer(self._get_embedding)
+            cache_vectorizer: Final = redisvl_classes.vectorizer(self._get_embedding)
             return self._init_semantic_cache(
-                semantic_cache_cls=SemanticCache,
+                semantic_cache_cls=redisvl_classes.semantic_cache,
                 index_name=self._index_name,
                 redis_url=self._redis_url,
                 cache_vectorizer=cache_vectorizer,
@@ -427,6 +474,8 @@ class RedisSemanticCache(BaseCache):
             **kwargs: Additional arguments including 'messages' for the prompt
                 and optional 'ttl' for time-to-live
         """
+        if self._redisvl_refusal is not None:
+            return
         print_verbose(f"Redis semantic-cache set_cache, kwargs: {kwargs}")
 
         value_str: str | None = None
@@ -469,8 +518,8 @@ class RedisSemanticCache(BaseCache):
 
         try:
             prompt: Final = self._get_prompt_from_kwargs(**kwargs)
-            if prompt is None:
-                print_verbose("No prompt provided for semantic cache lookup")
+            if prompt is None or self._redisvl_refusal is not None:
+                print_verbose(self._redisvl_refusal or "No prompt provided for semantic cache lookup")
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
@@ -578,6 +627,8 @@ class RedisSemanticCache(BaseCache):
             **kwargs: Additional arguments including 'messages' for the prompt
                 and optional 'ttl' for time-to-live
         """
+        if self._redisvl_refusal is not None:
+            return
         print_verbose(f"Async Redis semantic-cache set_cache, kwargs: {kwargs}")
 
         try:
@@ -624,8 +675,8 @@ class RedisSemanticCache(BaseCache):
 
         try:
             prompt: Final = self._get_prompt_from_kwargs(**kwargs)
-            if prompt is None:
-                print_verbose("No prompt provided for semantic cache lookup")
+            if prompt is None or self._redisvl_refusal is not None:
+                print_verbose(self._redisvl_refusal or "No prompt provided for semantic cache lookup")
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
@@ -687,6 +738,8 @@ class RedisSemanticCache(BaseCache):
         Returns:
             Dict[str, Any]: Information about the Redis index
         """
+        if self._redisvl_refusal is not None:
+            return {"error": self._redisvl_refusal}
         aindex: Final = await self.llmcache._get_async_index()
         return await aindex.info()
 
@@ -699,9 +752,7 @@ class RedisSemanticCache(BaseCache):
             **kwargs: Additional arguments
         """
         try:
-            tasks: Final = []
-            for val in cache_list:
-                tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
+            tasks: Final = [self.async_set_cache(val[0], val[1], **kwargs) for val in cache_list]
             await asyncio.gather(*tasks)
         except Exception as e:
             print_verbose(f"Error in async_set_cache_pipeline: {e}")

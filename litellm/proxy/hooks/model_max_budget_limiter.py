@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Final,
+    Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # untyped callback payload requires explicit narrowing
 )
@@ -27,7 +28,7 @@ from litellm.litellm_core_utils.batch_utils import (
     job_charged_once_marker_key,
     job_to_charge_once,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
@@ -40,7 +41,11 @@ from litellm.proxy.hooks.model_budget_shared_windows import (
     SharedWindow,
     SharedWindows,
 )
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
+from litellm.router_strategy.budget_limiter import (
+    RouterBudgetLimiting,
+    budget_window_seconds,
+    cost_left_after_failed_attempts,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, LiteLLMRealtimeStreamLoggingObject, LlmProviders, StandardLoggingPayload
 
@@ -658,6 +663,10 @@ def _priced_as_bedrock(cost_entry: object) -> bool:
     return str(_metadata_value(cost_entry, "litellm_provider") or "").startswith("bedrock")
 
 
+class _BudgetEntries(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _WindowReading:
     current_spend: float
@@ -667,7 +676,7 @@ class _WindowReading:
 async def build_model_max_budget_usage(
     entity_type: Litellm_EntityType,
     entity_id: str | None,
-    model_max_budget: Mapping[str, object] | None,
+    model_max_budget: object,
     cache: DualCache | None,
     now: datetime | None = None,
     shared_windows: SharedWindows = PROXY_SHARED_WINDOWS,
@@ -688,7 +697,7 @@ async def build_model_max_budget_usage(
 
     budgets: Final = tuple(
         (budget_model, budget_config)
-        for budget_model, raw_budget_config in model_max_budget.items()
+        for budget_model, raw_budget_config in require_attributes(model_max_budget, _BudgetEntries, "items").items()
         for budget_config in (_usable_budget_config(raw_budget_config),)
         if budget_config is not None
     )
@@ -1290,13 +1299,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         return healthy_deployments
 
     @with_service_target("model_budgets")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         """
         Track spend for virtual key + model in DualCache
 
@@ -1323,7 +1332,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if model is None:
             return
 
-        response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
+        response_cost: Final = cost_left_after_failed_attempts(kwargs, standard_logging_payload.get("response_cost", 0))
         key_model_max_budget: Final = _metadata.get("user_api_key_model_max_budget")
         team_member_user_id: Final = _metadata_string_value(
             payload_metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped

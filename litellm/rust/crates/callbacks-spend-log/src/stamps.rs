@@ -10,6 +10,7 @@ use crate::py::{Dict, NONE, get, get_or_none, has, text, to_str, truthy};
 
 pub(crate) const CALLER_SESSION_ID_METADATA_KEY: &str = "litellm_caller_session_id";
 const SESSION_ID_GENERATED_METADATA_KEY: &str = "litellm_session_id_generated";
+const SESSION_ID_INHERITED_METADATA_KEY: &str = "litellm_session_id_inherited";
 const KUBERNETES_POD_ROUTING_KEY: &str = "kubernetes_pod_routing";
 const POD_SELECTIONS: [&str; 3] = ["round_robin", "session_affinity", "session_affinity_retry"];
 const ANTHROPIC_OAUTH_FORWARD_PROVIDERS: [&str; 1] = ["anthropic"];
@@ -62,6 +63,20 @@ fn caller_session_id(params: &LitellmParams) -> Option<String> {
     } else {
         explicit.filter(|session| !session.is_empty())
     }
+}
+
+/// `_caller_session_for_spend_log(kwargs, metadata=None)` when `inherits_parent_session(litellm_params)`.
+pub(crate) fn inherited_parent_session(params: &LitellmParams) -> Option<String> {
+    let inherited = params.metadata_buckets().any(|body| {
+        matches!(
+            get_or_none(body, SESSION_ID_INHERITED_METADATA_KEY),
+            Value::Bool(true)
+        )
+    });
+    if !inherited {
+        return None;
+    }
+    caller_session_id(params).filter(|session| !session.contains('\0'))
 }
 
 /// `_caller_session_for_spend_log(kwargs, metadata)`.

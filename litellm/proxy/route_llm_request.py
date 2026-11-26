@@ -604,7 +604,7 @@ def _get_shared_session_lock() -> asyncio.Lock:
     return _shared_session_lock
 
 
-async def add_shared_session_to_data(data: dict) -> None:
+async def add_shared_session_to_data(data: dict[str, object]) -> None:
     """
     Add shared aiohttp session for connection reuse (prevents cold starts).
     If the session was closed (e.g. due to network interruption or idle timeout),
@@ -938,7 +938,7 @@ def _merge_router_settings_override(
 
 
 async def route_request(
-    data: dict,
+    data: dict[str, object],
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: RouteType,

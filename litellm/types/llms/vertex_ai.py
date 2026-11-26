@@ -62,20 +62,25 @@ class BlobType(TypedDict, total=False):
     data: Required[str]
 
 
+class GeminiFileInspectionMetadata(TypedDict, total=False):
+    document_metadata: ReadOnly[Mapping[str, object]]
+    spreadsheet_metadata: ReadOnly[Mapping[str, object]]
+    media_resolution: ReadOnly[Mapping[str, str]]
+
+
 class VideoMetadataType(TypedDict, total=False):
     fps: ReadOnly[float]
     startOffset: ReadOnly[str]
     endOffset: ReadOnly[str]
 
 
-class FunctionResponsePartType(TypedDict, total=False):
+class FunctionResponsePartType(GeminiFileInspectionMetadata, total=False):
     inline_data: BlobType
     file_data: FileDataType
-    media_resolution: ReadOnly[Literal["low", "medium", "high"]]
     video_metadata: ReadOnly[VideoMetadataType]
 
 
-class PartType(TypedDict, total=False):
+class PartType(GeminiFileInspectionMetadata, total=False):
     text: str
     inline_data: BlobType
     file_data: FileDataType
@@ -83,7 +88,6 @@ class PartType(TypedDict, total=False):
     function_response: FunctionResponse
     thought: bool
     thoughtSignature: str
-    media_resolution: Literal["low", "medium", "high"]
     video_metadata: ReadOnly[VideoMetadataType]
 
 
@@ -193,7 +197,7 @@ class Retrieval(TypedDict):
 
 
 class FunctionCallingConfig(TypedDict, total=False):
-    mode: Literal["ANY", "AUTO", "NONE"]
+    mode: ReadOnly[Literal["ANY", "AUTO", "NONE", "VALIDATED"]]
     allowed_function_names: list[str]
 
 

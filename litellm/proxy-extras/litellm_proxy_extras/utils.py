@@ -2,12 +2,13 @@ import glob
 import os
 import random
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -42,7 +43,7 @@ if TYPE_CHECKING:
 
 class LensCheckConnect(Protocol):
     def __call__(
-        self, conninfo: str, *, connect_timeout: int, autocommit: bool
+        self, conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
     ) -> "psycopg.Connection[tuple[object, ...]]": ...
 
 
@@ -392,7 +393,7 @@ class ProxyExtrasDBManager:
             sql.Identifier("_prisma_migrations"),
         )
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 row: Final = conn.execute(psycopg.sql.SQL(query).format(ledger_table), params).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return None
@@ -655,7 +656,10 @@ class ProxyExtrasDBManager:
         open_connection: Final = connect if connect is not None else psycopg.connect
         try:
             with open_connection(
-                ProxyExtrasDBManager._strip_prisma_query_params(database_url), connect_timeout=10, autocommit=True
+                ProxyExtrasDBManager._strip_prisma_query_params(database_url),
+                connect_timeout=10,
+                autocommit=True,
+                client_encoding="utf8",
             ) as connection:
                 return (
                     connection.execute(
@@ -727,7 +731,7 @@ class ProxyExtrasDBManager:
 
         cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 row = conn.execute(
                     "SELECT 1 "
                     "FROM pg_partitioned_table pt "
@@ -830,7 +834,7 @@ class ProxyExtrasDBManager:
             # it, psycopg3's `with conn` calls COMMIT on clean exit — which
             # fails after `UndefinedTable` (fresh DB) leaves the transaction
             # in an aborted state.
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 try:
                     rows = conn.execute(
                         "SELECT migration_name FROM _prisma_migrations "
@@ -935,7 +939,7 @@ class ProxyExtrasDBManager:
         schema: Final = ProxyExtrasDBManager._prisma_schema_param(prisma_url) or "public"
         cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(os.getenv("DIRECT_URL") or prisma_url)
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as conn:
                 conn.execute("SET statement_timeout = 0")
                 conn.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(lock_timeout)))
                 found: Final = ProxyExtrasDBManager._invalid_litellm_indexes(conn, schema)
@@ -1001,6 +1005,7 @@ class ProxyExtrasDBManager:
         from litellm_proxy_extras.migration_recovery import (
             baseline_current_schema,
             recover_completed_migration,
+            roll_back_killed_migration,
             roll_back_replayable_failed_migration,
         )
 
@@ -1031,8 +1036,11 @@ class ProxyExtrasDBManager:
                     migration_environment(_get_prisma_env()),
                 )
 
+        def roll_back_killed(session_name: str, attempt_started: float) -> None:
+            roll_back_killed_migration(lock_url, schema, session_name, attempt_started)
+
         while not ProxyExtrasDBManager._run_database_v2(
-            True, recover_completed, baseline_existing, lambda: prisma_migration_lock(lock_url)
+            True, recover_completed, baseline_existing, lambda: prisma_migration_lock(lock_url), roll_back_killed
         ):
             continue
         return True
@@ -1043,6 +1051,7 @@ class ProxyExtrasDBManager:
         recover_completed: Callable[[str], bool] = lambda name: False,
         baseline_existing: "Callable[[str], None] | None" = None,
         deploy_lock: Callable[[], AbstractContextManager[None]] = nullcontext,
+        roll_back_killed: Callable[[str, float], None] = lambda session_name, attempt_started: None,
     ) -> bool:
         """
         v2 migration resolver (opt-in via --use_v2_migration_resolver).
@@ -1106,12 +1115,9 @@ class ProxyExtrasDBManager:
             while not budget.exhausted:
                 attempt_started = time.monotonic()
                 try:
-                    with deploy_lock():
-                        result = prisma_toolchain.run_prisma(
-                            [_get_prisma_command(), "migrate", "deploy"],
-                            timeout=deploy_timeout,
-                            env=migration_env,
-                        )
+                    result = ProxyExtrasDBManager._migrate_deploy_under_lock(
+                        migration_env, deploy_timeout, deploy_lock, roll_back_killed
+                    )
                     logger.info(f"prisma migrate deploy stdout: {result.stdout}")
                     return True
 
@@ -1152,6 +1158,28 @@ class ProxyExtrasDBManager:
             )
         finally:
             os.chdir(original_dir)
+
+    @staticmethod
+    def _migrate_deploy_under_lock(
+        migration_env: Mapping[str, str],
+        deploy_timeout: float,
+        deploy_lock: Callable[[], AbstractContextManager[None]],
+        roll_back_killed: Callable[[str, float], None],
+    ) -> "subprocess.CompletedProcess[str]":
+        from litellm_proxy_extras.migration_lock import tagged_environment
+
+        session_name: Final = f"litellm-migrate-{secrets.token_hex(8)}"
+        started: Final = time.monotonic()
+        with deploy_lock():
+            try:
+                return prisma_toolchain.run_prisma(
+                    [_get_prisma_command(), "migrate", "deploy"],
+                    timeout=deploy_timeout,
+                    env=tagged_environment(migration_env, session_name),
+                )
+            except subprocess.TimeoutExpired:
+                roll_back_killed(session_name, started)
+                raise
 
     @staticmethod
     def _v2_failed_migration_name(stderr: str) -> "str | None":
@@ -1329,6 +1357,7 @@ class ProxyExtrasDBManager:
                 ProxyExtrasDBManager._strip_prisma_query_params(database_url),
                 connect_timeout=10,
                 autocommit=True,
+                client_encoding="utf8",
                 options="-c statement_timeout=5000",
             ) as conn:
                 rows: Final = conn.execute(
@@ -1507,7 +1536,7 @@ class ProxyExtrasDBManager:
         schema: Final = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
         prisma_dir: Final = Path(ProxyExtrasDBManager._get_prisma_dir())
         try:
-            with psycopg.connect(direct_url, connect_timeout=10, autocommit=True) as connection:
+            with psycopg.connect(direct_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as connection:
                 result: Final = dry_run(
                     connection,
                     schema,

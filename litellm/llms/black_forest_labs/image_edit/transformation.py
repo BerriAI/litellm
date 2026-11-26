@@ -125,7 +125,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to Black Forest Labs parameters.
 
@@ -145,12 +145,12 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for Black Forest Labs.
 
@@ -199,7 +199,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for the Black Forest Labs API request.
@@ -252,10 +252,10 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | Sequence[FileTypes | None] | None,
-        image_edit_optional_request_params: dict,
+        image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: Mapping[str, object],
+    ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform OpenAI-style request to Black Forest Labs request format.
 
@@ -292,7 +292,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
-    ) -> tuple[dict, RequestFiles]:
+    ) -> tuple[dict[str, object], RequestFiles]:
         downloaded_image: Final = await self._fetch_remote_image(image)
         downloaded_mask: Final = await self._fetch_remote_image(image_edit_optional_request_params.get("mask"))
         return self.transform_image_edit_request(
@@ -353,7 +353,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         )
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict | httpx.Headers
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
     ) -> BlackForestLabsError:
         """Return the appropriate error class for Black Forest Labs."""
         return BlackForestLabsError(

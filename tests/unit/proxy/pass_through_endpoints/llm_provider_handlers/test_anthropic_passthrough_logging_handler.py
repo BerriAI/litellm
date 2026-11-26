@@ -14,7 +14,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.messages.stream_assembly import extract_sse_data
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import PassThroughEndpointLoggingTypedDict, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _upstream_headers_for_anthropic_route
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -3389,3 +3389,158 @@ def test_a_stream_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_p
 
     assert result["result"].usage.prompt_tokens > 0
     assert result["kwargs"]["response_cost"] == pytest.approx(_deployment_price_of(result["result"].usage))
+
+
+def test_a_stream_the_rust_route_priced_is_billed_at_that_price_without_pricing_it_again(
+    monkeypatch: pytest.MonkeyPatch, all_chunks: list[str]
+) -> None:
+    logging_obj: Final = _deployment_priced_logging_obj(monkeypatch, stream=True)
+    logging_obj.optional_params = {}
+    logging_obj.record_route_cost(0.0421)
+
+    def repriced(*_args: object, **_kwargs: object) -> float:
+        raise AssertionError("a route-priced stream was priced again")
+
+    monkeypatch.setattr(litellm, "completion_cost", repriced)
+    monkeypatch.setattr(litellm, "response_cost_calculator", repriced)
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(  # pyright: ignore[reportUnknownMemberType]  # the handler leaves its passthrough logging object untyped
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5", "stream": True, "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1),
+    )
+
+    assert result["kwargs"]["response_cost"] == 0.0421, result["kwargs"]
+    assert logging_obj.model_call_details["response_cost"] == 0.0421
+
+
+_MANTLE_MESSAGES_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
+_BEDROCK_STYLE_REQUEST_MODEL: Final = "anthropic.claude-sonnet-4-5"
+_MANTLE_ROW_PRICING: Final = {"input_cost_per_token": 5e-03, "output_cost_per_token": 9e-03}
+
+
+def _log_generic_route_call(
+    monkeypatch: pytest.MonkeyPatch,
+    url_route: str,
+    stream: bool,
+    all_chunks: list[str],
+    httpx_response: httpx.Response,
+    configured_provider: str | None = None,
+    request_model: str = _BEDROCK_STYLE_REQUEST_MODEL,
+) -> tuple[LiteLLMLoggingObj, PassThroughEndpointLoggingTypedDict]:
+    returned_model: Final = httpx_response.json()["model"]
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            f"bedrock_mantle/{_BEDROCK_STYLE_REQUEST_MODEL}": {
+                "litellm_provider": "bedrock_mantle",
+                **_MANTLE_ROW_PRICING,
+            },
+            returned_model: {"litellm_provider": "anthropic", **_DEPLOYMENT_PRICING},
+        },
+    )
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="generic-route",
+        function_id="1",
+    )
+    logging_obj.model_call_details["stream"] = stream
+    if configured_provider is not None:
+        logging_obj.model_call_details["custom_llm_provider"] = configured_provider
+    request_body: Final = {"model": request_model, "stream": stream, "messages": []}
+    if stream:
+        return logging_obj, AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(  # pyright: ignore[reportUnknownMemberType]  # the handler leaves its passthrough logging object untyped
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route=url_route,
+            request_body=request_body,
+            endpoint_type=MagicMock(),
+            start_time=datetime(2025, 1, 1),
+            all_chunks=all_chunks,
+            end_time=datetime(2025, 1, 1),
+        )
+    return logging_obj, AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+        httpx_response=httpx_response,
+        response_body=httpx_response.json(),
+        logging_obj=logging_obj,
+        url_route=url_route,
+        result="success",
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+        cache_hit=False,
+        request_body=request_body,
+    )
+
+
+def _price_of(usage: litellm.Usage, pricing: dict[str, float]) -> float:
+    return (
+        usage.prompt_tokens * pricing["input_cost_per_token"]
+        + usage.completion_tokens * pricing["output_cost_per_token"]
+    )
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_a_generic_route_to_a_mantle_host_is_billed_at_the_mantle_row_of_the_requested_model(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, all_chunks: list[str], mock_httpx_response: httpx.Response
+) -> None:
+    logging_obj, result = _log_generic_route_call(
+        monkeypatch, _MANTLE_MESSAGES_URL, stream, all_chunks, mock_httpx_response
+    )
+
+    assert result["result"].usage.prompt_tokens > 0
+    assert result["kwargs"]["response_cost"] == pytest.approx(_price_of(result["result"].usage, _MANTLE_ROW_PRICING))
+    assert logging_obj.model_call_details["custom_llm_provider"] == "bedrock_mantle"
+    assert result["kwargs"]["model"] == _BEDROCK_STYLE_REQUEST_MODEL
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_a_generic_route_whose_requested_model_is_unpriced_is_billed_at_the_model_the_upstream_returned(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, all_chunks: list[str], mock_httpx_response: httpx.Response
+) -> None:
+    logging_obj, result = _log_generic_route_call(
+        monkeypatch, "https://gateway.example.com/v1/messages", stream, all_chunks, mock_httpx_response
+    )
+
+    assert result["result"].usage.prompt_tokens > 0
+    assert result["kwargs"]["response_cost"] == pytest.approx(_price_of(result["result"].usage, _DEPLOYMENT_PRICING))
+    assert logging_obj.model_call_details["custom_llm_provider"] == "anthropic"
+    assert result["kwargs"]["model"] == mock_httpx_response.json()["model"]
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_a_provider_the_route_configured_is_kept_on_a_mantle_host(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, all_chunks: list[str], mock_httpx_response: httpx.Response
+) -> None:
+    logging_obj, _ = _log_generic_route_call(
+        monkeypatch, _MANTLE_MESSAGES_URL, stream, all_chunks, mock_httpx_response, configured_provider="anthropic"
+    )
+
+    assert logging_obj.model_call_details["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_a_mantle_host_model_with_no_mantle_row_is_still_billed_at_the_model_the_upstream_returned(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, all_chunks: list[str], mock_httpx_response: httpx.Response
+) -> None:
+    logging_obj, result = _log_generic_route_call(
+        monkeypatch,
+        _MANTLE_MESSAGES_URL,
+        stream,
+        all_chunks,
+        mock_httpx_response,
+        request_model="anthropic.claude-opus-4-5",
+    )
+
+    assert result["result"].usage.prompt_tokens > 0
+    assert result["kwargs"]["response_cost"] == pytest.approx(_price_of(result["result"].usage, _DEPLOYMENT_PRICING))
+    assert logging_obj.model_call_details["custom_llm_provider"] == "anthropic"
+    assert result["kwargs"]["model"] == mock_httpx_response.json()["model"]

@@ -162,7 +162,7 @@ class AmazonCohereChatConfig:
             "tool_choice",
         ]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
@@ -232,7 +232,7 @@ def _with_served_service_tier(chunk: _StreamChunk, served_tier: str | None) -> _
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     model: str,
     messages: list,
@@ -244,7 +244,8 @@ async def make_call(
     timeout: float | httpx.Timeout | None = None,
     optional_params: Mapping[str, object] | None = None,
 ) -> tuple[
-    base_model_iterator.MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict], httpx.Headers
+    base_model_iterator.MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict[str, object]],
+    httpx.Headers,
 ]:
     try:
         if client is None:
@@ -289,7 +290,8 @@ async def make_call(
                 json_mode=json_mode,
             )
             completion_stream: (
-                base_model_iterator.MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict]
+                base_model_iterator.MockResponseIterator
+                | AsyncIterator[GChunk | ModelResponseStream | dict[str, object]]
             ) = base_model_iterator.MockResponseIterator(model_response=model_response)
         else:
             decoder: Final = _stream_decoder(
@@ -331,7 +333,7 @@ async def make_call(
 def make_sync_call(
     client: HTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     signed_json_body: bytes | None,
     model: str,
@@ -342,7 +344,9 @@ def make_sync_call(
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
-) -> tuple[base_model_iterator.MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]:
+) -> tuple[
+    base_model_iterator.MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict[str, object]], httpx.Headers
+]:
     try:
         if client is None:
             client = get_httpx_client(
@@ -385,7 +389,7 @@ def make_sync_call(
                 json_mode=json_mode,
             )
             completion_stream: (
-                base_model_iterator.MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict]
+                base_model_iterator.MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict[str, object]]
             ) = base_model_iterator.MockResponseIterator(model_response=model_response)
         else:
             decoder: Final = _stream_decoder(
@@ -725,7 +729,7 @@ class AWSEventStreamDecoder:
         except Exception as e:
             raise Exception(f"Received streaming error - {e}")
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
+    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict[str, object]:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -808,7 +812,7 @@ class AWSEventStreamDecoder:
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes], *, response_headers: Mapping[str, str] | None = None
-    ) -> AsyncIterator[GChunk | ModelResponseStream | dict]:
+    ) -> AsyncIterator[GChunk | ModelResponseStream | dict[str, object]]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         tally: Final = EventStreamTally("Bedrock", get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
@@ -940,7 +944,7 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
             sync_stream=sync_stream,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
+    def _chunk_parser(self, chunk_data: dict[str, object]) -> GChunk | ModelResponseStream | dict[str, object]:
         return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
