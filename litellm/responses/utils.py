@@ -1364,7 +1364,7 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def extract_mcp_headers_from_request(
-        secret_fields: dict[str, Any] | None,
+        secret_fields: Mapping[str, object] | None,
         tools: Iterable[object] | None,
         mcp_auth: "UserAPIKeyAuth | None" = None,
     ) -> tuple[

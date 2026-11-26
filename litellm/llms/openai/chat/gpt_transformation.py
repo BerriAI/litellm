@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.core_helpers import (
     subscript,
 )
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    decoded_json,
     extract_reasoning_content,
     handle_invalid_parallel_tool_calls,
     should_convert_tool_call_to_json_mode,
@@ -921,7 +922,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final[dict[str, object]] = raw_response.json()
+            completion_response: Final = decoded_json(raw_response)
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise OpenAIError(

@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Final, Literal, TypeVar, overload
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, TypeAdapter
@@ -431,7 +431,10 @@ async def _defined_guardrail(prisma_client: "PrismaClient", id_or_name: str) -> 
     )
 
 
-def _to_dict(value: object) -> dict[str, Any]:
+_GUARDRAIL_DESCRIPTION: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+
+
+def _to_dict(value: object) -> Mapping[str, object]:
     """Coerce a pydantic model (e.g. LitellmParams) / dict value into a plain dict."""
     if isinstance(value, BaseModel):
         return value.model_dump(exclude_none=True)
@@ -734,7 +737,7 @@ async def guardrails_usage_detail(
         avgLatency=None,
         status=_status_from_fail_rate(fail_rate),
         trend=trend,
-        description=guardrail_info.get("description"),
+        description=_GUARDRAIL_DESCRIPTION.validate_python(guardrail_info.get("description")),
         time_series=time_series,
         usage_units=_sum_counter_units(units_rows),
         usage_units_daily=units_daily,
