@@ -269,6 +269,23 @@ def _registered_hosts(servers: Collection[MCPServer]) -> frozenset[str]:
     return frozenset(host for host in (_url_host(server.url) for server in servers) if host is not None)
 
 
+def _allowlisted_unregistered_url(
+    server_url: str, url: str, registered_hosts: frozenset[str], allowed_origins: Sequence[str]
+) -> bool:
+    return _url_host(url) not in registered_hosts and is_url_destination_allowed_by_host(
+        server_url, list(allowed_origins)
+    )
+
+
+def runs_as_unregistered_server(server_url: str, servers: Collection[MCPServer], allowed_hosts: Sequence[str]) -> bool:
+    """Whether the gateway runs a hosted MCP tool naming server_url as an unregistered server: its host is allowlisted
+    and serves no registered server."""
+    url: Final = normalized_mcp_url(server_url)
+    return url is not None and _allowlisted_unregistered_url(
+        server_url, url, _registered_hosts(servers), hosted_mcp_allowed_origins(allowed_hosts)
+    )
+
+
 def _served_proxy_path(tool: Mapping[str, object], servers: Collection[MCPServer]) -> bool:
     name: Final = proxy_path_mcp_name(tool)
     return name is not None and any(name.lower() in map(str.lower, server_names(server)) for server in servers)
@@ -313,7 +330,7 @@ def _claim(
     matches: Final = _registered_matches(url, servers)
     if matches:
         return _registered_claim(tool, label, matches)
-    if _url_host(url) in registered_hosts or not is_url_destination_allowed_by_host(server_url, list(allowed_hosts)):
+    if not _allowlisted_unregistered_url(server_url, url, registered_hosts, allowed_hosts):
         return _Unclaimed(tool=tool)
     return _DirectClaim(
         tool=tool,

@@ -3903,6 +3903,20 @@ class MCPServerManager:
             return True
         return (await MCPRequestHandler.get_mcp_server_access(user_api_key_auth)).scope == "unscoped"
 
+    async def reaches_unregistered_mcp_url(self, server_id: str, user_api_key_auth: UserAPIKeyAuth | None) -> bool:
+        """Whether server_id is a URL the gateway runs for this caller as an unregistered server, reached through
+        gateway_hosted_mcp_allowed_hosts the way an allow_all_keys server is reached."""
+        from litellm.responses.mcp.direct_url_claims import runs_as_unregistered_server
+
+        return (
+            litellm.gateway_runs_hosted_mcp
+            and self.get_mcp_server_by_id(server_id) is None
+            and runs_as_unregistered_server(
+                server_id, tuple(self.get_registry().values()), litellm.gateway_hosted_mcp_allowed_hosts
+            )
+            and await self.reaches_hosted_mcp_allowed_hosts(user_api_key_auth)
+        )
+
     @staticmethod
     def _kept_from_mcp_servers_open_to_every_key(user_api_key_auth: UserAPIKeyAuth) -> bool:
         permission: Final = user_api_key_auth.object_permission

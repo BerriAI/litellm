@@ -9415,6 +9415,29 @@ class TestUserSubjectTeamUnion:
         assert open_tools is None, "open-channel server must be default-open for tools"
         assert closed_tools == [], "a server no source or channel grants stays deny-all"
 
+    async def test_allowlisted_hosted_mcp_url_gets_default_open_tools_for_admitted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "gateway_runs_hosted_mcp", True)
+        monkeypatch.setattr(litellm, "gateway_hosted_mcp_allowed_hosts", ("mcp.context7.com",))
+        auth: Final = _make_admitted_subject("sso-user")
+        with self._patch(teams_by_id={}, user_teams=[]):
+            allowlisted: Final = await MCPRequestHandler.get_allowed_tools_for_server(
+                "https://mcp.context7.com/mcp", auth
+            )
+            other_host: Final = await MCPRequestHandler.get_allowed_tools_for_server(
+                "https://mcp.deepwiki.com/mcp", auth
+            )
+            monkeypatch.setattr(litellm, "gateway_runs_hosted_mcp", False)
+            opted_out: Final = await MCPRequestHandler.get_allowed_tools_for_server(
+                "https://mcp.context7.com/mcp", auth
+            )
+        assert allowlisted is None
+        assert other_host == []
+        assert opted_out == []
+
     async def test_over_budget_team_grants_nothing_and_healthy_team_stands(self):
         """Budget ENFORCEMENT is the sibling of blocked: a team that has already exceeded its
         max_budget is rejected outright for a virtual key pinned to it (common_checks), so it must
@@ -12603,6 +12626,23 @@ async def test_personal_key_keeps_its_own_tool_rule_on_an_allow_all_server(
     )
     assert await MCPRequestHandler.get_allowed_tools_for_server("srv-open", scoped_key) == ["add"]
     assert await MCPRequestHandler.get_allowed_tools_for_server("srv-c", scoped_key) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [(), ("team-a",)], indirect=True)
+async def test_personal_key_gets_every_tool_on_an_allowlisted_hosted_mcp_url(
+    monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "gateway_runs_hosted_mcp", True)
+    monkeypatch.setattr(litellm, "gateway_hosted_mcp_allowed_hosts", ("mcp.context7.com", "srv-c.example.com"))
+    assert await MCPRequestHandler.get_allowed_tools_for_server(
+        "https://mcp.context7.com/mcp", personal_key_owner_teams
+    ) is None
+    assert await MCPRequestHandler.get_allowed_tools_for_server(
+        "https://srv-c.example.com/other", personal_key_owner_teams
+    ) == []
 
 
 @pytest.mark.asyncio

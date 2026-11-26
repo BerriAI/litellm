@@ -2678,9 +2678,11 @@ class MCPRequestHandler:
         # returns [], listable but uninvokable. Reachability is ALL it confers, NOT a ceiling waiver:
         # the user's own mcp_tool_permissions and org tool ceiling still bind, exactly as a key's do
         # on an allow_all server or an admin key's do on any server.
-        reachable_via_open_channel: Final = server_id in await global_mcp_server_manager.operator_open_server_ids(
-            auth
-        ) or await MCPRequestHandler.admin_view_unscoped(auth)
+        reachable_via_open_channel: Final = (
+            server_id in await global_mcp_server_manager.operator_open_server_ids(auth)
+            or await MCPRequestHandler.admin_view_unscoped(auth)
+            or await global_mcp_server_manager.reaches_unregistered_mcp_url(server_id, auth)
+        )
 
         allowed: Final[set[str]] = set()
         for source, granted in await MCPRequestHandler.admitted_source_grants(auth, allowed_team_ids=allowed_team_ids):
@@ -2875,9 +2877,11 @@ class MCPRequestHandler:
         grants: Final = await MCPRequestHandler.personal_key_team_server_grants(auth)
         granting: Final = tuple(source for source, access in grants if server_id in access.server_ids)
         if not granting:
-            reachable: Final = server_id in await global_mcp_server_manager.operator_open_server_ids(
-                auth
-            ) or await MCPRequestHandler.admin_view_unscoped(auth)
+            reachable: Final = (
+                server_id in await global_mcp_server_manager.operator_open_server_ids(auth)
+                or await MCPRequestHandler.admin_view_unscoped(auth)
+                or await global_mcp_server_manager.reaches_unregistered_mcp_url(server_id, auth)
+            )
             if not reachable:
                 return ()
             own_tools: Final = await MCPRequestHandler._single_credential_tools(server_id, auth)
