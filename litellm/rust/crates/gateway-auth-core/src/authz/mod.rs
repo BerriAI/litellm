@@ -3,10 +3,12 @@
 
 mod credential;
 mod eligibility;
+mod models;
 mod policy;
 mod principal;
 mod team;
 
 pub use credential::{check_admin_route, check_rbac_role, check_scope_based_access};
 pub(crate) use eligibility::{TeamEligibility, Verdict};
+pub use models::{Layer, ModelAsk, authorize};
 pub(crate) use policy::{RoutePolicy, Target};

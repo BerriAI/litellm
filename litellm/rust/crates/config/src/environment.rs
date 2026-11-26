@@ -42,6 +42,23 @@ pub struct Environment {
     pub default_cooldown_redis_read_interval_seconds: Option<f64>,
     #[serde_as(as = "UintOrUnset")]
     pub default_max_redis_batch_cache_size: Option<u64>,
+    pub litellm_rate_limit_window_size: Option<i64>,
+    pub litellm_tpm_token_reservation_enabled: Option<Flag>,
+    #[serde_as(as = "UintOrUnset")]
+    pub proxy_batch_write_at: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub spend_log_queue_max_bytes: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub spend_log_write_batch_max_bytes: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub spend_log_write_batch_max_rows: Option<u64>,
+    pub litellm_local_model_cost_map: Flag,
+    pub litellm_offline_mode: Flag,
+    #[serde_as(as = "UintOrUnset")]
+    pub model_cost_map_min_model_count: Option<u64>,
+    #[serde_as(as = "FloatOrUnset")]
+    pub model_cost_map_max_shrink_ratio: Option<f64>,
+    pub aws_region_name: Option<String>,
 }
 
 impl Environment {
@@ -99,6 +116,8 @@ mod tests {
             ("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", "10"),
             ("MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", "20"),
             ("NON_LLM_CONNECTION_TIMEOUT", "40"),
+            ("LITELLM_RATE_LIMIT_WINDOW_SIZE", "30"),
+            ("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false"),
         ])
         .unwrap();
 
@@ -113,6 +132,8 @@ mod tests {
                 max_request_body_decompression_ratio: Some(10),
                 max_decompressed_request_bodies_in_flight_mb: Some(20.0),
                 non_llm_connection_timeout: Some(40),
+                litellm_rate_limit_window_size: Some(30),
+                litellm_tpm_token_reservation_enabled: Some(Flag(false)),
                 ..Environment::default()
             }
         );

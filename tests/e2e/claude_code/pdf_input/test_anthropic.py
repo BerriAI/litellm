@@ -34,9 +34,10 @@ from claude_code.cli_driver import (
 
 
 ANTHROPIC_MODELS = [
-    "claude-haiku-4-5",
-    "claude-sonnet-4-5",
-    "claude-opus-4-7",
+    "claude-haiku-5-5",
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    "claude-fable-5-2",
 ]
 
 # Smallest valid PDF that renders a single visible word ("PONG"). Built

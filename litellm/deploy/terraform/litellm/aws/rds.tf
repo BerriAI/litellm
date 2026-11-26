@@ -43,7 +43,8 @@ resource "aws_rds_cluster" "this" {
   engine_version                  = var.db_engine_version
   database_name                   = var.db_name
   master_username                 = var.db_master_username
-  master_password                 = random_password.db_master_password[0].result
+  manage_master_user_password     = var.db_manage_master_password ? true : null
+  master_password                 = var.db_manage_master_password ? null : random_password.db_master_password[0].result
   db_subnet_group_name            = aws_db_subnet_group.this[0].name
   vpc_security_group_ids          = [aws_security_group.rds[0].id]
   db_cluster_parameter_group_name = aws_rds_cluster_parameter_group.this[0].name

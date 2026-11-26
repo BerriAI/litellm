@@ -1,12 +1,12 @@
 import asyncio
 import traceback
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Protocol, TypeAlias, cast
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -279,6 +279,28 @@ def failure_row_response_cost(request_data: Mapping[str, object]) -> float:
     )
 
 
+def _call_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=dict(kwargs)))
+
+
+def _is_billed_health_probe_failure(kwargs: Mapping[str, object]) -> bool:
+    probe_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(
+        UserAPIKeyAuth.get_litellm_internal_health_check_user_api_key_auth()
+    )
+    return _call_metadata(kwargs).get("user_api_key") == probe_key and failure_row_response_cost(kwargs) > 0
+
+
+def _health_probe_failure_request(
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: both failure spend writers stamp the row onto the request dict
+    litellm_params: Final = _str_keyed_fields(kwargs.get("litellm_params"))
+    return {
+        **kwargs,
+        "metadata": dict(_call_metadata(kwargs)),
+        "litellm_params": {name: value for name, value in litellm_params.items() if name != "litellm_metadata"},
+    }
+
+
 def _redaction_opt_in_lifted_from_litellm_metadata(
     litellm_metadata: ObjectMapping, *, caller_set_headers: bool
 ) -> ObjectMapping:
@@ -375,7 +397,7 @@ def _attempt_deployment(attempt: BilledFailedAttempt, deployment_lookup: Deploym
     return None if attempt.deployment_id is None else deployment_lookup(attempt.deployment_id)
 
 
-def _deployment_attribution(deployment: Deployment) -> Mapping[str, object]:
+def deployment_attribution(deployment: Deployment) -> Mapping[str, object]:
     """The spend-log attribution fields of the deployment that served an attempt: the model string it
     was called with, its provider, its configured ``api_base`` and its model group."""
     return MappingProxyType(
@@ -402,7 +424,7 @@ def _attempt_spend_row_kwargs(
     The row is stamped ``billed_retry_attempt`` so the daily spend tables keep its spend, tokens
     and model usage without counting it as a request the caller sent."""
     suffix: Final = f"-attempt-{position}"
-    attribution: Final = _NO_ATTRIBUTION if deployment is None else _deployment_attribution(deployment)
+    attribution: Final = _NO_ATTRIBUTION if deployment is None else deployment_attribution(deployment)
     raw_params: Final = cast("Mapping[str, object]", request_data.get("litellm_params") or {})  # cast-ok: request dict
     litellm_params: Final = {
         **raw_params,
@@ -601,6 +623,8 @@ def failure_spend_rows(
 
 
 class _ProxyDBLogger(CustomLogger):
+    runs_on_no_log_requests: ClassVar[bool] = True
+
     def __init__(
         self,
         spend_event_producer: SpendEventProducer | None = None,
@@ -738,8 +762,8 @@ class _ProxyDBLogger(CustomLogger):
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
 
-        existing_litellm_params: Final = request_data.get("litellm_params", {})
-        existing_litellm_metadata: Final = existing_litellm_params.get("metadata", {}) or {}
+        existing_litellm_params: Final = _str_keyed_fields(request_data.get("litellm_params"))
+        existing_litellm_metadata: Final = _str_keyed_fields(existing_litellm_params.get("metadata"))
 
         # Preserve tags from existing metadata
         if existing_litellm_metadata.get("tags"):
@@ -985,9 +1009,9 @@ class _ProxyDBLogger(CustomLogger):
         self,
         kwargs,  # kwargs to completion
         completion_response: (litellm.ModelResponse | object | None),  # response from completion
-        start_time=None,
-        end_time=None,  # start/end time for completion
-    ):
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,  # start/end time for completion
+    ) -> None:
         from litellm.proxy.proxy_server import (
             increment_spend_counters,
             proxy_logging_obj,
@@ -1280,6 +1304,7 @@ class _ProxyDBLogger(CustomLogger):
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    for_auth=True,
                 )
                 if team_obj.team_alias is not None:
                     metadata["user_api_key_team_alias"] = team_obj.team_alias
@@ -1319,6 +1344,41 @@ def _general_setting_enabled(name: str) -> bool:
 
 ProxyDBLogger: Final = _ProxyDBLogger
 
+FailureBilling: TypeAlias = Callable[[UserAPIKeyAuth, Exception, dict[str, object]], Awaitable[None]]
+
+
+async def bill_failure_on_spend_logs(
+    user_api_key_dict: UserAPIKeyAuth,
+    exception: Exception,
+    request_data: dict[str, object],  # mutable-ok: the spend loggers stamp the failure row on the request dict
+) -> None:
+    from litellm.proxy.hooks.rust_spend_logger import bill_failure_in_rust
+
+    for callback in litellm.callbacks:
+        if isinstance(callback, _ProxyDBLogger):
+            await callback.async_post_call_failure_hook(
+                request_data=request_data, original_exception=exception, user_api_key_dict=user_api_key_dict
+            )
+    await bill_failure_in_rust(user_api_key_dict, exception, request_data)
+
+
+class HealthProbeFailureBiller(CustomLogger):
+    def __init__(self, bill: FailureBilling = bill_failure_on_spend_logs) -> None:
+        super().__init__()
+        self._bill: Final = bill
+
+    async def async_log_failure_event(
+        self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        exception: Final = kwargs.get("exception")
+        if not isinstance(exception, Exception) or not _is_billed_health_probe_failure(kwargs):
+            return
+        await self._bill(
+            UserAPIKeyAuth.get_litellm_internal_health_check_user_api_key_auth(),
+            exception,
+            _health_probe_failure_request(kwargs),
+        )
+
 
 _REQUEST_DATA: Final = TypeAdapter(dict[str, object])
 
@@ -1334,7 +1394,7 @@ def is_pre_routing_rejection(exception: Exception, request_data: Mapping[str, ob
     )
 
 
-def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
+def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: Mapping[str, object]) -> None:
     patch = {k: v for k, v in metadata.items() if (k.startswith("user_api_key") or k == "tags") and v is not None}
     if not patch:
         return
@@ -1417,13 +1477,13 @@ def _metadata_keys(metadata: object) -> tuple[str, ...]:
     return tuple(sorted(str(key) for key in metadata))
 
 
-def _get_budget_reservation_from_metadata(metadata: dict) -> dict[str, object] | None:
+def _get_budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict[str, object] | None:
     return budget_reservation_from_metadata(metadata)
 
 
 def _get_request_tags_for_cost_tracking(
     sl_object: StandardLoggingPayload | None,
-    metadata: dict,
+    metadata: Mapping[str, object],
 ) -> list[str] | None:
     if sl_object is not None:
         request_tags: Final = sl_object.get("request_tags", None)
@@ -1558,7 +1618,7 @@ async def _update_database_and_spend_counters(
     end_user_id: str | None,
     team_id: str | None,
     org_id: str | None,
-    kwargs: dict,
+    kwargs: dict[str, object],
     completion_response: object,
     start_time: datetime | None,
     end_time: datetime | None,
@@ -1636,7 +1696,7 @@ async def _update_database_and_spend_counters_in_batch(
     end_user_id: str | None,
     team_id: str | None,
     org_id: str | None,
-    kwargs: dict,
+    kwargs: dict[str, object],
     completion_response: object,
     start_time: datetime | None,
     end_time: datetime | None,
@@ -1767,7 +1827,7 @@ async def _reconcile_budget_reservation_before_db_update(
             budget_reservation["finalized"] = True  # rebind-ok: stamps the caller's shared dict for the counter update
 
 
-async def _release_budget_reservation(budget_reservation: dict | None) -> None:
+async def _release_budget_reservation(budget_reservation: dict[str, object] | None) -> None:
     if budget_reservation is None:
         return
 
@@ -1781,7 +1841,7 @@ async def _release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def _invalidate_budget_reservation_counters(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
 ) -> None:
     if budget_reservation is None:
         return

@@ -104,7 +104,7 @@ def rejection_error(rejection: QueueTimeout | QueueFull, model: str) -> QueueRej
             assert_never(rejection)
 
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 async def _within(timer: Timer, seconds: float, call: Awaitable[_T]) -> _T | None:

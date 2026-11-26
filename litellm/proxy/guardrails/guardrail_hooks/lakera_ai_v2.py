@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from string import Formatter
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -42,6 +42,10 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIResponse,
 )
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.types.utils import LLMResponseTypes
+
 
 _DECODED_JSON: Final = TypeAdapter(object)
 _RESPONSE_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -390,9 +394,9 @@ class LakeraAIGuardrail(CustomGuardrail):
     async def call_v2_guard(
         self,
         messages: Sequence[AllMessageValues],
-        request_data: dict,
+        request_data: dict[str, object],
         event_type: GuardrailEventHooks,
-    ) -> tuple[LakeraAIResponse, dict]:
+    ) -> tuple[LakeraAIResponse, dict[str, int]]:
         """
         Call the Lakera AI v2 guard API.
         """
@@ -400,8 +404,8 @@ class LakeraAIGuardrail(CustomGuardrail):
         exception_str: str = ""
         start_time: Final[datetime] = datetime.now()
         lakera_response: LakeraAIResponse | None = None
-        request: dict = {}
-        masked_entity_count: Final[dict] = {}
+        request: dict[str, object] = {}
+        masked_entity_count: Final[dict[str, int]] = {}
         try:
             request = dict(
                 LakeraAIRequest(
@@ -434,7 +438,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             ####################################################
             # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
             ####################################################
-            guardrail_json_response: Exception | str | dict | list[dict] = {}
+            guardrail_json_response: Exception | str | dict[str, object] | list[dict[str, object]] = {}
             if status == "success":
                 copy_lakera_response_dict: Final = dict(copy.deepcopy(lakera_response)) if lakera_response else {}
                 # payload contains PII, we don't want to log it
@@ -457,7 +461,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         messages: Sequence[AllMessageValues],
         lakera_response: LakeraAIResponse | None,
-        masked_entity_count: dict,
+        masked_entity_count: dict[str, int],
     ) -> Sequence[AllMessageValues]:
         """
         Return a copy of messages with any detected PII replaced by
@@ -542,9 +546,9 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
@@ -681,7 +685,7 @@ class LakeraAIGuardrail(CustomGuardrail):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ):
@@ -757,7 +761,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: "LLMResponseTypes",
     ):
         """
         Post-call hook for Lakera guardrail.

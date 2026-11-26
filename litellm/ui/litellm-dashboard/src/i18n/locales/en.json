@@ -1,4 +1,23 @@
 {
+  "lensControls": {
+    "title": "Lens",
+    "tracing": "Tracing",
+    "new": "New",
+    "description": "Tracing · Alerting · Evals",
+    "on": "On",
+    "off": "Off",
+    "open": "Open Lens",
+    "teamDefault": "Default for team keys",
+    "keyInherited": "Uses team setting",
+    "keyCustom": "Custom setting",
+    "useTeam": "Use team setting",
+    "saveFailed": "Lens logging setting could not be saved",
+    "loading": "Loading…",
+    "unknown": "Unknown",
+    "teamUnavailable": "Team Lens setting is unavailable",
+    "statusUnavailable": "Lens connection status is unavailable",
+    "notConfigured": "Configure the gateway’s Lens connection to record traces"
+  },
   "apps": {
     "editSettings": "Edit {{alias}}",
     "title": "Applications",
@@ -3609,6 +3628,7 @@
       "customCallbackApi": "Custom Callback API Logging Integration",
       "galileo": "Galileo AI Observability Integration",
       "datadog": "Datadog Logging Integration",
+      "mixpanel": "Mixpanel Agent Intelligence OpenTelemetry Integration. Setup: https://docs.mixpanel.com/docs/agent-intelligence",
       "newrelic": "New Relic Logging Integration",
       "lago": "Lago Billing Logging Integration",
       "langfuse": "Langfuse v2 Logging Integration",
@@ -9323,6 +9343,15 @@
     }
   },
   "shared": {
+    "semanticCaching": {
+      "title": "Response cache",
+      "mode": "Cache mode",
+      "inherit": "Inherit",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "threshold": "Similarity threshold",
+      "ttl": "TTL in seconds"
+    },
     "fieldInformation": "{{label}} information",
     "resourceActivity": {
       "title": "Activity",
@@ -11911,6 +11940,9 @@
         },
         "airia": {
           "description": "Airia AI security and governance platform. Runtime guardrails for prompt injection, data leakage prevention, and responsible AI, enforced on every prompt and response."
+        },
+        "reco": {
+          "description": "Reco AI agent security. Checks every prompt against your Reco policies before the model call, blocking prompt injection and sensitive data leaks."
         }
       },
       "subcategories": {
@@ -16599,7 +16631,42 @@
       "format": {
         "label": "Format",
         "csv": "CSV (Excel, Google Sheets)",
-        "json": "JSON (includes metadata)"
+        "json": "JSON (includes metadata)",
+        "pdf": "PDF (printable report)"
+      },
+      "report": {
+        "frameTitle": "Usage report",
+        "summary": {
+          "title": "Summary",
+          "spend": "Total spend",
+          "requests": "Requests",
+          "successful": "Successful requests",
+          "failed": "Failed requests",
+          "tokens": "Total tokens",
+          "promptTokens": "Prompt tokens",
+          "completionTokens": "Completion tokens"
+        },
+        "breakdown": "Breakdown",
+        "columns": {
+          "date": "Date",
+          "key": "Key",
+          "model": "Model",
+          "user": "User",
+          "spend": "Spend",
+          "requests": "Requests",
+          "successful": "Successful",
+          "failed": "Failed",
+          "promptTokens": "Prompt tokens",
+          "completionTokens": "Completion tokens"
+        },
+        "meta": {
+          "dateRange": "Date range",
+          "exportType": "Export type",
+          "filters": "Filters",
+          "generated": "Generated"
+        },
+        "truncated": "Showing the first {{shown}} of {{total}} rows. Totals cover all rows. Export as CSV for the full breakdown.",
+        "empty": "No usage in this date range"
       },
       "summary": {
         "filterCount_one": "{{count}} filter",

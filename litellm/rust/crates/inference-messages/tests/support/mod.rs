@@ -235,7 +235,7 @@ impl<P: litellm_host::protocol::Protocol> litellm_host::interceptors::Intercepto
 
 impl<P> RecordingCall<P>
 where
-    P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
+    P: litellm_host::protocol::Protocol,
     P::Error: From<litellm_host::machine::MachineFault>,
 {
     pub fn request(&self) -> Result<P::Request, P::Error> {
@@ -257,7 +257,7 @@ where
 
 impl<P> litellm_host_native::in_process::StreamConsumer<P> for RecordingCall<P>
 where
-    P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
+    P: litellm_host::protocol::Protocol,
     P::Error: From<litellm_host::machine::MachineFault>,
 {
     async fn open_stream(&self, head: P::StreamHead) -> Result<ControlFlow<()>, P::Error> {
@@ -271,7 +271,7 @@ where
 }
 impl<P> litellm_host::lifecycle::CallObserver for RecordingCall<P>
 where
-    P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
+    P: litellm_host::protocol::Protocol,
     P::Error: From<litellm_host::machine::MachineFault>,
 {
     fn observe(&self, event: litellm_host::lifecycle::CallEvent) {

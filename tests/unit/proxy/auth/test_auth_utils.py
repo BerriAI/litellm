@@ -876,6 +876,30 @@ def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_cr
     assert (out["api_base"], out["api_key"]) == ("https://caller.example/v1", "sk-caller")
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("api_key", "test-key"), ("api_base", "https://alternate.example/v1"), ("base_url", "https://alternate.example/v1")),
+)
+def test_named_provider_oauth_deployment_rejects_client_side_overrides(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: str
+) -> None:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.models.credentials import CredentialItem
+
+    credential: Final = CredentialItem(
+        credential_name="provider-oauth",
+        credential_values={"oauth_client_credentials": True},
+        credential_info={},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+    with pytest.raises(BadRequestError, match="OAuth client credentials deployments"):
+        get_dynamic_litellm_params(
+            litellm_params={"model": "custom_openai/gpt-6-luna", "litellm_credential_name": credential.credential_name},
+            request_kwargs={field: value},
+        )
+
+
 def test_test_connection_may_name_a_credential_holding_an_oidc_api_key(oidc_api_key_credential):
     """The admin UI tests a stored credential by name, which is how a proxy admin checks an oidc/ api_key works."""
     assert (
@@ -1711,6 +1735,10 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
         )
         == "hosted_vllm/gpt-oss-20b"
     )
+    assert (
+        get_model_from_request(request_data={}, route="/gemini/v1beta/models/gemini-text:v1:generateContent")
+        == "gemini-text:v1"
+    )
 
 
 _URL_SELECTED_MODEL_ROUTES: Final = (
@@ -1718,6 +1746,8 @@ _URL_SELECTED_MODEL_ROUTES: Final = (
     ("/models/premium-model:generateContent", "premium-model"),
     ("/v1beta/models/premium-model:streamGenerateContent", "premium-model"),
     ("/models/provider/premium-model:7b:streamGenerateContent", "provider/premium-model:7b"),
+    ("/v1beta/models/premium-model:countTokens", "premium-model"),
+    ("/v1beta/models/premium-model:7b:countTokens", "premium-model:7b"),
     ("/openai/deployments/premium-model/images/generations", "premium-model"),
     ("/openai/deployments/provider/premium-model/images/edits", "provider/premium-model"),
 )
@@ -1747,6 +1777,24 @@ def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_u
     assert get_model_from_request(request_data=request_data, route=route) == url_model
 
 
+@pytest.mark.parametrize(
+    "route, url_model",
+    [
+        ("/v1beta/models/premium-model:countTokens", "premium-model"),
+        ("/models/premium-model:7b:countTokens", "premium-model:7b"),
+    ],
+)
+def test_get_model_from_request_checks_count_tokens_on_the_url_model_over_proxy_wide_models(
+    monkeypatch: pytest.MonkeyPatch, route: str, url_model: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"completion_model": "forced-model"})
+    monkeypatch.setattr(proxy_server, "user_model", "cli-model")
+
+    assert get_model_from_request(request_data={"model": "body-model"}, route=route) == url_model
+
+
 @pytest.mark.usefixtures("no_inference_model_override")
 @pytest.mark.parametrize(
     "route, path_params",
@@ -1773,6 +1821,10 @@ def test_get_model_from_request_follows_the_handlers_path_param_over_route_and_b
     [
         ("/v1beta/models/url-model:generateContent", {"completion_model": "configured"}, None, "configured"),
         ("/models/url-model:streamGenerateContent", {}, "cli", "cli"),
+        ("/v1beta/models/:generateContent", {"completion_model": "configured"}, None, "configured"),
+        ("/models/:streamGenerateContent", {}, "cli", "cli"),
+        ("/v1beta/models/:generateContent", {}, None, "body-model"),
+        ("/v1beta/models/:countTokens", {"completion_model": "configured"}, "cli", "body-model"),
         ("/v1beta/models/url-model:generateContent", {"image_generation_model": "configured"}, None, "url-model"),
         ("/openai/deployments/url-model/images/generations", {}, "cli", "cli"),
         ("/openai/deployments/url-model/images/generations", {"completion_model": "configured"}, None, "url-model"),
@@ -1806,6 +1858,12 @@ def test_get_model_from_request_applies_the_handlers_server_model_precedence(
 @pytest.mark.parametrize("route", ["/v1/images/generations", "/images/edits", "/v1/chat/completions"])
 def test_get_model_from_request_keeps_the_body_model_where_the_url_names_none(route: str) -> None:
     assert get_model_from_request(request_data={"model": "cheap-model"}, route=route) == "cheap-model"
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize("route", ["/v1beta/models/:generateContent", "/models/:countTokens"])
+def test_get_model_from_request_finds_no_model_when_neither_url_nor_body_names_one(route: str) -> None:
+    assert get_model_from_request(request_data={}, route=route) is None
 
 
 @pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)
@@ -1963,6 +2021,38 @@ def _azure_relay_router():
 )
 def test_get_model_from_request_azure_relay_routes_use_the_model_group_in_the_path(route, request_data, expected):
     assert get_model_from_request(request_data=request_data, route=route, llm_router=_azure_relay_router()) == expected
+
+
+def _azure_route_router_with_an_openai_group_named_like_a_path_segment():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {"model_name": "openai", "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"}},
+            {
+                "model_name": "private-azure",
+                "litellm_params": {"model": "azure/gpt-5.4", "api_base": "https://b.openai.azure.com", "api_key": "k"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected",
+    [
+        ("/azure/openai/deployments/private-azure/chat/completions", {}, "private-azure"),
+        ("/azure/openai/deployments/private-azure/chat/completions", {"model": "openai"}, "private-azure"),
+        ("/azure/openai/v1/responses", {"model": "private-azure"}, "private-azure"),
+        ("/azure/openai/v1/responses", {"model": "openai"}, "openai"),
+        ("/azure/openai/deployments/openai/chat/completions", {}, "openai"),
+        ("/azure/openai/deployments/openai/chat/completions", {"model": "private-azure"}, "openai"),
+    ],
+)
+def test_get_model_from_request_azure_routes_authorize_the_group_the_request_is_relayed_to(
+    route, request_data, expected
+):
+    router = _azure_route_router_with_an_openai_group_named_like_a_path_segment()
+    assert get_model_from_request(request_data=request_data, route=route, llm_router=router) == expected
 
 
 def _nvidia_nim_relay_router():
@@ -3100,6 +3190,14 @@ class TestGetEndUserIdDropsMalformedBodyValues:
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
             result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
+
+        assert result is None
+
+    def test_metadata_user_dot_id_is_only_a_span_label(self) -> None:
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result: Final = get_end_user_id_from_request_body(
+                request_body={"metadata": {"user.id": "label"}}, request_headers={}
+            )
 
         assert result is None
 

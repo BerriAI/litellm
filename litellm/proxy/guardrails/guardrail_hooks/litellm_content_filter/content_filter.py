@@ -13,7 +13,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
@@ -85,7 +85,7 @@ from .patterns import PATTERN_EXTRA_CONFIG, PATTERN_STREAMING_HOLDBACK_CHARS, ge
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
-_StreamItemT: Final = TypeVar("_StreamItemT")
+_StreamItemT = TypeVar("_StreamItemT")
 _JSON_ENTRIES: Final = TypeAdapter(list[object])
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
@@ -147,14 +147,26 @@ class _CategoryConfigView(TypedDict):
     category_file: str | None
 
 
-def _streamed_choice_content(choice: StreamingChoices | TextChoices) -> str | None:
+_STREAMED_DELTA_FIELDS: Final = ("content", "refusal")
+
+
+def _as_text(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _streamed_choice_texts(choice: StreamingChoices | TextChoices) -> tuple[tuple[str, str], ...]:
     if isinstance(choice, TextChoices):
-        return choice.text if isinstance(choice.text, str) else ""
+        return (("text", _as_text(attribute_or_none(choice, "text"))),)
     delta: Final = attribute_or_none(choice, "delta")
     if not delta:
-        return None
-    content: Final = attribute_or_none(delta, "content")
-    return content if isinstance(content, str) else ""
+        return ()
+    return tuple((field, _as_text(attribute_or_none(delta, field))) for field in _STREAMED_DELTA_FIELDS)
+
+
+def _streamed_texts(item: object) -> Iterator[tuple[StreamingChoices | TextChoices, str, str]]:
+    for choice in _streamed_choices(item):
+        for field, text in _streamed_choice_texts(choice):
+            yield choice, field, text
 
 
 def _streamed_choices(item: object) -> Sequence[StreamingChoices | TextChoices]:
@@ -178,9 +190,11 @@ class _StreamedChoiceState:
 
 
 def _end_of_stream_chunk(
-    last_item: object, state_by_choice: Mapping[int, _StreamedChoiceState]
+    last_item: object, state_by_choice: Mapping[tuple[int, str], _StreamedChoiceState]
 ) -> ModelResponseStream | TextCompletionResponse | None:
-    unfinished: Final = tuple(index for index, state in state_by_choice.items() if not state.finished)
+    unfinished: Final = tuple(
+        dict.fromkeys(index for (index, _field), state in state_by_choice.items() if not state.finished)
+    )
     if not unfinished:
         return None
     if isinstance(last_item, TextCompletionResponse):
@@ -206,15 +220,20 @@ async def _stream_then_end_of_stream_chunk(
 ) -> AsyncGenerator[tuple[_StreamItemT, bool], None]:
     last_item: _StreamItemT | None = None  # rebind-ok: the end-of-stream chunk copies the last chunk's id and model
     held_items: tuple[_StreamItemT, ...] = ()  # rebind-ok: the usage chunk must stay after the end-of-stream chunk
-    async for item in response:
-        last_item = item
-        if _is_choiceless_chunk(item):
-            held_items = (*held_items, item)
-            continue
-        for held_item in held_items:
-            yield held_item, False
-        held_items = ()
-        yield item, False
+    try:
+        async for item in response:
+            last_item = item
+            if _is_choiceless_chunk(item):
+                held_items = (*held_items, item)
+                continue
+            for held_item in held_items:
+                yield held_item, False
+            held_items = ()
+            yield item, False
+    except Exception:
+        if last_item is not None and (closing_on_error := end_of_stream_chunk(last_item)) is not None:
+            yield closing_on_error, True
+        raise
     closing_item: Final = None if last_item is None else end_of_stream_chunk(last_item)
     if closing_item is not None:
         yield closing_item, True
@@ -330,7 +349,7 @@ class CategoryConfig:
         self.inherit_from = inherit_from
         self.additional_block_words = [w.lower() for w in additional_block_words] if additional_block_words else []
         # Phrase patterns: regex patterns for catching paraphrases
-        self.phrase_patterns: list[tuple[str, Pattern]] = []
+        self.phrase_patterns: list[tuple[str, Pattern[str]]] = []
         for p in phrase_patterns or []:
             try:
                 self.phrase_patterns.append((p, re.compile(p, re.IGNORECASE)))
@@ -1820,7 +1839,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _apply_competitor_intent_policy(
         self,
         intent_result: CompetitorIntentResult,
-        request_data: dict,
+        request_data: dict[str, object],
         detections: list[ContentFilterDetection],
     ) -> None:
         """
@@ -1883,7 +1902,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     def _log_guardrail_information(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         detections: list[ContentFilterDetection],
         status: "GuardrailStatus",
         start_time: datetime,
@@ -1904,7 +1923,9 @@ class ContentFilterGuardrail(CustomGuardrail):
             duration: Seconds spent inside the guardrail; defaults to the wall clock since start_time
         """
         # Convert TypedDict detections to regular dicts for JSON serialization
-        guardrail_json_response: Exception | str | dict | list[dict] = [dict(detection) for detection in detections]
+        guardrail_json_response: Exception | str | dict[str, object] | list[dict[str, object]] = [
+            dict(detection) for detection in detections
+        ]
         if status != "success":
             guardrail_json_response = exception_str if exception_str else [dict(detection) for detection in detections]
 
@@ -1936,7 +1957,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def _get_mcp_tool_name(request_data: dict) -> str | None:
+    def _get_mcp_tool_name(request_data: dict[str, object]) -> str | None:
         raw_name: Final[object] = request_data.get("mcp_tool_name")
         if isinstance(raw_name, str) and raw_name:
             return raw_name
@@ -1984,7 +2005,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     def _scan_mcp_tool_call_arguments(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         detections: list[ContentFilterDetection],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> None:
@@ -2069,7 +2090,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> "GenericGuardrailAPIInputs":
@@ -2240,7 +2261,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[object],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[object, None]:
         """
         Process streaming response chunks and check for blocked content.
@@ -2254,7 +2275,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         and the UI Request Lifecycle panel. Mirrors apply_guardrail's finally-block
         contract.
         """
-        state_by_choice: Final[dict[int, _StreamedChoiceState]] = {}
+        state_by_choice: Final[dict[tuple[int, str], _StreamedChoiceState]] = {}
         plan: Final = self._streamed_scan_plan()
 
         start_time: Final = datetime.now()
@@ -2272,20 +2293,17 @@ class ContentFilterGuardrail(CustomGuardrail):
             async for item, stream_ended in _stream_then_end_of_stream_chunk(
                 response, lambda last_item: _end_of_stream_chunk(last_item, state_by_choice)
             ):
-                for choice in _streamed_choices(item):
-                    new_content = _streamed_choice_content(choice)
-                    if new_content is None:
-                        continue
-
+                for choice, field, new_content in _streamed_texts(item):
                     choice_index = getattr(choice, "index", 0)
                     if not isinstance(choice_index, int):
                         choice_index = 0
+                    state_key = (choice_index, field)
 
                     is_final = stream_ended or bool(getattr(choice, "finish_reason", None))
                     if not new_content and not is_final:
                         continue
 
-                    previous_state = state_by_choice.get(choice_index, _StreamedChoiceState())
+                    previous_state = state_by_choice.get(state_key, _StreamedChoiceState())
                     buffered_text = previous_state.buffered_text + new_content
                     if not buffered_text:
                         continue
@@ -2301,9 +2319,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                             masked_text = masked_text[:-1]
                         latest_detections = tuple(choice_detections)
                     except HTTPException:
-                        state_by_choice[choice_index] = replace(
-                            previous_state, latest_detections=tuple(choice_detections)
-                        )
+                        state_by_choice[state_key] = replace(previous_state, latest_detections=tuple(choice_detections))
                         raise
                     except Exception as e:
                         verbose_proxy_logger.error("ContentFilterGuardrail: Error in masking: %s", e)
@@ -2320,7 +2336,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     if isinstance(choice, TextChoices):
                         choice.text = released_text
                     else:
-                        choice.delta.content = released_text
+                        setattr(choice.delta, field, released_text)
                     next_state = replace(
                         previous_state,
                         buffered_text=buffered_text,
@@ -2328,14 +2344,14 @@ class ContentFilterGuardrail(CustomGuardrail):
                         latest_detections=latest_detections,
                     )
                     if is_final:
-                        state_by_choice[choice_index] = replace(next_state, finished=True)
+                        state_by_choice[state_key] = replace(next_state, finished=True)
                         continue
 
                     trim_started = time.perf_counter()
-                    state_by_choice[choice_index] = self._trim_streamed_choice_buffer(next_state, masked_text, plan)
+                    state_by_choice[state_key] = self._trim_streamed_choice_buffer(next_state, masked_text, plan)
                     scan_seconds += time.perf_counter() - trim_started
 
-                if stream_ended and not any(_streamed_choice_content(choice) for choice in _streamed_choices(item)):
+                if stream_ended and not any(text for _, _, text in _streamed_texts(item)):
                     continue
                 yield item
         except HTTPException:

@@ -164,8 +164,8 @@ class _CustomerMemberRow(_CustomerScopedRow, Protocol):
 
 
 _RowT = TypeVar("_RowT")
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
-_CustomerRowT: Final = TypeVar("_CustomerRowT", bound=_CustomerScopedRow)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
+_CustomerRowT = TypeVar("_CustomerRowT", bound=_CustomerScopedRow)
 
 
 class CustomerScopeTable(Protocol[_RowT_co]):
@@ -1629,7 +1629,7 @@ class ResetBudgetJob:
             )
             verbose_proxy_logger.debug("Keys to reset %s", _LazyJson(keys_to_reset))
             updated_keys: Final[list[_RowReset[LiteLLM_VerificationToken]]] = []
-            failed_keys: Final = []
+            failed_keys: Final[list[Mapping[str, object]]] = []
             if keys_to_reset is not None and len(keys_to_reset) > 0:
                 for key in keys_to_reset:
                     try:
@@ -1740,7 +1740,7 @@ class ResetBudgetJob:
                 reason="reset_budget_read_users_failure",
             )
             updated_users: Final[list[_RowReset[LiteLLM_UserTable]]] = []
-            failed_users: Final = []
+            failed_users: Final[list[Mapping[str, object]]] = []
             if users_to_reset is not None and len(users_to_reset) > 0:
                 for user in users_to_reset:
                     try:
@@ -1869,7 +1869,7 @@ class ResetBudgetJob:
                 reason="reset_budget_read_teams_failure",
             )
             updated_teams: Final[list[_RowReset[LiteLLM_TeamTable]]] = []
-            failed_teams: Final = []
+            failed_teams: Final[list[Mapping[str, object]]] = []
             if teams_to_reset is not None and len(teams_to_reset) > 0:
                 for team in teams_to_reset:
                     try:

@@ -6,7 +6,7 @@ import copy
 import io
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Union, cast
 
@@ -17,12 +17,15 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._logging import verbose_logger
 from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.core_helpers import map_finish_reason, require_attributes
+from litellm.exceptions import with_provider_reply
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.base_utils import (
@@ -51,6 +54,7 @@ from litellm.types.llms.anthropic import (
     MessageStartBlock,
 )
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -76,6 +80,8 @@ from litellm.types.utils import (
 from ...base import BaseLLM
 from ..common_utils import (
     AnthropicError,
+    is_anthropic_tool_use_id_pattern_error,
+    messages_with_renamed_tool_use_ids,
     process_anthropic_headers,
     refusal_params,
     stop_reason_provider_specific_fields,
@@ -90,15 +96,26 @@ from .transformation import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 _DECODED_JSON: Final = TypeAdapter(object)
-_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
-def _loads_stream_chunk(payload: str) -> dict[str, object]:
-    return require_attributes(_DECODED_JSON.validate_python(json.loads(payload)), dict[str, object], "get")
+def _loads_stream_chunk(payload: str) -> dict[str, object] | None:
+    if not payload.lstrip().startswith("{"):
+        verbose_logger.debug("Skipping an Anthropic stream data line that is not a JSON object: %.100s", payload)
+        return None
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
+    except json.JSONDecodeError:
+        raise
+    except (ValueError, RecursionError):
+        verbose_logger.debug("Skipping an Anthropic stream data line that cannot be decoded: %.100s", payload)
+        return None
+    return decoded if is_str_keyed_dict(decoded) else None
 
 
 _EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]
@@ -215,11 +232,11 @@ def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_nam
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     model: str,
-    messages: list,
-    logging_obj,
+    messages: Sequence[object],
+    logging_obj: "LiteLLMLoggingObj",
     timeout: float | httpx.Timeout | None,
     json_mode: bool,
     speed: str | None = None,
@@ -243,10 +260,13 @@ async def make_call(
         error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
-        raise AnthropicError(
-            status_code=e.response.status_code,
-            message=await e.response.aread(),
-            headers=error_headers,
+        raise with_provider_reply(
+            AnthropicError(
+                status_code=e.response.status_code,
+                message=await e.response.aread(),
+                headers=error_headers,
+            ),
+            e.response,
         )
     except Exception as e:
         for exception in litellm.LITELLM_EXCEPTION_TYPES:
@@ -278,11 +298,11 @@ async def make_call(
 def make_sync_call(
     client: HTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     model: str,
-    messages: list,
-    logging_obj,
+    messages: Sequence[object],
+    logging_obj: "LiteLLMLoggingObj",
     timeout: float | httpx.Timeout | None,
     json_mode: bool,
     speed: str | None = None,
@@ -306,10 +326,13 @@ def make_sync_call(
         error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
-        raise AnthropicError(
-            status_code=e.response.status_code,
-            message=e.response.read(),
-            headers=error_headers,
+        raise with_provider_reply(
+            AnthropicError(
+                status_code=e.response.status_code,
+                message=e.response.read(),
+                headers=error_headers,
+            ),
+            e.response,
         )
     except Exception as e:
         for exception in litellm.LITELLM_EXCEPTION_TYPES:
@@ -319,10 +342,13 @@ def make_sync_call(
 
     if response.status_code != 200:
         response_headers: Final = getattr(response, "headers", None)
-        raise AnthropicError(
-            status_code=response.status_code,
-            message=response.read(),
-            headers=response_headers,
+        raise with_provider_reply(
+            AnthropicError(
+                status_code=response.status_code,
+                message=response.read(),
+                headers=response_headers,
+            ),
+            response,
         )
 
     completion_stream: Final = ModelResponseIterator(
@@ -346,6 +372,42 @@ def make_sync_call(
     return completion_stream, response.headers
 
 
+def _request_with_renamed_tool_use_ids(
+    request: Mapping[str, object], error: AnthropicError
+) -> Mapping[str, object] | None:
+    renamed: Final = (
+        messages_with_renamed_tool_use_ids(request.get("messages"))
+        if error.status_code == 400 and is_anthropic_tool_use_id_pattern_error(str(error))
+        else None
+    )
+    return None if renamed is None else {**request, "messages": list(renamed)}
+
+
+def _send_renaming_rejected_tool_use_ids(
+    send: Callable[[Mapping[str, object]], "ModelResponse | CustomStreamWrapper"], request: Mapping[str, object]
+) -> "ModelResponse | CustomStreamWrapper":
+    try:
+        return send(request)
+    except AnthropicError as error:
+        renamed_request: Final = _request_with_renamed_tool_use_ids(request, error)
+        if renamed_request is None:
+            raise
+        return send(renamed_request)
+
+
+async def _asend_renaming_rejected_tool_use_ids(
+    send: Callable[[Mapping[str, object]], Awaitable["ModelResponse | CustomStreamWrapper"]],
+    request: Mapping[str, object],
+) -> "ModelResponse | CustomStreamWrapper":
+    try:
+        return await send(request)
+    except AnthropicError as error:
+        renamed_request: Final = _request_with_renamed_tool_use_ids(request, error)
+        if renamed_request is None:
+            raise
+        return await send(renamed_request)
+
+
 class AnthropicChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
@@ -353,23 +415,23 @@ class AnthropicChatCompletion(BaseLLM):
     async def acompletion_stream_function(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         timeout: float | httpx.Timeout,
         client: AsyncHTTPHandler | None,
-        encoding,
-        api_key,
+        encoding: object,
+        api_key: object,
         logging_obj: "LiteLLMLoggingObj",
-        stream,
-        _is_function_call,
-        data: dict,
+        stream: object,
+        _is_function_call: object,
+        data: dict[str, object],
         json_mode: bool,
         optional_params=None,
-        litellm_params=None,
-        logger_fn=None,
+        litellm_params: object = None,
+        logger_fn: object = None,
         headers={},
     ):
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -406,23 +468,23 @@ class AnthropicChatCompletion(BaseLLM):
     async def acompletion_function(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         timeout: float | httpx.Timeout,
-        encoding,
-        api_key,
-        logging_obj,
-        stream,
-        _is_function_call,
-        data: dict,
-        optional_params: dict,
+        encoding: "Tokenizer | None",
+        api_key: str | None,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: object,
+        _is_function_call: object,
+        data: dict[str, object],
+        optional_params: dict[str, object],
         json_mode: bool,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         provider_config: "BaseConfig",
-        logger_fn=None,
+        logger_fn: object = None,
         headers={},
         client: AsyncHTTPHandler | None = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
@@ -452,10 +514,13 @@ class AnthropicChatCompletion(BaseLLM):
                 error_headers = getattr(error_response, "headers", None)
             if error_response and hasattr(error_response, "text"):
                 error_text = getattr(error_response, "text", error_text)
-            raise AnthropicError(
-                message=error_text,
-                status_code=status_code,
-                headers=error_headers,
+            raise with_provider_reply(
+                AnthropicError(
+                    message=error_text,
+                    status_code=status_code,
+                    headers=error_headers,
+                ),
+                error_response,
             )
 
         return provider_config.transform_response(
@@ -475,20 +540,20 @@ class AnthropicChatCompletion(BaseLLM):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         encoding,
-        api_key,
+        api_key: str | None,
         logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
-        acompletion=None,
-        logger_fn=None,
+        acompletion: object = None,
+        logger_fn: object = None,
         headers={},
         client=None,
     ):
@@ -497,7 +562,7 @@ class AnthropicChatCompletion(BaseLLM):
 
         optional_params = copy.deepcopy(optional_params)
         stream: Final = optional_params.pop("stream", None)
-        json_mode: Final[bool] = optional_params.pop("json_mode", False)
+        json_mode: Final = bool(optional_params.pop("json_mode", False))
         is_vertex_request: Final[bool] = optional_params.pop("is_vertex_request", False)
         optional_params.pop("vertex_count_tokens_location", None)
         _is_function_call: Final = False
@@ -508,7 +573,7 @@ class AnthropicChatCompletion(BaseLLM):
             model=model,
             messages=messages,
             optional_params={
-                **with_extra_body_fields(_OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)),
+                **with_extra_body_fields(_STR_KEYED_MAPPING.validate_python(optional_params)),
                 "is_vertex_request": is_vertex_request,
             },
             litellm_params=litellm_params,
@@ -559,15 +624,21 @@ class AnthropicChatCompletion(BaseLLM):
 
         async def acompletion_dispatch() -> "ModelResponse | CustomStreamWrapper":
             """Translate then send, so the provider config can inline remote media off the event loop."""
-            request_headers, data = finish_request(
-                await config.async_transform_request(
-                    model=model,
-                    messages=messages,
-                    optional_params=transform_params,
-                    litellm_params=litellm_params,
-                    headers=headers,
-                )
+            return await _asend_renaming_rejected_tool_use_ids(
+                asend,
+                _STR_KEYED_MAPPING.validate_python(
+                    await config.async_transform_request(
+                        model=model,
+                        messages=messages,
+                        optional_params=transform_params,
+                        litellm_params=litellm_params,
+                        headers=headers,
+                    )
+                ),
             )
+
+        async def asend(request: Mapping[str, object]) -> "ModelResponse | CustomStreamWrapper":
+            request_headers, data = finish_request(dict(request))
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
@@ -617,27 +688,16 @@ class AnthropicChatCompletion(BaseLLM):
                 timeout=timeout,
             )
 
-        if acompletion is True:
-            return acompletion_dispatch()
-        else:
-            headers, data = finish_request(
-                config.transform_request(
-                    model=model,
-                    messages=messages,
-                    optional_params=transform_params,
-                    litellm_params=litellm_params,
-                    headers=headers,
-                )
-            )
-            ## COMPLETION CALL
+        def send(request: Mapping[str, object]) -> "ModelResponse | CustomStreamWrapper":
+            request_headers, data = finish_request(dict(request))
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 data["stream"] = stream
-                completion_stream, headers = make_sync_call(
+                completion_stream, response_headers = make_sync_call(
                     client=client,
                     api_base=api_base,
-                    headers=headers,
+                    headers=request_headers,
                     data=json.dumps(data),
                     model=model,
                     messages=messages,
@@ -659,50 +719,64 @@ class AnthropicChatCompletion(BaseLLM):
                     model=model,
                     custom_llm_provider="anthropic",
                     logging_obj=logging_obj,
-                    _response_headers=process_anthropic_headers(headers),
+                    _response_headers=process_anthropic_headers(response_headers),
                 )
 
-            else:
-                if client is None or not isinstance(client, HTTPHandler):
-                    client = get_httpx_client(params={"timeout": timeout})
-                else:
-                    client = client
-
-                try:
-                    response: Final = client.post(
-                        api_base,
-                        headers=headers,
-                        data=json.dumps(data),
-                        timeout=timeout,
-                        logging_obj=logging_obj,
-                    )
-                except Exception as e:
-                    status_code: Final = getattr(e, "status_code", 500)
-                    error_headers = getattr(e, "headers", None)
-                    error_text = getattr(e, "text", str(e))
-                    error_response: Final[object] = getattr(e, "response", None)
-                    if error_headers is None and error_response:
-                        error_headers = getattr(error_response, "headers", None)
-                    if error_response and hasattr(error_response, "text"):
-                        error_text = getattr(error_response, "text", error_text)
-                    raise AnthropicError(
+            sync_client: Final = (
+                client if isinstance(client, HTTPHandler) else get_httpx_client(params={"timeout": timeout})
+            )
+            try:
+                response: Final = sync_client.post(
+                    api_base,
+                    headers=request_headers,
+                    data=json.dumps(data),
+                    timeout=timeout,
+                    logging_obj=logging_obj,
+                )
+            except Exception as e:
+                status_code: Final = getattr(e, "status_code", 500)
+                error_headers = getattr(e, "headers", None)
+                error_text = getattr(e, "text", str(e))
+                error_response: Final[object] = getattr(e, "response", None)
+                if error_headers is None and error_response:
+                    error_headers = getattr(error_response, "headers", None)
+                if error_response and hasattr(error_response, "text"):
+                    error_text = getattr(error_response, "text", error_text)
+                raise with_provider_reply(
+                    AnthropicError(
                         message=error_text,
                         status_code=status_code,
                         headers=error_headers,
-                    )
+                    ),
+                    error_response,
+                )
+            return config.transform_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                request_data=data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                json_mode=json_mode,
+            )
 
-        return config.transform_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            request_data=data,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            encoding=encoding,
-            json_mode=json_mode,
+        if acompletion is True:
+            return acompletion_dispatch()
+        return _send_renaming_rejected_tool_use_ids(
+            send,
+            _STR_KEYED_MAPPING.validate_python(
+                config.transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=transform_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
+            ),
         )
 
     def embedding(self):
@@ -982,7 +1056,7 @@ class ModelResponseIterator:
             tool_name=tool_name,
         )
 
-    def _build_code_interpreter_results(self) -> list:
+    def _build_code_interpreter_results(self) -> list[OutputCodeInterpreterCall]:
         """Convert accumulated tool_results to OutputCodeInterpreterCall objects.
 
         Called during streaming to produce provider-neutral code_interpreter_results
@@ -994,7 +1068,7 @@ class ModelResponseIterator:
         wins" for list-valued provider_specific_fields keys, so the last
         emission must contain every result.
         """
-        results: Final = []
+        results: Final[list[OutputCodeInterpreterCall]] = []
         for tr in self.tool_results:
             if tr.get("type") != "bash_code_execution_tool_result":
                 continue
@@ -1287,6 +1361,8 @@ class ModelResponseIterator:
                 id=self.response_id,
                 model=self.served_model,
             )
+            if type_chunk == "message_start":
+                set_hidden_params(returned_chunk, {"anthropic_message_start": True})
 
             return returned_chunk
 
@@ -1525,7 +1601,7 @@ class ModelResponseIterator:
         # Try to parse as valid JSON first
         try:
             data_json: Final = _loads_stream_chunk(data_str)
-            return self.chunk_parser(chunk=data_json)
+            return None if data_json is None else self.chunk_parser(chunk=data_json)
         except json.JSONDecodeError:
             # Switch to accumulation mode and start accumulating
             self.chunk_type = "accumulated_json"
@@ -1644,7 +1720,7 @@ class ModelResponseIterator:
             except ValueError as e:
                 raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
-    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream | None:
         """
         Convert a string chunk to a GenericStreamingChunk
 
@@ -1665,6 +1741,6 @@ class ModelResponseIterator:
 
         if str_line.startswith("data:"):
             data_json: Final = _loads_stream_chunk(str_line[5:])
-            return self.chunk_parser(chunk=data_json)
+            return None if data_json is None else self.chunk_parser(chunk=data_json)
         else:
             return ModelResponseStream(id=self.response_id)

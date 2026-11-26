@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final, TypeVar, cast  # noqa: TID251  # Existing casts retained unchanged in this pure move
 
 from pydantic import TypeAdapter, ValidationError
@@ -11,7 +11,7 @@ from litellm.types.llms.openai import (
     PromptCacheBreakpoint,
 )
 
-_MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
+_MarkedT = TypeVar("_MarkedT", bound=Mapping[str, object])
 
 
 PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT: Final = (
@@ -33,7 +33,7 @@ _PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
 _CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(ChatCompletionPromptCacheBreakpoint)
 
 
-_AcceptedBreakpointT: Final = TypeVar("_AcceptedBreakpointT", bound=Mapping[str, object])
+_AcceptedBreakpointT = TypeVar("_AcceptedBreakpointT", bound=Mapping[str, object])
 
 
 def _accepted_prompt_cache_breakpoint(
@@ -90,14 +90,38 @@ def chat_completion_prompt_cache_breakpoint_for_wire(marker: object, drop_params
     return prompt_cache_breakpoint_within(_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT, marker)
 
 
-def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
+def default_ttl_prompt_cache_breakpoint_for(_cache_control: object) -> PromptCacheBreakpoint:
+    return PromptCacheBreakpoint(mode="explicit")
+
+
+def responses_prompt_cache_breakpoint_for(cache_control: object) -> PromptCacheBreakpoint:
+    """The OpenAI Responses API breakpoint for an Anthropic ``cache_control`` mark. A 1h mark asks for at least an
+    hour, and 12h is the only OpenAI TTL that long. A 5m or unset TTL inherits the request's TTL, 30m by default.
+    Chat Completions and Azure take no 12h TTL, so their breakpoints come from
+    ``default_ttl_prompt_cache_breakpoint_for``."""
+    match cache_control:
+        case {"ttl": "1h"}:
+            return PromptCacheBreakpoint(mode="explicit", ttl="12h")
+        case _:
+            return default_ttl_prompt_cache_breakpoint_for(cache_control)
+
+
+def cache_control_as_prompt_cache_breakpoint(
+    block: _MarkedT,
+    breakpoint_for: Callable[[object], PromptCacheBreakpoint] = default_ttl_prompt_cache_breakpoint_for,
+) -> _MarkedT:
     """Anthropic's ``cache_control`` mark rewritten as OpenAI's ``prompt_cache_breakpoint`` on the same block."""
-    if block.get("cache_control") is None:
+    cache_control: Final = block.get("cache_control")
+    if cache_control is None:
         return block
     unmarked: Final = {key: value for key, value in block.items() if key != "cache_control"}
     return cast(  # cast-ok: same block shape as the input with the marker key renamed
-        _MarkedT, with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
+        _MarkedT, with_prompt_cache_breakpoint(unmarked, breakpoint_for(cache_control))
     )
+
+
+def cache_control_as_responses_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
+    return cache_control_as_prompt_cache_breakpoint(block, responses_prompt_cache_breakpoint_for)
 
 
 def prompt_cache_breakpoint_as_cache_control(block: _MarkedT, drop_params: bool) -> _MarkedT:

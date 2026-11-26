@@ -119,6 +119,7 @@ func resourceLiteLLMModel() *schema.Resource {
 			"mode": {
 				Type:     schema.TypeString,
 				Optional: true,
+				Computed: true,
 				ValidateFunc: validation.StringInSlice([]string{
 					"completion",
 					"embedding",
@@ -128,6 +129,15 @@ func resourceLiteLLMModel() *schema.Resource {
 					"audio_transcription",
 					"audio_speech",
 					"rerank",
+					"responses",
+					"realtime",
+					"image_edit",
+					"ocr",
+					"search",
+					"video_generation",
+					"evaluation",
+					"decisions",
+					"extraction",
 				}, false),
 			},
 			"input_cost_per_million_tokens": {

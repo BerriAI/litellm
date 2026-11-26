@@ -5,7 +5,7 @@ import json
 import logging
 import math
 import re
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from types import MappingProxyType
@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
+from litellm.types.rerank import RerankResponse
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -46,8 +47,24 @@ else:
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
 
+def _camel_case(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+
+
+def camel_case_keys(config: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{_camel_case(key): value for key, value in config.items() if "_" in key},
+        **{key: value for key, value in config.items() if "_" not in key},
+    }
+
+
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
+
+
+def is_github_copilot_chat_user_agent(user_agent: str) -> bool:
+    return user_agent.startswith("GitHubCopilotChat/")
 
 
 def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
@@ -116,6 +133,44 @@ _LAX_BOOL: Final = TypeAdapter(bool)
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, (dict, Mapping)) else None
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def loads_json_object(payload: str | bytes | bytearray) -> Mapping[str, object] | None:
+    opens_object: Final = (
+        payload.lstrip().startswith(b"{")
+        if isinstance(payload, (bytes, bytearray))
+        else payload.lstrip().startswith("{")
+    )
+    if not opens_object:
+        return None
+    try:
+        return as_str_mapping(_DECODED_JSON.validate_python(json.loads(payload)))
+    except (ValueError, RecursionError):
+        return None
+
+
+_JSON_NESTING_ALWAYS_DECODABLE: Final = 100
+_DIGIT_RUN_PYTHON_MAY_REFUSE: Final = re.compile(r"[0-9]{640}")
+
+
+def is_undecodable_json_object(payload: str) -> bool:
+    if not payload.lstrip().startswith("{"):
+        return False
+    if (
+        payload.count("{") + payload.count("[") < _JSON_NESTING_ALWAYS_DECODABLE
+        and _DIGIT_RUN_PYTHON_MAY_REFUSE.search(payload) is None
+    ):
+        return False
+    try:
+        json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    except (ValueError, RecursionError):
+        return True
+    return False
 
 
 def as_object_list(value: object) -> Sequence[object] | None:
@@ -202,15 +257,15 @@ _HTTP_ERROR_STATUSES: Final = range(HTTPStatus.BAD_REQUEST, 600)
 def error_status_code(exc: object, default: int) -> int:
     """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
     the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
-    carried: Final = _http_error_status(attribute_or_none(exc, "status_code"))
+    carried: Final = http_error_status(attribute_or_none(exc, "status_code"))
     if carried is not None:
         return carried
     stringified: Final = attribute_or_none(exc, "code")
-    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
+    from_code: Final = http_error_status(stringified) if isinstance(stringified, str) else None
     return default if from_code is None else from_code
 
 
-def _http_error_status(value: object) -> int | None:
+def http_error_status(value: object) -> int | None:
     match value:
         case bool():
             return None
@@ -222,7 +277,8 @@ def _http_error_status(value: object) -> int | None:
             return None
 
 
-_Shape: Final = TypeVar("_Shape")
+_Shape = TypeVar("_Shape")
+_MetadataBucket = TypeVar("_MetadataBucket", bound=MutableMapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +388,11 @@ def require_get(value: object) -> SupportsGet:
     return require_attributes(value, SupportsGet, "get")
 
 
+def str_param(params: SupportsGet, key: str) -> str | None:
+    value: Final = params.get(key)
+    return value if isinstance(value, str) else None
+
+
 def iter_items(value: object) -> Iterable[object]:
     listed: Final = as_object_list(value)
     if listed is not None:
@@ -373,13 +434,6 @@ def normalize_drop_params(value: object) -> bool | None:
 
 def drops_unsupported_params(drop_params: object) -> bool:
     return litellm.drop_params is True or normalize_drop_params(drop_params) is True
-
-
-def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool:
-    normalized: Final = normalize_drop_params(value)
-    if normalized is None and value is not None:
-        logger.warning("%s=%r is not a flag value, treating it as off", source, value)
-    return bool(normalized)
 
 
 DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
@@ -607,7 +661,9 @@ def remove_items_at_indices(items: _PoppableByIndex | None, indices: Iterable[in
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: Mapping[str, object]) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(
+    litellm_metadata: _MetadataBucket, metadata: Mapping[str, object]
+) -> _MetadataBucket:
     """
     Helper to get litellm metadata for spend tracking
 
@@ -652,7 +708,7 @@ def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_re
 
 
 def get_or_create_metadata_bucket(
-    request_data: dict,
+    request_data: MutableMapping[str, object],
 ) -> tuple[Literal["metadata", "litellm_metadata"], dict]:
     """
     Return the proxy-internal metadata bucket for this request, creating it if absent.
@@ -880,9 +936,9 @@ _get_parent_otel_span_from_kwargs = get_parent_otel_span_from_kwargs
 
 
 def process_response_headers(
-    response_headers: httpx.Headers | dict,
+    response_headers: httpx.Headers | Mapping[str, _Value],
     preserve_litellm_internal_headers: bool = False,
-) -> dict:
+) -> dict[str, _Value | str]:
     """
     `preserve_litellm_internal_headers` must only be True when the input is a
     LiteLLM-owned dict (e.g. `_hidden_params["additional_headers"]` that has
@@ -901,9 +957,9 @@ def process_response_headers(
     # must never be treated as LiteLLM-owned, regardless of caller intent.
     _preserve: Final = preserve_litellm_internal_headers and isinstance(response_headers, dict)
 
-    openai_headers: Final = {}
-    processed_headers: Final = {}
-    additional_headers = {}
+    openai_headers: Final[dict[str, _Value | str]] = {}
+    processed_headers: Final[dict[str, _Value | str]] = {}
+    additional_headers: dict[str, _Value | str] = {}
 
     for k, v in response_headers.items():
         if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
@@ -932,8 +988,6 @@ def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
-    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    expected_keys: Final = frozenset(type(model_response).model_fields) | frozenset({"usage"})
     chunk_model: Final = original_chunk if isinstance(original_chunk, BaseModel) else None
     if chunk_model is None:
         raise AttributeError(
@@ -941,27 +995,33 @@ def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream
             name="model_fields",
             obj=type(original_chunk),
         )
+    _assign_attributes(model_response, upstream_non_openai_attributes(type(model_response), chunk_model))
+
+
+def upstream_non_openai_attributes(
+    model_response_type: type[BaseModel], original_chunk: BaseModel
+) -> tuple[tuple[str, object], ...]:
+    expected_keys: Final = frozenset(model_response_type.model_fields) | frozenset({"usage"})
     candidate_keys: Final = tuple(
         key
-        for key in (*type(chunk_model).model_fields, *(chunk_model.__pydantic_extra__ or {}))
+        for key in (*type(original_chunk).model_fields, *(original_chunk.__pydantic_extra__ or {}))
         if key not in expected_keys
     )
     if not candidate_keys:
-        return
+        return ()
     candidate_values: Final[tuple[tuple[str, object], ...]] = tuple(
         (
             key,
             cast(  # cast-ok: Pydantic extras are scalar-checked before assignment
                 object,
-                getattr(chunk_model, key),
+                getattr(original_chunk, key),
             ),
         )
         for key in candidate_keys
     )
     if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
-        _assign_attributes(model_response, candidate_values)
-        return
-    _assign_attributes(model_response, chunk_model.model_dump(include=set(candidate_keys)).items())
+        return candidate_values
+    return tuple(original_chunk.model_dump(include=set(candidate_keys)).items())
 
 
 def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:
@@ -1022,7 +1082,7 @@ def safe_deep_copy(data):
 
 
 def independent_snapshot(
-    data: dict,  # mutable-ok: caller-defined request-payload shape
+    data: dict[str, _Value],  # mutable-ok: caller-defined request-payload shape
 ) -> dict:  # mutable-ok: caller-defined request-payload shape
     """
     A copy of ``data`` whose top-level keys are deep-copied independently
@@ -1173,7 +1233,7 @@ def redact_nested_match_and_regex_keys(payload: object, keys: Collection[str] = 
 
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
-        seen: Final[set] = set()
+        seen: Final[set[int]] = set()
         stack: Final[list[object]] = [redacted]
         while stack:
             node = stack.pop()
@@ -1298,9 +1358,13 @@ def billed_usage_cost(response: object, custom_llm_provider: str | None) -> floa
     cost: Final = (
         _numeric(hidden[UPSTREAM_USAGE_COST])
         if hidden is not None and UPSTREAM_USAGE_COST in hidden
-        else provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+        else provider_reported_usage_cost(_billed_usage_block(response), custom_llm_provider)
     )
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
+
+
+def _billed_usage_block(response: object) -> object:
+    return response.provider_usage if isinstance(response, RerankResponse) else _usage_field(response, "usage")
 
 
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
@@ -1347,13 +1411,15 @@ _PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 
 
 def set_provider_response_headers_in_hidden_params(
-    response: _CarriesHiddenParams, headers: httpx.Headers | Mapping[str, str]
+    response: _CarriesHiddenParams,
+    headers: httpx.Headers | Mapping[str, str],
+    process_headers: Callable[[Mapping[str, str]], Mapping[str, object]] = process_response_headers,
 ) -> None:
     hidden_params: Final = response.hidden_params
     existing_additional_headers: Final[object] = hidden_params.get("additional_headers")
     raw_headers: Final[dict[str, str]] = dict(headers)  # mutable-ok: stored as the plain-dict hidden param
     additional_headers: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
-        **process_response_headers(raw_headers),
+        **process_headers(raw_headers),
         **(existing_additional_headers if isinstance(existing_additional_headers, Mapping) else _NO_HEADERS),
     }
     hidden_params["headers"] = raw_headers

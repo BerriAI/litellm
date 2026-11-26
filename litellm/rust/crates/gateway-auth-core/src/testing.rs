@@ -13,10 +13,11 @@ use crate::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
         key::{CachedTeam, KeyRecord, Keyed},
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
-            RegisteredAgent, TeamRead, User, UserLookup, UserRead,
+            RegisteredAgent, Team, TeamRead, User, UserLookup, UserRead,
         },
         key::Owner,
     },
@@ -57,6 +58,7 @@ pub(crate) struct ScriptedHost {
     /// Host calls that fail, by the name they record under.
     pub(crate) failing: HashMap<&'static str, Error>,
     pub(crate) teams: HashMap<&'static str, Result<TeamRead<String>, Error>>,
+    pub(crate) team_rosters: HashMap<&'static str, Vec<&'static str>>,
     pub(crate) aliases: HashMap<&'static str, Result<AliasRead<String>, Error>>,
     pub(crate) membership_fails: bool,
     /// Team rows whose model access the host allows.
@@ -83,6 +85,8 @@ pub(crate) struct ScriptedHost {
     pub(crate) delegated_team: Option<&'static str>,
     /// The JWT `finish_jwt` last finished an auto-registered key for.
     pub(crate) finished_mapping: Mutex<Option<MappedJwt<String>>>,
+    /// Stored credentials by name.
+    pub(crate) credentials: HashMap<&'static str, Params>,
     pub(crate) calls: Mutex<Vec<String>>,
 }
 
@@ -200,6 +204,10 @@ impl AuthHost for ScriptedHost {
     async fn with_team(&self, key: &String, team: &String) -> Result<String, Error> {
         self.step("with_team", format!("with_team {key} {team}"))?;
         Ok(format!("{key}+team"))
+    }
+    async fn credential(&self, name: &str) -> Result<Option<Params>, Error> {
+        self.step("credential", format!("credential {name}"))?;
+        Ok(self.credentials.get(name).cloned())
     }
     async fn db_key(&self, _: &KeyHash, end_user: &String) -> Result<Option<Keyed<String>>, Error> {
         self.step("db_key", format!("db_key {end_user}"))?;
@@ -326,6 +334,22 @@ impl AuthHost for ScriptedHost {
             .get(alias)
             .cloned()
             .unwrap_or(Ok(AliasRead::Absent))
+    }
+    async fn bind_team_member(
+        &self,
+        mut team: Team<String>,
+        user_id: &str,
+    ) -> Result<Team<String>, Error> {
+        if let Some(roster) = self.team_rosters.get(team.team_id.as_str()) {
+            self.record(format!("bind_team_member {} {user_id}", team.team_id));
+            team.members = roster
+                .iter()
+                .filter(|id| **id == user_id)
+                .map(ToString::to_string)
+                .collect();
+            team.row = format!("{} {user_id}", team.row);
+        }
+        Ok(team)
     }
     async fn granting_team(&self, team_id: &str) -> Result<TeamRead<String>, Error> {
         self.record(format!("granting_team {team_id}"));

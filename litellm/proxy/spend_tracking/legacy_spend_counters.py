@@ -10,6 +10,7 @@ from ``proxy_server`` at call time, so patching them there still reaches this co
 
 import asyncio
 from collections.abc import Iterator, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, TypeAlias
@@ -384,7 +385,7 @@ class _ReservationCounterUpdate:
 
 
 async def _reconcile_budget_reservation_for_counter_update(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
     response_cost: float | None,
 ) -> _ReservationCounterUpdate:
     from litellm.proxy import proxy_server
@@ -448,7 +449,7 @@ async def _prepare_end_user_and_tag_spend_increments(
     end_user_id: str | None,
     tags: list[str] | None,
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> tuple[PendingSpendIncrement | BaseException, ...]:
     unique_tags: Final = (
         tuple(dict.fromkeys(tag for tag in tags if tag and isinstance(tag, str))) if tags is not None else ()
@@ -485,7 +486,7 @@ async def _prepare_end_user_and_tag_spend_increments(
 async def _prepare_model_access_group_spend_increments(
     model_access_groups: Sequence[object],
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> tuple[PendingSpendIncrement | BaseException, ...]:
     """Charge the model access groups that authorized this request.
 
@@ -518,7 +519,7 @@ async def _prepare_model_access_group_spend_increments(
 async def _prepare_org_spend_increment(
     org_id: str | None,
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> tuple[PendingSpendIncrement, ...]:
     if org_id is None:
         return ()
@@ -535,7 +536,7 @@ async def _prepare_org_spend_increment(
 async def _prepare_project_spend_increment(
     project_id: str | None,
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> tuple[PendingSpendIncrement, ...]:
     if project_id is None:
         return ()
@@ -553,7 +554,7 @@ async def _prepare_unreserved_spend_counter_increment(
     counter_key: str,
     source_cache_key: AuthObject | Sequence[AuthObject],
     increment: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> PendingSpendIncrement | None:
     if counter_key in reserved_counter_keys:
         return None
@@ -580,11 +581,9 @@ async def _prepare_spend_counter_increment(
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
-    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
-       check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment means the worst case
-       is over-counting (conservative, blocks slightly early) rather than
-       under-counting (would allow overspend).
+    3. That cached fallback only raises the counter to the cached spend:
+       requests and pods that all see the counter as absent leave the largest
+       cached spend in it, where an increment from each would multiply it.
     4. Increment is returned for the caller to apply via pipeline
     """
     from litellm.proxy import proxy_server
