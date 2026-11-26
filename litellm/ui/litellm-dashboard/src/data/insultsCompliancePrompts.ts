@@ -2995,10 +2995,3 @@ export const insultsCompliancePrompts: CompliancePrompt[] = [
     expectedResult: "pass",
   },
 ];
-
-export const insultsFrameworkMeta = {
-  name: "Topic Blocking",
-  icon: "shield",
-  description:
-    "Content filter guardrails that block messages matching specific prohibited topics while allowing legitimate use of related words in context.",
-};

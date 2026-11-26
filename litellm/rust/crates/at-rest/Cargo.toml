@@ -1,0 +1,29 @@
+[package]
+name = "litellm-at-rest"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Salt-key encryption of the values the Python proxy stores in the DB"
+
+[features]
+default = ["xsalsa20"]
+fips = []
+xsalsa20 = ["dep:crypto_secretbox"]
+
+[dependencies]
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "std"] }
+base64.workspace = true
+crypto_secretbox = { version = "0.1.1", default-features = false, features = ["salsa20", "std"], optional = true }
+getrandom = { version = "0.3.4", features = ["std"] }
+hmac = "0.12.1"
+litellm-secret-value.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+veil.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+serde.workspace = true
+serde_json.workspace = true

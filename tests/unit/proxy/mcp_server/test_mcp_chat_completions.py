@@ -51,7 +51,7 @@ async def test_acompletion_mcp_auto_exec(monkeypatch):
     monkeypatch.setattr(
         ResponsesAPIRequestUtils,
         "extract_mcp_headers_from_request",
-        staticmethod(lambda secret_fields, tools: (None, None, None, None)),
+        staticmethod(lambda secret_fields, tools, mcp_auth=None: (None, None, None, None)),
     )
 
     response = await litellm.acompletion(
@@ -114,7 +114,7 @@ async def test_acompletion_mcp_respects_manual_approval(monkeypatch):
     monkeypatch.setattr(
         ResponsesAPIRequestUtils,
         "extract_mcp_headers_from_request",
-        staticmethod(lambda secret_fields, tools: (None, None, None, None)),
+        staticmethod(lambda secret_fields, tools, mcp_auth=None: (None, None, None, None)),
     )
 
     response = await litellm.acompletion(
@@ -202,7 +202,7 @@ async def test_completion_mcp_with_streaming_no_timeout_error(monkeypatch):
     monkeypatch.setattr(
         ResponsesAPIRequestUtils,
         "extract_mcp_headers_from_request",
-        staticmethod(lambda secret_fields, tools: (None, None, None, None)),
+        staticmethod(lambda secret_fields, tools, mcp_auth=None: (None, None, None, None)),
     )
 
     # Create a mock streaming response
@@ -519,7 +519,7 @@ async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
     monkeypatch.setattr(
         ResponsesAPIRequestUtils,
         "extract_mcp_headers_from_request",
-        staticmethod(lambda secret_fields, tools: (None, None, None, None)),
+        staticmethod(lambda secret_fields, tools, mcp_auth=None: (None, None, None, None)),
     )
 
     # Create mock streaming chunks
@@ -874,7 +874,7 @@ async def test_mcp_streaming_metadata_ordering(monkeypatch):
     monkeypatch.setattr(
         ResponsesAPIRequestUtils,
         "extract_mcp_headers_from_request",
-        staticmethod(lambda secret_fields, tools: (None, None, None, None)),
+        staticmethod(lambda secret_fields, tools, mcp_auth=None: (None, None, None, None)),
     )
 
     # Create mock streaming chunks

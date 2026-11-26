@@ -9,7 +9,9 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import date
 from itertools import product
 from pathlib import Path
 from types import MappingProxyType
@@ -19,7 +21,11 @@ import psycopg
 import pytest
 from litellm_proxy_extras import migration_data_checks, migration_dry_run, request_log_indexes
 from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY, migration_lock
-from litellm_proxy_extras.migration_recovery import recover_completed_migration, roll_back_replayable_failed_migration
+from litellm_proxy_extras.migration_recovery import (
+    recover_completed_migration,
+    roll_back_killed_migration,
+    roll_back_replayable_failed_migration,
+)
 from litellm_proxy_extras.request_log_indexes import (
     END_USER_RESTRICTED_PREDICATE,
     REQUEST_LOG_INDEXES,
@@ -32,6 +38,9 @@ from psycopg import sql
 from psycopg.abc import Params, QueryNoTemplate
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import class_row
+
+from litellm.constants import SPEND_LOG_PARTITION_PRECREATE_AHEAD
+from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import upcoming_partitions
 
 pytestmark = pytest.mark.timeout(900)
 
@@ -49,14 +58,15 @@ END_USER_RESTRICTED_QUERY: Final = (
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 TOOL_INDEX_MIGRATION: Final = "20260226120000_add_spend_log_tool_index"
+AGENT_IDENTITY_MIGRATION: Final = "20260921190000_agent_identity"
+KILLED_MIGRATION: Final = "20991231000000_killed_at_the_deploy_time_limit"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"
 CALL_ID_INDEX: Final = "LiteLLM_SpendLogs_litellm_call_id_idx"
 PARTITIONED_PARENT_ERROR: Final = 'cannot create index on partitioned table "LiteLLM_SpendLogs" concurrently'
 ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
     {
         "20250510142544_add_session_id_index_spend_logs": (
-            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_session_id_idx" '
-            'ON "LiteLLM_SpendLogs"("session_id");\n'
+            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_session_id_idx" ON "LiteLLM_SpendLogs"("session_id");\n'
         ),
         TOOL_INDEX_MIGRATION: (
             "-- CreateTable\n"
@@ -64,9 +74,9 @@ ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
             '    "request_id" TEXT NOT NULL,\n'
             '    "tool_name" TEXT NOT NULL,\n'
             '    "start_time" TIMESTAMP(3) NOT NULL,\n'
-            '\n'
+            "\n"
             '    CONSTRAINT "LiteLLM_SpendLogToolIndex_pkey" PRIMARY KEY ("request_id","tool_name")\n'
-            ');\n\n'
+            ");\n\n"
             "-- CreateIndex\n"
             'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogToolIndex_tool_name_start_time_idx" '
             'ON "LiteLLM_SpendLogToolIndex"("tool_name", "start_time");\n'
@@ -103,6 +113,9 @@ PARTITIONS: Final = MappingProxyType(
     }
 )
 DEFAULT_PARTITION: Final = "LiteLLM_SpendLogs_pdefault"
+RUNBOOK_DAY: Final = date(2026, 1, 15)
+RUNBOOK_TODAY: Final = "today CONSTANT date := (now() AT TIME ZONE 'UTC')::date;"
+RUNBOOK_INTERVAL: Final = "partition_interval CONSTANT text := 'day';"
 ROWS_PER_PARTITION: Final = 200
 RESOLVERS: Final = pytest.mark.parametrize("use_v2_resolver", (True, False), ids=("v2", "v1"))
 
@@ -150,9 +163,19 @@ def _insert_spend_log(
     )
 
 
+def _runbook_on(day: date, interval: str = "day") -> bytes:
+    script: Final = PARTITION_SCRIPT.read_text()
+    assert RUNBOOK_TODAY in script and RUNBOOK_INTERVAL in script, "the runbook no longer sets today and the interval"
+    return (
+        script.replace(RUNBOOK_TODAY, f"today CONSTANT date := '{day}';")
+        .replace(RUNBOOK_INTERVAL, f"partition_interval CONSTANT text := '{interval}';")
+        .encode()
+    )
+
+
 def _partition_spend_logs(database_url: str) -> None:
     with psycopg.connect(database_url, autocommit=True) as conn:
-        conn.execute(PARTITION_SCRIPT.read_bytes())
+        conn.execute(_runbook_on(RUNBOOK_DAY))
         for partition, (start, stop) in PARTITIONS.items():
             conn.execute(
                 sql.SQL('CREATE TABLE {} PARTITION OF "LiteLLM_SpendLogs" FOR VALUES FROM ({}) TO ({})').format(
@@ -336,8 +359,12 @@ def _expected_children(partitions: tuple[str, ...], suffix: str) -> frozenset[tu
     return frozenset((partition, f"{partition}_{suffix}") for partition in partitions)
 
 
+def _runbook_partitions() -> tuple[str, ...]:
+    return tuple(name for name, _, _ in upcoming_partitions(RUNBOOK_DAY, "day", SPEND_LOG_PARTITION_PRECREATE_AHEAD))
+
+
 def _assert_index_covers_every_partition(database_url: str, parent_index: str, suffix: str) -> None:
-    partitions: Final = (*PARTITIONS, DEFAULT_PARTITION)
+    partitions: Final = (*PARTITIONS, DEFAULT_PARTITION, *_runbook_partitions())
     assert _index_validity(database_url, suffix) == {parent_index: True} | {f"{p}_{suffix}": True for p in partitions}
     assert _attached_children(database_url, parent_index) == _expected_children(partitions, suffix)
 
@@ -455,9 +482,7 @@ def test_tool_index_recovery_accepts_only_the_shipped_checksum(
 ) -> None:
     _leave_the_tool_index_migration_unfinished(scratch_database, checksum)
 
-    recovered: Final = (
-        _migration_job(True) if use_v2_migration_job else _recover_tool_index_migration(scratch_database)
-    )
+    recovered: Final = _migration_job(True) if use_v2_migration_job else _recover_tool_index_migration(scratch_database)
 
     assert recovered is expected
     with psycopg.connect(scratch_database) as conn:
@@ -548,6 +573,156 @@ def test_a_migration_without_a_failed_row_is_not_touched(partitioned_database: s
         assert roll_back_replayable_failed_migration(coordinator, "public", inert) is False
 
     assert _ledger(partitioned_database) == before
+
+
+def _ledger_rows(database_url: str, migration: str) -> list[tuple[bool, bool]]:
+    """(finished, rolled back) for every ledger row of one migration, oldest first."""
+    with psycopg.connect(database_url) as conn, conn.cursor(row_factory=class_row(_LedgerRow)) as cursor:
+        rows: Final = cursor.execute(
+            "SELECT migration_name AS name, finished_at IS NOT NULL AS finished, "
+            "rolled_back_at IS NOT NULL AS rolled_back FROM _prisma_migrations "
+            "WHERE migration_name = %s ORDER BY started_at",
+            (migration,),
+        ).fetchall()
+    return [(row.finished, row.rolled_back) for row in rows]
+
+
+def _spend_logs_columns(database_url: str) -> frozenset[str]:
+    with psycopg.connect(database_url) as conn:
+        rows: Final = conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'LiteLLM_SpendLogs'"
+        ).fetchall()
+    return frozenset(str(row[0]) for row in rows)
+
+
+def _sessions_named(database_url: str, pattern: str) -> list[tuple[str, str | None]]:
+    """(application name, what it waits on) for every session of this database whose name matches."""
+    with psycopg.connect(database_url) as conn:
+        rows: Final = conn.execute(
+            "SELECT application_name, wait_event_type FROM pg_stat_activity "
+            "WHERE datname = current_database() AND application_name LIKE %s",
+            (pattern,),
+        ).fetchall()
+    return [(str(name), None if waits_on is None else str(waits_on)) for name, waits_on in rows]
+
+
+def _wait_until(condition: Callable[[], bool], what: str, seconds: float = 180.0) -> None:
+    deadline: Final = time.monotonic() + seconds
+    while not condition():
+        if time.monotonic() >= deadline:
+            pytest.fail(f"timed out after {seconds}s waiting until {what}")
+        time.sleep(0.2)
+
+
+def _start_a_ledger_row(
+    connection: "psycopg.Connection[tuple[object, ...]]", logs: str | None, applied_steps: int, age: str
+) -> None:
+    connection.execute(
+        "INSERT INTO _prisma_migrations (id, checksum, migration_name, logs, started_at, applied_steps_count) "
+        "VALUES (%s, 'checksum', %s, %s, current_timestamp - %s::interval, %s)",
+        (str(uuid.uuid4()), KILLED_MIGRATION, logs, age, applied_steps),
+    )
+
+
+@requires_db
+def test_a_migration_killed_at_the_deploy_time_limit_is_rolled_back_and_applied_once_the_table_lock_is_free(
+    scratch_database: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _migration_job(True) is True
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute("DELETE FROM _prisma_migrations WHERE migration_name = %s", (AGENT_IDENTITY_MIGRATION,))
+        conn.execute('ALTER TABLE "LiteLLM_SpendLogs" DROP COLUMN billing_agent_id')
+    monkeypatch.setenv("LITELLM_PRISMA_MIGRATE_DEPLOY_TIMEOUT", "20")
+    reader: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
+
+    def release_the_table_once_the_killed_run_is_rolled_back() -> None:
+        try:
+            _wait_until(
+                lambda: _ledger_rows(scratch_database, AGENT_IDENTITY_MIGRATION) == [(False, True)],
+                "the migration killed at the time limit is marked rolled back",
+            )
+        finally:
+            reader.close()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        released: Final = pool.submit(release_the_table_once_the_killed_run_is_rolled_back)
+        finished: Final = _migration_job(True)
+        released.result()
+
+    assert finished is True
+    assert _ledger_rows(scratch_database, AGENT_IDENTITY_MIGRATION) == [(False, True), (True, False)]
+    assert "billing_agent_id" in _spend_logs_columns(scratch_database)
+    assert _sessions_named(scratch_database, "litellm-migrate-%") == []
+    _assert_no_pending_migrations(scratch_database)
+
+
+@requires_db
+def test_the_session_a_killed_deploy_left_waiting_on_a_lock_is_ended_before_its_row_is_rolled_back(
+    scratch_database: str,
+) -> None:
+    session_name: Final = f"litellm-migrate-{uuid.uuid4().hex[:16]}"
+    attempt_started: Final = time.monotonic()
+    reader: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
+    left_behind: Final = psycopg.connect(scratch_database, autocommit=True, application_name=session_name)
+    _start_a_ledger_row(left_behind, logs=None, applied_steps=0, age="0 seconds")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        migration: Final = pool.submit(
+            left_behind.execute,
+            'CREATE TABLE "left_behind" (id INT); ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "left_behind" TEXT',
+        )
+        _wait_until(
+            lambda: _sessions_named(scratch_database, session_name) == [(session_name, "Lock")],
+            "the migration waits on the table lock",
+        )
+
+        rolled_back: Final = roll_back_killed_migration(scratch_database, "public", session_name, attempt_started)
+
+        reader.close()
+        with pytest.raises(psycopg.OperationalError):
+            migration.result()
+
+    assert rolled_back == (KILLED_MIGRATION,)
+    assert _sessions_named(scratch_database, session_name) == []
+    assert "left_behind" not in _spend_logs_columns(scratch_database)
+    with psycopg.connect(scratch_database) as conn:
+        assert conn.execute("SELECT to_regclass('left_behind')").fetchone() == (None,)
+    assert _ledger_rows(scratch_database, KILLED_MIGRATION) == [(False, True)]
+
+
+@requires_db
+@pytest.mark.parametrize(
+    ("logs", "applied_steps", "age"),
+    (("ERROR: boom", 0, "0 seconds"), (None, 1, "0 seconds"), (None, 0, "1 hour")),
+    ids=("failed-with-logs", "applied-a-step", "started-before-this-attempt"),
+)
+def test_an_unfinished_row_the_killed_deploy_did_not_leave_is_kept_for_the_operator(
+    scratch_database: str, logs: str | None, applied_steps: int, age: str
+) -> None:
+    session_name: Final = f"litellm-migrate-{uuid.uuid4().hex[:16]}"
+    reader: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
+    left_behind: Final = psycopg.connect(scratch_database, autocommit=True, application_name=session_name)
+    _start_a_ledger_row(left_behind, logs, applied_steps, age)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        migration: Final = pool.submit(
+            left_behind.execute, 'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "left_behind" TEXT'
+        )
+        _wait_until(
+            lambda: _sessions_named(scratch_database, session_name) == [(session_name, "Lock")],
+            "the migration waits on the table lock",
+        )
+
+        rolled_back: Final = roll_back_killed_migration(
+            scratch_database, "public", session_name, time.monotonic() - 60.0
+        )
+
+        reader.close()
+        with pytest.raises(psycopg.OperationalError):
+            migration.result()
+
+    assert rolled_back == ()
+    assert _ledger_rows(scratch_database, KILLED_MIGRATION) == [(False, False)]
 
 
 def _backend_pid(connection: "psycopg.Connection[tuple[object, ...]]") -> int:
@@ -680,6 +855,176 @@ def test_an_invalid_child_index_left_by_an_interrupted_build_is_rebuilt_and_atta
 
 
 @requires_db
+@pytest.mark.parametrize("partition_first", (False, True), ids=("partition", "unpartition"))
+@pytest.mark.parametrize("reports_on_path", (False, True), ids=("off-search-path", "on-search-path"))
+def test_spend_runbooks_repoint_views_and_allow_old_table_drop(
+    scratch_database: str, partition_first: bool, reports_on_path: bool
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        if partition_first:
+            conn.execute(PARTITION_SCRIPT.read_bytes())
+        conn.execute("CREATE SCHEMA reports")
+        invoker: Final = ", security_invoker=true" if conn.info.server_version >= 150000 else ""
+        conn.execute(
+            sql.SQL(
+                "CREATE VIEW reports.direct WITH (security_barrier=true{}) AS "
+                'SELECT request_id, \'"LiteLLM_SpendLogs_legacy" "LiteLLM_SpendLogs_partitioned"\' AS label '
+                'FROM public."LiteLLM_SpendLogs" AS "LiteLLM_SpendLogs_legacy" WITH LOCAL CHECK OPTION'
+            ).format(sql.SQL(invoker))
+        )
+        conn.execute("CREATE VIEW reports.nested AS SELECT * FROM reports.direct")
+        if reports_on_path:
+            conn.execute("SET search_path TO public, reports")
+        _insert_spend_log(conn, "before", "2026-08-01")
+        before_options: Final = conn.execute(
+            "SELECT reloptions FROM pg_class WHERE oid = 'reports.direct'::regclass"
+        ).fetchone()
+        script: Final = (
+            PARTITION_SCRIPT.with_name("unpartition_spend_logs.sql") if partition_first else PARTITION_SCRIPT
+        )
+        conn.execute(script.read_bytes())
+        assert (
+            conn.execute("SELECT reloptions FROM pg_class WHERE oid = 'reports.direct'::regclass").fetchone()
+            == before_options
+        )
+        _insert_spend_log(conn, "after", "2026-08-01")
+        label: Final = '"LiteLLM_SpendLogs_legacy" "LiteLLM_SpendLogs_partitioned"'
+        expected: Final = [("after", label), ("before", label)] if partition_first else [("after", label)]
+        assert conn.execute("SELECT * FROM reports.direct ORDER BY request_id").fetchall() == expected
+        assert conn.execute("SELECT * FROM reports.nested ORDER BY request_id").fetchall() == expected
+        if not partition_first:
+            conn.execute('DROP TABLE "LiteLLM_SpendLogs_legacy"')
+        assert conn.execute(
+            "SELECT relkind FROM pg_class WHERE oid = '\"LiteLLM_SpendLogs\"'::regclass"
+        ).fetchone() == ("r" if partition_first else "p",)
+
+
+@requires_db
+@pytest.mark.parametrize("partition_first", (False, True), ids=("partition", "unpartition"))
+def test_spend_runbooks_reject_materialized_views_without_changing_the_table(
+    scratch_database: str, partition_first: bool
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        if partition_first:
+            conn.execute(PARTITION_SCRIPT.read_bytes())
+        conn.execute('CREATE MATERIALIZED VIEW spend_snapshot AS SELECT request_id FROM "LiteLLM_SpendLogs"')
+        original: Final = conn.execute("SELECT '\"LiteLLM_SpendLogs\"'::regclass::oid").fetchone()
+        script: Final = (
+            PARTITION_SCRIPT.with_name("unpartition_spend_logs.sql") if partition_first else PARTITION_SCRIPT
+        )
+        old_table: Final = "LiteLLM_SpendLogs_partitioned" if partition_first else "LiteLLM_SpendLogs_legacy"
+        conn.execute(sql.SQL("CREATE TABLE {} (id INT)").format(sql.Identifier(old_table)))
+        with pytest.raises(psycopg.errors.RaiseException, match="Materialized view spend_snapshot"):
+            conn.execute(script.read_bytes())
+        conn.execute("ROLLBACK")
+        assert conn.execute("SELECT '\"LiteLLM_SpendLogs\"'::regclass::oid").fetchone() == original
+        _insert_spend_log(conn, "still-writable", "2026-08-01")
+        conn.execute("REFRESH MATERIALIZED VIEW spend_snapshot")
+        assert conn.execute("SELECT * FROM spend_snapshot").fetchall() == [("still-writable",)]
+
+
+@requires_db
+@pytest.mark.parametrize("partition_first", (False, True), ids=("partition", "unpartition"))
+@pytest.mark.parametrize(
+    "configure_rls",
+    (
+        'ALTER TABLE "LiteLLM_SpendLogs" ENABLE ROW LEVEL SECURITY',
+        'ALTER TABLE "LiteLLM_SpendLogs" FORCE ROW LEVEL SECURITY',
+        'CREATE POLICY spend_policy ON "LiteLLM_SpendLogs" USING (true)',
+    ),
+    ids=("enabled", "forced", "policy-only"),
+)
+def test_spend_runbooks_reject_row_security_before_swapping(
+    scratch_database: str, partition_first: bool, configure_rls: str
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        if partition_first:
+            conn.execute(PARTITION_SCRIPT.read_bytes())
+        conn.execute(configure_rls)
+        original: Final = conn.execute("SELECT '\"LiteLLM_SpendLogs\"'::regclass::oid").fetchone()
+        script: Final = (
+            PARTITION_SCRIPT.with_name("unpartition_spend_logs.sql") if partition_first else PARTITION_SCRIPT
+        )
+        old_table: Final = "LiteLLM_SpendLogs_partitioned" if partition_first else "LiteLLM_SpendLogs_legacy"
+        conn.execute(sql.SQL("CREATE TABLE {} (id INT)").format(sql.Identifier(old_table)))
+        with pytest.raises(psycopg.errors.RaiseException, match="LiteLLM_SpendLogs has row-level security") as error:
+            conn.execute(script.read_bytes())
+        conn.execute("ROLLBACK")
+        assert "restore them on the replacement table" in (error.value.diag.message_hint or "")
+        assert conn.execute("SELECT '\"LiteLLM_SpendLogs\"'::regclass::oid").fetchone() == original
+
+
+@requires_db
+def test_partition_runbook_rejects_views_that_rely_on_the_old_primary_key(scratch_database: str) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute(
+            'CREATE VIEW grouped_spend AS SELECT request_id, spend FROM "LiteLLM_SpendLogs" GROUP BY request_id'
+        )
+        conn.execute('CREATE TABLE "LiteLLM_SpendLogs_legacy" (id INT)')
+        with pytest.raises(psycopg.errors.RaiseException, match="View grouped_spend depends on the current") as error:
+            conn.execute(PARTITION_SCRIPT.read_bytes())
+        conn.execute("ROLLBACK")
+        assert error.value.diag.message_hint == (
+            "Rewrite the view to explicitly group or aggregate non-grouped spend log columns before partitioning."
+        )
+
+        conn.execute(
+            "CREATE OR REPLACE VIEW grouped_spend AS SELECT request_id, spend "
+            'FROM "LiteLLM_SpendLogs" GROUP BY request_id, spend'
+        )
+        conn.execute('DROP TABLE "LiteLLM_SpendLogs_legacy"')
+        conn.execute(PARTITION_SCRIPT.read_bytes())
+        _insert_spend_log(conn, "after", "2026-08-01")
+        assert conn.execute("SELECT request_id FROM grouped_spend").fetchall() == [("after",)]
+
+
+@requires_db
+@pytest.mark.parametrize("partition_first", (False, True), ids=("partition", "unpartition"))
+def test_spend_runbooks_report_view_lock_contention_without_deadlocking(
+    scratch_database: str, partition_first: bool
+) -> None:
+    with (
+        psycopg.connect(scratch_database, autocommit=True) as runner,
+        psycopg.connect(scratch_database, autocommit=True) as reader,
+        psycopg.connect(scratch_database, autocommit=True) as observer,
+        ThreadPoolExecutor(max_workers=1) as pool,
+    ):
+        if partition_first:
+            runner.execute(PARTITION_SCRIPT.read_bytes())
+        runner.execute('CREATE VIEW spend_report AS SELECT request_id FROM "LiteLLM_SpendLogs"')
+        reader.execute("SET statement_timeout = '10s'")
+        runner.execute("BEGIN")
+        runner.execute('LOCK TABLE "LiteLLM_SpendLogs" IN ACCESS EXCLUSIVE MODE')
+        try:
+            pending: Final = pool.submit(reader.execute, "SELECT * FROM spend_report")
+            for _ in range(100):
+                if observer.execute("SELECT pg_blocking_pids(%s)", (reader.info.backend_pid,)).fetchone() == (
+                    [runner.info.backend_pid],
+                ):
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("The reader did not wait for the spend table lock")
+            assert observer.execute(
+                "SELECT mode FROM pg_locks WHERE pid = %s AND relation = 'spend_report'::regclass AND granted",
+                (reader.info.backend_pid,),
+            ).fetchall() == [("AccessShareLock",)]
+            script: Final = (
+                PARTITION_SCRIPT.with_name("unpartition_spend_logs.sql") if partition_first else PARTITION_SCRIPT
+            )
+            with pytest.raises(
+                psycopg.errors.LockNotAvailable, match=r"Could not rebind spend log view public\.spend_report"
+            ):
+                runner.execute(script.read_bytes())
+        finally:
+            runner.execute("ROLLBACK")
+        assert pending.result(timeout=5).fetchall() == []
+        runner.execute(script.read_bytes())
+        _insert_spend_log(runner, "after", "2026-08-01")
+        assert reader.execute("SELECT * FROM spend_report").fetchall() == [("after",)]
+
+
+@requires_db
 def test_partitioning_a_table_the_index_job_already_covered_moves_its_call_id_index_aside(
     scratch_database: str,
 ) -> None:
@@ -712,7 +1057,7 @@ def test_an_index_of_that_name_on_another_table_is_left_alone_and_reported(parti
 
 @requires_db
 def test_an_invalid_index_of_a_child_name_on_another_table_is_not_dropped(partitioned_database: str) -> None:
-    child: Final = "LiteLLM_SpendLogs_p2026_08_litellm_call_id_idx"
+    child: Final = f"{_runbook_partitions()[0]}_litellm_call_id_idx"
     _leave_an_invalid_index(partitioned_database, child, "LiteLLM_ErrorLogs", "request_id")
 
     assert ensure_request_log_indexes(partitioned_database, "public") is False
@@ -870,9 +1215,9 @@ def test_inserts_are_never_held_back_while_the_parent_index_waits_for_an_open_wr
 def test_inserts_are_never_held_back_while_attach_partition_waits_for_a_reader_of_the_child_index(
     partitioned_database: str,
 ) -> None:
-    partition: Final = "LiteLLM_SpendLogs_p2026_08"
+    partition: Final = _runbook_partitions()[0]
     child_index: Final = CALL_ID_INDEX_DEFINITION.partition_index_name(partition)
-    assert child_index == "LiteLLM_SpendLogs_p2026_08_litellm_call_id_idx"
+    assert child_index == f"{partition}_litellm_call_id_idx"
     with psycopg.connect(partitioned_database, autocommit=True) as conn:
         conn.execute(
             'CREATE INDEX "LiteLLM_SpendLogs_litellm_call_id_idx" ON ONLY "LiteLLM_SpendLogs" ("litellm_call_id")'
@@ -1602,3 +1947,71 @@ def test_a_database_with_tables_but_no_ledger_is_judged_by_the_schema_diff_inste
     assert "ALTER TABLE x ADD COLUMN y TEXT;" in migration_dry_run.report(differing)
     assert custom.ok is False
     assert "custom migration history" in migration_dry_run.report(custom)
+
+
+def _partition_bounds(database_url: str) -> dict[str, str]:
+    with psycopg.connect(database_url) as conn:
+        rows: Final = conn.execute(
+            "SELECT c.relname, pg_get_expr(c.relpartbound, c.oid) FROM pg_inherits i "
+            "JOIN pg_class c ON c.oid = i.inhrelid WHERE i.inhparent = '\"LiteLLM_SpendLogs\"'::regclass"
+        ).fetchall()
+    return {str(name): str(bound) for name, bound in rows}
+
+
+@requires_db
+@pytest.mark.parametrize("interval", ("day", "week", "month"))
+def test_the_partition_runbook_creates_the_partitions_the_cleanup_job_would_so_a_new_row_skips_default(
+    scratch_database: str, interval: str
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute(_runbook_on(RUNBOOK_DAY, interval))
+        _insert_spend_log(conn, "after-swap", f"{RUNBOOK_DAY} 12:00:00")
+        landed: Final = conn.execute(
+            'SELECT tableoid::regclass::text FROM "LiteLLM_SpendLogs" WHERE request_id = %s', ("after-swap",)
+        ).fetchone()
+
+    expected: Final = {
+        name: f"FOR VALUES FROM ('{lower} 00:00:00') TO ('{upper} 00:00:00')"
+        for name, lower, upper in upcoming_partitions(RUNBOOK_DAY, interval, SPEND_LOG_PARTITION_PRECREATE_AHEAD)
+    }
+    assert _partition_bounds(scratch_database) == expected | {DEFAULT_PARTITION: "DEFAULT"}
+    assert landed == (f'"{upcoming_partitions(RUNBOOK_DAY, interval, 0)[0][0]}"',)
+
+
+@pytest.fixture
+def sql_ascii_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    admin_url: Final = _base_url()
+    name: Final = f"sql_ascii_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        conn.execute(
+            sql.SQL("CREATE DATABASE {} ENCODING 'SQL_ASCII' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0").format(
+                sql.Identifier(name)
+            )
+        )
+    database_url: Final = f"{admin_url.rsplit('/', 1)[0]}/{name}"
+    try:
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        monkeypatch.delenv("PGCLIENTENCODING", raising=False)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        yield database_url
+    finally:
+        with psycopg.connect(admin_url, autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+@requires_db
+@RESOLVERS
+def test_a_sql_ascii_database_migrates_on_every_boot_and_gets_its_request_log_indexes(
+    sql_ascii_database: str, use_v2_resolver: bool
+) -> None:
+    assert _migration_job(use_v2_resolver) is True
+    assert _migration_job(use_v2_resolver) is True
+
+    assert ensure_request_log_indexes(sql_ascii_database, "public") is True
+    with psycopg.connect(sql_ascii_database, client_encoding="utf8") as conn:
+        valid: Final = conn.execute(
+            "SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+            "WHERE c.relname IN (%s, %s)",
+            (API_KEY_INDEX, CALL_ID_INDEX),
+        ).fetchall()
+    assert sorted(valid) == sorted([(API_KEY_INDEX, True), (CALL_ID_INDEX, True)])

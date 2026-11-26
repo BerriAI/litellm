@@ -8,7 +8,7 @@ use axum::http::Uri;
 use litellm_config::{LitellmParams, Model, Spelled};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_model_catalog::Catalog;
-use litellm_router_core::Reached;
+use litellm_router_core::{Reached, registry::DeploymentFilter};
 use serde_json::{Map, Value};
 
 use super::{
@@ -21,12 +21,33 @@ use super::{
 /// through an adapter the gateway has not been compared with.
 const MESSAGES_PROVIDERS: [LlmProviders; 2] = [LlmProviders::Anthropic, LlmProviders::AzureAi];
 
-/// The `litellm_params` beyond the typed ones that the router reads as Python's does.
-const HONORED_EXTRA_PARAMS: [&str; 1] = ["weight"];
+/// The `litellm_params` beyond the typed ones that the router or the messages call reads as
+/// Python's does.
+const HONORED_EXTRA_PARAMS: [&str; 3] = ["weight", "additional_drop_params", "request_timeout"];
 
 /// The `model_info` keys the router reads as Python's does. `access_groups` only decides which
-/// models a caller other than the master key may call.
-const HONORED_MODEL_INFO: [&str; 2] = ["id", "access_groups"];
+/// models a caller other than the master key may call, and `max_input_tokens` is the context
+/// window the pre-call checks hold a prompt to. `db_model` only marks a model the database stores,
+/// and `blocked`, which boot copies from its row, is honored while it is `false`.
+const HONORED_MODEL_INFO: [&str; 5] = [
+    "id",
+    "access_groups",
+    "max_input_tokens",
+    "db_model",
+    "blocked",
+];
+const BLOCKED: &str = "blocked";
+
+/// The `litellm_params` flags Python's `/model/new` stores as `false`, their default, beside the
+/// params it was given. Written `false` they ask for nothing.
+const OFF_BY_DEFAULT_PARAMS: [&str; 4] = [
+    "use_xai_oauth",
+    "use_litellm_proxy",
+    "allow_client_keepalive_override",
+    "merge_reasoning_content_in_choices",
+];
+/// `ModelInfo.member_auto_router`, which `/model/new` stores as `false`, its default.
+const OFF_BY_DEFAULT_MODEL_INFO: [&str; 1] = ["member_auto_router"];
 
 pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let model = fields.get("model").and_then(Value::as_str)?;
@@ -53,13 +74,7 @@ pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason
 fn unserved(admit: &Admit, reached: &Reached) -> Option<Box<str>> {
     let group = reached.group.as_str();
     super::router::group(&admit.config.router_settings, group)
-        .or_else(|| {
-            reached
-                .steps
-                .iter()
-                .find(|step| !crate::host::answers(step))
-                .map(|step| format!("router_settings.{}", step.setting()).into())
-        })
+        .or_else(|| admit.host.unanswered(reached))
         .or_else(|| {
             admit
                 .config
@@ -80,18 +95,30 @@ fn unserved(admit: &Admit, reached: &Reached) -> Option<Box<str>> {
                 })
         })
         .or_else(|| {
+            let cost_map = admit.inference.as_ref()?.cost_map();
             admit
-                .aliased
+                .router
+                .registry()
+                .deployments(&DeploymentFilter {
+                    model_name: Some(group),
+                    ..DeploymentFilter::default()
+                })
                 .iter()
-                .find(|(aliased, _)| aliased == group)
-                .map(|(_, alias)| format!("model_list.litellm_params.model alias {alias}").into())
+                .find_map(|deployment| {
+                    alias(
+                        cost_map.catalog(),
+                        deployment.provider(),
+                        &deployment.params.model,
+                    )
+                })
+                .map(|alias| format!("model_list.litellm_params.model alias {alias}").into())
         })
 }
 
 /// The name `catalog` holds `model` of `provider` under as another model's alias, as it holds
 /// `claude-haiku-latest`. Python sends the model the alias stands for
 /// (`resolve_model_latest_alias`), and the native app sends the name as written.
-pub(in crate::admit) fn alias(catalog: &Catalog, provider: &str, model: &str) -> Option<Box<str>> {
+fn alias(catalog: &Catalog, provider: &str, model: &str) -> Option<Box<str>> {
     let name = model
         .strip_prefix(provider)
         .and_then(|rest| rest.strip_prefix('/'))
@@ -124,6 +151,14 @@ fn is_not_positive(timeout: &Option<Spelled<f64>>) -> bool {
     matches!(timeout, Some(Spelled::Value(seconds)) if *seconds <= 0.0)
 }
 
+/// A `request_timeout` other than a number of seconds above zero, which Python reads with
+/// `TypeAdapter(float)` and the native call does not read.
+fn is_no_seconds(request_timeout: Option<&Value>) -> bool {
+    request_timeout.is_some_and(|written| {
+        !written.is_null() && !written.as_f64().is_some_and(|seconds| seconds > 0.0)
+    })
+}
+
 /// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` gets its
 /// credential from a flow the proxy can host and the gateway may not, as Entra and workload
 /// identity are.
@@ -136,6 +171,9 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         custom_llm_provider: _,
         tpm: _,
         rpm: _,
+        tpd: _,
+        rpd: _,
+        daily_reset_time: _,
         drop_params: _,
         aws_bedrock_project_id: _,
         claude_platform: _,
@@ -168,6 +206,10 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         ),
         ("timeout", is_not_positive(timeout)),
         ("stream_timeout", is_not_positive(stream_timeout)),
+        (
+            "request_timeout",
+            is_no_seconds(extra.get("request_timeout")),
+        ),
     ]
     .into_iter()
     .filter(|(_, found)| *found)
@@ -194,7 +236,10 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
     .chain(unsent)
     .chain(other(
         "model_list.litellm_params.",
-        extra.keys(),
+        extra.iter().filter_map(|(key, value)| {
+            let off = *value == Value::Bool(false) && OFF_BY_DEFAULT_PARAMS.contains(&key.as_str());
+            (!off).then_some(key)
+        }),
         &HONORED_EXTRA_PARAMS,
     ))
     .collect()
@@ -213,10 +258,18 @@ fn deployment(model: &Model) -> Vec<Box<str>> {
         .into_iter()
         .chain(other(
             "model_list.model_info.",
-            model_info.keys(),
+            model_info.iter().filter_map(|(key, value)| {
+                let off = *value == litellm_config::Value::Bool(false)
+                    && OFF_BY_DEFAULT_MODEL_INFO.contains(&key.as_str());
+                (!off).then_some(key)
+            }),
             &HONORED_MODEL_INFO,
         ))
         .chain((*blocked == Some(true)).then(|| "model_list.blocked".into()))
+        .chain(
+            (model_info.get(BLOCKED) == Some(&litellm_config::Value::Bool(true)))
+                .then(|| "model_list.model_info.blocked".into()),
+        )
         .chain(unknown("model_list.", additional_fields))
         .collect()
 }
@@ -337,11 +390,6 @@ mod tests {
         "other",
         "router_settings.routing_strategy"
     )]
-    #[case::pre_call_checks(
-        "  enable_pre_call_checks: true\n",
-        "other",
-        "router_settings.enable_pre_call_checks"
-    )]
     #[case::health_check_routing(
         "  enable_health_check_routing: true\n",
         "other",
@@ -432,6 +480,14 @@ mod tests {
         "      stream_timeout: -1\n",
         "model_list.litellm_params.stream_timeout"
     )]
+    #[case::no_request_timeout_at_all(
+        "      request_timeout: 0\n",
+        "model_list.litellm_params.request_timeout"
+    )]
+    #[case::a_request_timeout_as_text(
+        "      request_timeout: \"30\"\n",
+        "model_list.litellm_params.request_timeout"
+    )]
     #[case::model_info_beyond_the_id(
         "    model_info:\n      id: claude-a\n      base_model: claude-haiku-5-5\n",
         "model_list.model_info.base_model"
@@ -449,7 +505,7 @@ mod tests {
 
     #[rstest]
     fn a_deployment_honoring_every_param_keeps_its_group() {
-        let written = "      api_base: https://api.anthropic.com\n      rpm: 300\n      weight: 2\n      timeout: 30\n    model_info:\n      id: claude-a\n      access_groups: [haiku]\n";
+        let written = "      api_base: https://api.anthropic.com\n      rpm: 300\n      weight: 2\n      timeout: 30\n      request_timeout: 2.5\n      additional_drop_params: [metadata.user_id]\n    model_info:\n      id: claude-a\n      access_groups: [haiku]\n";
 
         assert_eq!(
             one_deployment(&format!("{DEPLOYMENT}{written}"), anthropic(&["claude"])),

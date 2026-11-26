@@ -1,4 +1,4 @@
-"""One SDK session per case, in a fresh interpreter booted from the cost map at LITELLM_MODEL_COST_MAP_URL.
+"""One SDK session per case, in a fresh interpreter that has loaded the cost map at LITELLM_MODEL_COST_MAP_URL.
 
 Each case does what SDK code does to ``litellm.model_cost`` and bills a real ``completion`` after every step, then
 prints the charges as one JSON line. The steps use only names main exposes, so a case runs on main and the branch.
@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 from collections.abc import Callable
 from typing import Final
 
@@ -199,5 +200,14 @@ CASES: Final[dict[str, Callable[[], list[object]]]] = {
     )
 }
 
+
+def await_boot_refresh() -> None:
+    """Import serves the bundled map and installs the one at LITELLM_MODEL_COST_MAP_URL from a background thread."""
+    for thread in threading.enumerate():
+        if thread.name == "litellm-model-cost-map-refresh":
+            thread.join(timeout=60)
+
+
 if __name__ == "__main__":
+    await_boot_refresh()
     sys.stdout.write(json.dumps(CASES[sys.argv[1]]()) + "\n")

@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import str_param
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -241,7 +242,7 @@ def _request_headers(
     """The provider auth headers for a container request."""
     return container_provider_config.validate_environment(
         headers=extra_headers or {},
-        api_key=litellm_params.get("api_key", None),
+        api_key=str_param(litellm_params, "api_key"),
         litellm_params=litellm_params,
     )
 
@@ -252,7 +253,7 @@ def _request_api_base(
 ) -> str:
     """The provider base URL for a container request."""
     return container_provider_config.get_complete_url(
-        api_base=litellm_params.get("api_base", None),
+        api_base=str_param(litellm_params, "api_base"),
         litellm_params=dict(litellm_params),
     )
 

@@ -468,6 +468,9 @@ def isolate_model_catalog() -> Iterator[None]:
     models_by_provider: Final = litellm.models_by_provider
     models_by_provider_entries: Final = dict(models_by_provider)
     provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
+    model_list_entries: Final = tuple(litellm.model_list)
+    model_list_set: Final = litellm.model_list_set
+    model_list_set_entries: Final = frozenset(model_list_set)
     yield
     model_cost.clear()
     model_cost.update(model_cost_entries)
@@ -476,6 +479,9 @@ def isolate_model_catalog() -> Iterator[None]:
     for models, entries in provider_model_sets:
         models.clear()
         models.update(entries)
+    litellm.model_list[:] = model_list_entries
+    model_list_set.clear()
+    model_list_set.update(model_list_set_entries)
     publish(litellm.model_cost)
     litellm.get_model_info.cache_clear()
 

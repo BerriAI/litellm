@@ -18,7 +18,6 @@
     "statusUnavailable": "Lens connection status is unavailable",
     "notConfigured": "Configure the gateway’s Lens connection to record traces"
   },
-
   "apps": {
     "editSettings": "Edit {{alias}}",
     "title": "Applications",
@@ -3629,6 +3628,7 @@
       "customCallbackApi": "Custom Callback API Logging Integration",
       "galileo": "Galileo AI Observability Integration",
       "datadog": "Datadog Logging Integration",
+      "mixpanel": "Mixpanel Agent Intelligence OpenTelemetry Integration. Setup: https://docs.mixpanel.com/docs/agent-intelligence",
       "newrelic": "New Relic Logging Integration",
       "lago": "Lago Billing Logging Integration",
       "langfuse": "Langfuse v2 Logging Integration",
@@ -9343,6 +9343,15 @@
     }
   },
   "shared": {
+    "semanticCaching": {
+      "title": "Response cache",
+      "mode": "Cache mode",
+      "inherit": "Inherit",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "threshold": "Similarity threshold",
+      "ttl": "TTL in seconds"
+    },
     "fieldInformation": "{{label}} information",
     "resourceActivity": {
       "title": "Activity",
@@ -16622,7 +16631,42 @@
       "format": {
         "label": "Format",
         "csv": "CSV (Excel, Google Sheets)",
-        "json": "JSON (includes metadata)"
+        "json": "JSON (includes metadata)",
+        "pdf": "PDF (printable report)"
+      },
+      "report": {
+        "frameTitle": "Usage report",
+        "summary": {
+          "title": "Summary",
+          "spend": "Total spend",
+          "requests": "Requests",
+          "successful": "Successful requests",
+          "failed": "Failed requests",
+          "tokens": "Total tokens",
+          "promptTokens": "Prompt tokens",
+          "completionTokens": "Completion tokens"
+        },
+        "breakdown": "Breakdown",
+        "columns": {
+          "date": "Date",
+          "key": "Key",
+          "model": "Model",
+          "user": "User",
+          "spend": "Spend",
+          "requests": "Requests",
+          "successful": "Successful",
+          "failed": "Failed",
+          "promptTokens": "Prompt tokens",
+          "completionTokens": "Completion tokens"
+        },
+        "meta": {
+          "dateRange": "Date range",
+          "exportType": "Export type",
+          "filters": "Filters",
+          "generated": "Generated"
+        },
+        "truncated": "Showing the first {{shown}} of {{total}} rows. Totals cover all rows. Export as CSV for the full breakdown.",
+        "empty": "No usage in this date range"
       },
       "summary": {
         "filterCount_one": "{{count}} filter",

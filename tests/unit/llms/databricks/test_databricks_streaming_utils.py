@@ -138,6 +138,61 @@ def test_stream_usage_after_finish_chunk_reaches_the_caller(respx_mock: respx.Mo
     assert [(usage.prompt_tokens, usage.prompt_tokens_details.cached_tokens) for usage in usages] == [(340, 320)]
 
 
+def _stream_with_sse_fields(fields: str) -> bytes:
+    chunk_header: Final = {"id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 1, "model": "m"}
+    events: Final = (
+        {**chunk_header, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+        {**chunk_header, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {**chunk_header, "choices": [], "usage": {"prompt_tokens": 74, "completion_tokens": 52, "total_tokens": 126}},
+    )
+    return "".join(f"{fields.format(n=n)}data: {json.dumps(event)}\n\n" for n, event in enumerate(events, 1)).encode()
+
+
+_STREAM_ARGS: Final = {
+    "model": "maritalk/sabia-3",
+    "api_base": "http://upstream.test",
+    "api_key": "sk-test",
+    "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
+    "stream": True,
+    "stream_options": {"include_usage": True},
+}
+
+_ID_EVENT_RETRY_AND_COMMENT: Final = "id: {n}\nevent: message\nretry: 3000\n: keep-alive\n"
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    "fields",
+    [_ID_EVENT_RETRY_AND_COMMENT, "x-trace: {n}\n", "id\n"],
+    ids=["id-event-retry-comment", "unknown-field", "bare-field-name"],
+)
+def test_stream_usage_survives_sse_non_data_fields(respx_mock: respx.MockRouter, fields: str) -> None:
+    respx_mock.post("http://upstream.test/chat/completions").mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_stream_with_sse_fields(fields)
+        )
+    )
+
+    stream: Final = litellm.completion(**_STREAM_ARGS)
+    usages: Final = [chunk.usage for chunk in stream if getattr(chunk, "usage", None)]
+
+    assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == [(74, 52)]
+
+
+@pytest.mark.asyncio
+async def test_async_stream_skips_sse_non_data_fields_and_keeps_the_usage_chunk():
+    async def lines():
+        for line in _stream_with_sse_fields(_ID_EVENT_RETRY_AND_COMMENT).decode().split("\n"):
+            yield line
+
+    chunks: Final = [chunk async for chunk in ModelResponseIterator(streaming_response=lines(), sync_stream=False)]
+    parsed: Final = [
+        (chunk["text"], chunk["finish_reason"], (chunk["usage"] or {}).get("prompt_tokens")) for chunk in chunks
+    ]
+
+    assert parsed == [("ok", "", None), ("", "stop", None), ("", "", 74)]
+
+
 def test_chunk_parser_keeps_usage_on_the_finish_chunk():
     iterator: Final = ModelResponseIterator(streaming_response=None, sync_stream=True)
 
@@ -190,26 +245,26 @@ async def test_async_stream_skips_blank_sse_lines_and_keeps_the_usage_chunk():
     ]
 
 
-class _BrokenTransport(ValueError):
+class _UnreadableChunk(ValueError):
     pass
 
 
-def test_sync_stream_transport_error_surfaces_as_runtime_error():
+def test_sync_stream_value_error_surfaces_as_runtime_error():
     def lines():
         yield _SSE_LINES_WITH_BLANK_SEPARATORS[0]
-        raise _BrokenTransport("connection reset")
+        raise _UnreadableChunk("unreadable chunk")
 
-    with pytest.raises(RuntimeError, match="connection reset"):
+    with pytest.raises(RuntimeError, match="unreadable chunk"):
         list(ModelResponseIterator(streaming_response=lines(), sync_stream=True))
 
 
 @pytest.mark.asyncio
-async def test_async_stream_transport_error_surfaces_as_runtime_error():
+async def test_async_stream_value_error_surfaces_as_runtime_error():
     async def lines():
         yield _SSE_LINES_WITH_BLANK_SEPARATORS[0]
-        raise _BrokenTransport("connection reset")
+        raise _UnreadableChunk("unreadable chunk")
 
-    with pytest.raises(RuntimeError, match="connection reset"):
+    with pytest.raises(RuntimeError, match="unreadable chunk"):
         [chunk async for chunk in ModelResponseIterator(streaming_response=lines(), sync_stream=False)]
 
 

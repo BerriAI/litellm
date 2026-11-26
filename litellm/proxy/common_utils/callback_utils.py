@@ -24,6 +24,11 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.model.config import (
+    EMIT_BACKGROUND_SERVICE_SPANS_ENV,
+    background_service_spans_from_yaml,
+    parse_background_service_spans_setting,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -153,7 +158,7 @@ def initialize_callbacks_on_proxy(
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
-    callback_specific_params: dict | None = None,
+    callback_specific_params: Mapping[str, object] | None = None,
 ):
     if not isinstance(callback_specific_params, dict):
         callback_specific_params = {}
@@ -521,7 +526,7 @@ def _serialize_scan_metadata_header(entries: Iterable[object], *, max_length: in
     return f"[{','.join(encoded[:kept])}]"
 
 
-def get_logging_caching_headers(request_data: dict) -> dict | None:
+def get_logging_caching_headers(request_data: Mapping[str, object]) -> dict[str, str] | None:
     _metadata: Final[dict] = {}
     metadata_bucket: Final = request_data.get("metadata")
     litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
@@ -531,7 +536,7 @@ def get_logging_caching_headers(request_data: dict) -> dict | None:
         # Batch/file routes store proxy tracking in litellm_metadata while
         # user-facing metadata stays in metadata; merge both for headers.
         _metadata.update(litellm_metadata_bucket)
-    headers: Final = {}
+    headers: Final[dict[str, str]] = {}
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(_metadata["applied_guardrails"])
 
@@ -637,7 +642,7 @@ def sanitize_openai_provider_metadata(
     return None if metadata and not sanitized else sanitized
 
 
-def add_guardrail_to_applied_guardrails_header(request_data: dict, guardrail_name: str | None):
+def add_guardrail_to_applied_guardrails_header(request_data: dict[str, object], guardrail_name: str | None):
     if guardrail_name is None:
         return
     _, _metadata = get_or_create_metadata_bucket(request_data)
@@ -683,7 +688,7 @@ def add_guardrail_scan_id(
         _metadata[GUARDRAIL_SCAN_METADATA_METADATA_KEY] = (*entries, entry)
 
 
-def add_policy_to_applied_policies_header(request_data: dict, policy_name: str | None):
+def add_policy_to_applied_policies_header(request_data: dict[str, object], policy_name: str | None):
     """
     Add a policy name to the applied_policies list in request metadata.
 
@@ -700,7 +705,7 @@ def add_policy_to_applied_policies_header(request_data: dict, policy_name: str |
         _metadata["applied_policies"] = [policy_name]
 
 
-def add_policy_sources_to_metadata(request_data: dict, policy_sources: dict[str, str]):
+def add_policy_sources_to_metadata(request_data: dict[str, object], policy_sources: dict[str, str]):
     """
     Store policy match reasons in metadata for x-litellm-policy-sources header.
 
@@ -738,6 +743,20 @@ def add_guardrail_response_to_standard_logging_object(
     return standard_logging_object
 
 
+def _background_service_spans_callback_value(stored_value: str | None) -> str | None:
+    yaml_setting: Final = background_service_spans_from_yaml((litellm.callback_settings or {}).get("otel"))
+    if yaml_setting is not None:
+        return str(yaml_setting).lower()
+    env_var: Final = EMIT_BACKGROUND_SERVICE_SPANS_ENV
+    value: Final = (
+        decrypt_value_helper(stored_value, env_var, exception_type="debug", return_original_value=True)
+        if stored_value is not None
+        else os.getenv(env_var)
+    )
+    enabled: Final = parse_background_service_spans_setting(value)
+    return None if enabled is None else str(enabled).lower()
+
+
 def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict[str, object]:
     """Process a single callback and return its data with environment variables"""
     env_vars: Final = CustomLogger.get_callback_env_vars(_callback)
@@ -745,6 +764,11 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
     env_vars_dict: Final[dict[str, str | None]] = {}
     for _var in env_vars:
         stored_value = environment_variables.get(_var, None)
+        if _var == EMIT_BACKGROUND_SERVICE_SPANS_ENV:
+            env_vars_dict[_var] = _background_service_spans_callback_value(
+                stored_value if isinstance(stored_value, str) else None
+            )
+            continue
         env_vars_dict[_var] = stored_value if stored_value is not None else os.getenv(_var)
 
     return {"name": _callback, "variables": env_vars_dict, "type": callback_type}

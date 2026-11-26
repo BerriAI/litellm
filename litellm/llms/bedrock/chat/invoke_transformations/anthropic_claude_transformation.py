@@ -182,8 +182,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -233,7 +233,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         return mapped_params
 
     @staticmethod
-    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, params: dict) -> None:
+    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, params: dict[str, object]) -> None:
         """Lower ``reasoning_effort`` to the Bedrock effort ceiling before mapping.
 
         Bedrock's adaptive Claude models accept the OpenAI-style
@@ -257,10 +257,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
             model=model,
             messages=messages,
@@ -320,9 +320,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         return self.transform_request(
             model=model,
@@ -366,9 +366,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         filtered_params = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
         output_config: Final = filtered_params.get("output_config")
@@ -428,7 +428,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        headers: dict,
+        headers: dict[str, object],
         thinking: AnthropicThinkingParam | None,
         history_holds_tool_search: bool,
     ) -> list[str]:
@@ -472,7 +472,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
         return sorted(user_beta_set.union(set(auto_beta_list)))
 
-    def _convert_document_url_sources_to_base64(self, anthropic_request: dict) -> None:
+    def _convert_document_url_sources_to_base64(self, anthropic_request: Mapping[str, object]) -> None:
         """
         Bedrock Invoke does not accept document URL sources. Convert to base64 payloads.
         """
@@ -511,7 +511,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                     "data": image_chunk["data"],
                 }
 
-    def _normalize_bedrock_tool_search_tools(self, optional_params: dict) -> dict[str, object]:
+    def _normalize_bedrock_tool_search_tools(self, optional_params: dict[str, object]) -> dict[str, object]:
         """
         Convert tool search entries to the format supported by the Bedrock Invoke API.
         """
@@ -527,10 +527,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

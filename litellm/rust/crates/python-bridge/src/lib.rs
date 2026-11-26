@@ -1,10 +1,12 @@
 mod auth;
+mod billable_route;
 mod budget_counters;
 mod budgets;
 mod cache;
 mod callable;
 mod callbacks_model_capacity;
 mod coercion;
+mod cost;
 mod credentials;
 mod db;
 mod db_repository;
@@ -30,6 +32,16 @@ mod spend_log_rows;
 mod spend_log_writer;
 mod tokenizer;
 
+#[cfg(feature = "fips")]
+fn crypto_provider() -> rustls::crypto::CryptoProvider {
+    rustls::crypto::default_fips_provider()
+}
+
+#[cfg(not(feature = "fips"))]
+fn crypto_provider() -> rustls::crypto::CryptoProvider {
+    rustls::crypto::aws_lc_rs::default_provider()
+}
+
 #[pymodule(gil_used = true)]
 mod _native {
     #[pymodule_export]
@@ -49,20 +61,30 @@ mod _native {
         auth_route_matches_prefix, auth_route_matches_wildcard,
     };
     #[pymodule_export]
+    use crate::billable_route::{billable_route_passthrough_prefixes, classify_billable_route};
+    #[pymodule_export]
     use crate::budgets::NativeBudgets;
     #[pymodule_export]
     use crate::budgets::budget_check_decision;
     #[pymodule_export]
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
     #[pymodule_export]
+    use crate::cost::billable_service_tier;
+    #[pymodule_export]
+    use crate::cost::{
+        NativeCallContext, NativePriced, NativePrices, NativeQuote, NativeRateCard,
+        NativeTokenUsage,
+    };
+    #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
     use crate::db_repository::{
         RustAccessGroupRepository, RustAgentIdentityRepository, RustAuditLogRepository,
         RustBudgetRepository, RustEndUserRepository, RustJwtKeyMappingRepository,
-        RustKeyRepository, RustModelAccessGroupRepository, RustObjectPermissionRepository,
-        RustOrganizationRepository, RustProjectRepository, RustSpendLogRepository,
-        RustTagRepository, RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
+        RustKeyOwnersRepository, RustKeyRepository, RustModelAccessGroupRepository,
+        RustObjectPermissionRepository, RustOrganizationRepository, RustProjectRepository,
+        RustSpendLogRepository, RustTagRepository, RustTeamMembershipRepository,
+        RustTeamRepository, RustUserRepository,
     };
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -70,14 +92,15 @@ mod _native {
     #[pymodule_export]
     use crate::diagnostics::{gil_stats, process_state_started, reserve_process_for_forking};
     #[pymodule_export]
-    use crate::errors::{RustBridgeDeclined, RustUpstreamError};
+    use crate::errors::{RustBridgeDeclined, RustDocumentFetchError, RustUpstreamError};
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
     use crate::model_cost::{
-        NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
-        NativeModelCostMap, NativeModelCostMapState, NativeProvenance, NativeRegistered,
-        NativeRejected, NativeTableSwapped,
+        CostMapKept, CostMapRefreshStop, CostMapRefreshed, NativeCostMapSource, NativeFetchFailed,
+        NativeFetchPolicy, NativeFetched, NativeInstalled, NativeModelCostMap,
+        NativeModelCostMapState, NativeProvenance, NativeRegistered, NativeRejected,
+        NativeTableSwapped,
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
@@ -94,7 +117,9 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::active_teams::{NativeActiveTeams, PyActiveMember};
     #[pymodule_export]
-    use crate::redis::store::auth_cache::{NativeAuthCache, PyAuthObject, PyLocalSizes};
+    use crate::redis::store::auth_cache::{
+        NativeAuthCache, NativeTeamRoster, PyAuthObject, PyLocalSizes,
+    };
     #[pymodule_export]
     use crate::redis::store::cache_invalidation::NativeCacheInvalidation;
     #[pymodule_export]
@@ -155,14 +180,20 @@ mod _native {
     use crate::tokenizer::HuggingFaceEncoding;
     #[pymodule_export]
     use crate::tokenizer::Tokenizer;
+    #[pymodule_export]
+    use litellm_callbacks_legacy_python::{NativeBilledRates, NativeReceipt};
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = crate::crypto_provider().install_default();
         let _ = crate::logger::process().install_global();
         module.add(
             "JWT_ID_JAG_TYP",
             litellm_gateway_auth_core::authn::jwt::ID_JAG_TYP,
+        )?;
+        module.add(
+            "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
+            litellm_cost::bound::DEFAULT_MAX_OUTPUT_TOKENS,
         )?;
         let py = module.py();
         let dict = module.dict();
@@ -191,6 +222,7 @@ mod tests {
             let mut expected = vec![
                 "RustBridgeDeclined",
                 "RustUpstreamError",
+                "RustDocumentFetchError",
                 "ForkedAfterNativeRuntimeStarted",
                 "ProcessReservedForForking",
                 "ocr",
@@ -219,6 +251,7 @@ mod tests {
                 "NativeSend",
                 "drain_post_call_redis_batches",
                 "NativeAuthCache",
+                "NativeTeamRoster",
                 "NativeDeploymentHealth",
                 "NativeRouterSessionPins",
                 "AuthObject",
@@ -250,6 +283,7 @@ mod tests {
                 "NativeDatabase",
                 "NativeDatabaseFailure",
                 "RustKeyRepository",
+                "RustKeyOwnersRepository",
                 "RustJwtKeyMappingRepository",
                 "RustModelAccessGroupRepository",
                 "RustBudgetRepository",
@@ -268,6 +302,14 @@ mod tests {
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
+                "NativePrices",
+                "NativeTokenUsage",
+                "NativeCallContext",
+                "NativePriced",
+                "NativeQuote",
+                "NativeReceipt",
+                "NativeBilledRates",
+                "NativeRateCard",
                 "NativeModelCostMapState",
                 "NativeInstalled",
                 "NativeRejected",
@@ -278,6 +320,9 @@ mod tests {
                 "NativeFetchPolicy",
                 "NativeFetched",
                 "NativeFetchFailed",
+                "CostMapRefreshed",
+                "CostMapRefreshStop",
+                "CostMapKept",
                 "TokenCounter",
                 "Tokenizer",
                 "RouterCoreHandle",
@@ -288,6 +333,9 @@ mod tests {
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
                 "NativeBudgets",
+                "billable_route_passthrough_prefixes",
+                "billable_service_tier",
+                "classify_billable_route",
                 "budget_check_decision",
                 "NativeModelCapacity",
                 "NativeModelCapacityState",
@@ -303,6 +351,7 @@ mod tests {
                 "auth_route_matches_prefix",
                 "auth_route_matches_wildcard",
                 "JWT_ID_JAG_TYP",
+                "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
                 "RustAuth",
                 "RustAuthOutcome",
                 "RustAuthSettings",
@@ -338,7 +387,7 @@ mod tests {
         });
     }
     #[rstest::rstest]
-    fn module_import_installs_ring_as_the_process_crypto_provider() {
+    fn module_import_installs_the_build_crypto_provider() {
         Python::initialize();
         Python::attach(|py| {
             native_module(py);
@@ -348,7 +397,7 @@ mod tests {
             .expect("importing _native should install a process crypto provider");
         assert_eq!(
             format!("{installed:?}"),
-            format!("{:?}", rustls::crypto::ring::default_provider())
+            format!("{:?}", crate::crypto_provider())
         );
     }
 }
