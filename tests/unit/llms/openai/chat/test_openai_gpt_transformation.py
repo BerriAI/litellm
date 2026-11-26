@@ -335,6 +335,55 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert handler.chunk_parser(tiered_chunk).model_dump().get("service_tier") == "priority"
         assert handler.chunk_parser(plain_chunk).model_dump().get("service_tier") is None
 
+    def test_chunk_parser_overrides_stop_to_tool_calls_when_tool_calls_seen(self):
+        handler: Final = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        tool_call_chunk = {
+            "id": "gen-123",
+            "created": 1234567890,
+            "model": "openai/gpt-4o-mini",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_abc",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"location": "Tokyo"}'},
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        stop_chunk = {
+            "id": "gen-123",
+            "created": 1234567890,
+            "model": "openai/gpt-4o-mini",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        first_res: Final = handler.chunk_parser(tool_call_chunk)
+        assert first_res.choices[0].finish_reason is None
+
+        second_res: Final = handler.chunk_parser(stop_chunk)
+        assert second_res.choices[0].finish_reason == "tool_calls"
+
     def test_chunk_parser_raises_on_in_body_error_payload(self):
         """vLLM/sglang return HTTP 200 streams whose body carries the error,
         e.g. data: {"error": {..., "code": 400}}. chunk_parser must surface it
