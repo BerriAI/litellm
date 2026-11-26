@@ -93,7 +93,9 @@ def _authorizations(peer: McpPeer) -> tuple[bytes | None, ...]:
     )
 
 
-def _assert_bridge_peer_authorization(peer: McpPeer, key: str, upstream_token: str, envelope: str) -> None:
+def _assert_bridge_peer_authorization(
+    peer: McpPeer, key: str, upstream_token: str, envelope: str
+) -> None:
     observed: Final = peer.drain()
     assert len(tool_calls(observed)) == 1
     expected_authorization: Final = f"Bearer {upstream_token}".encode()
@@ -884,7 +886,9 @@ def test_clientless_dcr_bridge_relays_and_binds_the_token_to_the_service_key(
 ) -> None:
     with mcp_peer() as peer, oauth_server() as auth, clientless_dcr_gateway.scenario() as scenario:
         alias: Final = "dr" + uuid.uuid4().hex[:8]
-        _register_oauth(scenario, peer, auth, alias, auth_type="oauth_delegate", dcr_bridge=True, allow_all_keys=True)
+        _register_oauth(
+            scenario, peer, auth, alias, auth_type="oauth_delegate", dcr_bridge=True, allow_all_keys=True
+        )
         browser_user_id: Final = scenario.user()
         service_user_id: Final = scenario.user()
         other_user_id: Final = scenario.user()
@@ -943,11 +947,13 @@ def test_clientless_dcr_bridge_relays_and_binds_the_token_to_the_service_key(
         assert callback_query["state"] == [state]
         authorization_code: Final = callback_query["code"][0]
         authorize_requests: Final = auth.drain()
-        assert tuple((request.method, urlsplit(request.target).path) for request in authorize_requests) == (
-            ("GET", "/authorize"),
-        )
+        assert tuple(
+            (request.method, urlsplit(request.target).path) for request in authorize_requests
+        ) == (("GET", "/authorize"),)
 
-        redeemed: Final = _redeem(clientless_dcr_gateway, alias, service_key, client_id, authorization_code, pkce)
+        redeemed: Final = _redeem(
+            clientless_dcr_gateway, alias, service_key, client_id, authorization_code, pkce
+        )
         assert redeemed.status_code == 200, redeemed.status_code
         issued: Final = _response_object(redeemed)
         envelope: Final = _issued_token(issued)
@@ -1572,9 +1578,9 @@ def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_i
         assert protected.status_code == 200, protected.text
         protected_body: Final = _response_object(protected)
         resource: Final = str(protected_body["resource"])
-        assert check_resource_allowed(requested_resource=f"{_base(gateway)}{path}", configured_resource=resource), (
-            protected.text
-        )
+        assert check_resource_allowed(
+            requested_resource=f"{_base(gateway)}{path}", configured_resource=resource
+        ), protected.text
         issuers: Final = TypeAdapter(tuple[str, ...]).validate_python(protected_body["authorization_servers"])
         assert len(issuers) == 1, protected.text
         issuer: Final = urlsplit(issuers[0])
@@ -1600,12 +1606,8 @@ def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_i
         assert listed.tools == (f"{alias}-add",), listed.raw
         peer.drain()
         called: Final = _toolset_rpc(
-            gateway,
-            bearer,
-            granted_name,
-            "tools/call",
-            {"name": f"{alias}-add", "arguments": {"a": 4, "b": 5}},
-            route=route,
+            gateway, bearer, granted_name, "tools/call",
+            {"name": f"{alias}-add", "arguments": {"a": 4, "b": 5}}, route=route
         )
         assert called.ok and called.text == "9", called.raw
         assert len(tool_calls(peer.drain())) == 1
@@ -2380,8 +2382,7 @@ def _sdk_scope_peer() -> Iterator[McpPeer]:
         return "must not execute"
 
     app = service.streamable_http_app(
-        stateless_http=True,
-        json_response=True,
+        stateless_http=True, json_response=True,
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
     observed = queue.Queue()
@@ -2391,16 +2392,11 @@ def _sdk_scope_peer() -> Iterator[McpPeer]:
 
 @contextmanager
 def _scope_enforcing_peer(auth: AuthorizationServer, *, modern: bool = False) -> Iterator[tuple[McpPeer, Wire]]:
-    with (
-        _sdk_scope_peer()
-        if modern
-        else scripted_peer(
-            ScriptedTool("read_op", lambda _: text_result("read completed")),
-            ScriptedTool("write_op", lambda _: text_result("write completed")),
-            ScriptedTool("forbid_op", lambda _: text_result("must not execute")),
-        )
-    ) as inner:
-
+    with (_sdk_scope_peer() if modern else scripted_peer(
+        ScriptedTool("read_op", lambda _: text_result("read completed")),
+        ScriptedTool("write_op", lambda _: text_result("write completed")),
+        ScriptedTool("forbid_op", lambda _: text_result("must not execute")),
+    )) as inner:
         def enforce(request: Request) -> Reply:
             body: Final = json.loads(request.body) if request.body else {}
             if body.get("method") == "tools/call":
@@ -2436,39 +2432,23 @@ def test_managed_scope_step_up_preserves_read_and_write_without_retry(
 ) -> None:
     modern = protocol == "2026-07-28"
     config = tmp_path / "scope-proxy.yaml"
-    config.write_text(
-        yaml.safe_dump(
-            {
-                "model_list": [],
-                "general_settings": {
-                    "master_key": gateway.key,
-                    "store_model_in_db": True,
-                    "mcp_advertised_versions": ["2025-11-25", "2026-07-28"],
-                },
-            }
-        )
-    )
+    config.write_text(yaml.safe_dump({
+        "model_list": [],
+        "general_settings": {
+            "master_key": gateway.key, "store_model_in_db": True,
+            "mcp_advertised_versions": ["2025-11-25", "2026-07-28"],
+        },
+    }))
     with (
-        (
-            owned_proxy(
-                gateway, tmp_path / "gateway", {"DISABLE_SCHEMA_UPDATE": "true"}, config=config, database_setup=()
-            )
-            if modern
-            else nullcontext(gateway)
-        ) as active,
+        (owned_proxy(gateway, tmp_path / "gateway", {"DISABLE_SCHEMA_UPDATE": "true"}, config=config, database_setup=())
+         if modern else nullcontext(gateway)) as active,
         oauth_server(scopes=("tools.read", "tools.write")) as auth,
         _scope_enforcing_peer(auth, modern=modern) as (peer, wire),
         active.scenario() as scenario,
     ):
         alias: Final = "scope" + uuid.uuid4().hex[:8]
         identity: Final = _register_oauth(
-            scenario,
-            peer,
-            auth,
-            alias,
-            auth_type="oauth2",
-            oauth2_flow="authorization_code",
-            protocol_version=protocol,
+            scenario, peer, auth, alias, auth_type="oauth2", oauth2_flow="authorization_code", protocol_version=protocol,
             credentials={"client_id": "scope-client", "client_secret": "scope-secret", "scopes": ["tools.read"]},
         )
         owner: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
@@ -2483,19 +2463,14 @@ def test_managed_scope_step_up_preserves_read_and_write_without_retry(
         peer.drain()
         wire.drain()
         denied: Final = (
-            call_tool(active, owner, identity, f"{alias}-write_op", {})
-            if entry == "rest"
+            call_tool(active, owner, identity, f"{alias}-write_op", {}) if entry == "rest"
             else caller.rpc("tools/call", {"name": f"{alias}-write_op", "arguments": {}})
         )
         assert denied.status_code == 403, denied.text
         challenge: Final = denied.headers["www-authenticate"]
         assert 'error="insufficient_scope"' in challenge and 'scope="tools.write"' in challenge
         assert f'resource_metadata="{_base(active)}/.well-known/oauth-protected-resource/' in challenge
-        attempts: Final = tuple(
-            request
-            for request in wire.drain()
-            if request.body and json.loads(request.body).get("method") == "tools/call"
-        )
+        attempts: Final = tuple(request for request in wire.drain() if request.body and json.loads(request.body).get("method") == "tools/call")
         assert len(attempts) == 1 and tool_calls(peer.drain()) == (), "denied operation was retried or executed"
         second_code, _ = _authorize_through_gateway(active, auth, alias, owner, "scope-client", pkce, "tools.write")
         second: Final = _redeem(active, alias, owner, "scope-client", second_code, pkce)
@@ -2508,9 +2483,7 @@ def test_managed_scope_step_up_preserves_read_and_write_without_retry(
             assert result.ok and result.text == f"{operation} completed", result.raw
         forbidden: Final = caller.call(f"{alias}-forbid_op", {}, identity)
         assert forbidden.status == 200 and not forbidden.ok, forbidden.raw
-        unauthorized: Final = McpCaller(active, stranger, entry, alias, protocol_version=protocol).call(
-            f"{alias}-read_op", {}, identity
-        )
+        unauthorized: Final = McpCaller(active, stranger, entry, alias, protocol_version=protocol).call(f"{alias}-read_op", {}, identity)
         assert unauthorized.status == 401, unauthorized.raw
 
 
@@ -2605,10 +2578,7 @@ def _short_lived_issue(monkeypatch: pytest.MonkeyPatch, *, include_expiry: bool)
 
 @contextmanager
 def _live_token_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpPeer, Wire]]:
-    with scripted_peer(
-        ScriptedTool("add", lambda params: text_result(str(params["arguments"]["a"] + params["arguments"]["b"])))
-    ) as inner:
-
+    with scripted_peer(ScriptedTool("add", lambda params: text_result(str(params["arguments"]["a"] + params["arguments"]["b"])))) as inner:
         def enforce(request: Request) -> Reply:
             body: Final = json.loads(request.body) if request.body else {}
             if body.get("method") == "tools/call":
@@ -2630,9 +2600,7 @@ def _live_token_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpP
 
 @contextmanager
 def _paired_token_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpPeer, Wire]]:
-    with scripted_peer(
-        ScriptedTool("add", lambda params: text_result(str(params["arguments"]["a"] + params["arguments"]["b"])))
-    ) as inner:
+    with scripted_peer(ScriptedTool("add", lambda params: text_result(str(params["arguments"]["a"] + params["arguments"]["b"])))) as inner:
         condition: Final = threading.Condition()
         rejected: list[str] = []
 
@@ -2793,7 +2761,9 @@ def test_expired_access_with_dead_refresh_grant_is_revoked_and_challenges_for_re
         assert [request["grant_type"] for request in auth.token_requests()] == ["refresh_token"]
 
 
-def test_upstream_401_refreshes_once_and_retries_with_the_rotated_token(gateway: Gateway) -> None:
+def test_upstream_401_refreshes_once_and_retries_with_the_rotated_token(
+    gateway: Gateway
+) -> None:
     with oauth_server() as auth, _live_token_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
         alias: Final = "react" + uuid.uuid4().hex[:8]
         user_id: Final = scenario.user()
@@ -2808,9 +2778,7 @@ def test_upstream_401_refreshes_once_and_retries_with_the_rotated_token(gateway:
         outcome: Final = McpCaller(gateway, key, "mcp").call(f"{alias}-add", ADD)
         assert outcome.status == 200, outcome.raw
         attempts: Final = tuple(
-            request
-            for request in wire.drain()
-            if request.body and json.loads(request.body).get("method") == "tools/call"
+            request for request in wire.drain() if request.body and json.loads(request.body).get("method") == "tools/call"
         )
         assert len(attempts) == 2, attempts
         assert attempts[0].headers.get("authorization") == f"Bearer {original_access}"
@@ -2847,7 +2815,9 @@ def test_invalid_refresh_client_preserves_the_grant_and_never_challenges_the_use
         assert _user_credential_row_count(user_id, identity) == 1
 
 
-def test_two_replicas_coordinate_one_refresh_after_the_same_token_is_rejected(gateway: Gateway, tmp_path: Path) -> None:
+def test_two_replicas_coordinate_one_refresh_after_the_same_token_is_rejected(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     with oauth_server() as auth, _paired_token_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
         alias: Final = "race" + uuid.uuid4().hex[:8]
         user_id: Final = scenario.user()
@@ -2880,9 +2850,7 @@ def test_two_replicas_coordinate_one_refresh_after_the_same_token_is_rejected(ga
                 responses: Final = tuple(call.result(timeout=30) for call in calls)
         assert [response.status_code for response in responses] == [200, 200], [response.text for response in responses]
         attempts: Final = tuple(
-            request
-            for request in wire.drain()
-            if request.body and json.loads(request.body).get("method") == "tools/call"
+            request for request in wire.drain() if request.body and json.loads(request.body).get("method") == "tools/call"
         )
         assert len(attempts) == 4, attempts
         assert sum(request.headers.get("authorization") == f"Bearer {original_access}" for request in attempts) == 2
@@ -2936,13 +2904,12 @@ def test_reauth_during_a_stale_rejection_is_not_deleted_by_that_rejection(gatewa
 
         recovered: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
         assert recovered.status_code == 200, recovered.text
-        assert sorted(request["grant_type"] for request in auth.token_requests()) == [
-            "authorization_code",
-            "refresh_token",
-        ]
+        assert sorted(request["grant_type"] for request in auth.token_requests()) == ["authorization_code", "refresh_token"]
 
 
-def test_transient_refresh_failure_preserves_the_grant_and_is_retryable(gateway: Gateway) -> None:
+def test_transient_refresh_failure_preserves_the_grant_and_is_retryable(
+    gateway: Gateway
+) -> None:
     with oauth_server() as auth, _live_token_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
         alias: Final = "busy" + uuid.uuid4().hex[:8]
         user_id: Final = scenario.user()

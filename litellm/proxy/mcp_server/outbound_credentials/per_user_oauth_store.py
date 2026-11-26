@@ -149,9 +149,7 @@ async def _revoke_credential(user_id: str, server_id: str, access_token: str, re
 
     if prisma_client is None:
         return
-    await invalidate_user_oauth_credential_if_grant_matches(
-        prisma_client, user_id, server_id, access_token, refresh_token
-    )
+    await invalidate_user_oauth_credential_if_grant_matches(prisma_client, user_id, server_id, access_token, refresh_token)
 
 
 def _redis_cache_is_available() -> bool:
