@@ -6,7 +6,7 @@ import {
   fieldsForSection,
   inferRedisType,
   sourceBadge,
-} from "./coordinationRedisUtils";
+} from "./mapper";
 import { REDACTED_VALUE } from "./types";
 
 describe("fieldsForSection", () => {
