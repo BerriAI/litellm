@@ -33,6 +33,7 @@ async def test_aresponses_mock_response_streaming():
             api_key="mock-key",
         )
     assert isinstance(stream_response, MockResponsesAPIStreamingIterator)
+    assert stream_response.completed_response is None
 
     events = []
     collected_text = ""
@@ -42,6 +43,8 @@ async def test_aresponses_mock_response_streaming():
             collected_text += event.delta
 
     assert collected_text == "hello world"
+    assert [event.sequence_number for event in events] == list(range(len(events)))
+    assert stream_response.completed_response is events[-1]
     event_types = [event.type for event in events]
     assert "response.created" in event_types
     assert "response.output_text.delta" in event_types
@@ -96,6 +99,7 @@ def test_responses_mock_response_streaming():
             api_key="mock-key",
         )
     assert isinstance(stream_response, MockResponsesAPIStreamingIterator)
+    assert stream_response.completed_response is None
 
     collected_text = ""
     events = []
@@ -105,6 +109,8 @@ def test_responses_mock_response_streaming():
             collected_text += event.delta
 
     assert collected_text == "sync stream hello"
+    assert [event.sequence_number for event in events] == list(range(len(events)))
+    assert stream_response.completed_response is events[-1]
     event_types = [event.type for event in events]
     assert "response.created" in event_types
     assert "response.output_text.delta" in event_types
