@@ -5155,9 +5155,8 @@ async def test_upstream_refusal_before_any_frame_logs_a_failure_not_a_success():
     assert session.logging.logged_sessions == ()
 
 
-@pytest.mark.asyncio
-async def test_a_session_upstream_refused_for_a_rejected_key_logs_an_authentication_failure_the_router_can_read():
-    rejected_key: Final = {
+_REJECTED_KEY_ERROR: Final = json.dumps(
+    {
         "type": "error",
         "error": {
             "type": "invalid_request_error",
@@ -5165,13 +5164,72 @@ async def test_a_session_upstream_refused_for_a_rejected_key_logs_an_authenticat
             "message": "Incorrect API key provided: sk-proj-****0000.",
         },
     }
-    session: Final = _relay_session(
-        _client_ws_that_never_sends(),
-        _backend_ws_closing_with(
-            json.dumps(rejected_key).encode(),
-            ConnectionClosed(Close(3000, "invalid_request_error.invalid_api_key"), None),
+).encode()
+_SESSION_CREATED: Final = json.dumps({"type": "session.created", "session": {"id": "sess_held_open"}}).encode()
+
+
+def _backend_ws_sending_then_held_open(*frames: bytes) -> MagicMock:
+    remaining: Final = iter(frames)
+
+    async def recv(decode: bool = True) -> bytes:
+        frame: Final = next(remaining, None)
+        return frame if frame is not None else (await _wait_forever()).encode()
+
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = recv
+    return backend_ws
+
+
+def _client_ws_leaving_once_it_gets(event_type: str) -> MagicMock:
+    got_event: Final = asyncio.Event()
+
+    def deliver(text: str) -> None:
+        if json.loads(text).get("type") == event_type:
+            got_event.set()
+
+    async def leave() -> str:
+        await got_event.wait()
+        raise ConnectionClosed(None, None)
+
+    client_ws: Final = _client_ws_that_never_sends()
+    client_ws.send_text = AsyncMock(side_effect=deliver)
+    client_ws.receive_text = AsyncMock(side_effect=leave)
+    return client_ws
+
+
+def _client_ws_already_gone() -> MagicMock:
+    client_ws: Final = _client_ws_that_never_sends()
+    client_ws.send_text = AsyncMock(side_effect=RuntimeError('Cannot call "send" once a close message has been sent.'))
+    return client_ws
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_ws", "backend_ws"),
+    (
+        pytest.param(
+            _client_ws_that_never_sends,
+            lambda: _backend_ws_closing_with(
+                _REJECTED_KEY_ERROR, ConnectionClosed(Close(3000, "invalid_request_error.invalid_api_key"), None)
+            ),
+            id="provider-closes-first",
         ),
-    )
+        pytest.param(
+            lambda: _client_ws_leaving_once_it_gets("error"),
+            lambda: _backend_ws_sending_then_held_open(_REJECTED_KEY_ERROR),
+            id="client-leaves-before-the-provider-closes",
+        ),
+        pytest.param(
+            _client_ws_already_gone,
+            lambda: _backend_ws_sending_then_held_open(_REJECTED_KEY_ERROR),
+            id="client-gone-before-the-error-arrives",
+        ),
+    ),
+)
+async def test_a_session_upstream_refused_for_a_rejected_key_logs_an_authentication_failure_the_router_can_read(
+    client_ws: Callable[[], MagicMock], backend_ws: Callable[[], MagicMock]
+):
+    session: Final = _relay_session(client_ws(), backend_ws())
 
     await session.run()
 
@@ -5180,6 +5238,20 @@ async def test_a_session_upstream_refused_for_a_rejected_key_logs_an_authenticat
     assert failure.status_code == 401
     assert session.logging.model_call_details[REALTIME_SESSION_REFUSAL_KEY] is failure
     assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_a_client_leaving_after_the_session_started_logs_the_session_and_no_refusal():
+    session: Final = _relay_session(
+        _client_ws_leaving_once_it_gets("session.created"),
+        _backend_ws_sending_then_held_open(_REJECTED_KEY_ERROR, _SESSION_CREATED),
+    )
+
+    await session.run()
+
+    assert session.logging.logged_failures == ()
+    assert REALTIME_SESSION_REFUSAL_KEY not in session.logging.model_call_details
+    assert len(session.logging.logged_sessions) == 1
 
 
 @pytest.mark.asyncio

@@ -2236,11 +2236,11 @@ class RealTimeStreaming:
             await self._end_backend_session(self._upstream_refusal(e) if self._backend_refused_session(close) else None)
             return OVER_TOKEN_LIMIT_CLOSE if self._ended_over_token_limit else close
         except asyncio.CancelledError:
-            await self._end_backend_session(None)
+            await self._end_backend_session(self._refusal_before_relay_ended())
             raise
         except Exception as e:
             verbose_logger.exception("Error in backend to client send messages: %s", e)
-            await self._end_backend_session(None)
+            await self._end_backend_session(self._refusal_before_relay_ended())
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
@@ -2265,10 +2265,17 @@ class RealTimeStreaming:
         await self._log_session_end(transport_refusal)
 
     def _upstream_refusal(self, close: Exception) -> Exception:
+        error_before_session: Final = self._error_before_session()
+        return close if error_before_session is None else error_before_session
+
+    def _refusal_before_relay_ended(self) -> Exception | None:
+        return None if self._backend_sent_non_error_frames else self._error_before_session()
+
+    def _error_before_session(self) -> Exception | None:
         from litellm.responses.streaming_iterator import map_stream_error_to_exception
 
         if self._backend_error_before_session is None:
-            return close
+            return None
         provider: Final = self.logging_obj.model_call_details.get("custom_llm_provider")
         return map_stream_error_to_exception(
             self._backend_error_before_session,
