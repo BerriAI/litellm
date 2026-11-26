@@ -681,12 +681,30 @@ async def test_aresponses_hands_the_prompt_hook_no_label_or_version_of_the_wrong
             model="gpt-4o",
             prompt_id="wrong-typed",
             prompt_label=123,
-            prompt_version="2",
+            prompt_version="latest",
             litellm_logging_obj=logging_obj,
         )
 
     hook_kwargs: Final = logging_obj.async_get_chat_completion_prompt.call_args.kwargs
     assert (hook_kwargs["prompt_label"], hook_kwargs["prompt_version"]) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_aresponses_keeps_a_prompt_version_sent_as_a_numeric_string() -> None:
+    logging_obj: Final = _make_logging_obj(merged_model="openai/gpt-4o", merged_messages=[])
+
+    patches: Final = _patch_responses_dispatch()
+    with patches[0], patches[1], patches[2]:
+        await litellm.aresponses(
+            input="Hi",
+            model="gpt-4o",
+            prompt_id="versioned",
+            prompt_version="2",
+            litellm_logging_obj=logging_obj,
+        )
+
+    hook_kwargs: Final = logging_obj.async_get_chat_completion_prompt.call_args.kwargs
+    assert hook_kwargs["prompt_version"] == 2, hook_kwargs
 
 
 def test_responses_ignores_a_shared_session_that_is_not_a_client_session() -> None:

@@ -204,8 +204,10 @@ def _user_api_key_auth_of(value: object) -> "UserAPIKeyAuth | None":
     return require_attributes(value, UserAPIKeyAuth, "api_key")
 
 
-def _optional_int(value: object) -> int | None:
-    return value if isinstance(value, int) else None
+def _prompt_version_of(value: object) -> int | None:
+    if isinstance(value, int):
+        return value
+    return int(value) if isinstance(value, str) and value.isdigit() else None
 
 
 def _has_file_search_tool(tools: Iterable[Mapping[str, object]] | None) -> bool:
@@ -1160,7 +1162,7 @@ async def aresponses(
                     prompt_id=prompt_id,
                     prompt_variables=prompt_variables,
                     prompt_label=str_param(kwargs, "prompt_label"),
-                    prompt_version=_optional_int(kwargs.get("prompt_version", None)),
+                    prompt_version=_prompt_version_of(kwargs.get("prompt_version", None)),
                     request_kwargs=kwargs,
                 )
             input = cast(
