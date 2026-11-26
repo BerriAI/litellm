@@ -155,7 +155,7 @@ import type {
   ExportType,
   ModelTopKeysResponse,
 } from "./UsagePage/dailyActivityApi";
-import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import { resolveApiBase, runtimeConfigUrl, uiMountRootPath } from "@/lib/http/resolveApiBase";
 import {
   registerAuthHeaderNameGetter,
   registerAuthTokenGetter,
@@ -232,7 +232,8 @@ export const getProxyBaseUrl = (): string => {
     return proxyBaseUrl;
   }
   const browserLocation = getWindowLocation();
-  return browserLocation?.origin ?? "";
+  if (!browserLocation) return "";
+  return `${browserLocation.origin}${uiMountRootPath(browserLocation.pathname)}`;
 };
 
 export const getRuntimeBackendBaseUrl = (): string | null => runtimeBackendBaseUrl;
@@ -573,7 +574,7 @@ export const getUiConfig = async () => {
     : await (async (): Promise<string | null> => {
         try {
           // eslint-disable-next-line no-restricted-syntax -- read the UI static config before the API origin is known
-          const response = await fetch("/ui/litellm-runtime-config.json", { cache: "no-store" });
+          const response = await fetch(runtimeConfigUrl(getWindowLocation()?.pathname ?? ""), { cache: "no-store" });
           if (!response.ok) return null;
           const runtimeConfig: unknown = await response.json();
           if (

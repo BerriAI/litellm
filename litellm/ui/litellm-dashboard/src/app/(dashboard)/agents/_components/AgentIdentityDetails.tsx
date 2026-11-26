@@ -5,6 +5,7 @@ import type { components } from "@/lib/http/schema";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/components/networking";
 import { Button } from "@/components/ui/button";
+import { uiHref } from "@/utils/uiHref";
 import { readAgentIdentity } from "./agent_identity";
 
 const authenticationMessage = (t: TFunction, error: boolean, lastAuthenticated?: string | null): string => {
@@ -84,7 +85,7 @@ export const AgentIdentityDetails = ({
         >
           {t("agents.identityDetails.refresh")}
         </Button>
-        <a className="text-sm underline" href="/ui/logs/">
+        <a className="text-sm underline" href={uiHref("logs/")}>
           {t("agents.identityDetails.viewLogs")}
         </a>
       </div>

@@ -6,6 +6,7 @@ import { jwtDecode } from "jwt-decode";
 import { useOnboardingCredentials, useClaimOnboardingToken } from "@/app/(dashboard)/hooks/onboarding/useOnboarding";
 import { getProxyBaseUrl, getUiPageUrl } from "@/components/networking";
 import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
+import { uiHref } from "@/utils/uiHref";
 import { OnboardingLoadingView } from "./OnboardingLoadingView";
 import { OnboardingErrorView } from "./OnboardingErrorView";
 import { OnboardingFormBody } from "./OnboardingFormBody";
@@ -54,7 +55,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
           storeLoginToken(data.token);
           const proxyBaseUrl = getProxyBaseUrl();
           window.location.href = getUiPageUrl(
-            proxyBaseUrl ? `${proxyBaseUrl}/ui/?login=success` : "/ui/?login=success",
+            proxyBaseUrl ? `${proxyBaseUrl}/ui/?login=success` : uiHref("?login=success"),
           );
         },
         onError: (error: Error) => {

@@ -1286,3 +1286,44 @@ describe("modelPatchUpdateCall", () => {
     );
   });
 });
+
+describe("networking - runtime config discovery under a server root path", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const loadWithLocation = async (pathname: string) => {
+    vi.resetModules();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/litellm-runtime-config.json")) {
+        return { ok: false, json: async () => ({}) } as Response;
+      }
+      return { ok: true, json: async () => ({ server_root_path: "/", proxy_base_url: null }) } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", {
+      location: { origin: "http://proxy.example", pathname, search: "", hash: "", href: "" },
+      localStorage: { getItem: () => null },
+    });
+    const fresh = await import("./networking");
+    return { fresh, fetchMock };
+  };
+
+  it.each([
+    ["/9000/ui/", "/9000/ui/litellm-runtime-config.json"],
+    ["/ui/", "/ui/litellm-runtime-config.json"],
+  ])("requests the runtime config for page %s at %s", async (pathname, expectedUrl) => {
+    const { fresh, fetchMock } = await loadWithLocation(pathname);
+
+    await fresh.getUiConfig();
+
+    expect(fetchMock.mock.calls[0][0]).toBe(expectedUrl);
+  });
+
+  it("falls back to the origin plus the mount root when no proxy base URL is known", async () => {
+    const { fresh } = await loadWithLocation("/9000/ui/teams/");
+
+    expect(fresh.getProxyBaseUrl()).toBe("http://proxy.example/9000");
+  });
+});

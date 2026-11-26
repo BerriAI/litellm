@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeBackendPageUrlToUiOrigin } from "./returnUrlUtils";
+import { setServerRootPath } from "@/lib/serverRootPath";
 import { navigateToUiPage } from "./uiNavigation";
 
 vi.mock("@/components/networking", () => ({
@@ -16,7 +17,10 @@ describe("navigateToUiPage", () => {
     vi.stubGlobal("window", { location: { origin: "https://ui.example", assign, replace } });
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setServerRootPath("/");
+  });
 
   it.each([false, true])("uses document navigation with replace=%s", (replaceHistory) => {
     navigateToUiPage("/ui/teams?tab=all#members", replaceHistory);
@@ -30,17 +34,25 @@ describe("navigateToUiPage", () => {
     ["https://backend.example//attacker.example/login", "https://ui.example//attacker.example/login"],
     ["https://backend.example/\\attacker.example/login", "https://ui.example//attacker.example/login"],
     ["https://ui.example/ui/teams", "https://ui.example/ui/teams"],
-    ["https://attacker.example/ui", "/ui"],
-    ["//attacker.example/ui", "/ui"],
-    ["/\\attacker.example/ui", "/ui"],
-    ["/\t/attacker.example/ui", "/ui"],
-    ["javascript://ui.example/%0Aalert(1)", "/ui"],
-    ["ftp://ui.example/ui", "/ui"],
-    ["https://ui.example:444/ui", "/ui"],
-    ["http://[invalid", "/ui"],
+    ["https://attacker.example/ui", "/ui/"],
+    ["//attacker.example/ui", "/ui/"],
+    ["/\\attacker.example/ui", "/ui/"],
+    ["/\t/attacker.example/ui", "/ui/"],
+    ["javascript://ui.example/%0Aalert(1)", "/ui/"],
+    ["ftp://ui.example/ui", "/ui/"],
+    ["https://ui.example:444/ui", "/ui/"],
+    ["http://[invalid", "/ui/"],
   ])("navigates safely for %j", (url, expected) => {
     navigateToUiPage(url);
 
     expect(assign).toHaveBeenCalledWith(expected);
+  });
+
+  it("falls back to the dashboard home under the server root path for an unsafe target", () => {
+    setServerRootPath("/9000");
+
+    navigateToUiPage("https://attacker.example/ui");
+
+    expect(assign).toHaveBeenCalledWith("/9000/ui/");
   });
 });

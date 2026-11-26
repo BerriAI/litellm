@@ -45,3 +45,13 @@ export const resolveRequestUrl = (path: string, { registeredBase, pageOrigin }: 
   const base = (registeredBase || pageOrigin || "").replace(/\/+$/, "");
   return `${base}${path}`;
 };
+
+export const uiMountRootPath = (pathname: string): string => {
+  const segments = pathname.split("/");
+  const uiIndex = segments.indexOf("ui");
+  if (uiIndex === -1) return "";
+  return normalizeRootPath(segments.slice(0, uiIndex).join("/"));
+};
+
+export const runtimeConfigUrl = (pathname: string): string =>
+  `${uiMountRootPath(pathname)}/ui/litellm-runtime-config.json`;
