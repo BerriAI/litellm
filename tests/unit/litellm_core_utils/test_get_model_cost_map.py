@@ -9,7 +9,7 @@ import logging
 import re
 import threading
 from collections.abc import Callable, Mapping
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -31,7 +31,12 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     refetch_model_cost_map,
     registration_rows,
 )
-from litellm.rust_bridge._native import NativeInstalled, NativeModelCostMap, NativeRegistered
+from litellm.rust_bridge._native import (
+    NativeFetchFailed,
+    NativeInstalled,
+    NativeModelCostMap,
+    NativeRegistered,
+)
 from litellm.utils import catalog_with_runtime_registrations, get_model_cost_key, runtime_model_cost_registrations
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
@@ -166,6 +171,46 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
 def test_integrity_limits_out_of_range_name_the_limit_and_value(limits: dict[str, float], message: str):
     with pytest.raises(ValueError, match=re.escape(message)):
         NativeModelCostMap.bundled(**limits)
+
+
+# ---------------------------------------------------------------------------
+# The import-time fetch
+# ---------------------------------------------------------------------------
+
+
+def test_the_background_retry_waits_for_the_import_to_finish_before_it_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#54369: the retry thread's first log record must not race `import litellm`."""
+    from litellm.litellm_core_utils import get_model_cost_map as cost_map
+
+    calls: list[str] = []
+
+    class _ImportGate:
+        def wait(self, *args: object, **kwargs: object) -> None:
+            calls.append("wait")
+
+    class _FailedFetch:
+        pass
+
+    class _Source:
+        def fetch_blocking(self, *args: object, **kwargs: object) -> object:
+            calls.append("fetch")
+            return _FailedFetch()
+
+    class _Logger:
+        def warning(self, *args: object, **kwargs: object) -> None:
+            calls.append("log")
+
+    monkeypatch.setattr(cost_map, "_litellm_import_complete", _ImportGate())
+    monkeypatch.setattr(cost_map, "cost_map_source", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cost_map, "NativeFetchFailed", _FailedFetch)
+    monkeypatch.setattr(cost_map, "verbose_logger", _Logger())
+
+    cost_map._retry_remote_fetch_in_background(  # pyright: ignore[reportPrivateUsage]  # the import-time retry itself
+        "https://example.invalid/prices.json", 5, 3, cast(NativeFetchFailed, None)
+    )
+
+    assert calls[:1] == ["wait"], calls  # nothing is logged before the import completes
+    assert calls[1:] == ["fetch", "log"], calls  # and a failed fetch is still reported
 
 
 # ---------------------------------------------------------------------------
