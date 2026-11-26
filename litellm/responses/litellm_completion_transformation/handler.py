@@ -29,7 +29,12 @@ from litellm.responses.litellm_completion_transformation.compaction_trigger impo
     without_a_forced_tool,
 )
 from litellm.responses.litellm_completion_transformation.error_param import error_param_named_as_a_responses_field
-from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler, StoredTurns
+from litellm.responses.litellm_completion_transformation.session_handler import (
+    DEFAULT_TURN_REPLAY,
+    ResponsesSessionHandler,
+    StoredTurns,
+    TurnReplay,
+)
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -51,7 +56,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
-_BRIDGE_TRANSFORM_KEYWORDS: Final = frozenset({"caller_input", "names_non_string_fields"})
+_BRIDGE_TRANSFORM_KEYWORDS: Final = frozenset({"caller_input", "names_non_string_fields", "mcp_call_names"})
 
 
 def _without_bridge_transform_keywords(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
@@ -207,6 +212,7 @@ class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
         previous_response_client_ids: tuple[str, ...] = (),
+        turn_replay: TurnReplay = DEFAULT_TURN_REPLAY,
         /,
         *,
         model: str,
@@ -237,6 +243,7 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_client_ids,
                 previous_response_id,
                 hoisted,
+                turn_replay,
                 model=model,
                 caller_input=input,
                 responses_api_request=request,
@@ -259,6 +266,7 @@ class LiteLLMCompletionTransformationHandler:
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
+                mcp_call_names=turn_replay.mcp_call_names,
                 **_without_bridge_transform_keywords(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)),
             ),
             **_chat_verbosity(bridged_request),
@@ -271,6 +279,7 @@ class LiteLLMCompletionTransformationHandler:
             return self.async_response_api_handler(
                 previous_response_client_ids,
                 None,
+                turn_replay,
                 responses_input_message_count(input),
                 litellm_completion_request=litellm_completion_request,
                 request_input=bridged_input,
@@ -317,6 +326,7 @@ class LiteLLMCompletionTransformationHandler:
         previous_response_client_ids: tuple[str, ...],
         previous_response_id: str,
         hoisted: HoistedAdditionalTools,
+        turn_replay: TurnReplay,
         /,
         *,
         model: str,
@@ -328,9 +338,7 @@ class LiteLLMCompletionTransformationHandler:
         request_kwargs: Mapping[str, object],
         summarizes_into_compaction: bool,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
-        stored_turns: Final = await ResponsesSessionHandler.get_stored_turns_for_previous_response_id(
-            previous_response_id, previous_response_client_ids
-        )
+        stored_turns: Final = await turn_replay.stored_turns_source(previous_response_id, previous_response_client_ids)
         bridged: Final = _bridged_request(
             hoisted,
             responses_api_request,
@@ -341,6 +349,7 @@ class LiteLLMCompletionTransformationHandler:
         return await self.async_response_api_handler(
             previous_response_client_ids,
             stored_turns,
+            turn_replay,
             responses_input_message_count(caller_input),
             litellm_completion_request={
                 **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
@@ -352,6 +361,7 @@ class LiteLLMCompletionTransformationHandler:
                     custom_llm_provider=custom_llm_provider,
                     stream=stream,
                     extra_headers=extra_headers,
+                    mcp_call_names=turn_replay.mcp_call_names,
                     **_without_bridge_transform_keywords(request_kwargs),
                 ),
                 **_chat_verbosity(bridged.responses_api_request),
@@ -368,6 +378,7 @@ class LiteLLMCompletionTransformationHandler:
         self,
         previous_response_client_ids: tuple[str, ...] = (),
         stored_turns: StoredTurns | None = None,
+        turn_replay: TurnReplay = DEFAULT_TURN_REPLAY,
         caller_message_count: int | None = None,
         /,
         *,
@@ -386,8 +397,13 @@ class LiteLLMCompletionTransformationHandler:
                 instructions=responses_api_request.get("instructions"),
                 request_kwargs=request_kwargs,
                 previous_response_client_ids=previous_response_client_ids,
-                stored_turns=stored_turns,
+                stored_turns=(
+                    stored_turns
+                    if stored_turns is not None
+                    else await turn_replay.stored_turns_source(previous_response_id, previous_response_client_ids)
+                ),
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
+                mcp_call_names=turn_replay.mcp_call_names,
                 request_input=request_input,
             )
             if previous_response_id

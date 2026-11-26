@@ -211,7 +211,37 @@ def test_a_hosted_mcp_error_names_every_server_and_marks_an_unlabeled_one(monkey
     assert "the hosted MCP tool `deepwiki`, `unlabeled` " in str(raised.value)
 
 
+def test_the_chat_completions_hosted_mcp_error_keeps_its_text_and_names_no_responses_only_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        tools_without_hosted_mcp(
+            tools=[{"type": "mcp", "server_label": "gitmcp", "server_url": "https://gitmcp.io/docs"}],
+            model="deepseek-v4-flash",
+            route="deepseek",
+            drop_params=False,
+        )
+    assert str(raised.value).endswith(
+        'deepseek-v4-flash on deepseek cannot run the hosted MCP tool `gitmcp` (`type: "mcp"`). To have LiteLLM run '
+        "the MCP server for this model, register it on the LiteLLM MCP gateway and send "
+        '`server_url: "litellm_proxy/mcp/<server name>"`. To drop hosted MCP tools instead, set '
+        "`litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+    )
+
+
 _HOSTED_MCP_TOOL: Final = {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}
+
+
+def test_a_route_that_does_not_strip_hosted_mcp_keeps_the_tool_even_without_drop_params() -> None:
+    sent: Final = {"tools": [_HOSTED_MCP_TOOL, _GOOD_TOOL], "tool_choice": "auto"}
+
+    assert (
+        tool_params_without_hosted_mcp(
+            sent, model="claude-sonnet-4-6", route="anthropic", drop_params=False, handling="forwards"
+        )
+        is sent
+    )
 
 
 def test_dropping_a_hosted_mcp_tool_keeps_the_other_tool_params_and_leaves_the_caller_dict_alone() -> None:

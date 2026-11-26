@@ -315,6 +315,8 @@ ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
+gateway_runs_hosted_mcp: bool = False
+gateway_hosted_mcp_allowed_hosts: Sequence[str] = ()
 provider_url_destination_allowed_hosts: List[str] = []
 #: "override" (default) or "additive": whether a key or team destination replaces
 #: the operator's exporter for that backend or exports alongside it.

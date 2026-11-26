@@ -228,23 +228,48 @@ class StreamedRoundBilling:
         self._bank_apart_from_later_rounds(self._billed)
 
     def charge_final_round(
-        self, completed: ResponsesAPIStreamingResponse, response: ResponsesAPIResponse, restore_headers: RestoresHeaders
+        self,
+        completed: ResponsesAPIStreamingResponse,
+        response: ResponsesAPIResponse,
+        restore_headers: RestoresHeaders,
+        logged_output: Sequence[object] | None = None,
     ) -> ResponsesAPIResponse:
+        """Charge the last round. `logged_output`, when given, is the output the client saw, which the row logs in
+        place of the provider's for a turn that ran calls on the gateway, so a later request that continues it finds
+        each listing and each ran call with its result."""
         parked: Final = self._take_parked()
         self._banked = None
         if self._billed is None or self._billed.rounds == 1:
             if parked is not None:
-                self._release(parked)
+                self._release(self._first_round_release(parked, completed, logged_output, restore_headers))
             return response
         self._close(parked)
         charged: Final = response.model_copy(update={"usage": self._billed.response.usage})
         charged.hidden_params = {**self._billed.response.hidden_params}
         if parked is not None:
-            final_row: Final = self._billed.bridged_row(self._latest_assembled(), charged.id) or _round_row(
-                completed, charged, self._billed.chat_usage, restore_headers
+            final_row: Final = (
+                self._billed.bridged_row(self._latest_assembled(), charged.id) if logged_output is None else None
+            ) or _round_row(
+                completed,
+                charged if logged_output is None else charged.model_copy(update={"output": list(logged_output)}),
+                self._billed.chat_usage,
+                restore_headers,
             )
             self._release((self._dispatch(final_row, self._billed, self._logging_obj),))
         return charged
+
+    def _first_round_release(
+        self,
+        parked: Parked,
+        completed: ResponsesAPIStreamingResponse,
+        logged_output: Sequence[object] | None,
+        restore_headers: RestoresHeaders,
+    ) -> Parked:
+        billed: Final = self._billed
+        if billed is None or logged_output is None:
+            return parked
+        self._close(parked)
+        return (self._dispatch(billed.row(completed, logged_output, restore_headers), billed, self._logging_obj),)
 
     def finish(self) -> None:
         parked: Final = self._take_parked()

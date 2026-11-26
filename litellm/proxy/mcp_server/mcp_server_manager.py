@@ -369,6 +369,7 @@ _ToolParamMap: TypeAlias = dict[str, list[str]]
 _EnvVarList: TypeAlias = list[dict[str, object]]
 _InMemoryCacheDict: TypeAlias = dict[str, object]
 _ToolArguments: TypeAlias = dict[str, object]
+_TOOL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
 _UpstreamSessionKey: TypeAlias = tuple[
     str,
     str,
@@ -3887,6 +3888,64 @@ class MCPServerManager:
         resource_server_ids: Final = user_api_key_auth.mcp_session_resource_server_ids
         return None if resource_server_ids is None else frozenset(resource_server_ids)
 
+    async def reaches_hosted_mcp_allowed_hosts(
+        self, user_api_key_auth: UserAPIKeyAuth | None, general_settings: Mapping[str, object] | None = None
+    ) -> bool:
+        """Whether the caller may reach a host gateway_hosted_mcp_allowed_hosts opens to every key. The rules that keep
+        an allow_all_keys server from a caller apply: its MCP opt-out, a managed agent's policy, a toolset or
+        explicit-grants scope, a session's resource scope, and mcp_allow_all_keys_respects_mcp_scope for a key any MCP
+        server list restricts."""
+        if user_api_key_auth is None:
+            return True
+        if MCPServerManager._kept_from_mcp_servers_open_to_every_key(user_api_key_auth):
+            return False
+        if not (user_api_key_auth.via_virtual_key and MCPServerManager._respects_mcp_scope(general_settings)):
+            return True
+        return (await MCPRequestHandler.get_mcp_server_access(user_api_key_auth)).scope == "unscoped"
+
+    async def reaches_unregistered_mcp_url(self, server_id: str, user_api_key_auth: UserAPIKeyAuth | None) -> bool:
+        """Whether server_id is a URL the gateway runs for this caller as an unregistered server, reached through
+        gateway_hosted_mcp_allowed_hosts the way an allow_all_keys server is reached."""
+        from litellm.responses.mcp.direct_url_claims import runs_as_unregistered_server
+
+        return (
+            litellm.gateway_runs_hosted_mcp
+            and self.get_mcp_server_by_id(server_id) is None
+            and runs_as_unregistered_server(
+                server_id, tuple(self.get_registry().values()), litellm.gateway_hosted_mcp_allowed_hosts
+            )
+            and await self.reaches_hosted_mcp_allowed_hosts(user_api_key_auth)
+        )
+
+    @staticmethod
+    def _kept_from_mcp_servers_open_to_every_key(user_api_key_auth: UserAPIKeyAuth) -> bool:
+        permission: Final = user_api_key_auth.object_permission
+        opted_out: Final = (
+            not is_mcp_admitted_user_subject(user_api_key_auth)
+            and permission is not None
+            and SpecialMCPServerNames.no_mcp_servers.value in (permission.mcp_servers or [])
+        )
+        return (
+            opted_out
+            or managed_agent_policy(user_api_key_auth) is not None
+            or user_api_key_auth.mcp_toolset_id is not None
+            or user_api_key_auth.mcp_explicit_grants_only
+            or MCPServerManager._admitted_session_resource_scope(user_api_key_auth) is not None
+        )
+
+    @staticmethod
+    def _respects_mcp_scope(general_settings: Mapping[str, object] | None) -> bool:
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy global is declared as a bare dict
+        )
+
+        resolved_general_settings: Final = (
+            _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_general_settings)
+            if general_settings is None
+            else general_settings
+        )
+        return bool(resolved_general_settings.get("mcp_allow_all_keys_respects_mcp_scope", False))
+
     async def get_allowed_mcp_servers(
         self,
         user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -4772,7 +4831,7 @@ class MCPServerManager:
                 registered_names: Final = MappingProxyType(
                     {t.name.removeprefix(registry_prefix): t.name for t in registered}
                 )
-                guarded_openapi: Final = await self._guard_tool_catalog(
+                guarded_openapi: Final = await self.guard_tool_catalog(
                     server=server,
                     tools=[t.model_copy(update={"name": t.name.removeprefix(registry_prefix)}) for t in registered],
                     proxy_logging_obj=proxy_logging_obj,
@@ -4812,7 +4871,7 @@ class MCPServerManager:
                 tools = page.tools
                 self._remember_upstream_initialize_instructions(server, client)
 
-            guarded_tools: Final = await self._guard_tool_catalog(
+            guarded_tools: Final = await self.guard_tool_catalog(
                 server=server,
                 tools=tools,
                 proxy_logging_obj=proxy_logging_obj,
@@ -6095,7 +6154,7 @@ class MCPServerManager:
             "attempts; the 3-character prefix space is too crowded."
         )
 
-    async def _guard_tool_catalog(
+    async def guard_tool_catalog(
         self,
         server: MCPServer,
         tools: Sequence[MCPTool],
@@ -7579,6 +7638,56 @@ class MCPServerManager:
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
+
+    async def call_unregistered_server_tool(
+        self,
+        server: MCPServer,
+        tool: MCPTool,
+        arguments: _ToolArguments,
+        call: Callable[[MCPCallToolRequestParams], Awaitable[CallToolResult | InputRequiredResult]],
+        user_api_key_auth: UserAPIKeyAuth | None,
+        proxy_logging_obj: ProxyLogging | None,
+        raw_headers: Mapping[str, str] | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+        guardrail_context: Mapping[str, object] | None,
+    ) -> CallToolResult | InputRequiredResult:
+        """Run a call on a server the request named by URL through the checks, pre_mcp_call guardrails, rate limits
+        and during_mcp_call hooks a registered server's call gets. Headers a hook injects are not sent, since the
+        server is not one the admin configured."""
+        guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
+            guardrail_auth=None, user_api_key_auth=user_api_key_auth, server=server, tool_name=tool.name
+        )
+        hook_result: Final[Mapping[str, object]] = await self.pre_call_tool_check(
+            name=tool.name,
+            arguments=arguments,
+            server_name=server.name,
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+            raw_headers=None if raw_headers is None else dict(raw_headers),
+            litellm_logging_obj=litellm_logging_obj,
+            guardrail_context=guardrail_context,
+            tool=tool,
+            guardrail_auth=guardrail_auth,
+        )
+        checked_arguments: Final = (
+            _TOOL_ARGUMENTS.validate_python(hook_result["arguments"]) if "arguments" in hook_result else arguments
+        )
+        tool_call: Final = call(MCPCallToolRequestParams(name=tool.name, arguments=checked_arguments))
+        if proxy_logging_obj is None:
+            return await tool_call
+        during_hook: Final = self._create_during_hook_task(
+            name=tool.name,
+            arguments=checked_arguments,
+            server_name_from_prefix=server.name,
+            user_api_key_auth=guardrail_auth,
+            proxy_logging_obj=proxy_logging_obj,
+            start_time=datetime.datetime.now(datetime.timezone.utc),
+            litellm_logging_obj=litellm_logging_obj,
+            guardrail_context=guardrail_context,
+        )
+        _, result = await asyncio.gather(during_hook, tool_call)
+        return result
 
     #########################################################
     # End of Methods that call the upstream MCP servers

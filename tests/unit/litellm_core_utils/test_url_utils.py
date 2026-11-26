@@ -11,7 +11,7 @@ import litellm
 from litellm.litellm_core_utils import url_utils
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
-    _is_blocked_ip,
+    is_blocked_ip,
     assert_same_origin,
     encode_url_path_segment,
     encode_url_path_segments,
@@ -84,53 +84,69 @@ def mock_dns_failure(monkeypatch):
 
 class TestIsBlockedIp:
     def test_blocks_private(self):
-        assert _is_blocked_ip("10.0.0.1") is True
+        assert is_blocked_ip("10.0.0.1") is True
 
     def test_allows_public(self):
-        assert _is_blocked_ip("8.8.8.8") is False
+        assert is_blocked_ip("8.8.8.8") is False
 
     def test_unparseable_is_blocked(self):
-        assert _is_blocked_ip("not-an-ip") is True
+        assert is_blocked_ip("not-an-ip") is True
 
     # Coverage delta picked up by switching to `not ip.is_global` (RFC 6890)
     # over the old hand-maintained CIDR list.
     def test_blocks_cgnat_alibaba_metadata(self):
         """100.100.100.200 is Alibaba Cloud metadata; lives in CGNAT."""
-        assert _is_blocked_ip("100.100.100.200") is True
+        assert is_blocked_ip("100.100.100.200") is True
 
     def test_blocks_ietf_protocol_assignments_old_oracle_metadata(self):
         """192.0.0.192 was the legacy Oracle Cloud metadata IP."""
-        assert _is_blocked_ip("192.0.0.192") is True
+        assert is_blocked_ip("192.0.0.192") is True
 
     def test_blocks_documentation_ranges(self):
-        assert _is_blocked_ip("192.0.2.1") is True
-        assert _is_blocked_ip("198.51.100.1") is True
-        assert _is_blocked_ip("203.0.113.1") is True
+        assert is_blocked_ip("192.0.2.1") is True
+        assert is_blocked_ip("198.51.100.1") is True
+        assert is_blocked_ip("203.0.113.1") is True
 
     def test_blocks_multicast(self):
-        assert _is_blocked_ip("224.0.0.1") is True
+        assert is_blocked_ip("224.0.0.1") is True
 
     def test_blocks_reserved_future_use(self):
-        assert _is_blocked_ip("240.0.0.1") is True
+        assert is_blocked_ip("240.0.0.1") is True
 
     def test_blocks_broadcast(self):
-        assert _is_blocked_ip("255.255.255.255") is True
+        assert is_blocked_ip("255.255.255.255") is True
 
     def test_blocks_azure_wire_server(self):
         """168.63.129.16 is globally routable but cloud-internal — explicit exception."""
-        assert _is_blocked_ip("168.63.129.16") is True
+        assert is_blocked_ip("168.63.129.16") is True
 
     def test_blocks_aws_ipv6_imds(self):
         """fd00:ec2::254 is AWS's IPv6 IMDS, in IPv6 ULA (fc00::/7)."""
-        assert _is_blocked_ip("fd00:ec2::254") is True
+        assert is_blocked_ip("fd00:ec2::254") is True
 
     def test_blocks_ipv4_mapped_private(self):
         """::ffff:10.0.0.1 must be unwrapped and blocked as 10.0.0.1."""
-        assert _is_blocked_ip("::ffff:10.0.0.1") is True
+        assert is_blocked_ip("::ffff:10.0.0.1") is True
 
     def test_blocks_ipv4_mapped_azure_wire_server(self):
         """::ffff:168.63.129.16 must be unwrapped and blocked via the exception list."""
-        assert _is_blocked_ip("::ffff:168.63.129.16") is True
+        assert is_blocked_ip("::ffff:168.63.129.16") is True
+
+    @pytest.mark.parametrize(
+        ("address", "blocked"),
+        [
+            ("64:ff9b::a9fe:a9fe", True),
+            ("64:ff9b::7f00:1", True),
+            ("64:ff9b::a00:1", True),
+            ("::a9fe:a9fe", True),
+            ("::7f00:1", True),
+            ("64:ff9b::808:808", False),
+        ],
+    )
+    def test_judges_nat64_and_ipv4_compatible_addresses_by_the_ipv4_address_they_reach(
+        self, address: str, blocked: bool
+    ):
+        assert is_blocked_ip(address) is blocked
 
 
 class TestEncodeUrlPathSegment:

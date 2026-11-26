@@ -2,12 +2,12 @@ import asyncio
 import json
 import sys
 from bisect import bisect_left
-from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Container, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from functools import partial, reduce
 from itertools import chain, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -222,6 +222,11 @@ def _is_model_output(item: object) -> bool:
     return not (isinstance(item, Mapping) and item.get("type") in _MCP_AUTO_EXECUTE_OUTPUT_TYPES)
 
 
+def _input_items(request: Mapping[str, object] | None) -> tuple[object, ...]:
+    items: Final = None if request is None else request.get("input")
+    return tuple(as_object_list(items) or ())
+
+
 def _stored_responses_api_output(stored_response: object) -> ResponseInputParam | None:
     match stored_response:
         case {"object": "response", "output": list() as output}:
@@ -242,6 +247,37 @@ class _ReplayStart:
 class StoredTurns:
     spend_logs: tuple[Mapping[str, object], ...]
     proxy_server_requests: tuple[Mapping[str, object] | None, ...]
+
+
+StoredTurnsSource: TypeAlias = Callable[[str, tuple[str, ...]], Awaitable[StoredTurns]]
+McpCallNames: TypeAlias = Mapping[tuple[str, str], str]
+NO_MCP_CALL_NAMES: Final[McpCallNames] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class PrefetchedStoredTurns:
+    """The stored turns a request already read for its previous response. A later read that queries the same spend
+    log request ids, whether it names the response by its encoded or its decoded id, gets them again without another
+    query, and a read for any other response goes to the source."""
+
+    request_ids: tuple[str, ...]
+    stored_turns: StoredTurns
+    source: StoredTurnsSource
+
+    async def __call__(self, previous_response_id: str, client_response_ids: tuple[str, ...]) -> StoredTurns:
+        if _referenced_request_ids(previous_response_id, client_response_ids) == self.request_ids:
+            return self.stored_turns
+        return await self.source(previous_response_id, client_response_ids)
+
+
+async def prefetched_stored_turns(
+    source: StoredTurnsSource, previous_response_id: str, client_response_ids: tuple[str, ...]
+) -> PrefetchedStoredTurns:
+    return PrefetchedStoredTurns(
+        request_ids=_referenced_request_ids(previous_response_id, client_response_ids),
+        stored_turns=await source(previous_response_id, client_response_ids),
+        source=source,
+    )
 
 
 def _compaction_point(
@@ -544,6 +580,47 @@ def _latest_replayable_instructions(proxy_server_requests: Sequence[Mapping[str,
     return None if latest == REDACTED_BY_LITELLM else latest
 
 
+def mcp_call_key(item: Mapping[str, object]) -> tuple[str, str]:
+    return (str(item.get("server_label") or ""), str(item.get("name") or ""))
+
+
+def _mappings(values: Iterable[object]) -> tuple[Mapping[str, object], ...]:
+    candidates: Final = tuple(map(as_str_mapping, values))
+    return tuple(candidate for candidate in candidates if candidate is not None)
+
+
+def _row_text(row: Mapping[str, object], key: str) -> str | None:
+    value: Final = row.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _served_through_chat_bridge(spend_log: Mapping[str, object]) -> bool:
+    from litellm.utils import ProviderConfigManager
+
+    provider: Final = _row_text(spend_log, "custom_llm_provider")
+    if provider is None:
+        return False
+    return (
+        ProviderConfigManager.get_provider_responses_api_config(
+            provider=provider, model=_row_text(spend_log, "model"), api_base=_row_text(spend_log, "api_base")
+        )
+        is None
+    )
+
+
+def _gateway_names_of_turn(
+    spend_log: Mapping[str, object], request: Mapping[str, object] | None, items: Iterable[object]
+) -> McpCallNames:
+    from litellm.responses.mcp.direct_url_claims import direct_mcp_labels, direct_tool_name
+
+    tools: Final = as_object_list(None if request is None else request.get("tools")) or ()
+    labels: Final = direct_mcp_labels(_mappings(tools))
+    if not labels or not _served_through_chat_bridge(spend_log):
+        return NO_MCP_CALL_NAMES
+    calls: Final = frozenset(mcp_call_key(item) for item in _mappings(items) if item.get("type") == "mcp_call")
+    return MappingProxyType({call: direct_tool_name(*call) for call in calls if call[0] in labels})
+
+
 _STORED_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_IDS_ADAPTER: Final = TypeAdapter(list[str])
 
@@ -608,6 +685,7 @@ class ResponsesSessionHandler:
         stored_turns: StoredTurns | None = None,
         empty_user_turn_text: str | None = None,
         keep_tool_references: bool = False,
+        mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -653,6 +731,7 @@ class ResponsesSessionHandler:
             tool_call_provider_fields,
             empty_user_turn_text,
             keep_tool_references,
+            mcp_call_names,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[: start.index],
@@ -662,6 +741,7 @@ class ResponsesSessionHandler:
             tool_call_provider_fields,
             empty_user_turn_text,
             keep_tool_references,
+            mcp_call_names,
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -722,6 +802,26 @@ class ResponsesSessionHandler:
         )
 
     @staticmethod
+    def items_through_previous_response(
+        stored_turns: StoredTurns,
+        previous_response_id: str,
+        client_response_ids: tuple[str, ...] = (),
+    ) -> tuple[object, ...]:
+        """Each stored turn's input items and then its output items, in conversation order, up to the response the
+        follow-up continues."""
+        turns: Final = _turns_through_referenced_response(
+            stored_turns.spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
+        )
+        return tuple(
+            chain.from_iterable(
+                (*_input_items(request), *(_stored_responses_api_output(_stored_response(spend_log)) or ()))
+                for spend_log, request in zip(
+                    stored_turns.spend_logs[:turns], stored_turns.proxy_server_requests[:turns], strict=True
+                )
+            )
+        )
+
+    @staticmethod
     def _history_of_turns(
         spend_logs: Sequence[Mapping[str, object]],
         proxy_server_requests: Sequence[Mapping[str, object] | None],
@@ -730,6 +830,7 @@ class ResponsesSessionHandler:
         tool_call_provider_fields: bool,
         empty_user_turn_text: str | None = None,
         keep_tool_references: bool = False,
+        mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES,
     ) -> list["SessionMessage"]:
         return reduce(
             lambda history, turn: ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
@@ -741,6 +842,7 @@ class ResponsesSessionHandler:
                 empty_user_turn_text=empty_user_turn_text,
                 tool_names=turn[2],
                 keep_tool_references=keep_tool_references,
+                mcp_call_names=mcp_call_names,
             ),
             zip(spend_logs, proxy_server_requests, sent_tool_names, strict=True),
             [],
@@ -763,6 +865,7 @@ class ResponsesSessionHandler:
         keep_tool_references: bool = False,
         *,
         tool_names: SentToolNames = _NO_TOOL_NAMES,
+        mcp_call_names: McpCallNames = NO_MCP_CALL_NAMES,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -793,12 +896,27 @@ class ResponsesSessionHandler:
                     [_response_input_param],
                 )
 
+        stored_response: Final = _stored_response(spend_log)
+        turn_mcp_call_names: Final = MappingProxyType(
+            {
+                **_gateway_names_of_turn(
+                    spend_log,
+                    proxy_server_request_dict,
+                    chain(
+                        as_object_list(response_input_param) or (),
+                        _stored_responses_api_output(stored_response) or (),
+                    ),
+                ),
+                **mcp_call_names,
+            }
+        )
         output_messages: Final = ResponsesSessionHandler._stored_output_messages(
-            _stored_response(spend_log),
+            stored_response,
             tool_names,
             declared_tool_names,
             item_cache_control,
             tool_call_provider_fields,
+            turn_mcp_call_names,
         )
         if response_input_param is not None:
             stored_input: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
@@ -811,6 +929,7 @@ class ResponsesSessionHandler:
                 replay_tool_search=True,
                 tool_names=tool_names,
                 keep_tool_references=keep_tool_references,
+                mcp_call_names=turn_mcp_call_names,
             )
             input_before_blank_tail: Final = without_blank_user_tail(stored_input)
             inference_continues_the_blank_tail: Final = empty_user_turn_text == "" and len(
@@ -840,6 +959,7 @@ class ResponsesSessionHandler:
         declared_tool_names: frozenset[str],
         item_cache_control: bool,
         tool_call_provider_fields: bool,
+        mcp_call_names: McpCallNames,
     ) -> Sequence[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -861,6 +981,7 @@ class ResponsesSessionHandler:
                 only_since_compaction=True,
                 replay_tool_search=True,
                 tool_names=tool_names,
+                mcp_call_names=mcp_call_names,
             )
         if not isinstance(stored_response, dict) or not stored_response:
             return ()
@@ -1046,3 +1167,15 @@ class ResponsesSessionHandler:
 
         verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
         return []
+
+
+@dataclass(frozen=True, slots=True)
+class TurnReplay:
+    """How a bridged call replays the conversation it continues: where it reads the stored turns, and the name the
+    request's tools give each server's tool, so an mcp_call the gateway ran goes back under that name."""
+
+    stored_turns_source: StoredTurnsSource = ResponsesSessionHandler.get_stored_turns_for_previous_response_id
+    mcp_call_names: McpCallNames = field(default_factory=lambda: NO_MCP_CALL_NAMES)
+
+
+DEFAULT_TURN_REPLAY: Final = TurnReplay()

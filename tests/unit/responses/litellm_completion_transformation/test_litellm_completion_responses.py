@@ -8985,6 +8985,85 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
     assert f"'{field_path}'" in raised.value.message
 
 
+def test_a_follow_up_tool_output_for_a_call_the_stored_turn_holds_sends_that_call_once():
+    stored_call: Final = ChatCompletionMessageToolCall(
+        id="call_stored_weather", type="function", function=Function(name="get_weather", arguments="{}")
+    )
+
+    async def stored_turn(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[
+                {"role": "user", "content": "Weather?"},
+                {"role": "assistant", "content": None, "tool_calls": [stored_call.model_dump()]},
+            ],
+            litellm_session_id=None,
+        )
+
+    TOOL_CALLS_CACHE.set_cache(key=stored_call.id, value=stored_call)
+    try:
+        chat_request: Final = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model="deepseek/deepseek-v4-flash",
+                input=cast(
+                    ResponseInputParam,
+                    [{"type": "function_call_output", "call_id": stored_call.id, "output": "Sunny."}],
+                ),
+                responses_api_request=ResponsesAPIOptionalRequestParams(),
+            )
+        )
+    finally:
+        TOOL_CALLS_CACHE.delete_cache(key=stored_call.id)
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_stored_weather",
+            litellm_completion_request=chat_request,
+            instructions=None,
+            session_lookup=stored_turn,
+        )
+    )
+
+    assert [message.get("role") for message in request["messages"]] == ["user", "assistant", "tool"]
+
+
+@pytest.mark.parametrize(
+    "ran_call_id, runs_its_tool, tool_call_ids",
+    [
+        ("mcp_docs", True, ["call_weather", "mcp_docs"]),
+        (None, True, ["call_weather"]),
+        ("mcp_docs", False, ["call_weather"]),
+    ],
+)
+def test_a_ran_mcp_call_beside_a_handed_back_call_is_replayed_only_when_the_request_runs_its_tool_and_it_has_an_id(
+    ran_call_id: str | None, runs_its_tool: bool, tool_call_ids: list[str]
+):
+    ran_call: Final = {
+        "type": "mcp_call",
+        "server_label": "gitmcp",
+        "name": "ask_question",
+        "arguments": "{}",
+        "output": "LiteLLM is an AI gateway",
+    }
+    chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="deepseek/deepseek-v4-flash",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"type": "message", "role": "user", "content": "Weather and docs?"},
+                {"type": "function_call", "call_id": "call_weather", "name": "get_weather", "arguments": "{}"},
+                ran_call if ran_call_id is None else {**ran_call, "id": ran_call_id},
+                {"type": "function_call_output", "call_id": "call_weather", "output": "Sunny."},
+            ],
+        ),
+        responses_api_request=ResponsesAPIOptionalRequestParams(),
+        mcp_call_names=MappingProxyType({("gitmcp", "ask_question"): "gitmcp-ask_question"} if runs_its_tool else {}),
+    )
+
+    messages: Final = [dict(message) for message in chat_request["messages"]]
+    assert [message["role"] for message in messages] == ["user", "assistant", *(["tool"] * len(tool_call_ids))]
+    assert [dict(call)["id"] for call in messages[1]["tool_calls"]] == tool_call_ids
+    assert sorted(message["tool_call_id"] for message in messages[2:]) == sorted(tool_call_ids)
+
+
 _HELLO: Final = {"role": "assistant", "content": "Hello!"}
 _EMPTY_USER_TURN: Final = {"role": "user", "content": ""}
 

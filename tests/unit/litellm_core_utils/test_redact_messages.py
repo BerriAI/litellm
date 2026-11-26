@@ -39,8 +39,10 @@ from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
 from litellm.responses.main import mock_responses_api_response
+from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.types.responses.main import build_web_search_call
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import (
@@ -523,6 +525,32 @@ def test_redaction_hides_a_compaction_summary_in_responses_api_output(shape: str
 
     assert SECRET not in str(redacted), redacted
     assert SECRET in str(result)
+
+
+@pytest.mark.parametrize("surface", ("typed", "validated", "dict", "standard"))
+def test_redacting_a_gateway_mcp_turn_keeps_the_tool_names_the_spend_log_indexes(surface: str) -> None:
+    response: Final = LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
+        response=mock_responses_api_response("private answer"),
+        mcp_tools_fetched=[{"name": "deepwiki-read_wiki_structure"}],
+        tool_results=[
+            {"tool_call_id": "call_wiki", "name": "deepwiki-read_wiki_structure", "result": "private wiki structure"},
+            {"tool_call_id": "call_ask", "name": "deepwiki-ask_question", "result": "", "error": "private failure"},
+        ],
+    )
+    surfaces: Final = {
+        "typed": lambda: perform_redaction({}, response).model_dump(),
+        "validated": lambda: perform_redaction({}, ResponsesAPIResponse.model_validate(response.model_dump())).model_dump(),
+        "dict": lambda: perform_redaction({}, response.model_dump()),
+        "standard": lambda: redacted_standard_logging_payload({"response": response.model_dump(), "model": "m"})[
+            "response"
+        ],
+    }
+
+    redacted: Final = surfaces[surface]()
+
+    assert response_tool_call_names(redacted) == ("deepwiki-read_wiki_structure", "deepwiki-ask_question")
+    assert "private" not in json.dumps(redacted), redacted
+    assert "private wiki structure" in json.dumps(response.model_dump())
 
 
 @pytest.mark.parametrize("surface", ("typed", "dict", "standard", "callback", "helper"))

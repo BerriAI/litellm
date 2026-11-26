@@ -4,13 +4,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, overload
 
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, Unpack
 from typing_extensions import TypedDict as ExtraItemsTypedDict
-from typing_extensions import Unpack
 
 from litellm._internal_context import nested_tool_call_failure
 from litellm._logging import verbose_logger
@@ -65,7 +65,9 @@ if TYPE_CHECKING:
 
     from litellm.proxy.mcp_server.ui_session_utils import GrantedToolsetIds
     from litellm.proxy.utils import ProxyLogging
+    from litellm.responses.mcp.direct_url_claims import AllowedTools, DirectTool
     from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
+    from litellm.responses.mcp.openai_mcp_items import OpenAIStreamShaper
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 else:
     MCPTool = Any
@@ -75,14 +77,25 @@ ToolParam: TypeAlias = Mapping[str, object]
 SplitTools: TypeAlias = tuple[list[ToolParam], list[Any]]
 
 
-class MCPToolResult(TypedDict):
+class MCPToolResult(ExtraItemsTypedDict):
     tool_call_id: str | None
     result: str
     name: str | None
+    error: ReadOnly[NotRequired[str]]
 
 
 class _AresponsesOptions(ExtraItemsTypedDict, total=False, extra_items=object):
     pass
+
+
+def _failed_tool_result(
+    tool_call_id: str | None, message: str, name: str | None, reports_errors: bool
+) -> MCPToolResult:
+    return (
+        MCPToolResult(tool_call_id=tool_call_id, result=message, name=name, error=message)
+        if reports_errors
+        else MCPToolResult(tool_call_id=tool_call_id, result=message, name=name)
+    )
 
 
 def _registered_mcp_servers() -> Collection[MCPServer]:
@@ -141,6 +154,67 @@ async def _served_mcp_path_names(
     return await served_names(names) if names else frozenset[str]()
 
 
+_ITEM_FIELDS: Final = TypeAdapter(dict[str, object])
+_CONTENT_PARTS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _output_item_fields(output_item: object) -> Mapping[str, object] | None:
+    if isinstance(output_item, BaseModel):
+        return output_item.model_dump(exclude_none=True)
+    if isinstance(output_item, dict):
+        return _ITEM_FIELDS.validate_python(output_item)
+    return None
+
+
+def _is_blank_text_part(part: object) -> bool:
+    if not isinstance(part, dict):
+        return part == ""
+    fields: Final = _ITEM_FIELDS.validate_python(part)
+    return fields.get("type") == "output_text" and not fields.get("text")
+
+
+def _replayed_function_call(fields: Mapping[str, object]) -> Mapping[str, object] | None:
+    call_id: Final = fields.get("call_id") or fields.get("id")
+    name: Final = fields.get("name")
+    if not call_id or not name:
+        return None
+    return {"type": "function_call", "call_id": call_id, "name": name, "arguments": fields.get("arguments")}
+
+
+def _replayed_message(fields: Mapping[str, object]) -> Mapping[str, object] | None:
+    content: Final = fields.get("content", ())
+    parts: Final = _CONTENT_PARTS.validate_python(content) if isinstance(content, list) else (content,)
+    visible: Final = tuple(part for part in parts if not _is_blank_text_part(part))
+    if not visible:
+        return None
+    return {"type": "message", "role": "assistant", "content": list(visible)}
+
+
+def _replayed_output_item(output_item: object, preserve_reasoning: bool) -> Mapping[str, object] | None:
+    fields: Final = _output_item_fields(output_item)
+    if fields is None:
+        return None
+    match fields.get("type"):
+        case "function_call":
+            return _replayed_function_call(fields)
+        case "reasoning":
+            return fields if preserve_reasoning else None
+        case "message":
+            return _replayed_message(fields)
+        case _:
+            return None
+
+
+def _history_items(original_input: str | ResponseInputParam | None) -> tuple[object, ...]:
+    if not original_input:
+        return ()
+    if isinstance(original_input, str):
+        return ({"type": "message", "role": "user", "content": original_input},)
+    if isinstance(original_input, list):
+        return tuple(original_input)
+    return (original_input,)
+
+
 def _served_tool(tool_name: str, server_name: str) -> tuple[MCPServer | None, str]:
     from litellm.proxy.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
@@ -154,6 +228,26 @@ def _served_tool(tool_name: str, server_name: str) -> tuple[MCPServer | None, st
     ) or global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
     resolved_tool_name: Final = _resolve_display_name_to_original(tool_name, [mcp_server]) if mcp_server else tool_name
     return mcp_server, strip_known_server_prefix(resolved_tool_name, mcp_server)
+
+
+def admitted_by_server_allowed_tools(
+    mcp_tools: list[MCPTool], tool_server_map: dict[str, str], allowed_tools: Mapping[str, "AllowedTools"]
+) -> tuple[list[MCPTool], dict[str, str]]:
+    if not allowed_tools:
+        return mcp_tools, tool_server_map
+    admitted: Final = frozenset(
+        tool.name for tool in mcp_tools if _server_admits(tool, tool_server_map.get(tool.name, ""), allowed_tools)
+    )
+    return (
+        [tool for tool in mcp_tools if tool.name in admitted],
+        {name: server_name for name, server_name in tool_server_map.items() if name in admitted},
+    )
+
+
+def _server_admits(tool: MCPTool, server_name: str, allowed_tools: Mapping[str, "AllowedTools"]) -> bool:
+    server, tool_name = _served_tool(tool.name, server_name)
+    allowed: Final = None if server is None else allowed_tools.get(server.server_id)
+    return allowed is None or allowed.admits(tool.model_copy(update={"name": tool_name}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -917,6 +1011,8 @@ class LiteLLM_Proxy_MCP_Handler:
         guardrail_context: Mapping[str, object] | None = None,
         served_tools: Sequence[MCPTool] | None = None,
         request_trace_id: str | None = None,
+        direct_tools: "Mapping[str, DirectTool] | None" = None,
+        reports_errors: bool = False,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -928,6 +1024,7 @@ class LiteLLM_Proxy_MCP_Handler:
             global_mcp_server_manager,
         )
         from litellm.proxy.proxy_server import proxy_logging_obj
+        from litellm.responses.mcp.direct_url_claims import unregistered_mcp_server
 
         mark_parallel_slot_reused_by_tool_calls()
         tool_results: Final[list[MCPToolResult]] = []
@@ -954,9 +1051,12 @@ class LiteLLM_Proxy_MCP_Handler:
                 # Import here to avoid circular import
                 from litellm.proxy.proxy_server import proxy_logging_obj
 
-                server_name = tool_server_map[tool_name]
+                direct_tool = (direct_tools or {}).get(tool_name)
+                server_name = direct_tool.server.server_label if direct_tool else tool_server_map[tool_name]
 
-                mcp_server, sanitized_tool_name = _served_tool(tool_name, server_name)
+                mcp_server, sanitized_tool_name = (
+                    (None, direct_tool.tool.name) if direct_tool else _served_tool(tool_name, server_name)
+                )
 
                 start_time = datetime.now()
                 logging_input: Sequence[Mapping[str, object]] = [
@@ -1074,7 +1174,19 @@ class LiteLLM_Proxy_MCP_Handler:
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
 
                 result = await url_elicitation_as_error_result(
-                    global_mcp_server_manager.call_tool(
+                    global_mcp_server_manager.call_unregistered_server_tool(
+                        server=unregistered_mcp_server(direct_tool.server),
+                        tool=direct_tool.tool,
+                        arguments=parsed_arguments,
+                        call=direct_tool.client.call_tool,
+                        user_api_key_auth=typed_user_api_key_auth,
+                        proxy_logging_obj=proxy_logging_obj,
+                        raw_headers=raw_headers,
+                        litellm_logging_obj=litellm_logging_obj,
+                        guardrail_context=guardrail_context,
+                    )
+                    if direct_tool
+                    else global_mcp_server_manager.call_tool(
                         server_name=server_name,
                         name=sanitized_tool_name,
                         arguments=parsed_arguments,
@@ -1131,11 +1243,9 @@ class LiteLLM_Proxy_MCP_Handler:
                 # Format result for inclusion in response
                 result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
                 tool_results.append(
-                    {
-                        "tool_call_id": tool_call_id,
-                        "result": result_text,
-                        "name": tool_name,
-                    }
+                    _failed_tool_result(tool_call_id, result_text, tool_name, reports_errors)
+                    if getattr(result, "is_error", False) is True
+                    else MCPToolResult(tool_call_id=tool_call_id, result=result_text, name=tool_name)
                 )
 
             except BlockedPiiEntityError as e:
@@ -1149,13 +1259,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
                     raise
                 error_message = f"Tool call blocked: PII entity '{getattr(e, 'entity_type', 'unknown')}' detected by guardrail '{getattr(e, 'guardrail_name', 'unknown')}'. {e}"
-                tool_results.append(
-                    {
-                        "tool_call_id": tool_call_id,
-                        "result": error_message,
-                        "name": tool_name,
-                    }
-                )
+                tool_results.append(_failed_tool_result(tool_call_id, error_message, tool_name, reports_errors))
             except GuardrailRaisedException as e:
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,
@@ -1169,13 +1273,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 error_message = (
                     f"Tool call blocked: Guardrail '{getattr(e, 'guardrail_name', 'unknown')}' violation. {e}"
                 )
-                tool_results.append(
-                    {
-                        "tool_call_id": tool_call_id,
-                        "result": error_message,
-                        "name": tool_name,
-                    }
-                )
+                tool_results.append(_failed_tool_result(tool_call_id, error_message, tool_name, reports_errors))
             except HTTPException as e:
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,
@@ -1187,13 +1285,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
                     raise
                 error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"
-                tool_results.append(
-                    {
-                        "tool_call_id": tool_call_id,
-                        "result": error_message,
-                        "name": tool_name,
-                    }
-                )
+                tool_results.append(_failed_tool_result(tool_call_id, error_message, tool_name, reports_errors))
             except Exception as e:
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,
@@ -1203,11 +1295,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 )
                 verbose_logger.exception("Error executing MCP tool call: %s", e)
                 tool_results.append(
-                    {
-                        "tool_call_id": tool_call_id,
-                        "result": f"Error executing tool: {e}",
-                        "name": tool_name,
-                    }
+                    _failed_tool_result(tool_call_id, f"Error executing tool: {e}", tool_name, reports_errors)
                 )
 
         return tool_results
@@ -1279,77 +1367,14 @@ class LiteLLM_Proxy_MCP_Handler:
         original_input: str | ResponseInputParam | None = None,
         preserve_reasoning: bool = False,
     ) -> list[object]:
-        """Create follow-up input with tool results in proper format."""
-        follow_up_input: Final[list[object]] = []
-
-        # Add original user input if available to maintain conversation context
-        if original_input:
-            if isinstance(original_input, str):
-                follow_up_input.append({"type": "message", "role": "user", "content": original_input})
-            elif isinstance(original_input, list):
-                follow_up_input.extend(original_input)
-            else:
-                follow_up_input.append(original_input)
-
-        # Add the assistant message with function calls
-        assistant_message_content: Final[list[object]] = []
-        turn_items: Final[list[Mapping[str, object]]] = []
-
-        for output_item in response.output:
-            if not isinstance(output_item, dict) and hasattr(output_item, "model_dump"):
-                output_item = output_item.model_dump(exclude_none=True)
-
-            if isinstance(output_item, dict):
-                if output_item.get("type") == "function_call":
-                    call_id = output_item.get("call_id") or output_item.get("id")
-                    name = output_item.get("name")
-                    arguments = output_item.get("arguments")
-
-                    # Only add if we have required fields
-                    if call_id and name:
-                        turn_items.append(
-                            {
-                                "type": "function_call",
-                                "call_id": call_id,
-                                "name": name,
-                                "arguments": arguments,
-                            }
-                        )
-                elif output_item.get("type") == "reasoning" and preserve_reasoning:
-                    turn_items.append(output_item)
-                elif output_item.get("type") == "message":
-                    # Extract content from message
-                    content = output_item.get("content", [])
-                    if isinstance(content, list):
-                        assistant_message_content.extend(content)
-                    else:
-                        assistant_message_content.append(content)
-
-        # Add assistant message only if there's actual content (not empty)
-        # For example, gemini requires that function call turns come immediately after user turns,
-        # so we should not add empty assistant messages
-        if assistant_message_content:
-            follow_up_input.append(
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": assistant_message_content,
-                }
-            )
-
-        follow_up_input.extend(turn_items)
-
-        # Add tool results (function call outputs)
-        for tool_result in tool_results:
-            follow_up_input.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": tool_result["tool_call_id"],
-                    "output": tool_result["result"],
-                }
-            )
-
-        return follow_up_input
+        """Replay the round's output items in their order, so one turn's reasoning, text, and tool calls go back as
+        one assistant message, then append the tool results."""
+        replayed: Final = (_replayed_output_item(item, preserve_reasoning) for item in response.output)
+        tool_outputs: Final = (
+            {"type": "function_call_output", "call_id": tool_result["tool_call_id"], "output": tool_result["result"]}
+            for tool_result in tool_results
+        )
+        return [*_history_items(original_input), *(item for item in replayed if item is not None), *tool_outputs]
 
     _create_follow_up_input = create_follow_up_input
 
@@ -1400,6 +1425,9 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def _create_mcp_streaming_response(
+        direct_tools: "Mapping[str, DirectTool]",
+        stream_shaper: "OpenAIStreamShaper | None",
+        /,
         input: str | ResponseInputParam,
         model: str,
         all_tools: Sequence[object] | None,
@@ -1446,6 +1474,8 @@ class LiteLLM_Proxy_MCP_Handler:
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
             user_api_key_auth=mcp_execution_auth,
             original_request_params=request_params,
+            direct_tools=direct_tools,
+            stream_shaper=stream_shaper,
             tool_choice=tool_choice,
             gateway=gateway,
         )

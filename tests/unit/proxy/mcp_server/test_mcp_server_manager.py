@@ -16808,7 +16808,6 @@ def _pin_listing_clock(monkeypatch: pytest.MonkeyPatch, seconds_per_read: float 
 
 
 from mcp.types import JSONRPCMessage, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
-from pydantic import TypeAdapter
 
 _JSONRPC_ADAPTER = TypeAdapter(JSONRPCMessage)
 
@@ -23257,6 +23256,66 @@ def test_id_jag_listed_tool_metadata_is_isolated_between_identity_assertions() -
     manager.record_listed_tools(server, (first,), callers[0])
     manager.record_listed_tools(server, (second,), callers[1])
     assert tuple(manager.get_listed_tool(server, "list_notes", caller) for caller in callers) == (first, second, None)
+
+
+_URL_NAMED_SERVER: Final = MCPServer(
+    server_id="https://mcp.example.com/mcp",
+    name="wiki",
+    server_name="wiki",
+    url="https://mcp.example.com/mcp",
+    transport=MCPTransport.http,
+)
+_URL_NAMED_TOOL: Final = MCPTool(name="search", inputSchema={"type": "object"})
+
+
+def _guarded_proxy_logging(pre_call_hook: AsyncMock) -> ProxyLogging:
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.pre_call_hook = pre_call_hook
+    proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+    return proxy_logging_obj
+
+
+async def _call_url_named_server(proxy_logging_obj: ProxyLogging, call: AsyncMock) -> object:
+    return await MCPServerManager().call_unregistered_server_tool(
+        server=_URL_NAMED_SERVER,
+        tool=_URL_NAMED_TOOL,
+        arguments={"query": "123-45-6789"},
+        call=call,
+        user_api_key_auth=UserAPIKeyAuth(api_key="sk-test"),
+        proxy_logging_obj=proxy_logging_obj,
+        raw_headers=None,
+        litellm_logging_obj=None,
+        guardrail_context=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_url_named_server_receives_the_arguments_a_pre_call_guardrail_rewrote():
+    proxy_logging_obj: Final = _guarded_proxy_logging(
+        AsyncMock(return_value={"modified_arguments": {"query": "[MASKED]"}})
+    )
+    call: Final = AsyncMock(return_value=CallToolResult(content=[]))
+
+    await _call_url_named_server(proxy_logging_obj, call)
+
+    assert [(sent.name, sent.arguments) for sent in (args.args[0] for args in call.await_args_list)] == [
+        ("search", {"query": "[MASKED]"})
+    ]
+    during_data: Final = proxy_logging_obj.during_call_hook.call_args.kwargs["data"]
+    assert during_data["mcp_arguments"] == {"query": "[MASKED]"}
+
+
+@pytest.mark.asyncio
+async def test_a_pre_call_guardrail_block_stops_a_url_named_server_call_before_it_is_sent():
+    proxy_logging_obj: Final = _guarded_proxy_logging(
+        AsyncMock(side_effect=HTTPException(status_code=400, detail="blocked"))
+    )
+    call: Final = AsyncMock(return_value=CallToolResult(content=[]))
+
+    with pytest.raises(HTTPException):
+        await _call_url_named_server(proxy_logging_obj, call)
+
+    call.assert_not_called()
 
 
 @pytest.mark.asyncio

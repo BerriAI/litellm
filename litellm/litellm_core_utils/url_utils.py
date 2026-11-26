@@ -21,7 +21,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 
 import asyncio
 import socket
-from ipaddress import IPv6Address, ip_address, ip_network
+from ipaddress import IPv4Address, IPv6Address, ip_address, ip_network
 from typing import Final, Protocol
 from urllib.parse import quote, urlparse, urlsplit, urlunparse
 
@@ -190,20 +190,34 @@ def ensure_api_route(api_base: str, route: str) -> str:
     return join_api_base(base, route)
 
 
-def _is_blocked_ip(addr: str) -> bool:
+_IPV4_CARRYING_PREFIXES: Final = (ip_network("64:ff9b::/96"), ip_network("::/96"))
+
+
+def _reached_ip(ip: IPv4Address | IPv6Address) -> IPv4Address | IPv6Address:
+    if isinstance(ip, IPv4Address):
+        return ip
+    if ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    if any(ip in prefix for prefix in _IPV4_CARRYING_PREFIXES):
+        return IPv4Address(int(ip) & 0xFFFFFFFF)
+    return ip
+
+
+def is_blocked_ip(addr: str) -> bool:
     """Return True for any IP not safe to reach from a user-supplied URL.
 
     Policy: default-deny via ``ip.is_global`` (RFC 6890), plus an explicit
     exception list for globally-routable cloud-fabric IPs that are still
     dangerous from inside a cloud VM (currently just Azure Wire Server).
+    An IPv6 address that carries an IPv4 one (IPv4-mapped, NAT64 or
+    IPv4-compatible) is judged by the IPv4 address it reaches.
     Unparseable addresses fail closed.
     """
     try:
-        ip = ip_address(addr)
+        parsed: Final = ip_address(addr)
     except ValueError:
         return True  # fail-closed: unparseable addresses are blocked
-    if ip.version == 6 and hasattr(ip, "ipv4_mapped") and ip.ipv4_mapped:
-        ip = ip.ipv4_mapped
+    ip: Final = _reached_ip(parsed)
     if not ip.is_global or ip.is_multicast:
         return True
     return any(ip in net for net in _CLOUD_METADATA_EXCEPTIONS)
@@ -393,7 +407,7 @@ def validate_url(url: str) -> tuple[str, str]:
     if not is_allowlisted:
         for addrinfo_entry in addrinfo:
             resolved_ip = _sockaddr_host(addrinfo_entry[4])
-            if _is_blocked_ip(resolved_ip):
+            if is_blocked_ip(resolved_ip):
                 raise SSRFError(
                     f"URL targets a blocked address ({resolved_ip}). "
                     "If this is a legitimate internal service, add the host "

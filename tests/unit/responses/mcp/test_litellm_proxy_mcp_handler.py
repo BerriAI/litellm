@@ -42,8 +42,9 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from tests._support.rust_parallel_request_limiter import PROXY_MaxParallelRequestsHandler_v3
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.responses.main import OutputFunctionToolCall
@@ -1433,6 +1434,29 @@ async def test_aresponses_api_with_mcp_forwards_unserved_external_mcp_tool_to_th
     assert provider_tools == [[ZAPIER_TOOL]]
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["aresponses", "responses"])
+async def test_a_gateway_mcp_request_goes_through_the_public_aresponses_api_with_mcp_name(
+    monkeypatch: pytest.MonkeyPatch, entry: str
+):
+    intercepted: Final[list[Mapping[str, object]]] = []
+    answer: Final = ResponsesAPIResponse(id="resp_intercepted", created_at=0, output=[])
+
+    async def intercepting_gateway(**kwargs: object) -> ResponsesAPIResponse:
+        intercepted.append(kwargs)
+        return answer
+
+    monkeypatch.setattr(responses_main, "aresponses_api_with_mcp", intercepting_gateway)
+    request: Final = {"input": "Reply with ok.", "model": "openai/gpt-4.1", "tools": [EXPLICIT_GATEWAY_TOOL]}
+
+    response: Final = (
+        await litellm.aresponses(**request) if entry == "aresponses" else litellm.responses(**request)
+    )
+
+    assert response is answer
+    assert [call["tools"] for call in intercepted] == [[EXPLICIT_GATEWAY_TOOL]]
+
 def _response_with_reasoning_and_tool_call() -> Any:
     """A first-turn response as a reasoning model returns it: reasoning item, then a function call."""
     return ResponsesAPIResponse(
@@ -1558,6 +1582,65 @@ def test_create_follow_up_input_omits_reasoning_when_stateful():
     )
 
     assert not [item for item in follow_up if isinstance(item, dict) and item.get("type") == "reasoning"]
+
+
+def _chat_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
+    return ""
+
+
+@pytest.mark.parametrize("text", ["", "Let me read the wiki."])
+def test_follow_up_sends_a_thinking_tool_call_turn_back_as_one_assistant_message(text: str):
+    question: Final = "List the documentation topics of facebook/react."
+    round_one: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input=question,
+        responses_api_request={},
+        chat_completion_response=ModelResponse(
+            choices=[
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": text,
+                        "reasoning_content": "I should read the wiki structure.",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "deepwiki-read_wiki_structure",
+                                    "arguments": '{"repoName": "facebook/react"}',
+                                },
+                            }
+                        ],
+                    },
+                }
+            ]
+        ),
+    )
+    follow_up: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
+        response=round_one,
+        tool_results=[{"tool_call_id": "call-1", "name": "deepwiki-read_wiki_structure", "result": "1 Overview"}],
+        original_input=question,
+        preserve_reasoning=True,
+    )
+
+    round_two: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="deepseek-v4-pro",
+        input=cast(ResponseInputParam, follow_up),
+        responses_api_request={},
+        custom_llm_provider="deepseek",
+    )
+
+    messages: Final = round_two["messages"]
+    assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
+    assert messages[1]["reasoning_content"] == "I should read the wiki structure."
+    assert [call["id"] for call in messages[1]["tool_calls"]] == ["call-1"]
+    assert _chat_text(messages[1].get("content")) == text
 
 
 @pytest.mark.parametrize(

@@ -400,9 +400,60 @@ def _unrunnable_mcp_error(message: str, model: str, route: str) -> UnsupportedPa
     return UnsupportedParamsError(message=message, model=model, llm_provider=route, status_code=400)
 
 
-_HOSTED_MCP_GATEWAY_REMEDY: Final = (
-    "To have LiteLLM run the MCP server for this model, register it on the LiteLLM MCP gateway and send "
-    '`server_url: "litellm_proxy/mcp/<server name>"`. ' + _drop_params_hint("hosted MCP tools")
+def hosted_mcp_approval_error(server_labels: Sequence[str], model: str, route: str) -> UnsupportedParamsError:
+    named_servers: Final = ", ".join(f"`{label}`" for label in server_labels)
+    return _unrunnable_mcp_error(
+        f"LiteLLM runs the hosted MCP tool {named_servers} for {model} on {route} only with "
+        '`require_approval: "never"`, since it cannot pause the response for an approval. '
+        + _drop_params_hint("hosted MCP tools that need approval"),
+        model=model,
+        route=route,
+    )
+
+
+def hosted_mcp_registered_credentials_error(
+    server_labels: Sequence[str], server_names: Sequence[str], model: str, route: str
+) -> UnsupportedParamsError:
+    named_tools: Final = ", ".join(f"`{label}`" for label in server_labels)
+    per_server_headers: Final = ", ".join(f"`x-mcp-{name}-authorization`" for name in server_names)
+    return _unrunnable_mcp_error(
+        f"The hosted MCP tool {named_tools} points at a server registered on the LiteLLM MCP gateway, which runs "
+        "it with the credentials set there, so the tool's `authorization` and any header the server does not forward "
+        "would not be sent. "
+        f"Remove them, or send your own credentials in {per_server_headers}. "
+        + _drop_params_hint("the tool's credentials"),
+        model=model,
+        route=route,
+    )
+
+
+def hosted_mcp_shared_server_error(
+    server_labels: Sequence[str], server_name: str, model: str, route: str
+) -> UnsupportedParamsError:
+    named_tools: Final = ", ".join(f"`{label}`" for label in server_labels)
+    return _unrunnable_mcp_error(
+        f"The hosted MCP tools {named_tools} point at the same server `{server_name}` registered on the LiteLLM MCP "
+        "gateway, which lists a server's tools once, under one server_label and one `allowed_tools`. "
+        "Send one hosted MCP tool for that server. "
+        + _drop_params_hint("hosted MCP tools that share a registered server"),
+        model=model,
+        route=route,
+    )
+
+
+_GATEWAY_REMEDY: Final = (
+    'register it on the LiteLLM MCP gateway and send `server_url: "litellm_proxy/mcp/<server name>"`'
+)
+
+
+def _hosted_mcp_remedy(how: str) -> str:
+    return f"To have LiteLLM run the MCP server for this model, {how}. " + _drop_params_hint("hosted MCP tools")
+
+
+_HOSTED_MCP_GATEWAY_REMEDY: Final = _hosted_mcp_remedy(_GATEWAY_REMEDY)
+_RESPONSES_GATEWAY_REMEDY: Final = _hosted_mcp_remedy(
+    f"{_GATEWAY_REMEDY}, or set `litellm.gateway_runs_hosted_mcp=True` (`gateway_runs_hosted_mcp: true` in "
+    "`litellm_settings` for proxy) with the server registered or its host in `gateway_hosted_mcp_allowed_hosts`"
 )
 
 
@@ -419,19 +470,35 @@ def hosted_mcp_batch_row_remedy(row_drop_params: object) -> str:
     )
 
 
+def _named_hosted_mcp_servers(tools: Sequence[object]) -> str:
+    return ", ".join(f"`{label}`" for label in map(_hosted_mcp_server_label, tools) if label is not None)
+
+
+def _unrunnable_hosted_mcp_error(named_servers: str, model: str, route: str, remedy: str) -> UnsupportedParamsError:
+    return _unrunnable_mcp_error(
+        f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). {remedy}',
+        model=model,
+        route=route,
+    )
+
+
+def responses_hosted_mcp_error(
+    tools: Sequence[object], model: str, route: str, drop_params: object
+) -> UnsupportedParamsError | None:
+    named_servers: Final = _named_hosted_mcp_servers(tools)
+    if not named_servers or drops_unsupported_params(drop_params):
+        return None
+    return _unrunnable_hosted_mcp_error(named_servers, model=model, route=route, remedy=_RESPONSES_GATEWAY_REMEDY)
+
+
 def tools_without_hosted_mcp(
     tools: Sequence[_ToolT], model: str, route: str, drop_params: bool, remedy: str = _HOSTED_MCP_GATEWAY_REMEDY
 ) -> Sequence[_ToolT]:
-    server_labels: Final = tuple(label for label in map(_hosted_mcp_server_label, tools) if label is not None)
-    if not server_labels:
+    named_servers: Final = _named_hosted_mcp_servers(tools)
+    if not named_servers:
         return tools
-    named_servers: Final = ", ".join(f"`{label}`" for label in server_labels)
     if not drops_unsupported_params(drop_params):
-        raise _unrunnable_mcp_error(
-            f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). {remedy}',
-            model=model,
-            route=route,
-        )
+        raise _unrunnable_hosted_mcp_error(named_servers, model=model, route=route, remedy=remedy)
     verbose_logger.warning(
         HOSTED_MCP_DROP_WARNING, _one_log_line(named_servers), _one_log_line(model), _one_log_line(route)
     )
