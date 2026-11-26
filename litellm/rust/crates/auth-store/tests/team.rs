@@ -10,7 +10,7 @@ use std::sync::Arc;
 use litellm_auth_store::{Error, TeamDatabase};
 use litellm_db_testing::MigratedPostgres;
 use litellm_repositories::{Side, TeamRepository};
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use sqlx::PgPool;
 
 use support::{database, dumped, execute};
@@ -87,7 +87,15 @@ fn teams(postgres: &MigratedPostgres) -> TeamRepository {
     TeamRepository::new(database(postgres))
 }
 
-/// A team as `/team/new` stores it when asked for nothing, and one with every column set.
+/// A migrated Postgres holding a team as `/team/new` stores it when asked for nothing, and one
+/// with every column set.
+#[fixture]
+async fn postgres() -> MigratedPostgres {
+    let postgres = MigratedPostgres::start().await.unwrap();
+    insert_teams(postgres.pool()).await;
+    postgres
+}
+
 async fn insert_teams(pool: &PgPool) {
     execute(
         pool,
@@ -147,13 +155,11 @@ async fn insert_teams(pool: &PgPool) {
 #[case::every_column_set("full", FULL_ROW, FULL_ENTRY)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_team_read_from_the_database_is_the_entry_python_caches(
+    #[future(awt)] postgres: MigratedPostgres,
     #[case] team_id: &str,
     #[case] row: &str,
     #[case] cached: &str,
 ) {
-    let postgres = MigratedPostgres::start().await.unwrap();
-    insert_teams(postgres.pool()).await;
-
     let found = teams(&postgres)
         .find_with_model_aliases(team_id, Side::Read)
         .await
@@ -176,10 +182,7 @@ async fn a_team_read_from_the_database_is_the_entry_python_caches(
 
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-async fn a_team_no_row_has_is_not_found() {
-    let postgres = MigratedPostgres::start().await.unwrap();
-    insert_teams(postgres.pool()).await;
-
+async fn a_team_no_row_has_is_not_found(#[future(awt)] postgres: MigratedPostgres) {
     let read = TeamDatabase::new(Arc::new(teams(&postgres)))
         .team("gone", Side::Read)
         .await
@@ -204,11 +207,10 @@ async fn a_team_no_row_has_is_not_found() {
 #[case::metadata_that_is_a_list(r#"UPDATE "LiteLLM_TeamTable" SET metadata = '[1]'"#, "metadata")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_team_row_the_model_refuses_fails_the_read(
+    #[future(awt)] postgres: MigratedPostgres,
     #[case] corrupt: &'static str,
     #[case] column: &str,
 ) {
-    let postgres = MigratedPostgres::start().await.unwrap();
-    insert_teams(postgres.pool()).await;
     execute(postgres.pool(), corrupt).await;
 
     let refused = TeamDatabase::new(Arc::new(teams(&postgres)))
