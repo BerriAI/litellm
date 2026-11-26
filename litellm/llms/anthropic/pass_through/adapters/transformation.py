@@ -80,6 +80,13 @@ def is_provider_native_tool_dict(tool: Mapping[str, object]) -> bool:
     return key not in _ANTHROPIC_TOOL_SCHEMA_KEYS and isinstance(value, dict)
 
 
+def is_anthropic_web_search_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type", "")
+    return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or (
+        tool.get("name", "") == "web_search" and "input_schema" not in tool
+    )
+
+
 def create_tool_name_mapping(
     tools: Sequence[Mapping[str, object]],
 ) -> dict[str, str]:
@@ -539,24 +546,7 @@ class LiteLLMAnthropicMessagesAdapter:
         ]
 
     def _is_web_search_tool(self, tool: Mapping[str, object]) -> bool:
-        """
-        Check if a tool is an Anthropic web search tool.
-
-        Anthropic web search tools have:
-        - type starting with "web_search" (e.g., "web_search_20260209")
-        - legacy name = "web_search" without a client input_schema
-
-        Args:
-            tool: Tool definition dict
-
-        Returns:
-            True if this is a web search tool
-        """
-        tool_type: Final = tool.get("type", "")
-        tool_name: Final = tool.get("name", "")
-        return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or (
-            tool_name == "web_search" and "input_schema" not in tool
-        )
+        return is_anthropic_web_search_tool(tool)
 
     def translate_anthropic_messages_to_openai(
         self,

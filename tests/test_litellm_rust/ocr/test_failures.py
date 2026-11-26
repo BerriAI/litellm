@@ -108,7 +108,10 @@ async def test_ocr_contract_malformed_document_is_actionable(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("option,value,field", [("pages", [-1], "pages"), ("features", [1], "features")])
+@pytest.mark.parametrize(
+    "option,value,field",
+    [("pages", [-1], "pages"), ("features", [1], "features"), ("outputContentFormat", "html", "drop_params")],
+)
 async def test_ocr_contract_azure_invalid_options_are_bad_requests(
     server: RecordingServer,
     asynchronous: bool,

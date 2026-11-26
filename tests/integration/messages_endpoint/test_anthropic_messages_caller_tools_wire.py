@@ -21,10 +21,17 @@ GEMINI_MODEL: Final = "caller-tools-gemini"
 DOWN_MODEL: Final = "caller-tools-gemini-down"
 OPENAI_DOWN_MODEL: Final = "caller-tools-openai-down"
 TOOL_RESULTS_GUARDRAIL: Final = "caller-tools-results-filter"
+EMAIL_MASKING_GUARDRAIL: Final = "caller-tools-email-mask"
+DESCRIPTION_REDACTING_GUARDRAIL: Final = "caller-tools-vendor-redacts-lint-description"
+TOOL_REMOVING_GUARDRAIL: Final = "caller-tools-vendor-removes-lint"
+VENDOR_PREFIX: Final = "/vendor/"
+EMAIL: Final = "jane.doe@example.com"
+REDACTED_DESCRIPTION: Final = "[REDACTED]"
 CLAUDE_TARGET: Final = "/anthropic/v1/messages"
 RESPONSES_TARGET: Final = "/openai/v1/responses"
 GEMINI_PREFIX: Final = "/gemini/"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_JSON_OBJECTS: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
 _NONCE: Final = re.compile(rb"nonce-([0-9a-f]{32})")
 
 
@@ -60,6 +67,19 @@ def tool_with_a_property_named_cache_control() -> dict[str, JsonValue]:
             "required": ["path", "cache_control"],
         },
     }
+
+
+def deferred_tool() -> dict[str, JsonValue]:
+    return {**strict_tool("mcp__tracker__create_comment"), "defer_loading": True, "allowed_callers": ["direct"]}
+
+
+def coding_agent_tools() -> list[JsonValue]:
+    return [
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
+        {"type": "mcp_toolset", "mcp_server_name": "tracker"},
+        deferred_tool(),
+        strict_tool(),
+    ]
 
 
 def schema_nested(levels: int) -> dict[str, JsonValue]:
@@ -174,9 +194,32 @@ def gemini_reply(request: Request) -> Reply:
     )
 
 
+def is_lint(tool: Mapping[str, JsonValue]) -> bool:
+    return object_value(tool.get("function", {})).get("name") == "lint"
+
+
+def with_redacted_description(tool: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    if not is_lint(tool):
+        return tool
+    return {**tool, "function": {**object_value(tool["function"]), "description": REDACTED_DESCRIPTION}}
+
+
+def vendor_reply(request: Request) -> Reply:
+    shown: Final = _JSON_OBJECTS.validate_python(_JSON_OBJECT.validate_json(request.body).get("tools") or [])
+    verdict: Final = request.target.removeprefix(VENDOR_PREFIX).split("/")[0]
+    tools: Final = (
+        [with_redacted_description(tool) for tool in shown]
+        if verdict == "redact-lint-description"
+        else [tool for tool in shown if not is_lint(tool)]
+    )
+    return Reply(body=json.dumps({"action": "GUARDRAIL_INTERVENED", "tools": tools}).encode())
+
+
 def respond(request: Request) -> Reply:
     if request.method != "POST":
         return Reply(body=b'{"object":"list","data":[]}')
+    if request.target.startswith(VENDOR_PREFIX):
+        return vendor_reply(request)
     if request.target.startswith(CLAUDE_TARGET):
         return claude_reply(request)
     if request.target.startswith(RESPONSES_TARGET):
@@ -190,6 +233,19 @@ def deployment(name: str, model: str, api_base: str) -> dict[str, JsonValue]:
     return {
         "model_name": name,
         "litellm_params": {"model": model, "api_base": api_base, "api_key": f"synthetic-{name}-key"},
+    }
+
+
+def vendor_guardrail(name: str, api_base: str) -> dict[str, JsonValue]:
+    return {
+        "guardrail_name": name,
+        "litellm_params": {
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "default_on": False,
+            "api_base": api_base,
+            "api_key": "synthetic-guardrail-key",
+        },
     }
 
 
@@ -216,7 +272,20 @@ def write_config(directory: Path, wire_url: str) -> Path:
                             "scan_only_tool_results": True,
                             "blocked_words": [{"keyword": "ignore previous instructions", "action": "BLOCK"}],
                         },
-                    }
+                    },
+                    {
+                        "guardrail_name": EMAIL_MASKING_GUARDRAIL,
+                        "litellm_params": {
+                            "guardrail": "litellm_content_filter",
+                            "mode": "pre_call",
+                            "default_on": False,
+                            "patterns": [{"pattern_type": "prebuilt", "pattern_name": "email", "action": "MASK"}],
+                        },
+                    },
+                    vendor_guardrail(
+                        DESCRIPTION_REDACTING_GUARDRAIL, f"{wire_url}{VENDOR_PREFIX}redact-lint-description"
+                    ),
+                    vendor_guardrail(TOOL_REMOVING_GUARDRAIL, f"{wire_url}{VENDOR_PREFIX}remove-lint"),
                 ],
                 "general_settings": {
                     "master_key": "os.environ/LITELLM_MASTER_KEY",
@@ -305,6 +374,53 @@ def test_claude_behind_a_tool_results_guardrail_receives_the_tools_as_sent(rig: 
 
     assert reply_text(status, raw, streaming=streaming) == f"linted {request_nonce.removeprefix('nonce-')}"
     assert sent_body(rig.received(request_nonce), CLAUDE_TARGET)["tools"] == [strict_tool()]
+
+
+def tools_claude_received(rig: Rig, request_nonce: str) -> list[JsonValue]:
+    sent: Final = tuple(request for request in rig.received(request_nonce) if request.target == CLAUDE_TARGET)
+    return list_value(sent_body(sent, CLAUDE_TARGET)["tools"])
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["json", "stream"])
+def test_claude_behind_an_email_masking_guardrail_receives_the_coding_agent_tools_as_sent(
+    rig: Rig, streaming: bool
+) -> None:
+    request_nonce: Final = nonce()
+    body: Final = {
+        **messages_body(CLAUDE_MODEL, request_nonce, tools=coding_agent_tools(), guardrails=(EMAIL_MASKING_GUARDRAIL,)),
+        "messages": [{"role": "user", "content": f"lint the repo {request_nonce} and mail {EMAIL}"}],
+    }
+    status, raw = rig.send(body, streaming=streaming)
+
+    assert reply_text(status, raw, streaming=streaming) == f"linted {request_nonce.removeprefix('nonce-')}"
+    sent: Final = sent_body(rig.received(request_nonce), CLAUDE_TARGET)
+    assert EMAIL not in json.dumps(sent["messages"]), sent["messages"]
+    assert sent["tools"] == coding_agent_tools()
+
+
+def test_a_vendor_redacting_one_tool_description_leaves_the_other_tools_as_sent(rig: Rig) -> None:
+    request_nonce: Final = nonce()
+    status, raw = rig.send(
+        messages_body(
+            CLAUDE_MODEL, request_nonce, tools=coding_agent_tools(), guardrails=(DESCRIPTION_REDACTING_GUARDRAIL,)
+        )
+    )
+
+    assert reply_text(status, raw, streaming=False) == f"linted {request_nonce.removeprefix('nonce-')}"
+    *untouched, lint = tools_claude_received(rig, request_nonce)
+    assert untouched == coding_agent_tools()[:3]
+    assert (object_value(lint)["name"], object_value(lint)["description"]) == ("lint", REDACTED_DESCRIPTION), lint
+    assert object_value(lint)["input_schema"] == strict_tool()["input_schema"], lint
+
+
+def test_a_vendor_removing_one_tool_leaves_the_other_tools_as_sent(rig: Rig) -> None:
+    request_nonce: Final = nonce()
+    status, raw = rig.send(
+        messages_body(CLAUDE_MODEL, request_nonce, tools=coding_agent_tools(), guardrails=(TOOL_REMOVING_GUARDRAIL,))
+    )
+
+    assert reply_text(status, raw, streaming=False) == f"linted {request_nonce.removeprefix('nonce-')}"
+    assert tools_claude_received(rig, request_nonce) == coding_agent_tools()[:3]
 
 
 @pytest.mark.parametrize("guardrails", [(), (TOOL_RESULTS_GUARDRAIL,)], ids=["no_guardrail", "tool_results_guardrail"])
