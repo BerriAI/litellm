@@ -1198,7 +1198,6 @@ jobs:
           set +e
           uv run --no-sync pytest "${pytest_args[@]}" \
             --tb=short -vv \
-            -p no:ddtrace -p no:logfire -p no:pytest_logfire -p no:langsmith_plugin -p no:codspeed \
             --maxfail="${MAX_FAILURES}" \
             "${xdist_args[@]}" \
             --reruns "${RERUNS}" \
