@@ -87,10 +87,9 @@ def proxy_auth_state(monkeypatch: pytest.MonkeyPatch) -> ProxyAuthState:
 WITHOUT_LOW_TIERS_MODEL: Final = "reasoner-without-low-tiers"
 
 
-@pytest.fixture
-def openai_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
-    litellm.model_cost[WITHOUT_LOW_TIERS_MODEL] = {
-        "litellm_provider": "openai",
+def _model_without_low_tiers(model_cost_key: str, provider: str) -> Iterator[str]:
+    litellm.model_cost[model_cost_key] = {
+        "litellm_provider": provider,
         "mode": "responses",
         "supports_reasoning": True,
         "supports_none_reasoning_effort": False,
@@ -99,7 +98,17 @@ def openai_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
     }
     litellm.get_model_info.cache_clear()
     try:
-        yield f"openai/{WITHOUT_LOW_TIERS_MODEL}"
+        yield f"{provider}/{WITHOUT_LOW_TIERS_MODEL}"
     finally:
-        litellm.model_cost.pop(WITHOUT_LOW_TIERS_MODEL, None)
+        litellm.model_cost.pop(model_cost_key, None)
         litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def openai_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
+    yield from _model_without_low_tiers(WITHOUT_LOW_TIERS_MODEL, "openai")
+
+
+@pytest.fixture
+def azure_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
+    yield from _model_without_low_tiers(f"azure/{WITHOUT_LOW_TIERS_MODEL}", "azure")
