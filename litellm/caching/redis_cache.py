@@ -1453,6 +1453,7 @@ class RedisCache(BaseCache):
     async def _incrbyfloat_with_ttl(
         _redis_client: "Redis[bytes | str]", key: str, value: float, ttl: int | None, refresh_ttl: bool
     ) -> float:
+        """INCRBYFLOAT and its TTL decision in one Lua call, so a cancelled caller cannot leave the key unexpiring."""
         ttl_arg: Final = "" if ttl is None else str(ttl)
         raw_value: Final = await _redis_client.eval(
             _INCREMENT_WITH_TTL_LUA, 1, key, value, ttl_arg, "1" if refresh_ttl else "0"
