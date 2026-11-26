@@ -483,7 +483,7 @@ async def test_a_kept_open_stream_nobody_settles_closes_the_provider_connection_
 
 
 @pytest.mark.asyncio
-async def test_a_provider_failure_while_draining_a_cut_stream_is_logged_as_a_failure_not_a_success(
+async def test_a_provider_failure_while_draining_a_cut_stream_logs_no_failure_since_the_proxy_bills_it_as_a_cut(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     upstream: Final = _UpstreamThatReasonsUntilReleased(fails_after_release=True)
@@ -498,4 +498,48 @@ async def test_a_provider_failure_while_draining_a_cut_stream_is_logged_as_a_fai
     assert drained is False
     assert upstream.closed is True
     assert recorder.success_payloads == ()
-    assert len(recorder.failure_payloads) == 1
+    assert recorder.failure_payloads == (), (
+        "a failure log releases the parallel-request slot the proxy's disconnect cleanup releases too"
+    )
+
+
+class _UpstreamThatFailsOnceReleasedAfterRelayingText:
+    headers: dict[str, str] = {}
+
+    def __init__(self) -> None:
+        self.released: Final = asyncio.Event()
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time", 1)):
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        await self.released.wait()
+        raise httpx.ReadError("connection reset by peer")
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_a_provider_failure_while_draining_leaves_the_relayed_text_billable_as_a_cut_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatFailsOnceReleasedAfterRelayingText()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    assert [(await iterator.__anext__()).type for _ in range(2)] == ["response.created", "response.output_text.delta"]
+    waiting_on_the_provider: Final = asyncio.ensure_future(iterator.__anext__())
+    await asyncio.sleep(0)
+    waiting_on_the_provider.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting_on_the_provider
+    await iterator.aclose()
+
+    upstream.released.set()
+    drained: Final = await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+
+    assert drained is False
+    assert recorder.failure_payloads == ()
+    assert incomplete_event is not None, "nothing else bills the text relayed before the provider failed"
+    assert incomplete_event.response.output[0].content[0].text == "Once upon a time"

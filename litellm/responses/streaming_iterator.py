@@ -387,6 +387,7 @@ class BaseResponsesAPIStreamingIterator:
         self._created_response: ResponsesAPIResponse | None = None
         self._completed_response_cached = False
         self._completed_response_logged = False
+        self._reading_on_after_consumer_left = False
         self._completed_response_cache_hit: bool | None = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
@@ -969,8 +970,9 @@ class BaseResponsesAPIStreamingIterator:
         Trigger failure handlers before bubbling the exception.
         Only calls handlers once even if called multiple times.
         """
-        # Prevent double-calling failure handlers
-        if self._failure_handled:
+        # Prevent double-calling failure handlers. A failure while reading on after the consumer left is no
+        # failure of the request: the stream stays a cut one, billed and released by the disconnect cleanup.
+        if self._failure_handled or self._reading_on_after_consumer_left:
             return
         self._failure_handled = True
 
@@ -1188,11 +1190,12 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         if not drain or not self._can_be_read_on():
             await self._close_upstream()
             return drain and self._completed_response_logged
+        self._reading_on_after_consumer_left = True
         with anyio.move_on_after(RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS):
             try:
                 while self.completed_response is None:
                     await self.__anext__()
-            except (StopAsyncIteration, Exception) as e:  # noqa: BLE001  # the failure path already logged it; teardown goes on
+            except (StopAsyncIteration, Exception) as e:  # noqa: BLE001  # the cleanup bills what was relayed, as for any cut stream
                 verbose_logger.debug("Responses API stream ended while draining after a client disconnect: %r", e)
         await self._close_upstream()
         return self._completed_response_logged
