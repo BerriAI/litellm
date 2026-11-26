@@ -49,16 +49,6 @@ CI = [".github/workflows/test-unit.yml"]
 @pytest.mark.parametrize(
     "category,changed,expected",
     [
-        ("mcp-dependencies", ["pyproject.toml"], "run"),
-        ("mcp-dependencies", ["uv.lock"], "run"),
-        ("mcp-dependencies", ["litellm/mcp_client/client.py"], "run"),
-        ("mcp-dependencies", ["tests/e2e/mcp/datadog_mcp.py"], "run"),
-        ("mcp-dependencies", ["litellm/proxy-extras/pyproject.toml"], "run"),
-        ("mcp-dependencies", ["litellm/scripts/check_mcp_sdk_install.py"], "run"),
-        ("mcp-dependencies", [".github/workflows/test-mcp-dependency-resolution.yml"], "run"),
-        ("mcp-dependencies", [".github/scripts/ci/classify_changes.sh"], "run"),
-        ("mcp-dependencies", ["litellm/llms/openai/chat/gpt_transformation.py"], "skip"),
-        ("mcp-dependencies", DOCS + CLIENT, "skip"),
         ("windows-release", ["litellm/rust/crates/inference/src/lib.rs"], "run"),
         ("windows-release", ["litellm/rust_bridge/dispatch.py"], "run"),
         ("windows-release", ["litellm/rust/rust-toolchain.toml"], "run"),

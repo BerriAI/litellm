@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-category="${1:?usage: classify_changes.sh <backend|client|ui|cost-map-only|mcp-dependencies|windows-release|redis-compat|python-310>}"
+category="${1:?usage: classify_changes.sh <backend|client|ui|cost-map-only|windows-release|redis-compat|python-310>}"
 
 has_client=false
 has_backend=false
 has_ci=false
 has_cost_map=false
-has_mcp_dependencies=false
 has_windows_release=false
 has_redis_compat=false
 has_python_310=false
@@ -21,11 +20,6 @@ while IFS= read -r file || [ -n "$file" ]; do
   case "$file" in
     litellm/proxy/db/prisma_engine.py | litellm/proxy/db/prisma_client.py | tests/unit/proxy/db/test_prisma_engine.py | tests/unit/proxy/db/test_prisma_planned_engine_restart.py | tests/unit/proxy/db/conftest.py | tests/_process_helpers.py | litellm/integrations/custom_logger_v2/*.py | tests/unit/integrations/custom_logger_v2/test_dispatcher.py | .github/workflows/test-unit.yml | .github/actions/detect-changes/* | .github/scripts/detect_changes.sh | .github/scripts/ci/classify_changes.sh | pyproject.toml | uv.lock)
       has_python_310=true ;;
-  esac
-  case "$file" in
-    *.md | *.mdx) : ;;
-    pyproject.toml | */pyproject.toml | uv.lock | uv.toml | .python-version | litellm/rust/* | litellm/__init__.py | litellm/proxy/proxy_server.py | litellm/*mcp* | tests/*mcp* | litellm/integrations/arize/* | tests/base_sdk_tests/* | litellm/scripts/check_mcp_sdk_install.py | .github/workflows/test-mcp-dependency-resolution.yml | .github/actions/detect-changes/* | .github/actions/setup-uv-with-retries/* | .github/actions/cache-cargo-build/* | .github/scripts/detect_changes.sh | .github/scripts/uv_sync_with_retries.sh | .github/scripts/ci/classify_changes.sh | tests/unit/test_ci_path_filter.py | tests/unit/test_detect_changes.py)
-      has_mcp_dependencies=true ;;
   esac
   case "$file" in
     litellm/rust/* | litellm/rust_bridge/* | pyproject.toml | uv.lock | tests/windows_tests/* | .github/scripts/ci/* | .github/actions/*)
@@ -46,9 +40,6 @@ while IFS= read -r file || [ -n "$file" ]; do
 done
 
 case "$category" in
-  mcp-dependencies)
-    [ "$has_mcp_dependencies" = true ] && echo run || echo skip
-    ;;
   cost-map-only)
     { [ "$has_cost_map" = true ] && [ "$outside_cost_map_set" = false ]; } && echo run || echo skip
     ;;
