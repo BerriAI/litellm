@@ -2255,15 +2255,16 @@ def _responses_ws_failure_reply(failure: Exception) -> _ResponsesWsFailureReply:
     proxy_exception: Final = handle_exception_on_proxy(failure)
     status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
     close_code: Final = refusal_close_code(status)
+    refusal_summary: Final = proxy_exception.message.split("\n\n", 1)[0]
     return _ResponsesWsFailureReply(
         frame=responses_ws_error_frame(status, responses_ws_error_type(status), proxy_exception.message),
         close_code=close_code,
-        close_reason="Internal server error" if close_code == 1011 else _refusal_close_reason(proxy_exception.message),
+        close_reason=(
+            "Internal server error"
+            if close_code == 1011
+            else websocket_close_reason(refusal_summary, fallback="Request refused")
+        ),
     )
-
-
-def _refusal_close_reason(message: str) -> str:
-    return websocket_close_reason(message.split("\n\n", 1)[0], fallback="Request refused")
 
 
 async def _enforce_responses_ws_first_frame_model_auth(
@@ -2916,7 +2917,7 @@ async def _responses_websocket_session(
         verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
         with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
             await websocket.send_text(turn_refusal_frame(e))
-        await websocket.close(code=refusal_close_code(429), reason=_refusal_close_reason(e.message))
+        await websocket.close(code=refusal_close_code(429), reason="Rate limit exceeded")
         return
     except Exception as e:
         await proxy_logging_obj.arelease_refused_responses_websocket_slot(user_api_key_dict)

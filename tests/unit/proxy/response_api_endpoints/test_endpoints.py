@@ -3035,15 +3035,21 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "open_failure, refusal, close, logged_traceback",
+        "open_failure, refusal, message_fragment, close, logged_traceback",
         [
             (
-                ProxyRateLimitError(detail="Rate limit exceeded for api_key: tokens"),
+                ProxyRateLimitError(
+                    detail=(
+                        f"Rate limit exceeded for api_key: {'a' * 64}. Limit type: requests. "
+                        "Current limit: 1, Remaining: 0. Limit resets at: 2026-11-26 05:00:00 UTC"
+                    )
+                ),
                 (429, "rate_limit_exceeded"),
-                (1013, "litellm.RateLimitError: Rate limit exceeded for api_key: tokens"),
+                "Limit type: requests. Current limit: 1",
+                (1013, "Rate limit exceeded"),
                 False,
             ),
-            (ValueError("bad metadata"), (500, "server_error"), (1008, "Pre-call error"), True),
+            (ValueError("bad metadata"), (500, "server_error"), "bad metadata", (1008, "Pre-call error"), True),
         ],
         ids=["rate-limited", "other-failure"],
     )
@@ -3051,6 +3057,7 @@ class TestResponsesWSFirstFrameModelAuth:
         self,
         open_failure: Exception,
         refusal: tuple[int, str],
+        message_fragment: str,
         close: tuple[int, str],
         logged_traceback: bool,
     ):
@@ -3098,6 +3105,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
         sent: Final = json.loads(ws.send_text.await_args.args[0])
         assert (sent.get("status"), sent["error"]["type"]) == refusal
+        assert message_fragment in sent["error"]["message"]
         ws.close.assert_awaited_once_with(code=close[0], reason=close[1])
         assert [record.exc_info is not None for record in recorder.records] == [logged_traceback]
 
