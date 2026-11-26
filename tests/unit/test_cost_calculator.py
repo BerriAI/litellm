@@ -9049,8 +9049,6 @@ def test_together_ai_qwen_completion_cost():
         "custom_cost_per_second": None,
     }
 
-    from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
-
     response = get_model_params_and_category(
         model_name="qwen/Qwen2-72B-Instruct", call_type=CallTypes.completion
     )
