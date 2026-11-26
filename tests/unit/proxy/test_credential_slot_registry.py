@@ -102,6 +102,8 @@ CALLBACK_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProx
         "newrelic_region": NotSecret("region name"),
         "signoz_ingestion_key": Unplanted(),
         "signoz_ingestion_endpoint": NotSecret("sink endpoint URL"),
+        "mixpanel_project_token": Unplanted(),
+        "mixpanel_region": NotSecret("region name"),
         "turn_off_message_logging": NotSecret("boolean logging switch"),
         "litellm_disabled_callbacks": NotSecret("list of callback names"),
     }

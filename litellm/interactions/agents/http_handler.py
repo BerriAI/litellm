@@ -13,6 +13,7 @@ import httpx
 
 from litellm.constants import request_timeout
 from litellm.interactions.http_handler import InteractionsHTTPHandler
+from litellm.litellm_core_utils.core_helpers import str_param
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -61,7 +62,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             headers=extra_headers or {}, litellm_params=dict(litellm_params)
         )
         url: Final = agents_api_config.get_complete_url(
-            api_base=litellm_params.get("api_base"),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
         data: Final = {
@@ -105,7 +106,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             headers=extra_headers or {}, litellm_params=dict(litellm_params)
         )
         url: Final = agents_api_config.get_complete_url(
-            api_base=litellm_params.get("api_base"),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
         data: Final = {
@@ -163,7 +164,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             headers=extra_headers or {}, litellm_params=dict(litellm_params)
         )
         url, params = agents_api_config.transform_list_request(
-            api_base=litellm_params.get("api_base"),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
         logging_obj.pre_call(
@@ -193,7 +194,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
             headers=extra_headers or {}, litellm_params=dict(litellm_params)
         )
         url, params = agents_api_config.transform_list_request(
-            api_base=litellm_params.get("api_base"),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
         logging_obj.pre_call(
@@ -240,7 +241,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         )
         url, params = agents_api_config.transform_get_request(
             name=name,
-            api_base=litellm_params.get("api_base"),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
         logging_obj.pre_call(
@@ -272,7 +273,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         )
         url, params = agents_api_config.transform_get_request(
             name=name,
-            api_base=litellm_params.get("api_base"),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
         logging_obj.pre_call(
@@ -319,7 +320,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         )
         url: Final = agents_api_config.transform_delete_request(
             name=name,
-            api_base=litellm_params.get("api_base"),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
         logging_obj.pre_call(
@@ -351,7 +352,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         )
         url: Final = agents_api_config.transform_delete_request(
             name=name,
-            api_base=litellm_params.get("api_base"),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
         logging_obj.pre_call(
@@ -398,7 +399,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         )
         url, params = agents_api_config.transform_list_versions_request(
             name=name,
-            api_base=litellm_params.get("api_base"),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
         logging_obj.pre_call(
@@ -430,7 +431,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         )
         url, params = agents_api_config.transform_list_versions_request(
             name=name,
-            api_base=litellm_params.get("api_base"),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
         logging_obj.pre_call(

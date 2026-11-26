@@ -408,7 +408,19 @@ class MissingMessageRoleError(MalformedRequestFieldError):
     pass
 
 
+class UnresolvablePreviousResponseError(MalformedRequestFieldError):
+    pass
+
+
+class UnknownPreviousResponseError(UnresolvablePreviousResponseError):
+    pass
+
+
 class UnsupportedEndpointError(BadRequestError):
+    pass
+
+
+class DocumentFetchError(BadRequestError):
     pass
 
 
@@ -1157,6 +1169,7 @@ LITELLM_EXCEPTION_TYPES: Final = [
     UnprocessableEntityError,
     UnsupportedParamsError,
     UnsupportedEndpointError,
+    DocumentFetchError,
     Timeout,
     PermissionDeniedError,
     RateLimitError,

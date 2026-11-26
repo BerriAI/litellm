@@ -29,6 +29,9 @@ strum.workspace = true
 thiserror.workspace = true
 time.workspace = true
 
+[build-dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }
+
 [dev-dependencies]
 jsonschema = { version = "0.55.1", default-features = false }
 rstest.workspace = true

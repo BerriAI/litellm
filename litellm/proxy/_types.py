@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Ty
 import httpx
 from pydantic import (
     AfterValidator,
+    AliasChoices,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -3277,6 +3278,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
     )
+    customer_budget_response_headers: bool | None = Field(
+        None,
+        description="If True, responses carry x-litellm-app-customer-org-* and x-litellm-app-customer-member-* headers with the spend, max budget, remaining budget and reset time the calling app holds for the request's customer organization and member, one set per budget window. A key not pinned to one customer organization reads the budget of whichever organization it names.",
+    )
     forward_client_headers_to_llm_api: bool | None = Field(
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
@@ -3813,6 +3818,11 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     parallel_tool_calls: JsonValue = None
     response_format: JsonValue = None
     web_search_options: JsonValue = None
+    system_instruction: JsonValue = Field(
+        default=None,
+        validation_alias=AliasChoices("systemInstruction", "system_instruction"),
+        description="Google systemInstruction, counted with contents",
+    )
 
 
 from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export
@@ -3893,6 +3903,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "OTEL_ENDPOINT",
             "OTEL_TRACES_ENDPOINT",
             "OTEL_HEADERS",
+            "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS",
         ],
     )
 
@@ -4011,6 +4022,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
         ],
+    )
+
+    mixpanel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="mixpanel",
+        ui_callback_name="Mixpanel",
+        litellm_callback_params=("MIXPANEL_PROJECT_TOKEN", "MIXPANEL_REGION", "MIXPANEL_ENDPOINT"),
     )
 
     signoz: CallbackOnUI = CallbackOnUI(

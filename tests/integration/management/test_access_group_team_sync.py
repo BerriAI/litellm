@@ -363,6 +363,27 @@ async def test_settled_request_restores_assignment_removed_while_waiting_for_gro
         assert (team.access_group_ids, await _read(db)) == ([GROUPS[0]], {GROUPS[0]: [TEAM]})
 
 
+def _store_first_in_scan_order(first: str, second: str, model: str) -> None:
+    """Store two access groups so a sequential scan reads ``first`` before ``second``. Postgres puts a
+    new row in any free slot of the page, so ``second`` is stored again until it lands after ``first``;
+    the slots it leaves stay taken until the transaction commits, so every retry moves it forward."""
+    insert: Final = (
+        'INSERT INTO "LiteLLM_AccessGroupTable" (access_group_id, access_group_name, access_model_names) '
+        "VALUES (%s, %s, ARRAY[%s]) RETURNING ctid"
+    )
+    with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
+        (first_slot,) = connection.execute(insert, (first, first, model)).fetchall()
+        (second_slot,) = connection.execute(insert, (second, second, model)).fetchall()
+        while _slot(second_slot[0]) < _slot(first_slot[0]):
+            connection.execute('DELETE FROM "LiteLLM_AccessGroupTable" WHERE access_group_id = %s', (second,))
+            (second_slot,) = connection.execute(insert, (second, second, model)).fetchall()
+
+
+def _slot(ctid: str) -> tuple[int, int]:
+    page, _, offset = ctid.strip("()").partition(",")
+    return int(page), int(offset)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("writer", ["model delete", "key attach"])
 async def test_group_writer_and_team_sync_on_the_same_groups_both_commit(writer: str) -> None:
@@ -370,19 +391,7 @@ async def test_group_writer_and_team_sync_on_the_same_groups_both_commit(writer:
     key: Final = f"ags-key-{_XDIST_WORKER}"
     low, high = GROUPS[0], GROUPS[1]
     async with _clean_db() as db, connected_proxy_prisma() as client:
-        await db.execute_raw(
-            'INSERT INTO "LiteLLM_AccessGroupTable" (access_group_id, access_group_name, access_model_names) '
-            "VALUES ($1, $1, ARRAY[$3]), ($2, $2, ARRAY[$3])",
-            high,
-            low,
-            model,
-        )
-        stored: Final = await db.query_raw(
-            'SELECT access_group_id FROM "LiteLLM_AccessGroupTable" WHERE access_group_id = ANY($1::text[]) '
-            "ORDER BY ctid",
-            [low, high],
-        )
-        assert [row["access_group_id"] for row in stored] == [high, low], "the writer must scan the higher id first"
+        await asyncio.to_thread(_store_first_in_scan_order, high, low, model)
         await _set_team_groups(db, TEAM, [low, high])
 
         with psycopg.connect(os.environ["DATABASE_URL"]) as held:

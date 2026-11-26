@@ -7,13 +7,15 @@
 //! call loop also resolves a deployment id, a routing group, a wildcard and the first default
 //! fallback, and a fallback target only one of those serves is reported as not served.
 
+use std::{collections::BTreeSet, sync::Arc};
+
 use litellm_router_types::RoutingStrategy;
 
 use crate::{
     Router,
     config::RouterDynamicConfig,
     fallback::{FallbackTarget, Fallbacks},
-    registry::{Registry, ResolveKind},
+    registry::{Deployment, DeploymentFilter, Registry, ResolveKind},
     settings::Settings,
     strategy::{StrategyScope, implemented, routing_context},
 };
@@ -127,6 +129,144 @@ fn steps(
         .filter(|_| served)
         .chain(params)
         .collect()
+}
+
+/// `_direct_fallback_model_names` over every fallback type: the groups each list names as
+/// `model`'s chain. Every chain routing can run is followed, where Python follows fewer: a list
+/// of bare names is the whole chain, not its last name, and a chain of every group (`*`) is
+/// followed beside `default_fallbacks`, which Python reads over it.
+fn direct_fallback_model_names(dynamic: &RouterDynamicConfig, model: &str) -> Vec<String> {
+    let keys = &dynamic.fallback_keys;
+    let error_specific = [
+        &dynamic.context_window_fallbacks,
+        &dynamic.content_policy_fallbacks,
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|list| list.lookup_groups(&[model], keys));
+    let regular = if dynamic.fallbacks.is_client_side(keys) {
+        vec![dynamic.fallbacks.as_chain()]
+    } else {
+        [
+            dynamic.fallbacks.lookup_groups(&[model], keys),
+            dynamic
+                .fallbacks
+                .chain_with_defaults(model, keys, &dynamic.default_fallbacks),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    };
+    regular
+        .into_iter()
+        .chain(error_specific)
+        .flatten()
+        .filter_map(|target| target.model().map(str::to_owned))
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+impl Router {
+    /// `router_fallback_model_names` over every fallback type: each group a failure on `model`
+    /// can reach through the router's fallback lists, chained and generic (`*`), with
+    /// `default_fallbacks` read as the Python router folds them in. `model` itself is left out,
+    /// and names are taken as written, aliases unresolved.
+    pub fn fallback_model_names(&self, model: &str) -> BTreeSet<String> {
+        fallback_model_names(&self.core.snapshot.load().settings.dynamic, model)
+    }
+
+    /// Python's `_opt_in_model_groups`: the deployments of every model group a request for
+    /// `requested` can be served by. Each name goes through its alias and the router's fallbacks,
+    /// then each found deployment's own group joins, until no new group turns up. Each new group's
+    /// fallbacks are followed too, where Python follows only those of a deployment's group, so a
+    /// fallback reached through an alias is judged as the router would serve it. A group that
+    /// no deployment serves is an empty one. `team_id` picks a team's own deployments of a group
+    /// when it has any. Wildcard deployments and a provider's group, which Python also reads, are
+    /// not followed yet.
+    pub fn opt_in_groups(
+        &self,
+        requested: &BTreeSet<String>,
+        team_id: Option<&str>,
+    ) -> Vec<Vec<Arc<Deployment>>> {
+        let snapshot = self.core.snapshot.load();
+        let registry = &snapshot.registry;
+        let dynamic = &snapshot.settings.dynamic;
+        let alias = |name: &str| registry.alias_of(name).unwrap_or(name).to_owned();
+        let fallbacks = |names: &BTreeSet<String>| -> BTreeSet<String> {
+            names
+                .iter()
+                .flat_map(|name| fallback_model_names(dynamic, name))
+                .map(|name| alias(&name))
+                .collect()
+        };
+        let routed: BTreeSet<String> = requested.iter().map(|name| alias(name)).collect();
+        let groups: BTreeSet<String> = routed
+            .iter()
+            .cloned()
+            .chain(fallbacks(&requested.union(&routed).cloned().collect()))
+            .collect();
+        let mut every = Vec::new();
+        let mut reached = groups.clone();
+        let mut frontier = groups;
+        while !frontier.is_empty() {
+            let deployments: Vec<Vec<Arc<Deployment>>> = frontier
+                .iter()
+                .map(|group| group_deployments(registry, group, team_id))
+                .collect();
+            let routed_groups: BTreeSet<String> = deployments
+                .iter()
+                .flatten()
+                .map(|deployment| deployment.model_name.clone())
+                .filter(|name| !reached.contains(name))
+                .collect();
+            every.extend(deployments);
+            let next: BTreeSet<String> = routed_groups
+                .iter()
+                .cloned()
+                .chain(fallbacks(
+                    &frontier.union(&routed_groups).cloned().collect(),
+                ))
+                .filter(|name| !reached.contains(name))
+                .collect();
+            reached.extend(next.iter().cloned());
+            frontier = next;
+        }
+        every
+    }
+}
+
+/// A team's own deployments of `group` when it has any, else the group's.
+fn group_deployments(
+    registry: &Registry,
+    group: &str,
+    team_id: Option<&str>,
+) -> Vec<Arc<Deployment>> {
+    let team = team_id
+        .map(|team_id| {
+            registry.deployments(&DeploymentFilter {
+                model_name: Some(group),
+                team_id: Some(team_id),
+                provider: None,
+            })
+        })
+        .filter(|deployments| !deployments.is_empty());
+    team.unwrap_or_else(|| registry.group(group).unwrap_or_default())
+}
+
+fn fallback_model_names(dynamic: &RouterDynamicConfig, model: &str) -> BTreeSet<String> {
+    let mut reached = BTreeSet::from([model.to_owned()]);
+    let mut frontier = vec![model.to_owned()];
+    while !frontier.is_empty() {
+        let next: BTreeSet<String> = frontier
+            .iter()
+            .flat_map(|name| direct_fallback_model_names(dynamic, name))
+            .filter(|name| !reached.contains(name))
+            .collect();
+        reached.extend(next.iter().cloned());
+        frontier = next.into_iter().collect();
+    }
+    reached.remove(model);
+    reached
 }
 
 impl Router {

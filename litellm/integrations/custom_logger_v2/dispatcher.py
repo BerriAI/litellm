@@ -390,7 +390,7 @@ class RequestScope:
     ) -> object:
         policy: Final = self._dispatcher.policy
         handler: Final = _handler(entry.manifest.logger, entry.subscription.handler)
-        context: Final = CallContext[object](hook=hook, call=call, state=state)
+        context: Final = CallContext(hook=hook, call=call, state=state)
         view: Final = policy.view(entry.subscription, fields)
         result: Final = (
             await _awaited(handler(view, context))

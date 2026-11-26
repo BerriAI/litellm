@@ -60,8 +60,3 @@ reason = "soupsieve 3.0.2 is the first fix and requires Python >= 3.11.5, so Pyt
 id = "GHSA-7g44-g9rc-x53w"
 ignoreUntil = 2027-02-01
 reason = "soupsieve 3.0.2 is the first fix and requires Python >= 3.11.5, so Python 3.10 and 3.11.0-3.11.4 resolve 2.10 while newer Python versions resolve 4.1. The advisory is unbounded recursion when parsing an untrusted CSS selector with deeply nested pseudo-classes. litellm declares beautifulsoup4 in its ci dependency group and uses BeautifulSoup only in tests/code_coverage_tests/bedrock_pricing.py, which calls find and find_all and never parses a CSS selector; no runtime litellm code imports soupsieve or beautifulsoup4. Remove once 3.10 is dropped and the minimum Python version is at least 3.11.5"
-
-[[IgnoredVulns]]
-id = "GHSA-fc5q-39xc-vjpf"
-ignoreUntil = 2026-11-24
-reason = "picomatch ReDoS on single-branch repeated extglobs, affecting every release through 4.0.7 with no fixed version published yet. Only dev dependency chains of the dashboard and the VS Code extension pull picomatch, so it runs in build tooling on globs we write and never in the proxy. Short ignore to unblock CI, bump picomatch once a fix ships"

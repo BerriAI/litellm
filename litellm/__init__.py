@@ -155,6 +155,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "compression_interception",
     "newrelic",
     "signoz",
+    "mixpanel",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -569,10 +570,14 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
+from litellm.litellm_core_utils.get_model_cost_map import (
+    get_model_cost_map as get_model_cost_map,
+    load_model_cost_map_for_import,
+    mark_litellm_import_complete,
+)
 from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 
-model_cost = get_model_cost_map(url=model_cost_map_url)
+model_cost = load_model_cost_map_for_import(model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
 apply_search_free_tier: bool = False
 cost_margin_config: Dict[
@@ -1098,11 +1103,20 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
 
 def add_known_models(model_cost_map: Optional[Mapping[str, Mapping[str, object]]] = None):
     """Fold `model_cost_map` (defaults to `litellm.model_cost`) into the per-provider model sets,
-    then refresh `models_by_provider` from those sets so the additions reach wildcard expansion.
-    The refresh updates the dict in place, so references captured before a reload stay live.
+    then refresh `models_by_provider`, `model_list`, `model_list_set` and `all_embedding_models` from those
+    sets so the additions and retirements reach wildcard expansion and provider inference. Each is updated in
+    place, so references captured before a reload stay live.
     """
+    known_before: Final = _known_models()
     _populate_provider_model_sets(model_cost_map if model_cost_map is not None else model_cost)
     models_by_provider.update(_build_models_by_provider())
+    known: Final = _known_models()
+    retired: Final = known_before - known
+    added: Final = known - model_list_set
+    model_list[:] = [*(name for name in model_list if name not in retired), *added]
+    model_list_set.difference_update(retired)
+    model_list_set.update(added)
+    all_embedding_models.update(_known_embedding_models())
 
 
 _populate_provider_model_sets(model_cost)
@@ -1134,115 +1148,119 @@ ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
 
-model_list = list(
-    open_ai_chat_completion_models
-    | open_ai_text_completion_models
-    | cohere_models
-    | cohere_chat_models
-    | anthropic_models
-    | set(replicate_models)
-    | openrouter_models
-    | datarobot_models
-    | set(huggingface_models)
-    | vertex_chat_models
-    | vertex_text_models
-    | ai21_models
-    | ai21_chat_models
-    | set(together_ai_models)
-    | set(baseten_models)
-    | aleph_alpha_models
-    | nlp_cloud_models
-    | set(ollama_models)
-    | bedrock_models
-    | deepinfra_models
-    | clf_ai_gateway_models
-    | perplexity_models
-    | set(maritalk_models)
-    | runwayml_models
-    | vertex_language_models
-    | watsonx_models
-    | gemini_models
-    | text_completion_codestral_models
-    | text_completion_inception_models
-    | xai_models
-    | zai_models
-    | bigmodel_models
-    | fal_ai_models
-    | deepseek_models
-    | modelscope_models
-    | azure_ai_models
-    | voyage_models
-    | infinity_models
-    | databricks_models
-    | cloudflare_models
-    | codestral_models
-    | friendliai_models
-    | palm_models
-    | groq_models
-    | azure_models
-    | azure_anthropic_models
-    | anyscale_models
-    | cerebras_models
-    | nadir_models
-    | galadriel_models
-    | nvidia_nim_models
-    | nvidia_riva_models
-    | gnani_models
-    | soniox_models
-    | sambanova_models
-    | scaledown_models
-    | azure_text_models
-    | novita_models
-    | assemblyai_models
-    | jina_ai_models
-    | snowflake_models
-    | gradient_ai_models
-    | llama_models
-    | featherless_ai_models
-    | nscale_models
-    | deepgram_models
-    | elevenlabs_models
-    | gradium_models
-    | dashscope_models
-    | qwencloud_models
-    | qwen_ai_platform_models
-    | moonshot_models
-    | publicai_models
-    | darkbloom_models
-    | openinfer_models
-    | kyma_models
-    | streamlake_models
-    | resetdata_models
-    | wally_models
-    | huawei_maas_models
-    | zerogpu_models
-    | v0_models
-    | vispark_models
-    | morph_models
-    | opencode_go_models
-    | lambda_ai_models
-    | inception_models
-    | black_forest_labs_models
-    | recraft_models
-    | cometapi_models
-    | oci_models
-    | heroku_models
-    | vercel_ai_gateway_models
-    | edenai_models
-    | volcengine_models
-    | wandb_models
-    | ovhcloud_models
-    | lemonade_models
-    | docker_model_runner_models
-    | reducto_models
-    | nace_models
-    | bedrock_mantle_models
-    | coralbricks_models
-    | perplexity_orchestrator_models
-    | aiand_models
-    | set(clarifai_models)
-)
 
+def _known_models() -> frozenset[str]:
+    return frozenset(
+        open_ai_chat_completion_models
+        | open_ai_text_completion_models
+        | cohere_models
+        | cohere_chat_models
+        | anthropic_models
+        | set(replicate_models)
+        | openrouter_models
+        | datarobot_models
+        | set(huggingface_models)
+        | vertex_chat_models
+        | vertex_text_models
+        | ai21_models
+        | ai21_chat_models
+        | set(together_ai_models)
+        | set(baseten_models)
+        | aleph_alpha_models
+        | nlp_cloud_models
+        | set(ollama_models)
+        | bedrock_models
+        | deepinfra_models
+        | clf_ai_gateway_models
+        | perplexity_models
+        | set(maritalk_models)
+        | runwayml_models
+        | vertex_language_models
+        | watsonx_models
+        | gemini_models
+        | text_completion_codestral_models
+        | text_completion_inception_models
+        | xai_models
+        | zai_models
+        | bigmodel_models
+        | fal_ai_models
+        | deepseek_models
+        | modelscope_models
+        | azure_ai_models
+        | voyage_models
+        | infinity_models
+        | databricks_models
+        | cloudflare_models
+        | codestral_models
+        | friendliai_models
+        | palm_models
+        | groq_models
+        | azure_models
+        | azure_anthropic_models
+        | anyscale_models
+        | cerebras_models
+        | nadir_models
+        | galadriel_models
+        | nvidia_nim_models
+        | nvidia_riva_models
+        | gnani_models
+        | soniox_models
+        | sambanova_models
+        | scaledown_models
+        | azure_text_models
+        | novita_models
+        | assemblyai_models
+        | jina_ai_models
+        | snowflake_models
+        | gradient_ai_models
+        | llama_models
+        | featherless_ai_models
+        | nscale_models
+        | deepgram_models
+        | elevenlabs_models
+        | gradium_models
+        | dashscope_models
+        | qwencloud_models
+        | qwen_ai_platform_models
+        | moonshot_models
+        | publicai_models
+        | darkbloom_models
+        | openinfer_models
+        | kyma_models
+        | streamlake_models
+        | resetdata_models
+        | wally_models
+        | huawei_maas_models
+        | zerogpu_models
+        | v0_models
+        | vispark_models
+        | morph_models
+        | opencode_go_models
+        | lambda_ai_models
+        | inception_models
+        | black_forest_labs_models
+        | recraft_models
+        | cometapi_models
+        | oci_models
+        | heroku_models
+        | vercel_ai_gateway_models
+        | edenai_models
+        | volcengine_models
+        | wandb_models
+        | ovhcloud_models
+        | lemonade_models
+        | docker_model_runner_models
+        | reducto_models
+        | nace_models
+        | bedrock_mantle_models
+        | coralbricks_models
+        | perplexity_orchestrator_models
+        | aiand_models
+        | set(clarifai_models)
+    )
+
+
+model_list = list(_known_models())
 model_list_set = set(model_list)
 
 
@@ -1416,16 +1434,21 @@ longer_context_model_fallback_dict: dict[str, str] = {
 
 ####### EMBEDDING MODELS ###################
 
-all_embedding_models = (
-    open_ai_embedding_models
-    | set(cohere_embedding_models)
-    | set(bedrock_embedding_models)
-    | vertex_embedding_models
-    | fireworks_ai_embedding_models
-    | nebius_embedding_models
-    | sambanova_embedding_models
-    | ovhcloud_embedding_models
-)
+
+def _known_embedding_models() -> frozenset[str]:
+    return frozenset(
+        open_ai_embedding_models
+        | set(cohere_embedding_models)
+        | set(bedrock_embedding_models)
+        | vertex_embedding_models
+        | fireworks_ai_embedding_models
+        | nebius_embedding_models
+        | sambanova_embedding_models
+        | ovhcloud_embedding_models
+    )
+
+
+all_embedding_models = set(_known_embedding_models())
 
 ####### IMAGE GENERATION MODELS ###################
 
@@ -1517,6 +1540,7 @@ from .exceptions import (
     CallerCredentialRateLimitError as CallerCredentialRateLimitError,
     InvalidRequestError,
     BadRequestError,
+    DocumentFetchError as DocumentFetchError,
     ImageFetchError,
     MalformedRequestFieldError as MalformedRequestFieldError,
     MissingMessageRoleError as MissingMessageRoleError,

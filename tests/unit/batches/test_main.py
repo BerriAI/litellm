@@ -177,6 +177,21 @@ def test_create__vertex_ai_forwards_custom_endpoint(seams):
     assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is True
 
 
+@pytest.mark.parametrize(("sent", "forwarded"), [("yes", True), (1, True), ("", False), (0, False)])
+def test_create__vertex_ai_forwards_a_non_bool_custom_endpoint_as_its_truthiness(
+    seams: Seams, sent: object, forwarded: bool
+) -> None:
+    bm.create_batch(**CREATE_KW, custom_llm_provider="vertex_ai", custom_endpoint=sent)
+
+    assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is forwarded
+
+
+def test_create__vertex_ai_forwards_an_absent_custom_endpoint_as_false(seams: Seams) -> None:
+    bm.create_batch(**CREATE_KW, custom_llm_provider="vertex_ai")
+
+    assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is False
+
+
 def test_create__provider_config_routes_to_base_http_handler(seams):
     """model + a provider batches config (bedrock-style) routes to the generic
     base_llm_http_handler, NOT the per-provider instance."""
@@ -1682,3 +1697,19 @@ def test_retrieve__gemini_routes_to_base_http_handler_with_gemini_config(seams):
     forwarded = seams.base_http.retrieve_batch.call_args.kwargs
     assert type(forwarded["provider_config"]).__name__ == "GeminiBatchesConfig"
     assert forwarded["batch_id"] == "la6"
+
+
+def test_create__model_that_is_not_a_string_skips_provider_inference(seams: Seams) -> None:
+    with patch.object(bm, "get_llm_provider") as provider_inference:
+        result: Final = bm.create_batch(**CREATE_KW, custom_llm_provider="openai", model=123)
+
+    assert result is seams.openai.create_batch.return_value
+    assert provider_inference.call_count == 0, provider_inference.call_args_list
+
+
+def test_retrieve__model_that_is_not_a_string_skips_provider_config_lookup(seams: Seams) -> None:
+    with patch.object(bm.ProviderConfigManager, "get_provider_batches_config") as config_lookup:
+        result: Final = bm.retrieve_batch(batch_id="batch-1", custom_llm_provider="openai", model=123)
+
+    assert result is seams.openai.retrieve_batch.return_value
+    assert config_lookup.call_count == 0, config_lookup.call_args_list

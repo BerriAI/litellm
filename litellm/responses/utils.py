@@ -6,7 +6,19 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from dataclasses import dataclass
 from functools import reduce
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, Optional, Protocol, TypeVar, Union, cast, get_type_hints, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    NoReturn,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+    cast,
+    get_type_hints,
+    overload,
+)
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict as ExtraItemsTypedDict
@@ -56,6 +68,9 @@ from litellm.types.utils import (
     Usage,
     text_tokens_without_nested_reasoning,
 )
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
@@ -1337,9 +1352,21 @@ class ResponsesAPIRequestUtils:
         return text
 
     @staticmethod
+    def mcp_raw_headers(
+        secret_fields: Mapping[str, Any] | None, mcp_auth: "UserAPIKeyAuth | None"
+    ) -> dict[str, str] | None:  # mutable-ok: callers merge per-tool headers into the returned headers
+        from litellm.proxy.mcp_server.mcp_server_manager import without_admission_authorization
+
+        raw_headers: Final[Mapping[str, str] | None] = (
+            secret_fields.get("raw_headers") if secret_fields and isinstance(secret_fields, Mapping) else None
+        )
+        return dict(without_admission_authorization(raw_headers, mcp_auth)) if raw_headers else None
+
+    @staticmethod
     def extract_mcp_headers_from_request(
         secret_fields: dict[str, Any] | None,
         tools: Iterable[object] | None,
+        mcp_auth: "UserAPIKeyAuth | None" = None,
     ) -> tuple[
         str | None,
         dict[str, dict[str, str]] | None,
@@ -1357,9 +1384,9 @@ class ResponsesAPIRequestUtils:
         )
 
         # Extract headers from secret_fields which contains the original request headers
-        raw_headers_from_request: dict[str, str] | None = None
-        if secret_fields and isinstance(secret_fields, dict):
-            raw_headers_from_request = secret_fields.get("raw_headers")
+        raw_headers_from_request: dict[str, str] | None = ResponsesAPIRequestUtils.mcp_raw_headers(
+            secret_fields, mcp_auth
+        )
 
         # Extract MCP-specific headers using MCPRequestHandler methods
         mcp_auth_header: str | None = None
@@ -1411,6 +1438,33 @@ class ResponsesAPIRequestUtils:
             oauth2_headers,
             raw_headers_from_request,
         )
+
+
+_CHAT_COMPLETION_ID_PREFIX: Final = "chatcmpl-"
+
+
+def answered_by_the_chat_bridge(response_id: object) -> bool:
+    return isinstance(
+        response_id, str
+    ) and ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id).startswith(
+        _CHAT_COMPLETION_ID_PREFIX
+    )
+
+
+_RESPONSES_API_ID_PREFIX: Final = "resp_"
+
+
+def held_by_a_provider(response_id: str) -> bool:
+    from litellm.utils import ProviderConfigManager
+
+    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
+    original: Final = decoded.get("response_id", response_id)
+    provider: Final = decoded.get("custom_llm_provider")
+    return original.startswith(_RESPONSES_API_ID_PREFIX) or (
+        provider is not None
+        and not original.startswith(_CHAT_COMPLETION_ID_PREFIX)
+        and ProviderConfigManager.get_provider_responses_api_config(provider=provider) is not None
+    )
 
 
 class ResponseAPILoggingUtils:
