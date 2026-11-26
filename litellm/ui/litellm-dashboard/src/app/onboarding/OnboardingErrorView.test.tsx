@@ -1,6 +1,10 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+const { mockGetProxyBaseUrl } = vi.hoisted(() => ({ mockGetProxyBaseUrl: vi.fn(() => "") }));
+vi.mock("@/components/networking", () => ({ getProxyBaseUrl: mockGetProxyBaseUrl }));
+
 import { OnboardingErrorView } from "./OnboardingErrorView";
 
 describe("OnboardingErrorView", () => {
@@ -23,5 +27,14 @@ describe("OnboardingErrorView", () => {
     render(<OnboardingErrorView />);
     const link = screen.getByRole("link", { name: "Back to Login" });
     expect(link).toHaveAttribute("href", "/ui/login/");
+  });
+
+  it("keeps the server root path in the login link", () => {
+    mockGetProxyBaseUrl.mockReturnValueOnce("http://proxy.example/9000");
+    render(<OnboardingErrorView />);
+    expect(screen.getByRole("link", { name: "Back to Login" })).toHaveAttribute(
+      "href",
+      "http://proxy.example/9000/ui/login/",
+    );
   });
 });
