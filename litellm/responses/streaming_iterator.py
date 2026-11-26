@@ -1180,14 +1180,14 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         """
         With drain, keep reading the provider's stream so its terminal event bills the usage the provider
         reports (reasoning tokens and the cached split included) instead of a local count; True when that
-        event was reached and logged as a success. Without it, or when the stream cannot be read on, close it.
+        event was logged as a success, here or before the consumer left. Otherwise close the stream.
         """
         self._settled_after_consumer_left = True
         if self._unclaimed_close is not None:
             self._unclaimed_close.cancel()
         if not drain or not self._can_be_read_on():
             await self._close_upstream()
-            return False
+            return drain and self._completed_response_logged
         with anyio.move_on_after(RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS):
             try:
                 while self.completed_response is None:
