@@ -15,6 +15,8 @@ import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings
 import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
@@ -78,6 +80,7 @@ export default function ModelInfoView({
   modelAccessGroups,
 }: ModelInfoViewProps) {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const queryClient = useQueryClient();
   const activityDateRange = useActivityDateRange();
   const [localModelData, setLocalModelData] = useState<any>(null);
@@ -563,15 +566,18 @@ export default function ModelInfoView({
         </div>
         <div className="flex gap-2">
           {(!isAnyAutoRouter || isComplexityRouterModel) && (
-            <Button
-              variant="outline"
-              onClick={handleTestConnection}
-              className="flex items-center gap-2"
-              data-testid="test-connection-button"
-            >
-              <RefreshIcon className="h-4 w-4" />
-              {t("modelInfoView.header.testConnection")}
-            </Button>
+            <ControlPlaneActionTooltip reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}>
+              <Button
+                variant="outline"
+                onClick={handleTestConnection}
+                disabled={Boolean(controlPlane)}
+                className="flex items-center gap-2"
+                data-testid="test-connection-button"
+              >
+                <RefreshIcon className="h-4 w-4" />
+                {t("modelInfoView.header.testConnection")}
+              </Button>
+            </ControlPlaneActionTooltip>
           )}
 
           {!isAnyAutoRouter && (

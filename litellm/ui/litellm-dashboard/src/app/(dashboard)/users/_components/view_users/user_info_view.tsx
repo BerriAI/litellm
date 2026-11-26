@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import {
   userGetInfoV2,
   UserInfoV2Response,
@@ -89,6 +91,7 @@ export default function UserInfoView({
   startInEditMode = false,
 }: UserInfoViewProps) {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const { premiumUser, userId: signedInUserId } = useAuthorized();
   const canViewAutoRouterUsage = hasProxyWideSpendView(userRole);
   const canViewUserUsage = canViewAutoRouterUsage || (Boolean(userId.trim()) && userId === signedInUserId);
@@ -455,10 +458,12 @@ export default function UserInfoView({
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex items-center space-x-2">
-            <Button variant="secondary" onClick={handleResetPassword} className="flex items-center">
-              <RefreshCw />
-              {t("users.userInfo.actions.resetPassword")}
-            </Button>
+            <ControlPlaneActionTooltip reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}>
+              <Button variant="secondary" onClick={handleResetPassword} disabled={Boolean(controlPlane)}>
+                <RefreshCw />
+                {t("users.userInfo.actions.resetPassword")}
+              </Button>
+            </ControlPlaneActionTooltip>
             <Button
               variant="secondary"
               onClick={() => setIsDeleteModalOpen(true)}

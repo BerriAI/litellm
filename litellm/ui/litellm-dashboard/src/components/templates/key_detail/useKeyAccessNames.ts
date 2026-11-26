@@ -5,6 +5,7 @@ import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers"
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { mcpAllowedToolsFor, mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
 import { getAgentsList, vectorStoreListCall } from "@/components/networking";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 
 import type { KeyAccess } from "./keyOverviewSections";
 
@@ -43,6 +44,7 @@ const nameLookup =
     records.find((record) => record.id === id)?.name ?? id;
 
 export function useKeyAccessNames(access: KeyAccess): KeyAccessNames {
+  const controlPlane = useControlPlane();
   const { accessToken } = useAuthorized();
   const { data: servers } = useMCPServers();
   const { data: toolsets } = useMCPToolsets();
@@ -55,7 +57,7 @@ export function useKeyAccessNames(access: KeyAccess): KeyAccessNames {
   const agents = useQuery({
     queryKey: ["keyDetail", "agentNames"],
     queryFn: async () => toNamedRecords((await getAgentsList(accessToken!)).agents, "agent_id", "agent_name"),
-    enabled: Boolean(accessToken) && access.agents.length > 0,
+    enabled: !controlPlane && Boolean(accessToken) && access.agents.length > 0,
   });
 
   const serverCatalog = servers ?? [];

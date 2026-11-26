@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getAgentsList } from "../networking";
 import { InheritedGrant, inheritedGrantTooltip } from "./inheritedGrants";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 
 interface Agent {
   agent_id: string;
@@ -27,6 +28,7 @@ export function AgentPermissions({
   accessToken,
 }: AgentPermissionsProps) {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const [agentDetails, setAgentDetails] = useState<Agent[]>([]);
   const inheritedOnlyAgents = inheritedAgents.filter((grant) => !agents.includes(grant.id));
   const agentIdCount = agents.length + inheritedOnlyAgents.length;
@@ -34,7 +36,7 @@ export function AgentPermissions({
   // Fetch agent details when component mounts
   useEffect(() => {
     const fetchAgentDetails = async () => {
-      if (accessToken && agentIdCount > 0) {
+      if (!controlPlane && accessToken && agentIdCount > 0) {
         try {
           const response = await getAgentsList(accessToken);
           if (response && response.agents && Array.isArray(response.agents)) {
@@ -46,7 +48,7 @@ export function AgentPermissions({
       }
     };
     fetchAgentDetails();
-  }, [accessToken, agentIdCount]);
+  }, [accessToken, agentIdCount, controlPlane]);
 
   // Function to get display name for agent
   const getAgentDisplayName = (agentId: string) => {

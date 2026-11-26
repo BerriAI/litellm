@@ -2,8 +2,9 @@ import { useMCPAccessGroups } from "@/app/(dashboard)/hooks/mcpServers/useMCPAcc
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
-import React from "react";
+import React, { useId } from "react";
 import { useTranslation } from "react-i18next";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
 import type { MCPServer } from "@/components/mcp_tools/types";
 import { accessGroupNamesOf } from "./effectiveMcpServers";
@@ -54,6 +55,8 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   allowAllProxyMcpServers = false,
 }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
+  const unavailableId = useId();
   const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId, userId);
   const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
   const { data: toolsets = [], isLoading: toolsetsLoading } = useMCPToolsets();
@@ -140,9 +143,15 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
         placeholder={placeholder ?? t("mcpServerManagement.serverSelector.placeholder")}
         emptyText={t("mcpServerManagement.serverSelector.empty")}
         loading={loading}
-        disabled={disabled}
+        disabled={disabled || Boolean(controlPlane)}
+        aria-describedby={controlPlane ? unavailableId : undefined}
         className={`w-full ${className ?? ""}`}
       />
+      {controlPlane && (
+        <p id={unavailableId} className="mt-1 text-sm text-muted-foreground">
+          {t("controlPlane.actionUnavailable")}
+        </p>
+      )}
     </div>
   );
 };

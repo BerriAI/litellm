@@ -136,6 +136,7 @@ import type {
   SubscriptionUsageResponse,
 } from "@/app/(dashboard)/usage/_components/components/SubscriptionCost/types";
 import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
+import { controlPlaneProxyOrigin, proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -228,6 +229,8 @@ const updateServerRootPath = (receivedServerRootPath: string) => {
 };
 
 export const getProxyBaseUrl = (): string => {
+  const controlPlaneOrigin = controlPlaneProxyOrigin();
+  if (controlPlaneOrigin) return controlPlaneOrigin;
   if (proxyBaseUrl) {
     return proxyBaseUrl;
   }
@@ -249,6 +252,8 @@ const normalizeHttpUrl = (url: string | null | undefined): string | null => {
 };
 
 export const getGatewayBaseUrl = (): string => {
+  const controlPlaneOrigin = controlPlaneProxyOrigin();
+  if (controlPlaneOrigin) return controlPlaneOrigin;
   if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) {
     return getProxyBaseUrl();
   }
@@ -567,6 +572,14 @@ export const makeModelGroupPublic = async (accessToken: string, modelGroups: str
 };
 
 export const getUiConfig = async () => {
+  const controlPlaneOrigin = controlPlaneProxyOrigin();
+  if (controlPlaneOrigin) {
+    const response = await globalThis.fetch("/litellm/.well-known/litellm-ui-config", {
+      credentials: "omit",
+      redirect: "error",
+    });
+    return (await response.json()) as LiteLLMWellKnownUiConfig;
+  }
   /**Special route to get the proxy base url and server root path */
   const runtimeBackendUrl = defaultProxyBaseUrl
     ? null
@@ -604,6 +617,14 @@ export const getUiConfig = async () => {
   gatewayBaseUrl = normalizeHttpUrl(jsonData.gateway_base_url);
   return jsonData;
 };
+
+export function registerSameOriginProxyBase() {
+  const previous = proxyBaseUrl;
+  proxyBaseUrl = window.location.origin;
+  return () => {
+    proxyBaseUrl = previous;
+  };
+}
 
 export const getPublicModelHubInfo = async () => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub/info` : `/public/model_hub/info`;
@@ -1886,7 +1907,17 @@ export const modelAvailableCall = async (
    * Get all the models user has access to
    */
   try {
-    return await gatewayApiClient.get(`/models`, {
+    if (controlPlaneProxyOrigin()) {
+      const { data } = await gatewayApiClient.get<{
+        data: { model_name: string; model_info?: { access_groups?: string[] } }[];
+      }>("/model/info", { accessToken, query: { teamId: teamID || undefined } });
+      const names = data.flatMap(({ model_name, model_info }) => [
+        ...(!only_model_access_groups && (return_wildcard_routes || !model_name.includes("*")) ? [model_name] : []),
+        ...(model_info?.access_groups ?? []),
+      ]);
+      return { object: "list", data: [...new Set(names)].map((id) => ({ id, object: "model" })) };
+    }
+    return await gatewayApiClient.get("/models", {
       accessToken,
       query: {
         include_model_access_groups: "True",

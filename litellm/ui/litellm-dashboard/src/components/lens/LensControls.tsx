@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { TabsTrigger } from "@/components/ui/tabs";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { $api } from "@/lib/http/api";
 import { toast } from "@/lib/toast";
 import { effectiveLensEnabled, type LensPolicy } from "./lensPolicy";
@@ -106,6 +107,13 @@ function useLensControlState({
 }
 
 export function LensControls(props: LensControlsProps) {
+  const controlPlane = useControlPlane();
+  const { t } = useTranslation();
+  if (controlPlane) return <p>{t("controlPlane.actionUnavailable")}</p>;
+  return <DataplaneLensControls {...props} />;
+}
+
+function DataplaneLensControls(props: LensControlsProps) {
   const { kind, href, teamPolicyStatus = "ready" } = props;
   const { t } = useTranslation();
   const { service, isError, enabled, inherited, canReset, disabled, loadingPolicy, status, saving, updatePolicy } =
@@ -167,15 +175,18 @@ export function LensControls(props: LensControlsProps) {
   );
 }
 
-export function LensCreateField({
-  policy,
-  teamPolicy = null,
-  onChange,
-}: {
+type LensCreateFieldProps = {
   policy: LensPolicy;
   teamPolicy?: LensPolicy;
   onChange: (enabled: boolean) => void;
-}) {
+};
+
+export function LensCreateField(props: LensCreateFieldProps) {
+  const controlPlane = useControlPlane();
+  return controlPlane ? null : <DataplaneLensCreateField {...props} />;
+}
+
+function DataplaneLensCreateField({ policy, teamPolicy = null, onChange }: LensCreateFieldProps) {
   const { t } = useTranslation();
   const { data: service, isPending, isError } = $api.useQuery("get", "/lens/service", undefined, { staleTime: 30_000 });
   const enabled = effectiveLensEnabled(policy, teamPolicy, service?.configured ?? false);

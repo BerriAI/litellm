@@ -37,6 +37,48 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const ignoreUpdate = () => {};
+
+export function ControlPlaneAuthProvider({
+  accessToken,
+  subject,
+  email,
+  canWrite,
+  children,
+}: {
+  accessToken: string;
+  subject: string;
+  email: string | null;
+  canWrite: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <AuthContext.Provider
+      value={{
+        authLoading: false,
+        token: null,
+        userID: subject,
+        userRole: canWrite ? "Admin" : "Admin Viewer",
+        userEmail: email,
+        accessToken,
+        premiumUser: true,
+        disabledPersonalKeyCreation: !canWrite,
+        showSSOBanner: false,
+        passwordResetRequired: false,
+        setToken: ignoreUpdate,
+        setUserID: ignoreUpdate,
+        setUserRole: ignoreUpdate,
+        setUserEmail: ignoreUpdate,
+        setAccessToken: ignoreUpdate,
+        setPremiumUser: ignoreUpdate,
+        setShowSSOBanner: ignoreUpdate,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authLoading, setAuthLoading] = useState(true);
   const [token, setToken] = useState<string | null>(null);

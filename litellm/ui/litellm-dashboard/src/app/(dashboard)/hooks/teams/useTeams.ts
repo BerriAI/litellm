@@ -14,6 +14,7 @@ import { apiClient, teamInfoCall } from "@/components/networking";
 import type { components } from "@/lib/http/schema";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { teamListScopeUserId } from "@/utils/roles";
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
 
 export interface TeamsResponse {
   teams: Team[];

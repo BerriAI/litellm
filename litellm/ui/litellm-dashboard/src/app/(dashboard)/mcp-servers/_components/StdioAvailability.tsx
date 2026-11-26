@@ -7,14 +7,18 @@ import { SelectItem } from "@/components/ui/select";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { TRANSPORT, TRANSPORT_ITEMS } from "@/components/mcp_tools/types";
 import { $api } from "@/lib/http/api";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import en from "@/i18n/locales/en.json";
 
 export const STDIO_DISABLED_MESSAGE_KEY: ParseKeys = "mcpServers.stdioAvailability.disabledMessage";
 
 export const STDIO_DISABLED_MESSAGE = en.mcpServers.stdioAvailability.disabledMessage;
 
-export const useMcpStdioEnabled = (): boolean =>
-  $api.useQuery("get", "/.well-known/litellm-ui-config").data?.mcp_stdio_enabled !== false;
+export const useMcpStdioEnabled = (): boolean => {
+  const controlPlane = useControlPlane();
+  const { data } = $api.useQuery("get", "/.well-known/litellm-ui-config", undefined, { enabled: !controlPlane });
+  return !controlPlane && data?.mcp_stdio_enabled !== false;
+};
 
 export const TransportSelectItems: FC<{ stdioEnabled: boolean }> = ({ stdioEnabled }) => {
   const { t } = useTranslation();

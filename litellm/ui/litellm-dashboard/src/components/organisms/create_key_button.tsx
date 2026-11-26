@@ -5,6 +5,8 @@ import { useTerminology } from "@/contexts/TerminologyContext";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -271,8 +273,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     hint: term(t(option.hint)),
   }));
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
-  const canViewPolicies = useCan("viewPolicies");
-  const canViewPrompts = useCan("viewPrompts");
+  const controlPlane = useControlPlane();
+  const canViewPolicies = useCan("viewPolicies") && !controlPlane;
+  const canViewPrompts = useCan("viewPrompts") && !controlPlane;
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -393,12 +396,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   }, [accessToken, userID, userRole]);
 
   useEffect(() => {
-    if (accessToken) {
+    if (!controlPlane && accessToken) {
       getAgentsList(accessToken)
         .then((res) => setAgentsList(res?.agents || []))
         .catch(() => setAgentsList([]));
     }
-  }, [accessToken]);
+  }, [accessToken, controlPlane]);
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -504,8 +507,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   // Check if team selection is required
   const isTeamSelectionRequired = modelsToPick.includes("no-default-models");
   const isFormDisabled = isTeamSelectionRequired && !selectedCreateKeyTeam;
+  const ownerUnavailable = Boolean(controlPlane && (keyOwner === "service_account" || keyOwner === "agent"));
 
   const handleCreate = async (formValues: MountedFormValues) => {
+    if (ownerUnavailable) return;
     try {
       const input: KeyCreateInput = {
         formValues,
@@ -868,20 +873,24 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       <RadioGroupItem value="you" />
                       {t("createKey.owner.you")}
                     </label>
-                    <label className={KEY_OWNER_LABEL_CLASS}>
-                      <RadioGroupItem value="service_account" />
-                      {t("createKey.owner.serviceAccount")}
-                    </label>
+                    <ControlPlaneActionTooltip reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}>
+                      <label className={KEY_OWNER_LABEL_CLASS}>
+                        <RadioGroupItem value="service_account" disabled={Boolean(controlPlane)} />
+                        {t("createKey.owner.serviceAccount")}
+                      </label>
+                    </ControlPlaneActionTooltip>
                     {ownerScope !== "none" && (
                       <label className={KEY_OWNER_LABEL_CLASS}>
                         <RadioGroupItem value="another_user" />
                         {t("createKey.owner.anotherUser")}
                       </label>
                     )}
-                    <label className={KEY_OWNER_LABEL_CLASS}>
-                      <RadioGroupItem value="agent" />
-                      {t("createKey.owner.agent")} <Badge>{t("createKey.owner.newBadge")}</Badge>
-                    </label>
+                    <ControlPlaneActionTooltip reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}>
+                      <label className={KEY_OWNER_LABEL_CLASS}>
+                        <RadioGroupItem value="agent" disabled={Boolean(controlPlane)} />
+                        {t("createKey.owner.agent")} <Badge>{t("createKey.owner.newBadge")}</Badge>
+                      </label>
+                    </ControlPlaneActionTooltip>
                   </RadioGroup>
                 </Field>
 
@@ -2000,9 +2009,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
               )}
 
               <div style={{ textAlign: "right", marginTop: "10px" }}>
-                <Button type="submit" disabled={isFormDisabled}>
-                  {t("createKey.submit")}
-                </Button>
+                <ControlPlaneActionTooltip reason={ownerUnavailable ? t("controlPlane.actionUnavailable") : undefined}>
+                  <Button type="submit" disabled={isFormDisabled || ownerUnavailable}>
+                    {t("createKey.submit")}
+                  </Button>
+                </ControlPlaneActionTooltip>
               </div>
             </form>
           </MountedFormProvider>

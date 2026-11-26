@@ -103,7 +103,7 @@ litellm_py_pattern='^litellm/.*\.py$'
 e2e_py_pattern='^tests/e2e(_harness)?/.*\.py$'
 e2e_types_pattern='^(tests/e2e(_harness)?/.*\.py|litellm/proxy-extras/.*\.py|pyproject\.toml|uv\.lock)$'
 test_tree_pattern='^(tests/.*\.py|\.github/linters/ruff-tests\.toml|pyproject\.toml|litellm/scripts/(check_test_quality|test_quality_gate)\.py)$'
-spec_pattern='^(litellm/.*|enterprise/.*|pyproject\.toml|uv\.lock|litellm/ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$'
+spec_pattern='^(litellm/.*|enterprise/.*|pyproject\.toml|uv\.lock|litellm/ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/(schema|controlPlaneSchema)\.d\.ts))$'
 ui_prettier_pattern='^litellm/ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$'
 ui_eslint_pattern='^litellm/ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$'
 
@@ -121,7 +121,7 @@ test_tree_files=$(scope_match "$test_tree_pattern")
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' | existing_files)
 spec_files=$({
     scope_match "$spec_pattern" | grep -Ev '^litellm/(ui|vscode-extension|rust|proxy-extras|packaging|cli|scripts|runtime)/' || true
-    scope_match '^litellm/ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts)$'
+    scope_match '^litellm/ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/(schema|controlPlaneSchema)\.d\.ts)$'
 })
 # CI's ui job runs prettier over a wider extension set than eslint; keep that
 # split so this flags exactly what the job would.
@@ -293,6 +293,10 @@ genapi_checks() {
         fi
         if ! git diff --quiet -- litellm/ui/litellm-dashboard/src/lib/http/schema.d.ts; then
             echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and commit; re-run make check only if other checks failed too." >&2
+            status=1
+        fi
+        if ! git diff --quiet -- litellm/ui/litellm-dashboard/src/lib/http/controlPlaneSchema.d.ts; then
+            echo "✗ Control plane API types are stale; regenerated src/lib/http/controlPlaneSchema.d.ts. Stage it and commit; re-run make check only if other checks failed too." >&2
             status=1
         fi
     else

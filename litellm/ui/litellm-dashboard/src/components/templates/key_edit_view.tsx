@@ -72,6 +72,7 @@ import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
 import { getPromptsList, modelAvailableCall, tagListCall } from "../networking";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { fetchTeamModels } from "../organisms/create_key_button";
 import NumericalInput from "../shared/numerical_input";
 import { MultiSelect } from "../shared/MultiSelect";
@@ -112,8 +113,9 @@ function KeyEditSession({
 }: KeyEditViewProps) {
   const { t } = useTranslation();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
-  const canViewPolicies = hasCapability(userRole, "viewPolicies");
-  const canViewPrompts = hasCapability(userRole, "viewPrompts");
+  const controlPlane = useControlPlane();
+  const canViewPolicies = !controlPlane && hasCapability(userRole, "viewPolicies");
+  const canViewPrompts = !controlPlane && hasCapability(userRole, "viewPrompts");
   const canEditEstimates = userRole != null && isProxyAdminRole(userRole);
   const estimateTooltip = estimateTooltips(canEditEstimates);
   const form = useZodForm<KeyEditFormValues, KeyEditFormValues>(keyEditFormSchema, {

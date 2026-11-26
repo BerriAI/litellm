@@ -1,3 +1,5 @@
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
@@ -69,11 +71,12 @@ const fetchProjects = async (accessToken: string): Promise<ProjectResponse[]> =>
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export const useProjects = () => {
+  const controlPlane = useControlPlane();
   const { accessToken, userRole } = useAuthorized();
 
   return useQuery<ProjectResponse[]>({
     queryKey: projectKeys.list({}),
     queryFn: async () => fetchProjects(accessToken!),
-    enabled: Boolean(accessToken) && canReadProjects(userRole),
+    enabled: !controlPlane && Boolean(accessToken) && canReadProjects(userRole),
   });
 };

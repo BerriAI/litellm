@@ -23,7 +23,10 @@ vi.mock("./useModelDashboardData", () => ({
   useModelDashboardData: () => ({ availableModelAccessGroups: [], allModelsOnProxy: [], availableModelGroups: [] }),
 }));
 
-const authState = vi.hoisted(() => ({ userRole: "Admin", isViewOnly: false }));
+const authState = vi.hoisted(() => ({ userRole: "Admin", isViewOnly: false, controlPlane: false }));
+vi.mock("@/contexts/ControlPlaneContext", () => ({
+  useControlPlane: () => (authState.controlPlane ? {} : null),
+}));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({
     token: "123",
@@ -201,6 +204,7 @@ describe("ModelsAndEndpointsPage ?team drill-in", () => {
   beforeEach(() => {
     authState.userRole = "Admin";
     authState.isViewOnly = false;
+    authState.controlPlane = false;
     can.mockReturnValue(true);
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
@@ -220,6 +224,15 @@ describe("ModelsAndEndpointsPage ?team drill-in", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("disables unproxied model settings and falls back to deployed models on a direct link", () => {
+    authState.controlPlane = true;
+    renderWithProviders(<ModelsAndEndpointsPage />, { searchParams: { tab: "pass-through" } });
+
+    expect(screen.getByRole("tab", { name: "Pass-Through Endpoints" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("tab", { name: "Model Retry Settings" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("tab", { name: "Deployed Models" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("shows the Disable all global guardrails switch to a proxy admin session", async () => {

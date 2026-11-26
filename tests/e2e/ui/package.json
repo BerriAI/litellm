@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "e2e": "playwright test --config playwright.config.ts",
+    "e2e:control-plane": "playwright test --config controlPlane.config.ts",
     "e2e:ui": "playwright test --ui --config playwright.config.ts",
     "e2e:migration": "playwright test tests/migration/migratedPages.spec.ts --config playwright.config.ts",
     "e2e:migration:root": "playwright test --config migration.serverRootPath.config.ts"

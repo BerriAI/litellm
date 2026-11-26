@@ -1,5 +1,7 @@
 import { parseAsString, useQueryState } from "nuqs";
 import { useResetDetailState } from "@/hooks/useUrlTab";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { User } from "lucide-react";
@@ -64,7 +66,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   orgAdminOrgIds,
 }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
+  const canLoadUsers = Boolean(accessToken && (controlPlane || token) && userRole && userID);
   const queryClient = useQueryClient();
 
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
@@ -266,7 +270,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         searchFilter,
       );
     },
-    enabled: Boolean(accessToken && token && userRole && userID),
+    enabled: canLoadUsers,
     placeholderData: (previousData) => previousData,
   });
 
@@ -277,7 +281,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       if (!accessToken) throw new Error("Access token required");
       return await getPossibleUserRoles(accessToken);
     },
-    enabled: Boolean(accessToken && token && userRole && userID),
+    enabled: canLoadUsers,
   });
   const possibleUIRoles = userRolesQuery.data;
 
@@ -386,9 +390,15 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   <PageTabsTrigger value="users" className="data-active:text-primary after:bg-primary">
                     {t("users.page.tabs.users")}
                   </PageTabsTrigger>
-                  <PageTabsTrigger value="default-settings" className="data-active:text-primary after:bg-primary">
-                    {t("users.page.tabs.defaultSettings")}
-                  </PageTabsTrigger>
+                  <ControlPlaneActionTooltip reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}>
+                    <PageTabsTrigger
+                      value="default-settings"
+                      className="data-active:text-primary after:bg-primary"
+                      disabled={Boolean(controlPlane)}
+                    >
+                      {t("users.page.tabs.defaultSettings")}
+                    </PageTabsTrigger>
+                  </ControlPlaneActionTooltip>
                 </PageTabsBar>
               ) : (
                 <div className="flex flex-wrap gap-2">{userActions}</div>
@@ -402,24 +412,26 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                 {usersTable}
               </TabsContent>
 
-              <TabsContent value="default-settings" keepMounted>
-                {!userID || !userRole || !accessToken ? (
-                  <div
-                    className="flex h-64 items-center justify-center"
-                    role="status"
-                    aria-label={t("users.page.defaultSettingsLoading")}
-                  >
-                    <div className="w-full max-w-lg space-y-3">
-                      <Skeleton className="h-5 w-1/3" />
-                      <Skeleton className="h-5 w-full" />
-                      <Skeleton className="h-5 w-full" />
-                      <Skeleton className="h-5 w-2/3" />
+              {!controlPlane && (
+                <TabsContent value="default-settings" keepMounted>
+                  {!userID || !userRole || !accessToken ? (
+                    <div
+                      className="flex h-64 items-center justify-center"
+                      role="status"
+                      aria-label={t("users.page.defaultSettingsLoading")}
+                    >
+                      <div className="w-full max-w-lg space-y-3">
+                        <Skeleton className="h-5 w-1/3" />
+                        <Skeleton className="h-5 w-full" />
+                        <Skeleton className="h-5 w-full" />
+                        <Skeleton className="h-5 w-2/3" />
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <DefaultUserSettingsForm possibleUIRoles={possibleUIRoles} />
-                )}
-              </TabsContent>
+                  ) : (
+                    <DefaultUserSettingsForm possibleUIRoles={possibleUIRoles} />
+                  )}
+                </TabsContent>
+              )}
             </>
           ) : (
             usersTable

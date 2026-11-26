@@ -16,6 +16,8 @@ import { Button } from "@/components/ui/button";
 import React, { useEffect, useMemo, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import TeamDropdown from "../common_components/team_dropdown";
 import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
@@ -89,6 +91,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   decisionCatalog,
 }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const [testMode, setTestMode] = useState<string>("chat");
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
@@ -516,15 +519,19 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                       </a>
                     </SimpleTooltip>
                     <div className="space-x-2">
-                      <Button
-                        variant="outline"
-                        data-testid="test-connect-btn"
-                        onClick={handleTestConnection}
-                        disabled={isTestingConnection}
-                        aria-busy={isTestingConnection}
+                      <ControlPlaneActionTooltip
+                        reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}
                       >
-                        {t("addModel.addModelForm.testConnect")}
-                      </Button>
+                        <Button
+                          variant="outline"
+                          data-testid="test-connect-btn"
+                          onClick={handleTestConnection}
+                          disabled={isTestingConnection || Boolean(controlPlane)}
+                          aria-busy={isTestingConnection}
+                        >
+                          {t("addModel.addModelForm.testConnect")}
+                        </Button>
+                      </ControlPlaneActionTooltip>
                       <Button data-testid="add-model-btn" type="submit">
                         {t("addModel.addModelForm.submit")}
                       </Button>

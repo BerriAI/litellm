@@ -14,6 +14,7 @@ import { formatBudgetResetTime } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { canModifyKey as canModifyVirtualKey } from "@/utils/keyPermissions";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { ArrowLeft, SearchX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -119,6 +120,8 @@ export default function KeyInfoView({
 }: KeyInfoViewProps) {
   const { t } = useTranslation();
   const { accessToken, userId: userID, userRole, premiumUser, isViewOnly } = useAuthorized();
+  const controlPlane = useControlPlane();
+  const enterpriseRegenTooltip = premiumUser ? undefined : t("keyDetail.keyInfoView.header.enterpriseOnly");
   const accessGroupNames = useModelAccessGroupNames();
   const activityDateRange = useActivityDateRange();
   const [activeTab, setActiveTab] = useUrlTab(
@@ -171,7 +174,7 @@ export default function KeyInfoView({
   useEffect(() => {
     const fetchPolicyGuardrails = async () => {
       const policies = currentKeyData?.metadata?.policies;
-      if (!accessToken || !policies || !Array.isArray(policies) || policies.length === 0) {
+      if (controlPlane || !accessToken || !policies || !Array.isArray(policies) || policies.length === 0) {
         return;
       }
 
@@ -199,7 +202,7 @@ export default function KeyInfoView({
     };
 
     fetchPolicyGuardrails();
-  }, [accessToken, currentKeyData?.metadata?.policies]);
+  }, [accessToken, controlPlane, currentKeyData?.metadata?.policies]);
 
   // Reset recent regeneration indicator after 5 seconds
   useEffect(() => {
@@ -692,8 +695,8 @@ export default function KeyInfoView({
             isBlocked={isBlocked}
             canModifyKey={canModifyKey}
             backButtonText={backButtonText}
-            regenerateDisabled={!premiumUser}
-            regenerateTooltip={!premiumUser ? t("keyDetail.keyInfoView.header.enterpriseOnly") : undefined}
+            regenerateDisabled={Boolean(controlPlane) || !premiumUser}
+            regenerateTooltip={controlPlane ? t("controlPlane.actionUnavailable") : enterpriseRegenTooltip}
             tabs={<KeyTabsList showAutoRouter={hasProxyWideSpendView(userRole)} />}
           />
 

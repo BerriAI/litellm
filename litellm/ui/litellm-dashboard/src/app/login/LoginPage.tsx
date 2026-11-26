@@ -40,7 +40,7 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
-function LoginLogo() {
+export function LoginLogo() {
   return (
     <div className="flex justify-center">
       <img

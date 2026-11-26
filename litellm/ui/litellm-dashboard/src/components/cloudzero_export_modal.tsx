@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { CircleCheck, FileDown } from "lucide-react";
 import { z } from "zod";
 import { getGlobalLitellmHeaderName } from "@/components/networking";
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
 import { toast } from "@/lib/toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { PasswordInput } from "@/components/shared/PasswordInput";

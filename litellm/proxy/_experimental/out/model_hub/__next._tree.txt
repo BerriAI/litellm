@@ -1,6 +1,10 @@
-:HL["/litellm-asset-prefix/_next/static/chunks/1bnh8r0-prf7e.css","style"]
-:HL["/litellm-asset-prefix/_next/static/chunks/0598zsj78ni2h.css","style"]
-:HL["/litellm-asset-prefix/_next/static/media/83afe278b6a6bb3c-s.p.2bn3s6zvc0dyp.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/litellm-asset-prefix/_next/static/chunks/35w28dc8qn7_1.css","style"]
+:HL["/litellm-asset-prefix/_next/static/chunks/30do28ua4lalj.css","style"]
+:HL["/litellm-asset-prefix/_next/static/media/066ba92c8fc1c222-s.p.3lj349bs9hfu1.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/litellm-asset-prefix/_next/static/media/07c7676b89ed2778-s.p.2bn3s6zvc0dyp.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/litellm-asset-prefix/_next/static/media/660acf689794c992-s.p.2_mbdogr7ni8i.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/litellm-asset-prefix/_next/static/media/73c8302d2fdfe340-s.p.30xqm3yldpj47.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/litellm-asset-prefix/_next/static/chunks/2x2zuvmf9mima.css","style"]
 2:[["children",{"s":"__PAGE__","h":160}]]
 1:[["children",{"s":"model_hub","h":96,"c":"$Q2"}]]
-0:{"b":"gyn32IHLXvPl9GksQaEMb","t":{"t":{"s":"","h":80,"c":"$Q1"}}}
+0:{"b":"z_2D0qlhTphppiKyJZJbE","t":{"t":{"s":"","h":80,"c":"$Q1"}}}

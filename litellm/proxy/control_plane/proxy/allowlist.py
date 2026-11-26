@@ -44,6 +44,14 @@ MANAGEMENT_PREFIXES: Final = (
 )
 
 HEALTH_READ_ROUTES: Final = frozenset({"/health/readiness", "/health/liveliness", "/health/liveness", "/health/latest"})
+MODEL_CATALOG_READ_ROUTES: Final = frozenset(
+    {
+        "/public/providers/fields",
+        "/public/litellm_model_cost_map",
+        "/public/autorouter_presets",
+        "/public/complexity_router/scorer_defaults",
+    }
+)
 
 DENIED_PREFIXES: Final = (
     "/health/drain",
@@ -90,7 +98,7 @@ def _normalize(raw_path: str) -> str | None:
     return path[:-1] if path != "/" and path.endswith("/") and not path.endswith("//") else path
 
 
-def decide(raw_path: str) -> Allowed | Denied:
+def decide(raw_path: str, *, is_read: bool = False) -> Allowed | Denied:
     path: Final = _normalize(raw_path)
     if path is None:
         return Denied("/" + raw_path.lstrip("/"), "encoded or reserved path characters are not allowed")
@@ -107,6 +115,8 @@ def decide(raw_path: str) -> Allowed | Denied:
     if _matches(unversioned, "/mcp/server") and any(segment.lower().startswith("oauth") for segment in segments):
         return Denied(path, "OAuth routes never go through the control plane")
     if path in HEALTH_READ_ROUTES:
+        return Allowed(path)
+    if is_read and path in MODEL_CATALOG_READ_ROUTES:
         return Allowed(path)
     if not any(_matches(path, prefix) for prefix in MANAGEMENT_PREFIXES):
         return Denied(path, "only management routes are proxied, inference goes straight to the dataplane")

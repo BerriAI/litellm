@@ -1,3 +1,4 @@
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
 import { useQuery, UseQueryResult } from "@tanstack/react-query";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import { createQueryKeys } from "../common/queryKeysFactory";

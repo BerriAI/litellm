@@ -5,6 +5,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { getProxyBaseUrl } from "@/components/networking";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +18,14 @@ import { productNames } from "@/i18n/untranslated/productNames";
 const LOGO_CLASS_NAME =
   "h-5 w-auto max-w-[150px] object-contain group-data-[collapsible=icon]:h-6 group-data-[collapsible=icon]:w-6";
 
-function bundledLogoSrc(baseUrl: string, { dark, monogram }: { dark: boolean; monogram: boolean }): string {
+function bundledLogoSrc(
+  baseUrl: string,
+  { dark, monogram, controlPlane }: { dark: boolean; monogram: boolean; controlPlane: boolean },
+): string {
+  if (controlPlane) {
+    const suffix = dark ? "_dark" : "";
+    return uiHref(`assets/logos/${monogram ? `litellm_monogram${suffix}.svg` : `litellm_logo${suffix}.png`}`);
+  }
   const query = [dark && "theme=dark", monogram && "variant=monogram"].filter(Boolean).join("&");
   return `${baseUrl}/get_image${query ? `?${query}` : ""}`;
 }
@@ -36,12 +44,15 @@ export function SidebarBrand({
   const collapsed = state === "collapsed" && !isMobile;
   const { logoUrl, logoUrlDark } = useTheme();
   const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
-  const { data: healthData } = useHealthReadinessDetails(accessToken);
-  const version = healthData?.litellm_version;
+  const session = useControlPlane();
+  const { data: healthData } = useHealthReadinessDetails(session ? null : accessToken);
+  const version = session ? session.version : healthData?.litellm_version;
   const baseUrl = getProxyBaseUrl();
-  const logoSrc = logoUrl || bundledLogoSrc(baseUrl, { dark: false, monogram: collapsed });
+  const controlPlane = Boolean(session);
+  const logoSrc = logoUrl || bundledLogoSrc(baseUrl, { dark: false, monogram: collapsed, controlPlane });
   const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
-  const darkLogoSrc = reachableDarkLogo || logoUrl || bundledLogoSrc(baseUrl, { dark: true, monogram: collapsed });
+  const darkLogoSrc =
+    reachableDarkLogo || logoUrl || bundledLogoSrc(baseUrl, { dark: true, monogram: collapsed, controlPlane });
   return (
     <SidebarHeader className="h-14 flex-none border-b border-border p-3 group-data-[collapsible=icon]:h-auto group-data-[collapsible=icon]:py-2">
       <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:gap-1">

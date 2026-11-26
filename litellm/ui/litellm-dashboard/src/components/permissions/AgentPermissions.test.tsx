@@ -4,6 +4,10 @@ import userEvent from "@testing-library/user-event";
 import AgentPermissions from "./AgentPermissions";
 import * as networking from "../networking";
 
+const mode = vi.hoisted(() => ({ controlPlane: false }));
+vi.mock("@/contexts/ControlPlaneContext", () => ({
+  useControlPlane: () => (mode.controlPlane ? {} : null),
+}));
 vi.mock("../networking");
 
 describe("AgentPermissions", () => {
@@ -12,6 +16,16 @@ describe("AgentPermissions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mode.controlPlane = false;
+  });
+
+  it("displays a granted agent ID without requesting the unavailable catalog in control-plane mode", () => {
+    mode.controlPlane = true;
+
+    render(<AgentPermissions agents={[agentId]} accessToken={accessToken} />);
+
+    expect(screen.getByText(agentId)).toBeInTheDocument();
+    expect(networking.getAgentsList).not.toHaveBeenCalled();
   });
 
   it("lists agents inherited from access groups, counts them, and names the groups on hover", async () => {

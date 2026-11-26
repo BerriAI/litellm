@@ -7,11 +7,13 @@ import { effectiveSessionRole, formatUserRole, isViewOnlySessionRole, userRoleDi
 import { useCurrentUser } from "./currentUser/useCurrentUser";
 import { redirectToLogin } from "./redirectToLogin";
 import { useUIConfig } from "./uiConfig/useUIConfig";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 
 const useAuthorized = () => {
+  const controlPlane = useControlPlane();
   const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
 
-  const token = typeof document !== "undefined" ? getCookie("token") : null;
+  const token = !controlPlane && typeof document !== "undefined" ? getCookie("token") : null;
 
   const decoded = useMemo(() => decodeToken(token), [token]);
   const isTokenValid = useMemo(() => checkTokenValidity(token), [token]);
@@ -26,7 +28,7 @@ const useAuthorized = () => {
 
   // Single useEffect for all redirect logic
   useEffect(() => {
-    if (isLoading) return;
+    if (controlPlane || isLoading) return;
 
     if (!isAuthorized) {
       if (token) {
@@ -34,7 +36,28 @@ const useAuthorized = () => {
       }
       redirectToLogin();
     }
-  }, [isLoading, isAuthorized, token]);
+  }, [controlPlane, isLoading, isAuthorized, token]);
+
+  if (controlPlane) {
+    const { principal, token: accessToken, canWrite } = controlPlane;
+    return {
+      isLoading: false,
+      isAuthorized: true,
+      token: null,
+      accessToken,
+      userId: principal.subject,
+      userEmail: principal.email ?? null,
+      userAlias: null,
+      userRole: canWrite ? "Admin" : "Admin Viewer",
+      userRoleLabel: canWrite ? "Admin" : "Admin Viewer",
+      isViewOnly: !canWrite,
+      premiumUser: true,
+      disabledPersonalKeyCreation: !canWrite,
+      loginMethod: null,
+      showSSOBanner: false,
+      passwordResetRequired: false,
+    };
+  }
 
   return {
     isLoading,

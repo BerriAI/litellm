@@ -11,3 +11,4 @@ build
 coverage/
 eslint-suppressions.json
 src/lib/http/schema.d.ts
+src/lib/http/controlPlaneSchema.d.ts

@@ -1,4 +1,5 @@
 import { getProxyBaseUrl, getProxyUISettings } from "@/components/networking";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
@@ -19,6 +20,7 @@ const EMPTY_PROXY_SETTINGS: ProxySettings = {
 };
 
 export function useProxySettingsQuery(accessToken: string | null) {
+  const controlPlane = useControlPlane();
   const managementBaseUrl = getProxyBaseUrl();
   return useQuery({
     queryKey: [...proxySettingsKeys.all, managementBaseUrl, accessToken],
@@ -26,7 +28,7 @@ export function useProxySettingsQuery(accessToken: string | null) {
       if (getProxyBaseUrl() !== managementBaseUrl) throw new Error("Gateway changed while loading settings.");
       return accessToken ? getProxyUISettings(accessToken) : null;
     },
-    enabled: Boolean(accessToken),
+    enabled: !controlPlane && Boolean(accessToken),
   });
 }
 

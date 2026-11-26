@@ -50,6 +50,28 @@ def test_get_with_a_trailing_slash_reaches_the_dataplane_without_it() -> None:
     assert transport.calls[0][0] == f"{EU}/key/list"
 
 
+@pytest.mark.parametrize(
+    ("path", "catalog"),
+    [
+        ("/public/providers/fields", [{"provider": "openai", "provider_display_name": "OpenAI"}]),
+        ("/public/litellm_model_cost_map?catalog_only=true", {"gpt-4o": {"litellm_provider": "openai"}}),
+    ],
+)
+def test_model_catalog_can_be_read_but_cannot_be_written_through_the_dataplane(path: str, catalog: object) -> None:
+    route, _, query = path.partition("?")
+    client, transport, minter = rig({f"{EU}{route}": [response(200, catalog)]})
+    proxy_path: Final = f"/api/v1/dataplanes/eu/proxy{path}"
+
+    read: Final = client.get(proxy_path, headers=minter.headers("eu", role=VIEWER_ROLE))
+    write: Final = client.post(proxy_path, headers=minter.headers("eu", role=EDITOR_ROLE))
+
+    assert (read.status_code, read.json()) == (200, catalog)
+    assert read.headers["X-LiteLLM-Dataplane"] == "eu"
+    assert write.status_code == 403
+    expected_query: Final = (("catalog_only", "true"),) if query else ()
+    assert [(url, params) for url, params, _ in transport.calls] == [(f"{EU}{route}", expected_query)]
+
+
 def test_oversized_dataplane_response_is_a_control_plane_bad_gateway() -> None:
     client, transport, minter = rig({f"{EU}/key/list": [response(200, {"oversized": "body"})]})
     client.app.dependency_overrides[get_dataplane_client] = lambda: DataplaneClient(

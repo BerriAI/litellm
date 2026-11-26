@@ -6,6 +6,9 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { useTerminology } from "@/contexts/TerminologyContext";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { controlPlanePageReason, controlPlaneRoute } from "@/lib/controlPlaneNavigation";
+import { controlPlaneMenuGroup, UnavailableControlPlaneItem } from "@/components/ControlPlaneSidebar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sidebar,
@@ -568,18 +571,17 @@ const findParentKey = (route: string): string | null => {
   return null;
 };
 
-const findMenuItemKey = (route: string): string => {
-  for (const group of [...menuGroups, ...customerPortalGroups]) {
-    for (const item of group.items) {
-      if (routeOf(item) === route) return item.key;
-      const child = item.children?.find((c) => routeOf(c) === route);
-      if (child) return child.key;
+const findMenuItem = (route: string, groups: readonly MenuGroup[]) => {
+  for (const { groupLabel, items } of groups) {
+    for (const item of items) {
+      const match = routeOf(item) === route ? item : item.children?.find((c) => routeOf(c) === route);
+      if (match) return { item: match, groupLabel };
     }
   }
-  return HOME_ROUTE;
 };
 
 const GROUP_LABELS: Record<string, ParseKeys> = {
+  "controlPlane.globalControlPlane": "controlPlane.globalControlPlane",
   "AI GATEWAY": "shell.nav.groups.aiGateway",
   "CUSTOMER MANAGEMENT": "shell.nav.groups.customerPortal",
   OBSERVABILITY: "shell.nav.groups.observability",
@@ -616,15 +618,10 @@ export const labelText = (item: MenuItem): string =>
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
   const route = routeForPathname(pathname);
   if (route === "aria") return { section: null, title: "Aria Agent" };
-  for (const group of [...menuGroups, ...customerPortalGroups]) {
-    for (const item of group.items) {
-      const section = sectionText(group.groupLabel);
-      if (routeOf(item) === route) return { section, title: labelText(item) };
-      const child = item.children?.find((c) => routeOf(c) === route);
-      if (child) return { section, title: labelText(child) };
-    }
-  }
-  return { section: null, title: prettify(route) };
+  const match = findMenuItem(route, [...menuGroups, ...customerPortalGroups]);
+  return match
+    ? { section: sectionText(match.groupLabel), title: labelText(match.item) }
+    : { section: null, title: prettify(route) };
 };
 
 const groupsOpenFor = (route: string) => {
@@ -639,6 +636,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
 }) => {
+  const controlPlane = useControlPlane();
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
   const { mode: pluginMode } = usePluginMode();
   const { t } = useTranslation();
@@ -653,8 +651,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
     if (event.target instanceof Element && event.target.closest("a[href]")) setOpenMobile(false);
   };
 
-  const currentRoute = routeForPathname(usePathname());
-  const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
+  const pathname = usePathname();
+  const currentRoute = controlPlane ? controlPlaneRoute(pathname) || HOME_ROUTE : routeForPathname(pathname);
+  const selectedMenuItem = findMenuItem(currentRoute, [...menuGroups, ...customerPortalGroups, controlPlaneMenuGroup]);
+  const selectedKey = currentRoute === "aria" ? null : selectedMenuItem?.item.key ?? (controlPlane ? null : HOME_ROUTE);
   const inLensWorkspace = currentRoute === LENS_ROUTE;
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => groupsOpenFor(currentRoute));
@@ -675,6 +675,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const { hasGrant: hasAppGrant } = useGrantedApps();
 
   const visibleGroups = useMemo(() => {
+    if (controlPlane) return [controlPlaneMenuGroup, ...menuGroups];
     const context: MenuVisibilityContext = {
       userRole,
       isViewOnly,
@@ -689,6 +690,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
     };
     return visibleMenuGroups(pluginMode === "customer-portal" ? customerPortalGroups : menuGroups, context);
   }, [
+    controlPlane,
     pluginMode,
     allowAgentsForTeamAdmins,
     allowVectorStoresForTeamAdmins,
@@ -737,6 +739,13 @@ const Sidebar_: React.FC<SidebarProps> = ({
     const active = selectedKey === item.key;
     const title = collapsed ? term(labelText(item)) : undefined;
     if (!item.children?.length) {
+      const reason = controlPlane && controlPlanePageReason(routeOf(item).split("/").at(-1) ?? "", controlPlane, t);
+      if (reason)
+        return (
+          <UnavailableControlPlaneItem key={item.key} reason={reason} className={navMenuButtonClassName}>
+            {leafContent(item)}
+          </UnavailableControlPlaneItem>
+        );
       return (
         <SidebarMenuItem key={item.key}>
           <SidebarMenuButton isActive={active} title={title} className={navMenuButtonClassName} render={leafLink(item)}>
@@ -791,11 +800,13 @@ const Sidebar_: React.FC<SidebarProps> = ({
         <SidebarBrand accessToken={accessToken} homeLabel={t("shell.nav.homeLink")} />
 
         <SidebarGroup className="gap-1 px-3 pt-3 pb-1">
-          <ViewSwitcher
-            collapsed={collapsed}
-            className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsible=icon]:[&_[data-slot=workspace-label]]:hidden"
-          />
-          {!inLensWorkspace && <AriaSidebarLink active={currentRoute === "aria"} />}
+          {!controlPlane && (
+            <ViewSwitcher
+              collapsed={collapsed}
+              className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsible=icon]:[&_[data-slot=workspace-label]]:hidden"
+            />
+          )}
+          {!controlPlane && !inLensWorkspace && <AriaSidebarLink active={currentRoute === "aria"} />}
         </SidebarGroup>
         <SidebarContent>
           <ScrollArea className="min-h-0 flex-1">
@@ -825,10 +836,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
         </SidebarContent>
 
         <SidebarFooter className="flex-none gap-2.5 border-t border-sidebar-border p-3">
-          {isAdminRole(userRole) && (
+          {!controlPlane && isAdminRole(userRole) && (
             <SidebarUsageCard accessToken={accessToken} collapsed={collapsed} onExpandRail={() => setOpen(true)} />
           )}
-          <SidebarAccountMenu onLogout={logout} collapsed={collapsed} />
+          <SidebarAccountMenu onLogout={controlPlane?.logout ?? logout} collapsed={collapsed} />
         </SidebarFooter>
       </div>
     </Sidebar>

@@ -45,6 +45,15 @@ vi.mock("../utils/roles", async (importOriginal) => {
 
 const navState = vi.hoisted(() => ({ pathname: "/ui/api-keys" }));
 const health = vi.hoisted(() => ({ version: undefined as string | undefined }));
+const controlPlane = vi.hoisted(() => ({ version: undefined as string | undefined }));
+
+vi.mock("@/contexts/ControlPlaneContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/contexts/ControlPlaneContext")>()),
+  useControlPlane: () =>
+    controlPlane.version
+      ? { version: controlPlane.version, selected: "east", principal: { scopes: ["fleet:read", "proxy:read"] } }
+      : null,
+}));
 
 vi.mock("next/navigation", () => ({
   usePathname: () => navState.pathname,
@@ -180,6 +189,7 @@ describe("Sidebar (leftnav)", () => {
     mockUseThemeImpl = unbrandedTheme;
     navState.pathname = "/ui/api-keys";
     health.version = undefined;
+    controlPlane.version = undefined;
     uiConfig.data = { admin_ui_disabled: false, use_si_terminology: false };
     localStorage.removeItem("litellm_plugin_mode");
   });
@@ -720,6 +730,16 @@ describe("Sidebar (leftnav)", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
     expect(screen.getByRole("link", { name: "Logs" })).toHaveAttribute("data-active");
     expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
+  });
+
+  it("highlights only the native control-plane route and shows the discovery version", () => {
+    navState.pathname = "/ui/control-plane/fleet-models";
+    controlPlane.version = "1.2.3";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: "Fleet Models" })).toHaveAttribute("data-active");
+    expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
+    expect(screen.getByRole("link", { name: "v1.2.3" })).toBeVisible();
   });
 
   it("closes the mobile drawer after following any link in it, including the page already open", async () => {

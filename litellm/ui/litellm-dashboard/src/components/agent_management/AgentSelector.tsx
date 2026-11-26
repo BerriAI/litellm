@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { getAgentsList } from "../networking";
 import i18n from "@/i18n/i18n";
 
@@ -32,13 +34,14 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
   disabled = false,
 }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [accessGroups, setAccessGroups] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
-      if (!accessToken) return;
+      if (controlPlane || !accessToken) return;
       setLoading(true);
       try {
         const response = await getAgentsList(accessToken);
@@ -61,7 +64,7 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
       }
     };
     fetchData();
-  }, [accessToken]);
+  }, [accessToken, controlPlane]);
 
   // Combine options, access groups first
   const options: MultiSelectOption[] = [
@@ -88,7 +91,7 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
   };
 
   return (
-    <div>
+    <ControlPlaneActionTooltip reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}>
       <MultiSelect
         options={options}
         value={selectedValues}
@@ -96,10 +99,10 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
         placeholder={placeholder}
         emptyText={t("agentSelector.empty")}
         loading={loading}
-        disabled={disabled}
+        disabled={disabled || Boolean(controlPlane)}
         className={`w-full ${className ?? ""}`}
       />
-    </div>
+    </ControlPlaneActionTooltip>
   );
 };
 
