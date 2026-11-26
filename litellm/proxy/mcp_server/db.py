@@ -2027,6 +2027,25 @@ async def invalidate_user_oauth_credential_if_grant_matches(
     return written > 0
 
 
+async def delete_user_oauth_credential_if_grant_matches(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    access_token: str,
+    refresh_token: str | None,
+) -> bool:
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
+    grant: Final = None if row is None else decode_oauth_payload(row.credential_b64)
+    if row is None or grant is None:
+        return False
+    if grant.get("access_token") != access_token or grant.get("refresh_token") != refresh_token:
+        return False
+    deleted: Final = await _user_credential_actions(prisma_client, use_writer=True).delete_many(
+        where={"user_id": row.user_id, "server_id": row.server_id, "credential_b64": row.credential_b64}
+    )
+    return deleted > 0
+
+
 async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:
     """Note on the saved grant that the provider refused a call for ``scope``, so the connect page sends the user
     back to the provider. The next sign-in drops the note; a grant saved since the read is left alone."""

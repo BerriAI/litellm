@@ -35,6 +35,7 @@ from litellm.proxy.mcp_server.db import (
     _prepare_mcp_server_data,
     create_mcp_server,
     decrypt_credentials,
+    delete_user_oauth_credential_if_grant_matches,
     encrypt_credentials,
     get_all_mcp_servers,
     get_mcp_servers,
@@ -978,6 +979,37 @@ async def test_invalidated_grants_are_absent_from_user_and_admin_credential_surf
     assert await list_server_user_credentials(prisma, "srv-1") == ()
     invalidated_metadata: Final = await get_user_oauth_credential(prisma, "alice", "srv-1", include_invalidated=True)
     assert invalidated_metadata is not None and invalidated_metadata["refresh_token"] == "rt-old"
+
+
+@pytest.mark.asyncio
+async def test_conditional_revocation_deletes_a_tombstone_but_never_a_replacement_grant(
+    credentials_prisma: SimpleNamespace,
+) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
+    assert await invalidate_user_oauth_credential_if_grant_matches(
+        credentials_prisma, "alice", "srv-1", "at-old", "rt-old"
+    )
+
+    deleted: Final = await delete_user_oauth_credential_if_grant_matches(
+        credentials_prisma, "alice", "srv-1", "", "rt-old"
+    )
+    assert deleted is True
+    assert await get_user_oauth_credential(credentials_prisma, "alice", "srv-1", include_invalidated=True) is None
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
+    assert await invalidate_user_oauth_credential_if_grant_matches(
+        credentials_prisma, "alice", "srv-1", "at-old", "rt-old"
+    )
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new", refresh_token="rt-new")
+
+    replacement_deleted: Final = await delete_user_oauth_credential_if_grant_matches(
+        credentials_prisma, "alice", "srv-1", "", "rt-old"
+    )
+    assert replacement_deleted is False
+    assert rows.rows[("alice", "srv-1")] is not None
+    grant: Final = await _saved_grant(credentials_prisma)
+    assert (grant["access_token"], grant["refresh_token"]) == ("at-new", "rt-new")
 
 
 @pytest.mark.asyncio

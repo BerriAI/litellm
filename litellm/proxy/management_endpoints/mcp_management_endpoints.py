@@ -218,6 +218,7 @@ if MCP_AVAILABLE:
         delete_mcp_server,
         delete_user_credential,
         delete_user_env_vars,
+        delete_user_oauth_credential_if_grant_matches,
         get_all_mcp_servers,
         get_draft_mcp_server,
         get_mcp_server,
@@ -2818,10 +2819,13 @@ if MCP_AVAILABLE:
             prisma_client, target_user_id, server_id, include_invalidated=True
         )
         if cred_to_delete is not None:
-            try:
-                await delete_user_credential(prisma_client, target_user_id, server_id)
-            except RecordNotFoundError:
-                pass  # Already gone — treat as a successful delete
+            await delete_user_oauth_credential_if_grant_matches(
+                prisma_client,
+                target_user_id,
+                server_id,
+                access_token=cred_to_delete["access_token"],
+                refresh_token=cred_to_delete.get("refresh_token"),
+            )
             from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415
                 global_mcp_server_manager,
             )

@@ -5900,7 +5900,7 @@ async def test_delete_mcp_oauth_user_credential_only_deletes_oauth():
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
             new=delete_mock,
         ),
     ):
@@ -5996,7 +5996,7 @@ async def test_delete_mcp_oauth_user_credential_reads_invalidated_grants_for_rev
             new=reader,
         ),
         patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
             new=delete_mock,
         ),
         patch.object(
@@ -6011,7 +6011,9 @@ async def test_delete_mcp_oauth_user_credential_reads_invalidated_grants_for_rev
         )
 
     reader.assert_awaited_once_with(prisma, user_id, server_id, include_invalidated=True)
-    delete_mock.assert_awaited_once_with(prisma, user_id, server_id)
+    delete_mock.assert_awaited_once_with(
+        prisma, user_id, server_id, access_token="", refresh_token="dead-refresh"
+    )
     invalidate_mock.assert_awaited_once_with(user_id, server_id)
     assert result.has_credential is False
 
@@ -6042,7 +6044,7 @@ async def test_delete_mcp_oauth_user_credential_invalidates_cached_token():
             new=AsyncMock(return_value={"type": "oauth2", "access_token": "revoked-tok"}),
         ),
         patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
             new=AsyncMock(return_value=None),
         ),
         patch.object(
@@ -6063,7 +6065,7 @@ async def test_delete_mcp_oauth_user_credential_invalidates_cached_token():
 @pytest.mark.asyncio
 async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_gone():
     """A concurrent delete can remove the row between the read and the delete; the cache may
-    still hold the revoked token, so the invalidate must fire even on RecordNotFoundError."""
+    still hold the revoked token, so the invalidate must fire even when the conditional delete is a no-op."""
     if not mgmt_endpoints.MCP_AVAILABLE:
         pytest.skip("MCP module not installed")
 
@@ -6086,8 +6088,8 @@ async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_
             new=AsyncMock(return_value={"type": "oauth2", "access_token": "revoked-tok"}),
         ),
         patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
-            new=AsyncMock(side_effect=mgmt_endpoints.RecordNotFoundError({}, message="already gone")),
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
+            new=AsyncMock(return_value=False),
         ),
         patch.object(
             manager_module.global_mcp_server_manager,
@@ -6240,7 +6242,7 @@ async def test_admin_revokes_another_users_oauth_credential():
             new=get_mock,
         ),
         patch(  # test-quality-ok: endpoint test stubs the credential row delete
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
             new=delete_mock,
         ),
         patch.object(  # test-quality-ok: the OAuth cache lives on the global manager; the suite's only seam
@@ -6283,7 +6285,7 @@ async def test_non_full_admin_cannot_revoke_another_users_oauth_credential(role)
             new=get_mock,
         ),
         patch(  # test-quality-ok: endpoint test stubs the credential row delete
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
             new=delete_mock,
         ),
     ):
