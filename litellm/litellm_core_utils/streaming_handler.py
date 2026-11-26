@@ -2881,6 +2881,13 @@ class CustomStreamWrapper:
             if self.received_finish_reason is None:
                 await self.aclose()
                 self._log_stream_failure_and_raise(e)
+            verbose_logger.warning(
+                "%s stream lost its upstream connection after finish_reason=%s, ending it normally: %s: %s",
+                self.custom_llm_provider,
+                self.received_finish_reason,
+                type(e).__name__,
+                e,
+            )
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
             await self.aclose()
