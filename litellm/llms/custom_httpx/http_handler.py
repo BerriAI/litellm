@@ -89,10 +89,6 @@ def _query_params_of(params: _RequestParams | None) -> httpx.QueryParams:
     return httpx.QueryParams(params)  # pyright: ignore[reportArgumentType]  # httpx handles a non-primitive value itself
 
 
-def _headers_of(headers: _OptionalRequestHeaders) -> httpx.Headers:
-    return httpx.Headers(headers)  # pyright: ignore[reportArgumentType]  # httpx raises its own TypeError on a non-str value
-
-
 def _build_request(
     client: httpx.Client | httpx.AsyncClient,
     method: str,
@@ -115,24 +111,6 @@ def _build_request(
         json=json,
         files=files,
         content=content,
-        timeout=timeout,
-    )
-
-
-def _client_get(
-    client: httpx.Client,
-    url: str,
-    *,
-    params: httpx.QueryParams,
-    headers: _OptionalRequestHeaders,
-    follow_redirects: bool | UseClientDefault,
-    timeout: float | httpx.Timeout | UseClientDefault,
-) -> httpx.Response:
-    return client.get(
-        url,
-        params=params,
-        headers=headers,  # pyright: ignore[reportArgumentType]  # httpx raises its own TypeError on a non-str value
-        follow_redirects=follow_redirects,
         timeout=timeout,
     )
 
@@ -971,7 +949,7 @@ class AsyncHTTPHandler:
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         query: Final = _query_params_of(params).merge(HTTPHandler.extract_query_params(url))
-        request_headers: Final = _headers_of(headers)
+        request_headers: Final = httpx.Headers(headers)  # pyright: ignore[reportArgumentType]  # httpx raises its own TypeError on a non-str value
 
         if stream:
             return await self._send_streaming_get(
@@ -1788,11 +1766,10 @@ class HTTPHandler:
                 timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
             )
 
-        response: Final = _client_get(
-            self.client,
+        response: Final = self.client.get(
             url,
             params=query,
-            headers=headers,
+            headers=headers,  # pyright: ignore[reportArgumentType]  # httpx raises its own TypeError on a non-str value
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )

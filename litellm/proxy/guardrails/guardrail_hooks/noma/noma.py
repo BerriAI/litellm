@@ -749,7 +749,7 @@ class NomaGuardrail(CustomGuardrail):
         extra_data: Mapping[str, object],
     ) -> object:
         call_id: Final = request_data.get("litellm_call_id")
-        headers: Final[dict[str, object]] = {  # mutable-ok: built here, sent as is
+        headers: Final[Mapping[str, object]] = {
             **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
             **({"X-Noma-Request-ID": call_id} if call_id else {}),
         }
