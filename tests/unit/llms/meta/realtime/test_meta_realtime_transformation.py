@@ -598,6 +598,7 @@ def test_pcm_is_packetized_into_raw_binary_frames(rate: int, packet_bytes: int):
         (12, "base64 string"),
         ("A" * (4 * ((24_000 * 2 * 4 + 2) // 3) + 4), "four-second backlog"),
     ],
+    ids=("invalid-base64", "partial-sample", "not-a-string", "over-backlog"),
 )
 def test_invalid_audio_appends_are_rejected(audio: object, message: str):
     config = _configured()
