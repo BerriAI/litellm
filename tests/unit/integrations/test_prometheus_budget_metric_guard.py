@@ -15,6 +15,7 @@ from prometheus_client import REGISTRY
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.types.integrations.prometheus import NoOpMetric
+from litellm.types.proxy.carried_budget_state import TeamMemberBudgetSnapshot
 
 _BUDGET_EXCLUDED_CONFIG = [
     {
@@ -357,3 +358,20 @@ class TestPerEntityGuards:
             )
 
         set_org_metrics.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_only_the_member_max_gauge_enabled_still_emits_on_requests(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "prometheus_metrics_config",
+        [{"group": "member-max-only", "metrics": ["litellm_team_member_max_budget_metric"]}],
+    )
+    logger = PrometheusLogger()
+    carried = TeamMemberBudgetSnapshot(max_budget=7.0, spend=1.0, budget_reset_at=None)
+    metadata = {**carried.metadata_entries(), "user_api_key_user_email": "user-1@example.com"}
+
+    await logger._increment_remaining_budget_metrics(**{**COMMON_KWARGS, "litellm_params": {"metadata": metadata}})
+
+    member = {"team": "team-123", "team_alias": "my-team", "user": "user-1", "user_email": "user-1@example.com"}
+    assert REGISTRY.get_sample_value("litellm_team_member_max_budget_metric", member) == 7.0

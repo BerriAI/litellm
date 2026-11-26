@@ -40,6 +40,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     CallInfo,
     LiteLLM_BudgetTable,
+    LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
     Litellm_EntityType,
     LiteLLM_ObjectPermissionTable,
@@ -114,6 +115,7 @@ from litellm.redis.stores.auth_cache import AuthObject
 from litellm.utils import get_utc_datetime
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.proxy.carried_budget_state import TeamMemberBudgetSnapshot
 from tests._master_key import MASTER_KEY
 from tests._support.clock_loops import AutojumpClockLoop
 from pydantic import BaseModel
@@ -13078,3 +13080,98 @@ async def test_one_rows_skipped_email_does_not_hold_back_another_rows_fill() -> 
     third: Final = await _sign_in(table, claim_id="third", email="owner@example.com", cache=third_cache)
 
     assert third is not None and third.user_email == "owner@example.com"
+
+
+_MEMBER_RESET_AT: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+_TEAM_MEMBER_COUNTER: Final = "spend:team_member:test-user:test-team"
+
+
+def _member_budget_row(max_budget: float | None, temp_budget_increase: float | None = None) -> LiteLLM_BudgetTableFull:
+    return LiteLLM_BudgetTableFull(
+        budget_id="member-budget",
+        max_budget=max_budget,
+        temp_budget_increase=temp_budget_increase,
+        temp_budget_expiry=datetime.now(timezone.utc) + timedelta(days=1) if temp_budget_increase else None,
+        budget_reset_at=_MEMBER_RESET_AT,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+async def _token_after_member_budget_check(
+    membership: LiteLLM_TeamMembership | None, default_cap: float, counter_spend: float
+) -> UserAPIKeyAuth:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.team_member_default_budget("default-budget-1"),
+        value=LiteLLM_BudgetTable(budget_id="default-budget-1", max_budget=default_cap),
+    )
+    valid_token: Final = UserAPIKeyAuth(token="test-token", user_id="test-user", team_id="test-team")
+
+    async def counter_then_fallback(counter_key: str, fallback_spend: float, max_budget=None, **kwargs) -> float:
+        return counter_spend if counter_key == _TEAM_MEMBER_COUNTER else fallback_spend
+
+    with patch(  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        "litellm.proxy.proxy_server.get_current_spend", counter_then_fallback
+    ):
+        await _check_team_member_budget(
+            team_object=LiteLLM_TeamTable(team_id="test-team", metadata={"team_member_budget_id": "default-budget-1"}),
+            user_object=LiteLLM_UserTable(user_id="test-user"),
+            valid_token=valid_token,
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            team_membership=membership,
+            team_membership_loaded=True,
+        )
+    return valid_token
+
+
+def _membership_with(budget_row: LiteLLM_BudgetTableFull | None) -> LiteLLM_TeamMembership:
+    return LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=0.25,
+        budget_id=budget_row.budget_id if budget_row is not None else None,
+        litellm_budget_table=budget_row,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("membership", "expected"),
+    [
+        pytest.param(
+            _membership_with(None),
+            TeamMemberBudgetSnapshot(max_budget=5.0, spend=2.5, budget_reset_at=None),
+            id="default-only-member",
+        ),
+        pytest.param(
+            None,
+            TeamMemberBudgetSnapshot(max_budget=5.0, spend=2.5, budget_reset_at=None),
+            id="member-without-membership-row",
+        ),
+        pytest.param(
+            _membership_with(_member_budget_row(None, temp_budget_increase=3.0)),
+            TeamMemberBudgetSnapshot(max_budget=8.0, spend=2.5, budget_reset_at=_MEMBER_RESET_AT),
+            id="default-plus-temp-increase",
+        ),
+        pytest.param(
+            _membership_with(_member_budget_row(20.0)),
+            TeamMemberBudgetSnapshot(max_budget=20.0, spend=2.5, budget_reset_at=_MEMBER_RESET_AT),
+            id="per-member-override",
+        ),
+    ],
+)
+async def test_member_budget_check_carries_effective_budget_and_counter_spend(
+    membership: LiteLLM_TeamMembership | None, expected: TeamMemberBudgetSnapshot
+) -> None:
+    token: Final = await _token_after_member_budget_check(membership, default_cap=5.0, counter_spend=2.5)
+
+    assert token.team_member_budget_snapshot == expected
+
+
+@pytest.mark.asyncio
+async def test_member_without_effective_budget_carries_no_snapshot() -> None:
+    token: Final = await _token_after_member_budget_check(_membership_with(None), default_cap=0.0, counter_spend=2.5)
+
+    assert token.team_member_budget_snapshot is None

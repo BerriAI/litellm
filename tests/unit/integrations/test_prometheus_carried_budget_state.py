@@ -32,8 +32,10 @@ from litellm.proxy.spend_tracking.carried_budget_state import (
     carried_budget_metadata,
     carry_organization_budget_state,
     carry_team_and_user_budget_state,
+    carry_team_member_budget_state,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
+from litellm.proxy.spend_tracking.team_member_budget import TeamMemberBudget
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
     EntitySpendCounterKeys,
@@ -178,6 +180,9 @@ def _stub_gauges(prometheus_logger: PrometheusLogger) -> None:
         "litellm_remaining_org_budget_metric",
         "litellm_org_max_budget_metric",
         "litellm_org_budget_remaining_hours_metric",
+        "litellm_remaining_team_member_budget_metric",
+        "litellm_team_member_max_budget_metric",
+        "litellm_team_member_budget_remaining_hours_metric",
     ):
         setattr(prometheus_logger, name, MagicMock())
 
@@ -811,3 +816,19 @@ async def test_carried_objects_match_what_the_getters_would_have_produced(
         "get_user_object": 1,
         "get_org_object": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_authed_request_sets_member_gauges_without_lookups(prometheus_logger, getters):
+    _stub_gauges(prometheus_logger)
+    token: Final = _authed_token()
+    carry_team_member_budget_state(token, TeamMemberBudget(max_budget=25.0, budget_reset_at=TEAM_RESET_AT), spend=4.0)
+
+    await _emit(prometheus_logger, _request_metadata(token))
+
+    assert all(getter.await_count == 0 for getter in getters.values()), {
+        name: getter.await_count for name, getter in getters.items()
+    }
+    prometheus_logger.litellm_team_member_max_budget_metric.labels().set.assert_called_once_with(25.0)
+    prometheus_logger.litellm_remaining_team_member_budget_metric.labels().set.assert_called_once_with(19.0)
+    prometheus_logger.litellm_team_member_budget_remaining_hours_metric.labels().set.assert_called_once()
