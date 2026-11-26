@@ -9,7 +9,7 @@ import uuid
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 import httpx
@@ -372,12 +372,12 @@ def test_a_destination_outage_and_a_worker_kill_mid_burst_keep_one_failure_recor
         )
         since: Final = (recorded_spans(audit_sinks.operator)[0], recorded_spans(audit_sinks.tenant)[0])
 
-        def call(index: int) -> tuple[str, int, int | None]:
+        def call(index: int, gateway: Gateway = proxy) -> tuple[str, int, int | None]:
             failure: Final[Failure] = "upstream_500" if index % 4 < 2 else "unknown_model"
             model: Final = failing_model if failure == "upstream_500" else f"not-deployed-{uuid.uuid4().hex}"
             side: Final = index % 2
             try:
-                trace_id, response = _send(proxy, keys[side], model, ENDPOINTS[index % 3], index % 6 < 3)
+                trace_id, response = _send(gateway, keys[side], model, ENDPOINTS[index % 3], index % 6 < 3)
             except httpx.TransportError:
                 return "", side, None
             assert response.status_code == FAILURE_STATUS[failure], response.text
@@ -412,7 +412,9 @@ def test_a_destination_outage_and_a_worker_kill_mid_burst_keep_one_failure_recor
                 killed: Final = tuple(future.result() for future in futures)
         finally:
             configure_sink(audit_sinks.tenant, delay_seconds=0)
-        after: Final = tuple(call(36 + index) for index in range(6))
+        with httpx.Client(base_url=proxy.client.base_url, timeout=proxy.client.timeout, trust_env=False) as fresh:
+            after: Final = tuple(call(36 + index, replace(proxy, client=fresh)) for index in range(6))
+        assert all(status is not None for _, _, status in after), after
         settled: Final = (*outage, *after)
 
         held(
