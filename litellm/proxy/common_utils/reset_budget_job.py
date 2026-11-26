@@ -40,7 +40,7 @@ from litellm.litellm_core_utils.duration_parser import (
     rolled_budget_window_start,
 )
 from litellm.models.budget import active_rollover_credit
-from litellm.models.budget_schedule import is_scheduled_duration
+from litellm.models.budget_schedule import SCHEDULE_PERIOD_RETENTION, SCHEDULE_PREFIX, is_scheduled_duration
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     LiteLLM_BudgetTableFull,
@@ -93,6 +93,7 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
+    BudgetWindowSpendRepository,
     CustomerMemberRepository,
     CustomerOrganizationRepository,
     CustomerTeamRepository,
@@ -835,6 +836,7 @@ class ResetBudgetJob:
             await self.reset_budget_for_litellm_teams()
             await self.reset_budget_for_litellm_budget_table()
             await self.reset_budget_windows()
+            await self.prune_expired_schedule_periods()
         finally:
             if lease is _Lease.LEADER and self.pod_lock_manager is not None:
                 await self.pod_lock_manager.release_lock(cronjob_id=RESET_BUDGET_JOB_NAME)
@@ -2094,6 +2096,22 @@ class ResetBudgetJob:
                 await self._reset_windows_for(source=source, now=now, spend_counter_store=spend_counter_store)
             except Exception as e:
                 verbose_proxy_logger.exception("Failed to reset budget windows for %s: %s", source.log_subject, e)
+
+    async def prune_expired_schedule_periods(self) -> None:
+        """Drop scheduled period rows no request can still charge.
+
+        A period lasts at most a day, so a week of margin covers requests and retries that finish after it ends.
+        """
+        cutoff: Final = datetime.now(timezone.utc) - SCHEDULE_PERIOD_RETENTION
+        try:
+            await self._with_db_write_retry(
+                lambda: BudgetWindowSpendRepository(self.prisma_client, use_writer=True).table.delete_many(
+                    where={"window_duration": {"startswith": SCHEDULE_PREFIX}, "window_start": {"lt": cutoff}}
+                ),
+                reason="reset_budget_prune_schedule_periods_failure",
+            )
+        except Exception as e:  # noqa: BLE001  # pruning is best effort and must never stop the budget sweep
+            verbose_proxy_logger.exception("Failed to prune expired scheduled budget periods: %s", e)
 
     async def _reset_windows_for(
         self,

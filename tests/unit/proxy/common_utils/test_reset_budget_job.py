@@ -136,6 +136,39 @@ async def test_sweep_never_resets_a_scheduled_window_counter() -> None:
     assert counters.redis == counters.memory == {counter: 4.0}
 
 
+class _WindowSpendTable:
+    """Window spend rows, deleted with Prisma's ``startswith`` and ``lt`` filter semantics."""
+
+    def __init__(self, rows: Sequence[tuple[str, datetime]]) -> None:
+        self.rows: tuple[tuple[str, datetime], ...] = tuple(rows)
+
+    async def delete_many(self, where: Mapping[str, Mapping[str, object]]) -> int:
+        prefix: Final = str(where["window_duration"]["startswith"])
+        before: Final = cast(datetime, where["window_start"]["lt"])
+        kept: Final = tuple(row for row in self.rows if not (row[0].startswith(prefix) and row[1] < before))
+        removed: Final = len(self.rows) - len(kept)
+        self.rows = kept
+        return removed
+
+
+@pytest.mark.asyncio
+async def test_sweep_prunes_only_scheduled_periods_no_request_can_still_charge(frozen_reset_clock: datetime) -> None:
+    label: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:08:00-13:00"
+    expired_start: Final = frozen_reset_clock - timedelta(days=9)
+    last_week_start: Final = frozen_reset_clock - timedelta(days=7)
+    expired: Final = (f"{label}@{expired_start.isoformat()}", expired_start)
+    last_week: Final = (f"{label}@{last_week_start.isoformat()}", last_week_start)
+    rolling: Final = ("1d", frozen_reset_clock - timedelta(days=30))
+    table: Final = _WindowSpendTable((expired, last_week, rolling))
+    client: Final = MagicMock(spec=PrismaClient)
+    client.writer_db = MagicMock()
+    client.writer_db.litellm_budgetwindowspend = table
+
+    await ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=client).prune_expired_schedule_periods()
+
+    assert table.rows == (last_week, rolling)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("budget_duration", ("1h", "1d", "2d", "7d", "1mo"))
 @pytest.mark.parametrize(
