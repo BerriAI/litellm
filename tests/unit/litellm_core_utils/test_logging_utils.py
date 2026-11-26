@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.logging_utils import (
     _set_duration_in_model_call_details,
     _truncate_base64_in_string,
     format_base64_size,
+    truncate_base64_data_uris_in_messages,
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
@@ -261,6 +262,44 @@ class TestTruncateBase64InMessages:
             "describe",
             f"data:image/png;base64,[base64_data truncated: {format_base64_size(len(payload))}]",
         ]
+
+    @pytest.mark.parametrize("parent", ["inline_data", "inlineData"])
+    def test_gemini_inline_data_is_replaced_by_a_size_placeholder(self, parent: str):
+        payload: Final = "R" * 4_000
+        placeholder: Final = f"[base64_data truncated: {format_base64_size(len(payload))}]"
+
+        assert truncate_base64_in_messages(_gemini_contents(parent, payload)) == _gemini_contents(parent, placeholder)
+
+    def test_openai_input_audio_data_is_replaced_by_a_size_placeholder(self):
+        payload: Final = "S" * 4_000
+        placeholder: Final = f"[base64_data truncated: {format_base64_size(len(payload))}]"
+
+        assert truncate_base64_in_messages(_input_audio_messages(payload)) == _input_audio_messages(placeholder)
+
+    def test_caller_inline_data_is_not_mutated(self):
+        payload: Final = "R" * 4_000
+        contents: Final = _gemini_contents("inline_data", payload)
+
+        assert truncate_base64_in_messages(contents) != contents
+        assert contents == _gemini_contents("inline_data", payload)
+
+    def test_short_inline_data_is_kept(self):
+        contents: Final = _gemini_contents("inline_data", "AAAA")
+
+        assert truncate_base64_in_messages(contents) == contents
+
+    def test_router_key_keeps_inline_data_whole(self):
+        contents: Final = _gemini_contents("inline_data", "T" * 4_000)
+
+        assert truncate_base64_data_uris_in_messages(contents) == contents
+
+
+def _gemini_contents(parent: str, data: str) -> list[dict[str, object]]:
+    return [{"role": "user", "parts": [{"text": "describe"}, {parent: {"mime_type": "image/jpeg", "data": data}}]}]
+
+
+def _input_audio_messages(data: str) -> list[dict[str, object]]:
+    return [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": data, "format": "wav"}}]}]
 
 
 def _anthropic_source_messages(
