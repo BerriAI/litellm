@@ -153,7 +153,10 @@ pub(crate) async fn inference_over(
         shaping,
         routing,
         host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
-    )?;
+    )?
+    .with_body_check(litellm_gateway_inference::BodyCheck::new(
+        &config.general_settings,
+    ));
     Ok(Inference {
         gateway: Arc::new(gateway),
         key_limiter,
