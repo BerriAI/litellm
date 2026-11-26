@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import chain, groupby, takewhile
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypedDict, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypedDict, TypeVar, Union, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required
@@ -205,6 +205,14 @@ class _ToolCallAccumulator:
 
 class _ToolCallChunk(TypedDict):
     choices: ReadOnly[Sequence[_ToolCallChoice]]
+
+
+class _CacheTokenFields(Protocol):
+    def get(self, key: Literal["cache_creation_input_tokens", "cache_read_input_tokens"], /) -> int | None: ...
+
+
+class _SystemFingerprintField(Protocol):
+    def get(self, key: Literal["system_fingerprint"], default: None, /) -> str | None: ...
 
 
 class _UsageBearingChunk(TypedDict, total=False):
@@ -908,15 +916,16 @@ class ChunkProcessor:
         cost: float | None = None
 
         if "prompt_tokens" in usage_chunk:
-            prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
+            prompt_tokens = usage_chunk.prompt_tokens or 0
         if "completion_tokens" in usage_chunk:
-            completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
+            completion_tokens = usage_chunk.completion_tokens or 0
+        cache_token_fields: Final = require_attributes(usage_chunk, _CacheTokenFields, "get")
         if "cache_creation_input_tokens" in usage_chunk:
-            cache_creation_input_tokens = usage_chunk.get("cache_creation_input_tokens")
+            cache_creation_input_tokens = cache_token_fields.get("cache_creation_input_tokens")
         if "cache_read_input_tokens" in usage_chunk:
-            cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
+            cache_read_input_tokens = cache_token_fields.get("cache_read_input_tokens")
         if "cost" in usage_chunk:
-            cost = usage_chunk.get("cost")
+            cost = usage_chunk.cost
         if hasattr(usage_chunk, "completion_tokens_details"):
             if isinstance(usage_chunk.completion_tokens_details, dict):
                 completion_tokens_details = CompletionTokensDetails(**usage_chunk.completion_tokens_details)
@@ -1425,7 +1434,9 @@ def stream_chunk_builder_text_completion(
     object: Final = text_chunks[0].object
     created: Final = text_chunks[0].created
     model: Final = text_chunks[0].model
-    system_fingerprint: Final = text_chunks[0].get("system_fingerprint", None)
+    system_fingerprint: Final = require_attributes(text_chunks[0], _SystemFingerprintField, "get").get(
+        "system_fingerprint", None
+    )
     all_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in text_chunks))
     choices: Final = [
         _rebuilt_text_choice(index, tuple(group))
