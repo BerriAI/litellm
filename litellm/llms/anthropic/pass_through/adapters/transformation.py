@@ -1,13 +1,15 @@
 import copy
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
@@ -15,6 +17,7 @@ from litellm.litellm_core_utils.tool_fields import truncate_tool_name
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.pass_through.deferred_tools import is_deferred, routed_deferred_tools_mode
 from litellm.llms.anthropic.pass_through.utils import (
+    KNOWN_REASONING_EFFORTS,
     REASONING_EFFORT_OFF,
     RESPONSES_API_PROVIDERS,
     ClientEffort,
@@ -23,6 +26,8 @@ from litellm.llms.anthropic.pass_through.utils import (
     json_copy_or_original,
     local_model_name,
     maps_bare_output_effort,
+    model_excludes_effort,
+    normalize_reasoning_effort_value,
     prompt_cache_key_from_user_id,
     reasoning_off_level,
     thinking_off_switch,
@@ -141,6 +146,7 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
     openai_chat_refusal_text,
     refusal_stop_details,
 )
+from litellm.router_utils.reasoning_effort_capability import reasoning_effort_within_thinking_budget
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicPassThroughMessageValues,
@@ -386,6 +392,7 @@ class AnthropicAdapter:
             reasoning_summary=reasoning_summary,
             base_model=base_model,
             drop_params=drop_params,
+            report_reasoning_drops=True,
             translate_bare_output_effort=translate_bare_output_effort,
         )
 
@@ -1213,6 +1220,42 @@ class LiteLLMAnthropicMessagesAdapter:
         )
 
     @staticmethod
+    def _effort_within_thinking_budget(
+        output_effort: object,
+        budget_effort: str | None,
+        model: str,
+        excludes_effort: Callable[[str], bool],
+        normalize_effort: Callable[[str], str],
+        *,
+        drop_params: bool,
+        report_drops: bool,
+    ) -> str | None:
+        effort: Final = reasoning_effort_within_thinking_budget(output_effort, budget_effort)
+        if effort is None or effort == budget_effort:
+            return effort
+        normalized: Final = normalize_effort(effort)
+        drop_reason: Final = (
+            None
+            if not drop_params
+            else "no reasoning API defines it"
+            if effort not in KNOWN_REASONING_EFFORTS
+            else "its model cost map entry does not list it"
+            if excludes_effort(normalized)
+            else None
+        )
+        if drop_reason is not None and report_drops:
+            verbose_logger.warning(
+                "Dropping output_config.effort=%r for %s, %s, because drop_params is set",
+                normalized,
+                model,
+                drop_reason,
+            )
+        if drop_reason is not None:
+            return budget_effort
+        normalized_within_budget: Final = reasoning_effort_within_thinking_budget(normalized, budget_effort)
+        return budget_effort if normalized_within_budget == budget_effort else effort
+
+    @staticmethod
     def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
         if not is_between_tool_calls(anthropic_message_request):
             return REASONING_EFFORT_OFF
@@ -1225,8 +1268,10 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         drop_params: bool = True,
+        report_reasoning_drops: bool = False,
         translate_bare_output_effort: bool = False,
         deployment_model_info: object = None,
+        base_model: str | None = None,
     ) -> None:
         """Translate Anthropic thinking to either thinking or reasoning_effort.
 
@@ -1278,10 +1323,33 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         mirrors_responses_bridge: Final = custom_llm_provider in RESPONSES_API_PROVIDERS
+        base_model_info: Final = (
+            deployment_model_info
+            if base_model is None
+            else {**(as_str_mapping(deployment_model_info) or {}), "base_model": base_model}
+        )
         reasoning_effort: Final = declared_effort or (
             self._between_tools_reasoning_effort(anthropic_message_request, output_effort)
             if is_between_tools and mirrors_responses_bridge
-            else self.translate_anthropic_thinking_to_reasoning_effort(cast(AnthropicThinkingParam, thinking))
+            else self._effort_within_thinking_budget(
+                output_effort,
+                self.translate_anthropic_thinking_to_reasoning_effort(cast(AnthropicThinkingParam, thinking)),
+                model,
+                partial(
+                    model_excludes_effort,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    deployment_model_info=base_model_info,
+                ),
+                partial(
+                    normalize_reasoning_effort_value,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    deployment_model_info=base_model_info,
+                ),
+                drop_params=drop_params,
+                report_drops=report_reasoning_drops,
+            )
             if thinking
             else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)
             if translate_bare_output_effort
@@ -1365,6 +1433,7 @@ class LiteLLMAnthropicMessagesAdapter:
         base_model: str | None = None,
         deployment_model_info: Mapping[str, object] | None = None,
         drop_params: bool = True,
+        report_reasoning_drops: bool = False,
         translate_bare_output_effort: bool = False,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
@@ -1415,8 +1484,10 @@ class LiteLLMAnthropicMessagesAdapter:
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
             drop_params=drop_params,
+            report_reasoning_drops=report_reasoning_drops,
             translate_bare_output_effort=translate_bare_output_effort,
             deployment_model_info=deployment_model_info,
+            base_model=base_model,
         )
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI, after tools and thinking pick the route
         new_messages: Final = self.translate_anthropic_messages_to_openai(

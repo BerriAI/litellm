@@ -4721,6 +4721,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -4728,7 +4729,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure_ai/gpt-5.4-pro-2026-03-05": {
         "deprecation_date": "2027-09-07",
@@ -4767,6 +4768,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -4774,7 +4776,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "azure_ai/gpt-5.4-mini": {
         "deprecation_date": "2027-09-21",
@@ -7262,6 +7264,9 @@
         "mode": "responses",
         "output_cost_per_token": 0.00012,
         "output_cost_per_token_batches": 6e-05,
+        "reasoning_effort_levels": [
+            "high"
+        ],
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
@@ -7273,6 +7278,7 @@
         "supported_output_modalities": [
             "text"
         ],
+        "supports_low_reasoning_effort": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -7281,7 +7287,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.1": {
         "deprecation_date": "2027-05-15",
@@ -7853,6 +7860,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -7892,6 +7901,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -8258,6 +8269,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -8306,6 +8319,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -10599,6 +10614,8 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -22722,6 +22739,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -37273,7 +37292,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_low_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false
     },
     "gpt-5.2-pro-2025-12-11": {
         "input_cost_per_token": 2.1e-05,
@@ -37315,7 +37335,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_low_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false
     },
     "gpt-6-astra": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -38488,6 +38509,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
+        "supports_low_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
         "input_cost_per_token_above_272k_tokens_flex": 3e-05,
         "output_cost_per_token_above_272k_tokens_flex": 0.000135,
@@ -38541,6 +38563,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
+        "supports_low_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
         "input_cost_per_token_above_272k_tokens_flex": 3e-05,
         "output_cost_per_token_above_272k_tokens_flex": 0.000135,
@@ -38799,7 +38822,11 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_low_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false,
+        "reasoning_effort_levels": [
+            "high"
+        ]
     },
     "gpt-5-pro-2025-10-06": {
         "deprecation_date": "2026-12-11",
@@ -38842,7 +38869,11 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
-        "supports_minimal_reasoning_effort": true
+        "supports_low_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false,
+        "reasoning_effort_levels": [
+            "high"
+        ]
     },
     "gpt-5-2025-08-07": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -71527,7 +71558,12 @@
         "mode": "responses",
         "output_cost_per_token": 0.000132,
         "output_cost_per_token_batches": 6.6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
+        "reasoning_effort_levels": [
+            "high"
+        ]
     },
     "azure/eu/gpt-5.1-codex-max": {
         "deprecation_date": "2027-05-18",
@@ -71569,7 +71605,9 @@
         "mode": "responses",
         "output_cost_per_token": 0.0001848,
         "output_cost_per_token_batches": 9.24e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "azure/eu/gpt-5.3-codex": {
         "deprecation_date": "2027-08-24",
@@ -71624,7 +71662,9 @@
         "output_cost_per_token_above_272k_tokens": 0.000297,
         "output_cost_per_token_above_272k_tokens_batches": 0.0001485,
         "output_cost_per_token_batches": 9.9e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "azure/eu/gpt-6-astra": {
         "deprecation_date": "2028-01-11",
@@ -72035,7 +72075,12 @@
         "mode": "responses",
         "output_cost_per_token": 0.000132,
         "output_cost_per_token_batches": 6.6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
+        "reasoning_effort_levels": [
+            "high"
+        ]
     },
     "azure/us/gpt-5.1-codex-max": {
         "deprecation_date": "2027-05-18",
@@ -72077,7 +72122,9 @@
         "mode": "responses",
         "output_cost_per_token": 0.0001848,
         "output_cost_per_token_batches": 9.24e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "azure/us/gpt-5.3-codex": {
         "deprecation_date": "2027-08-24",
@@ -72132,7 +72179,9 @@
         "output_cost_per_token_above_272k_tokens": 0.000297,
         "output_cost_per_token_above_272k_tokens_batches": 0.0001485,
         "output_cost_per_token_batches": 9.9e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "azure/us/o1-mini": {
         "cache_read_input_token_cost": 6.05e-07,
@@ -72942,6 +72991,8 @@
         "source": "https://aihubmix.com/api/v1/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_web_search": true
