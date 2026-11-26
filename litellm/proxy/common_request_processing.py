@@ -5635,7 +5635,7 @@ class ProxyBaseLLMRequestProcessing:
                     request_data,
                     client_disconnected,
                 )
-            drained_to_provider_usage: Final = await settle_responses_stream_after_consumer_left(
+            stream_end_log: Final = await settle_responses_stream_after_consumer_left(
                 response, drain=recorded_client_disconnect
             )
             if recorded_client_disconnect:
@@ -5646,22 +5646,19 @@ class ProxyBaseLLMRequestProcessing:
                 # above, or the partial-spend billing below) releases the
                 # request's max_parallel_requests slot through the limiter's
                 # own success callback. Release explicitly when no event fires.
-                success_event_owns_slot_release = deferred_stream_logging_armed or drained_to_provider_usage
-                if not success_event_owns_slot_release:
+                success_event_owns_slot_release = deferred_stream_logging_armed or stream_end_log == "success"
+                # A provider failure while the stream was read on is logged by the stream, and that failure
+                # callback releases the slot too. No failure hook runs for it, so its reservation is settled here.
+                failure_event_owns_slot_release: Final = stream_end_log == "failure"
+                if not success_event_owns_slot_release and not failure_event_owns_slot_release:
                     success_event_owns_slot_release = await _bill_partial_streamed_spend_on_disconnect(
                         request_data, response
                     )
-                if (
-                    not success_event_owns_slot_release
-                    and proxy_logging_obj is not None
-                    and user_api_key_dict is not None
-                ):
+                slot_is_released_by_an_event: Final = success_event_owns_slot_release or failure_event_owns_slot_release
+                if not slot_is_released_by_an_event and proxy_logging_obj is not None and user_api_key_dict is not None:
                     await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
-                if (
-                    release_reservation_if_unbilled
-                    and not success_event_owns_slot_release
-                    and user_api_key_dict is not None
-                ):
+                reservation_is_left_open: Final = release_reservation_if_unbilled or failure_event_owns_slot_release
+                if reservation_is_left_open and not success_event_owns_slot_release and user_api_key_dict is not None:
                     await release_budget_reservation_on_cancel(user_api_key_dict.budget_reservation)
 
             if has_attributes(response, _ClosesAsync, "aclose"):

@@ -12102,6 +12102,59 @@ class TestStreamingClientDisconnectBilling:
         assert upstream.closed is True
 
     @pytest.mark.asyncio
+    async def test_a_provider_failure_logged_while_a_cut_stream_is_read_on_releases_the_slot_once_and_the_reservation(
+        self, monkeypatch
+    ):
+        class StreamWhoseProviderFailsWhileItIsReadOn:
+            def outlive_consumer_until_settled(self) -> None:
+                pass
+
+            async def settle_after_consumer_left(self, *, drain: bool) -> str | None:
+                return "failure" if drain else None
+
+        class CountsExplicitSlotReleases:
+            releases = 0
+
+            async def arelease_max_parallel_requests_on_disconnect(self, user_api_key_dict: object) -> None:
+                self.releases += 1
+
+        logging_obj: Final = LiteLLMLoggingObj(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "think hard"}],
+            stream=True,
+            call_type="aresponses",
+            start_time=datetime.datetime(2026, 11, 26, 12, 0, 0),
+            litellm_call_id="failed-while-read-on",
+            function_id="failed-while-read-on",
+        )
+        slot_releases: Final = CountsExplicitSlotReleases()
+        reservation: Final = {"reserved_cost": 1.0}
+        reservations_released: Final[list[object]] = []
+
+        async def record_release(budget_reservation: object) -> None:
+            reservations_released.append(budget_reservation)
+
+        monkeypatch.setattr(
+            "litellm.proxy.common_request_processing.release_budget_reservation_on_cancel", record_release
+        )
+
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=None,
+            request_data={"litellm_logging_obj": logging_obj},
+            response=StreamWhoseProviderFailsWhileItIsReadOn(),
+            stream_completed=False,
+            client_disconnected=True,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-cut", budget_reservation=reservation),
+            proxy_logging_obj=slot_releases,
+            release_reservation_if_unbilled=False,
+        )
+
+        assert slot_releases.releases == 0, (
+            "the stream's failure callback released the slot, a second release would free another request's"
+        )
+        assert reservations_released == [reservation], "no failure hook runs for this request, so nothing else would"
+
+    @pytest.mark.asyncio
     async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):
         recorder = _RecordingSuccessLogger()
         original_callbacks = litellm.callbacks

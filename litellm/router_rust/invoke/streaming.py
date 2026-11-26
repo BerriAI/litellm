@@ -86,6 +86,7 @@ from litellm.types.utils import CostBreakdown, ModelResponseStream, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+    from litellm.responses.streaming_iterator import StreamEndLog
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.core import RustCore
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuationOutput, ContinuedPartial
@@ -2013,7 +2014,7 @@ class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
 
         keep_responses_stream_open_for_disconnect_drain(self._source_iterator)
 
-    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+    async def settle_after_consumer_left(self, *, drain: bool) -> "StreamEndLog":
         from litellm.responses.streaming_iterator import settle_responses_stream_after_consumer_left
 
         primary_alone: Final = self._billing_source is self._source_iterator and self._primary_partial is None

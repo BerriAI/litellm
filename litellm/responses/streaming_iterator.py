@@ -262,6 +262,9 @@ def spawn_logging_task(
     return task
 
 
+# The log a stream wrote for its own end, whose callbacks released the request's parallel-request slot.
+StreamEndLog: TypeAlias = Literal["success", "failure"] | None
+
 _UNCLAIMED_STREAM_CLOSES: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdlib strong-ref set for rooted tasks
 
 
@@ -1352,18 +1355,19 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         """
         self._outlives_its_consumer = True
 
-    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+    async def settle_after_consumer_left(self, *, drain: bool) -> StreamEndLog:
         """
         With drain, keep reading the provider's stream so its terminal event bills the usage the provider
-        reports (reasoning tokens and the cached split included) instead of a local count; True when that
-        event was logged as a success, here or before the consumer left. Otherwise close the stream.
+        reports (reasoning tokens and the cached split included) instead of a local count. Otherwise close the
+        stream. Returns which log the stream wrote for its own end, here or before the consumer left: that log's
+        callbacks already released the request's parallel-request slot.
         """
         self._settled_after_consumer_left = True
         if self._unclaimed_close is not None:
             self._unclaimed_close.cancel()
         if not drain or not self._can_be_read_on():
             await self._close_upstream()
-            return drain and self._completed_response_logged
+            return self._logged_its_own_end() if drain else None
         with anyio.move_on_after(RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS):
             try:
                 while self.completed_response is None:
@@ -1371,7 +1375,12 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             except (StopAsyncIteration, Exception) as e:  # noqa: BLE001  # the failure path already logged it; teardown goes on
                 verbose_logger.debug("Responses API stream ended while draining after a client disconnect: %r", e)
         await self._close_upstream()
-        return self._completed_response_logged
+        return self._logged_its_own_end()
+
+    def _logged_its_own_end(self) -> StreamEndLog:
+        if self._completed_response_logged:
+            return "success"
+        return "failure" if self._failure_handled else None
 
     def _can_be_read_on(self) -> bool:
         if not self._outlives_its_consumer or self._replays_stored_stream or self._reached_its_end():
@@ -1885,7 +1894,7 @@ def partial_responses_incomplete_event_on_disconnect(stream: object) -> Response
 class OutlivesItsConsumer(Protocol):
     def outlive_consumer_until_settled(self) -> None: ...
 
-    def settle_after_consumer_left(self, *, drain: bool) -> Awaitable[bool]: ...
+    def settle_after_consumer_left(self, *, drain: bool) -> Awaitable[StreamEndLog]: ...
 
 
 def keep_responses_stream_open_for_disconnect_drain(stream: object) -> None:
@@ -1894,10 +1903,10 @@ def keep_responses_stream_open_for_disconnect_drain(stream: object) -> None:
         stream.outlive_consumer_until_settled()
 
 
-async def settle_responses_stream_after_consumer_left(stream: object, *, drain: bool) -> bool:
-    """Read the stream kept open above on to the provider's terminal usage (drain), or close it. True when drained."""
+async def settle_responses_stream_after_consumer_left(stream: object, *, drain: bool) -> StreamEndLog:
+    """Read the stream kept open above on to the provider's terminal usage (drain), or close it."""
     if not isinstance(stream, OutlivesItsConsumer):
-        return False
+        return None
     return await stream.settle_after_consumer_left(drain=drain)
 
 
