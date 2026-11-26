@@ -75,6 +75,14 @@
     "base_url": "https://api.abliteration.ai/v1",
     "api_key_env": "ABLITERATION_API_KEY"
   },
+  "commentllm": {
+    "base_url": "https://api.commentllm.com/v1",
+    "api_key_env": "COMMENTLLM_API_KEY",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
+  },
   "llamagate": {
     "base_url": "https://api.llamagate.dev/v1",
     "api_key_env": "LLAMAGATE_API_KEY",

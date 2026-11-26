@@ -111,6 +111,32 @@
         "generateContent": true
       }
     },
+    "commentllm": {
+      "display_name": "CommentLLM (`commentllm`)",
+      "url": "https://docs.litellm.ai/docs/providers/commentllm",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": false,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
     "aiml": {
       "display_name": "AI/ML API (`aiml`)",
       "url": "https://docs.litellm.ai/docs/providers/aiml",
