@@ -15,7 +15,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import traceback
@@ -3076,9 +3075,7 @@ try:
     if not _validate_ui_directory(ui_path):
         verbose_proxy_logger.error("Selected UI path %s is invalid or incomplete. UI may not work correctly.", ui_path)
 
-    match render_ui_for_root_path(
-        FsPath(ui_path), server_root_path, (FsPath(ui_path).parent, FsPath(tempfile.gettempdir()))
-    ):
+    match render_ui_for_root_path(FsPath(ui_path), server_root_path, (FsPath(ui_path).parent, FsPath(ui_path))):
         case RenderedUI(directory=directory):
             ui_path = str(directory)  # rebind-ok: module-level UI directory selection predates Final bindings
         case RenderUnavailable(errors=render_errors):

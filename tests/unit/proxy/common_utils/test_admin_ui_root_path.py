@@ -1,3 +1,4 @@
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -20,6 +21,7 @@ from litellm.proxy.common_utils.admin_ui_root_path import (
 CONFIG_PLACEHOLDER: Final = "/litellm/.well-known/litellm-ui-config"
 ASSET_PLACEHOLDER: Final = "/litellm-asset-prefix"
 FAVICON_BYTES: Final = bytes(range(256)) + b"/litellm-asset-prefix\xff\xfe"
+WOFF2_BYTES: Final = b"wOF2" + ASSET_PLACEHOLDER.encode() + b"\x00\xff"
 APP_JS: Final = f'a="{ASSET_PLACEHOLDER}";b=`${{r}}{CONFIG_PLACEHOLDER}`;c="{CONFIG_PLACEHOLDER}";d="{ASSET_PLACEHOLDER}/_next";e="{ASSET_PLACEHOLDER}/.well-known/litellm-ui-config"'
 EXPECTED_FOO_LITELLM_APP_JS: Final = (
     'a="/foo/litellm";b=`${r}/foo/litellm/.well-known/litellm-ui-config`;c="/foo/litellm/.well-known/litellm-ui-config";'
@@ -38,6 +40,7 @@ def _build_source(root: Path) -> Path:
     _write(source / "login.html", f'<link href="{ASSET_PLACEHOLDER}/_next/login.css">')
     _write(source / "_next" / "static" / "chunks" / "app.js", APP_JS)
     _write(source / "favicon.ico", FAVICON_BYTES)
+    _write(source / "fonts" / "a.woff2", WOFF2_BYTES)
     return source
 
 
@@ -111,7 +114,8 @@ def test_concurrent_workers_render_the_same_complete_directory(tmp_path: Path):
         "index.html": b'<script src="/foo/litellm/_next/static/chunks/app.js"></script>',
         "login/index.html": b'<link href="/foo/litellm/_next/login.css">',
         "_next/static/chunks/app.js": EXPECTED_FOO_LITELLM_APP_JS.encode(),
-        "favicon.ico": bytes(range(256)) + b"/foo/litellm\xff\xfe",
+        "favicon.ico": FAVICON_BYTES,
+        "fonts/a.woff2": WOFF2_BYTES,
     }
     assert all(snapshot == expected_render for _, snapshot in outcomes)
     assert [path.name for path in (parent / RENDERED_UI_DIRNAME).iterdir()] == [next(iter(directories)).name]
@@ -210,3 +214,60 @@ def test_changed_source_file_renders_into_a_new_directory(tmp_path: Path):
     assert before != after
     assert 'z="/a/new"' in (after / "_next" / "static" / "chunks" / "app.js").read_text()
     assert 'z="/a/new"' not in (before / "_next" / "static" / "chunks" / "app.js").read_text()
+
+
+def test_renders_inside_source_when_no_other_parent_is_usable(tmp_path: Path):
+    source: Final = _build_source(tmp_path)
+    regular_file: Final = tmp_path / "file"
+    regular_file.write_text("file")
+
+    first: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (regular_file, source)))
+    second: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (regular_file, source)))
+
+    assert first == second
+    assert first.parent == source / RENDERED_UI_DIRNAME
+    assert "/a/_next" in (first / "index.html").read_text()
+    assert not (first / RENDERED_UI_DIRNAME).exists()
+
+
+def test_restructure_leaves_in_source_render_untouched(tmp_path: Path):
+    source: Final = _build_source(tmp_path)
+    rendered: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (source,)))
+    before: Final = _snapshot(rendered)
+
+    restructure_ui_html_files(source)
+
+    assert _snapshot(rendered) == before
+    assert (source / "login" / "index.html").is_file()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need elevated privileges on Windows")
+def test_symlinked_directory_is_rendered_with_its_content(tmp_path: Path):
+    source: Final = _build_source(tmp_path)
+    real_next: Final = tmp_path / "real_next"
+    _write(real_next / "chunk.js", f'x="{ASSET_PLACEHOLDER}/y"')
+    (source / "linked").symlink_to(real_next, target_is_directory=True)
+
+    directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (tmp_path / "parent",)))
+
+    assert (directory / "linked" / "chunk.js").read_text() == 'x="/a/y"'
+
+
+def test_binary_files_are_copied_verbatim_while_text_is_substituted(tmp_path: Path):
+    source: Final = _build_source(tmp_path)
+    _write(source / "img.PNG", FAVICON_BYTES)
+
+    directory: Final = _rendered_directory(render_ui_for_root_path(source, "/a", (tmp_path / "parent",)))
+
+    assert (directory / "img.PNG").read_bytes() == FAVICON_BYTES
+    assert (directory / "fonts" / "a.woff2").read_bytes() == WOFF2_BYTES
+    assert "/a/_next" in (directory / "index.html").read_text()
+
+
+def test_vanishing_source_file_during_key_computation_is_reported_unavailable(tmp_path: Path):
+    source: Final = _build_source(tmp_path)
+    (source / "dangling.js").symlink_to(tmp_path / "missing")
+
+    result: Final = render_ui_for_root_path(source, "/a", (tmp_path / "parent",))
+
+    assert isinstance(result, RenderUnavailable)

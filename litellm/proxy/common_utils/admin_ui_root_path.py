@@ -3,8 +3,9 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from typing import Final
 
@@ -13,7 +14,9 @@ RENDERED_UI_DIRNAME: Final = ".litellm-ui-rendered"
 
 _UI_CONFIG_PATH: Final = b"/.well-known/litellm-ui-config"
 _PLACEHOLDER_PATTERN: Final = re.compile(rb"/litellm-asset-prefix|/litellm/\.well-known/litellm-ui-config")
-_NON_ROUTE_DIRS: Final = frozenset({"_next", "litellm-asset-prefix"})
+_RENDER_FORMAT: Final = b"1"
+_BINARY_SUFFIXES: Final = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".eot")
+_NON_ROUTE_DIRS: Final = frozenset({"_next", "litellm-asset-prefix", RENDERED_UI_DIRNAME})
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,14 +55,26 @@ def restructure_ui_html_files(ui_root: Path) -> None:
         _restructure_directory(ui_root, Path(current_root), files)
 
 
+def _files_in(source: Path, current_root: str, files: Sequence[str]) -> Iterator[Path]:
+    relative_root: Final = Path(current_root).relative_to(source)
+    return (relative_root / filename for filename in files)
+
+
+def _source_files(source: Path) -> tuple[Path, ...]:
+    walked: Final = chain.from_iterable(
+        _files_in(source, current_root, files) for current_root, _, files in os.walk(source, followlinks=True)
+    )
+    return tuple(sorted(path for path in walked if path.parts[0] != RENDERED_UI_DIRNAME))
+
+
 def _render_key(source: Path, server_root_path: str) -> str:
-    files: Final = sorted(path for path in source.rglob("*") if path.is_file())
     fields: Final = (
+        _RENDER_FORMAT,
         server_root_path.encode(),
         str(source.resolve()).encode(),
         *(
-            b"%s %d %d" % (path.relative_to(source).as_posix().encode(), stat.st_size, stat.st_mtime_ns)
-            for path, stat in ((path, path.stat()) for path in files)
+            b"%s %d %d" % (relative.as_posix().encode(), stat.st_size, stat.st_mtime_ns)
+            for relative, stat in ((relative, (source / relative).stat()) for relative in _source_files(source))
         ),
     )
     return hashlib.sha256(b"\0".join(fields)).hexdigest()[:16]
@@ -75,23 +90,16 @@ def _substitute_root_path(content: bytes, server_root_path: str) -> bytes:
 
 
 def _copy_rendered_file(source_file: Path, destination_file: Path, server_root_path: str) -> None:
+    destination_file.parent.mkdir(parents=True, exist_ok=True)
+    if source_file.name.lower().endswith(_BINARY_SUFFIXES):
+        shutil.copyfile(source_file, destination_file)
+        return
     destination_file.write_bytes(_substitute_root_path(source_file.read_bytes(), server_root_path))
 
 
-def _copy_rendered_directory(
-    source_dir: Path, destination_dir: Path, dirs: Sequence[str], files: Sequence[str], server_root_path: str
-) -> None:
-    for dirname in dirs:
-        (destination_dir / dirname).mkdir(parents=True, exist_ok=True)
-    for filename in files:
-        _copy_rendered_file(source_dir / filename, destination_dir / filename, server_root_path)
-
-
 def _write_rendered_tree(source: Path, destination: Path, server_root_path: str) -> None:
-    for current_root, dirs, files in os.walk(source):
-        _copy_rendered_directory(
-            Path(current_root), destination / Path(current_root).relative_to(source), dirs, files, server_root_path
-        )
+    for relative in _source_files(source):
+        _copy_rendered_file(source / relative, destination / relative, server_root_path)
 
 
 def _render_into_parent(source: Path, server_root_path: str, key: str, parent: Path) -> UIRenderResult:
@@ -140,5 +148,8 @@ def _render_into_first_usable_parent(
 def render_ui_for_root_path(source: Path, server_root_path: str, output_parents: tuple[Path, ...]) -> UIRenderResult:
     if server_root_path in ("", "/"):
         return RenderedUI(source)
-    key: Final = _render_key(source, server_root_path)
+    try:
+        key: Final = _render_key(source, server_root_path)
+    except OSError as error:
+        return RenderUnavailable((f"{source}: {error}",))
     return _render_into_first_usable_parent(source, server_root_path, key, output_parents)
