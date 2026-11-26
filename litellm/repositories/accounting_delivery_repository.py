@@ -1,9 +1,9 @@
+import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
-from itertools import chain
 from types import TracebackType
-from typing import TYPE_CHECKING, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -99,12 +99,22 @@ ORDER BY next_attempt_at, delivery_id LIMIT $1::integer FOR UPDATE SKIP LOCKED""
 _APPLIED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET state = 'applied', applied_at = (NOW() AT TIME ZONE 'UTC'), last_error = NULL
 WHERE delivery_id = ANY($1::text[]) AND state = 'pending' """
-_FAILED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
-SET attempts = attempts + 1, last_error = $3,
+_FAILED: Final = """WITH failed AS (
+    SELECT delivery.delivery_id
+    FROM "LiteLLM_SpendLogDelivery" AS delivery
+    JOIN jsonb_to_recordset($1::jsonb) AS claimed(delivery_id text, attempts integer)
+      ON claimed.delivery_id = delivery.delivery_id AND claimed.attempts = delivery.attempts
+    WHERE delivery.state = 'pending'
+    ORDER BY delivery.delivery_id
+    FOR UPDATE OF delivery
+)
+UPDATE "LiteLLM_SpendLogDelivery" AS delivery
+SET attempts = attempts + 1, last_error = $2,
     next_attempt_at = (NOW() AT TIME ZONE 'UTC') + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)) * (0.5 + random()))),
-    state = $4::"AccountingDeliveryState"
-WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer
-RETURNING delivery_id, attempts"""
+    state = $3::"AccountingDeliveryState"
+FROM failed
+WHERE delivery.delivery_id = failed.delivery_id
+RETURNING delivery.delivery_id, delivery.attempts"""
 _BACKLOG: Final = """SELECT COUNT(*) FILTER (WHERE state = 'pending') AS pending_count,
     COUNT(*) FILTER (WHERE state = 'parked') AS parked_count,
     COALESCE(EXTRACT(EPOCH FROM (NOW() AT TIME ZONE 'UTC') - MIN(created_at) FILTER (WHERE state = 'pending')), 0)
@@ -201,28 +211,18 @@ class AccountingDeliveryRepository:
     async def _record_failure(
         self, claimed: tuple[_Delivery, ...], error: Exception, max_attempts: int
     ) -> DeliveryBatchResult:
-        parks: Final = len(claimed) == 1 and _is_permanent_failure(error)
+        parked: Final = len(claimed) == 1 and _is_permanent_failure(error) and claimed[0].attempts + 1 >= max_attempts
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
-            updates: Final = tuple(
-                [
-                    await self._record_row_failure(
-                        transaction,
-                        delivery,
-                        type(error).__name__,
-                        "parked" if parks and delivery.attempts + 1 >= max_attempts else "pending",
-                    )
-                    for delivery in claimed
-                ]
+            updated: Final = _DELIVERIES.validate_python(
+                await transaction.query_raw(
+                    _FAILED,
+                    json.dumps([{"delivery_id": row.delivery_id, "attempts": row.attempts} for row in claimed]),
+                    type(error).__name__,
+                    "parked" if parked else "pending",
+                )
             )
         return DeliveryBatchResult(
-            failed=len(claimed), parked=tuple(chain.from_iterable(updates)), error=type(error).__name__
+            failed=len(claimed),
+            parked=tuple(row.delivery_id for row in updated) if parked else (),
+            error=type(error).__name__,
         )
-
-    @staticmethod
-    async def _record_row_failure(
-        transaction: LedgerTransaction, delivery: _Delivery, error: str, state: Literal["pending", "parked"]
-    ) -> tuple[str, ...]:
-        updated: Final = _DELIVERIES.validate_python(
-            await transaction.query_raw(_FAILED, delivery.delivery_id, delivery.attempts, error, state)
-        )
-        return tuple(row.delivery_id for row in updated) if state == "parked" else ()

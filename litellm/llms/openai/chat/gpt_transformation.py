@@ -47,6 +47,10 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     flatten_combinators_and_drop_non_python_regex_patterns,
     tool_with_sanitized_parameters,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    place_mid_conversation_system,
+    split_leading_system_run,
+)
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     chat_completion_prompt_cache_breakpoints_for_wire,
     with_only_content_part_prompt_cache_breakpoints,
@@ -80,7 +84,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     chat_completion_tool_call_from_dict,
 )
-from litellm.utils import convert_to_model_response_object, declared_mid_conversation_system_support
+from litellm.utils import convert_to_model_response_object, declares_system_first
 
 from ..common_utils import OpenAIError, RelayOnlyBodyOpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
@@ -131,6 +135,11 @@ def _roles(messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
     return tuple(message["role"] for message in messages)
 
 
+def _placed_for_system_first_model(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    leading, conversation = split_leading_system_run(hoist_developer_messages_into_leading_system_message(messages))
+    return (*leading, *place_mid_conversation_system(conversation, supports_mid_conversation_system=False))
+
+
 def translate_developer_role_for_openai_compatible_endpoint(
     messages: Sequence[AllMessageValues],
     *,
@@ -142,10 +151,12 @@ def translate_developer_role_for_openai_compatible_endpoint(
     in_place: Final = map_developer_role_to_system_role(messages=messages)
     if targets_openai_hosted_endpoint(custom_llm_provider, api_base):
         return in_place
-    placed: Final = hoist_developer_messages_into_leading_system_message(messages=messages)
-    if _roles(placed) == _roles(in_place):
+    if not any(message["role"] in ("system", "developer") for message in messages[1:]):
         return in_place
-    if declared_mid_conversation_system_support(model, custom_llm_provider, model_info) is not False:
+    if not declares_system_first(model, custom_llm_provider, model_info):
+        return in_place
+    placed: Final = _placed_for_system_first_model(messages)
+    if _roles(placed) == _roles(in_place):
         return in_place
     return placed
 
@@ -339,8 +350,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -550,7 +561,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         A developer message only changes role, except on a model whose deployment or cost
         map declares `supports_mid_conversation_system` false, where the instructions are
-        placed in one leading system message for its chat template.
+        placed in one leading system message for its chat template and every later system
+        message becomes a user turn in place.
         """
         return translate_developer_role_for_openai_compatible_endpoint(
             messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, model_info=model_info
@@ -740,8 +752,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict[str, object],
     ) -> dict:
         if not has_file_id_urls(messages, _PDF_URL_STARTS):
@@ -884,10 +896,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -939,8 +951,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -967,8 +979,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:

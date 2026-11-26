@@ -1,0 +1,34 @@
+# The proxy's IP allowlist. A listed address is served natively, and an unlisted one is taken as
+# sent and refused by the native app with the proxy's 403. With `use_x_forwarded_for` off, Python
+# checks the address its server resolved from `x-forwarded-for` when the peer is a proxy the
+# operator trusts, which the gateway is not told, so a request that sends the header goes to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    allowed_ips: [10.0.0.1]
+
+requests:
+  - name: listed peer
+    peer: 10.0.0.1:50000
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: unlisted peer
+    peer: 10.0.0.9:50000
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: listed peer that sends a forwarded address
+    peer: 10.0.0.1:50000
+    headers: {authorization: Bearer gateway-key, x-forwarded-for: 10.0.0.9}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+    over: general_settings.allowed_ips

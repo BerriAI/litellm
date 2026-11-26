@@ -407,10 +407,12 @@ async def test_an_async_usage_based_v2_override_counts_rpm_before_the_call(
 
 @pytest.mark.asyncio
 async def test_request_scoped_routing_still_runs_the_strategy_rpm_check(
-    make_core: MakeCore, host: ScriptedHost
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """After ``observe(request_scoped=True)`` the selector is off the host's lists, but the router's
     own pre-call checks still reach it, so ``rpm=1`` still holds."""
+    now: Final = datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.timezone.utc)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: now)
     collect_other_routers()
     core: Final = make_core(
         model_list=[deployment("g", "a", rpm=1)], routing_strategy="usage-based-routing-v2", num_retries=0

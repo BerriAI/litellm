@@ -9,6 +9,7 @@
 
 
 import asyncio
+import copy
 import json
 import re
 import sys
@@ -73,7 +74,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+from litellm.proxy.common_utils.sse_keepalive import last_sse_frame_end
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_blocks,
     anthropic_sse_chunks_of_events,
@@ -187,6 +188,21 @@ def _flush_unmaskable_buffer(all_chunks: list[ModelResponseStream]) -> Iterator[
         len(all_chunks),
     )
     yield from all_chunks
+
+
+def _classify_completed_frames(pending: bytearray, classified: int, appended: int) -> tuple[bytes, bytes, int]:
+    """
+    Split the frames a read of ``appended`` bytes completed into ``(preface, classifiable, next classified offset)``.
+    Only a buffer with no data-bearing frame yet (``classified == 0``) has a preface, which the caller relays and
+    removes from its buffer.
+    """
+    frames_end: Final = last_sse_frame_end(pending, classified, appended)
+    new_frames: Final = bytes(pending[classified:frames_end])
+    preface, classifiable = _split_sse_preface(new_frames) if classified == 0 else (b"", new_frames)
+    return preface, classifiable, frames_end - len(preface)
+
+
+_FrameClassifier: TypeAlias = Callable[[bytearray, int, int], tuple[bytes, bytes, int]]
 
 
 def _is_responses_event(chunk: object) -> bool:
@@ -449,7 +465,9 @@ async def _processed_tool_call(
     return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"arguments": processed})})
 
 
-async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+async def _coalesce_first_sse_frame(
+    stream: AsyncIterator[object], classify: _FrameClassifier = _classify_completed_frames
+) -> AsyncGenerator[object, None]:
     """
     Relay leading data-less SSE frames (comment keepalives, events with no
     data) as they complete, and join raw ``bytes`` chunks until they
@@ -459,29 +477,29 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
     is forwarded untouched. The byte cap bounds a single unterminated frame
     and a run of frames with no JSON object.
     """
-    pending = b""
+    pending: Final = bytearray()
+    classified = 0  # rebind-ok: offset of the first byte no read has classified yet, advanced on every read
     try:
         async for chunk in stream:
             if not isinstance(chunk, bytes):
                 yield chunk
                 continue
-            pending += chunk
-            complete_frames, tail = split_complete_sse_frames(pending)
-            preface, classifiable = _split_sse_preface(complete_frames)
+            pending.extend(chunk)
+            preface, classifiable, classified = classify(pending, classified, len(chunk))
             if preface:
                 yield _SsePreface(preface)
-            pending = classifiable + tail
+                del pending[: len(preface)]
             if _holds_json_object_frame(classifiable) or len(pending) >= _MAX_FIRST_SSE_FRAME_BYTES:
                 break
         else:
             if pending:
-                yield pending
+                yield bytes(pending)
             return
     except Exception:
         if pending:
-            yield pending
+            yield bytes(pending)
         raise
-    yield pending
+    yield bytes(pending)
     async for chunk in stream:
         yield chunk
 
@@ -1320,7 +1338,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         text: str,
         output_parse_pii: bool,
         presidio_config: PresidioPerRequestConfig | None,
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> str:
         """
         Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
@@ -1517,9 +1535,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Masks the input and output before logging to langfuse, datadog, etc.
         """
-        if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
+        masks_response_only: Final = self._callback_role is not None and self.apply_to_output
+        if call_type in ("completion", "acompletion") and not masks_response_only:  # /chat/completions requests
             messages: Final[list | None] = kwargs.get("messages", None)
-            tasks: Final = []
+            tasks: Final[list[Awaitable[str]]] = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
 
             if messages is None:
@@ -1586,8 +1605,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     request_data=kwargs,
                     mode="mask",
                 )
+        else:
+            return kwargs, await self._masked_copy_of_logged_response(kwargs, result, call_type)
 
         return kwargs, result
+
+    async def _masked_copy_of_logged_response(
+        self, kwargs: Mapping[str, object], result: object, call_type: str
+    ) -> object:
+        from litellm.llms import get_guardrail_translation_mapping
+        from litellm.types.utils import CallTypes
+
+        if isinstance(result, ModelResponse):
+            return await self._process_response_for_pii(response=result, request_data={**kwargs}, mode="mask")
+        try:
+            translation: Final = get_guardrail_translation_mapping(CallTypes(call_type))()
+        except ValueError:
+            return result
+        return await translation.process_output_response(
+            response=copy.deepcopy(result),
+            guardrail_to_apply=self,
+            request_data={"metadata": {}, "litellm_call_id": kwargs.get("litellm_call_id")},
+        )
 
     async def async_post_call_success_hook(
         self,
@@ -1666,7 +1705,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _process_anthropic_response_for_pii(
         self,
         response: dict,
-        request_data: dict,
+        request_data: dict[str, object],
         mode: Literal["mask", "unmask"],
     ) -> dict:
         """
@@ -1732,7 +1771,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _process_response_for_pii(
         self,
         response: ModelResponse,
-        request_data: dict,
+        request_data: dict[str, object],
         mode: Literal["mask", "unmask"],
     ) -> ModelResponse:
         """

@@ -235,8 +235,8 @@ class OTELGenAISemconvMixin:
 
     def _emit_inference_details_event(
         self,
-        kwargs: dict,
-        response_obj: dict,
+        kwargs: dict[str, object],
+        response_obj: dict[str, object],
         provider: str | None,
         otel_logger,
         parent_ctx: "SpanContext",

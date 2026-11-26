@@ -148,7 +148,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for Stability AI.
         """
@@ -167,7 +167,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:

@@ -191,6 +191,7 @@ _MODEL_INFO_DISCOVERERS: Final[Mapping[str, _ModelInfoDiscoverer]] = MappingProx
 )
 
 
+_CLIP_RATE_FIELDS: Final = ("input_cost_per_audio_per_second", "input_cost_per_video_per_second")
 _CACHE_PRICING_FIELDS: Final = (
     "cache_creation_input_token_cost",
     "cache_creation_input_token_cost_above_1hr",
@@ -342,6 +343,35 @@ def _inherited_cache_pricing(
     return {field: backend_info[field] for field in missing_fields if backend_info.get(field) is not None}
 
 
+def _inherited_clip_rates(
+    host: "PythonHost", model_info: Mapping[str, object], backend_model: str, provider: str | None, region: object
+) -> Mapping[str, object]:
+    """The per-second audio and video input rates a token-priced entry inherits, from the region's own cost map entry
+    when it has one. A clip is billed by its length and has no tokens, so a token price alone would bill it at
+    nothing."""
+    if not model_info.get("input_cost_per_token"):
+        return {}
+    missing_fields: Final = tuple(field for field in _CLIP_RATE_FIELDS if model_info.get(field) is None)
+    if not missing_fields:
+        return {}
+    prefix, _, unprefixed_model = backend_model.partition("/")
+    regional_key: Final = (
+        f"{provider}/{region}/{backend_model.removeprefix(f'{provider}/')}"
+        if provider
+        else f"{prefix}/{region}/{unprefixed_model}"
+    )
+    regional_entry: Final[object] = host.dynamic().model_cost.get(regional_key)
+    try:
+        backend_info: Final = (
+            _MODEL_INFO_ADAPTER.validate_python(regional_entry)
+            if isinstance(regional_entry, dict)
+            else _backend_model_info(host, backend_model, provider)
+        )
+    except Exception:  # noqa: BLE001  # an unmapped backend model contributes nothing
+        return {}
+    return {field: backend_info[field] for field in missing_fields if backend_info.get(field) is not None}
+
+
 def _inherited_service_tier_pricing(
     host: "PythonHost", model_info: Mapping[str, object], backend_model: str, provider: str | None
 ) -> Mapping[str, object]:
@@ -488,7 +518,11 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
         else off_peak
     )
     tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, rates_model, provider)}
-    return {**tiers, **_inherited_tiered_output_rate(host, tiers, rates_model, provider)}
+    tiered_output: Final = {**tiers, **_inherited_tiered_output_rate(host, tiers, rates_model, provider)}
+    return {
+        **tiered_output,
+        **_inherited_clip_rates(host, tiered_output, rates_model, provider, params.get("aws_region_name")),
+    }
 
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:

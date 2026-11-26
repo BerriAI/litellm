@@ -5,7 +5,11 @@ from typing import Final, Literal, cast  # noqa: TID251  # extra_body carries ra
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.llms.base_llm.embedding.transformation import split_extra_body
+from litellm.llms.base_llm.embedding.transformation import (
+    over_extra_body_items,
+    split_extra_body,
+    split_request_extra_body,
+)
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
@@ -99,7 +103,9 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
     def get_supported_openai_params(self):
         return ["dimensions"]
 
-    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict, kwargs: dict):
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], kwargs: dict[str, object]
+    ):
         for param, value in non_default_params.items():
             if param == "dimensions":
                 optional_params["outputDimensionality"] = value
@@ -114,7 +120,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         """
         return {"project": "vertex_project", "region_name": "vertex_location"}
 
-    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
         mapped_params: Final = self.get_mapped_special_auth_params()
 
         for param, value in non_default_params.items():
@@ -127,7 +133,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         input: list | str,
         optional_params: dict,
         model: str,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex embedding request.
@@ -164,11 +170,15 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
             embedding_input = self.create_embedding_input(content=text, task_type=task_type, title=title)
             vertex_text_embedding_input_list.append(embedding_input)
 
-        vertex_request["instances"] = vertex_text_embedding_input_list
         body_params, extra_body = split_extra_body(optional_params)
+        extra_instances, extra_parameters = split_request_extra_body(extra_body, "instances", "parameters")
+        vertex_request["instances"] = cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+            list[TextEmbeddingInput],
+            over_extra_body_items(extra_instances, vertex_text_embedding_input_list),
+        )
         vertex_request["parameters"] = (
             cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
-                EmbeddingParameters, {**extra_body, **body_params}
+                EmbeddingParameters, {**extra_parameters, **body_params}
             )
         )
         if labels:
@@ -210,11 +220,15 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
             embedding_input = TextEmbeddingFineTunedInput(inputs=text)
             vertex_text_embedding_input_list.append(embedding_input)
 
-        vertex_request["instances"] = vertex_text_embedding_input_list
         body_params, extra_body = split_extra_body(optional_params)
+        extra_instances, extra_parameters = split_request_extra_body(extra_body, "instances", "parameters")
+        vertex_request["instances"] = cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+            list[TextEmbeddingFineTunedInput],
+            over_extra_body_items(extra_instances, vertex_text_embedding_input_list),
+        )
         vertex_request["parameters"] = (
             cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
-                TextEmbeddingFineTunedParameters, {**extra_body, **body_params}
+                TextEmbeddingFineTunedParameters, {**extra_parameters, **body_params}
             )
         )
         # Remove 'shared_session' from parameters if present

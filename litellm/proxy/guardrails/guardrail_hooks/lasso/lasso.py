@@ -186,7 +186,7 @@ class LassoGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,  # Deprecated, use global_cache instead (kept to align with CustomGuardrail interface)
-        data: dict,
+        data: dict[str, object],
         call_type: Literal[
             "completion",
             "text_completion",
@@ -218,7 +218,7 @@ class LassoGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
@@ -246,7 +246,7 @@ class LassoGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):
@@ -453,7 +453,7 @@ class LassoGuardrail(CustomGuardrail):
         message_type: Literal["PROMPT", "COMPLETION"],
         messages: Sequence[Mapping[str, object]],
         messages_count: int,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Handle masking with classifix endpoint.
 
         ``messages_count`` is the number of inspected items derived from

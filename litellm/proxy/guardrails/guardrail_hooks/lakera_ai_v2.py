@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from string import Formatter
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -40,6 +40,10 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIResponse,
 )
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.types.utils import LLMResponseTypes
+
 
 _DECODED_JSON: Final = TypeAdapter(object)
 _RESPONSE_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -381,7 +385,7 @@ class LakeraAIGuardrail(CustomGuardrail):
     async def call_v2_guard(
         self,
         messages: Sequence[AllMessageValues],
-        request_data: dict,
+        request_data: dict[str, object],
         event_type: GuardrailEventHooks,
     ) -> tuple[LakeraAIResponse, dict[str, int]]:
         """
@@ -533,9 +537,9 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
@@ -672,7 +676,7 @@ class LakeraAIGuardrail(CustomGuardrail):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ):
@@ -748,7 +752,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: "LLMResponseTypes",
     ):
         """
         Post-call hook for Lakera guardrail.

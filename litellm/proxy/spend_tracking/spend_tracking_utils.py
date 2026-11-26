@@ -3,14 +3,14 @@ import ipaddress
 import os
 import re
 import secrets
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from datetime import datetime as dt
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, cast, runtime_checkable
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -280,6 +280,7 @@ def _get_spend_logs_metadata(  # pyright: ignore[reportUnusedFunction]  # shared
     azure_spillover: AzureSpillover | None = None,
     used_client_oauth_token: bool | None = None,
     subscription_usage: ClaudeSubscriptionUsage | None = None,
+    no_log: bool = False,
     kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
     is_silent_experiment: bool = False,
     route_call_type: str | None = None,
@@ -384,10 +385,14 @@ def _get_spend_logs_metadata(  # pyright: ignore[reportUnusedFunction]  # shared
     clean_metadata["batch_failed_requests"] = batch_failed_requests
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
-        vector_store_request_metadata, metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)
+        vector_store_request_metadata,
+        metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata),
+        no_log=no_log,
     )
     clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(
-        guardrail_information, metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)
+        guardrail_information,
+        metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata),
+        no_log=no_log,
     )
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -640,7 +645,7 @@ def _snapshotless_cost_breakdown(  # pyright: ignore[reportUnusedFunction]  # sh
 
 
 def get_logging_payload(
-    kwargs: dict | None,
+    kwargs: dict[str, object] | None,
     response_obj: object,
     start_time: datetime,
     end_time: datetime,
@@ -1171,11 +1176,12 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
 def _sanitize_guardrail_information_for_spend_logs(
     guardrail_information: list[StandardLoggingGuardrailInformation] | None,
     metadata: Mapping[str, object] | None = None,
+    no_log: bool = False,
 ) -> list[StandardLoggingGuardrailInformation] | None:
     """
-    When ``store_prompts_in_spend_logs`` is False, redact prompt-carrying fields
+    When ``store_prompts_in_spend_logs`` is False, blank prompt-carrying fields
     (``guardrail_request``, ``guardrail_response``, ``match_details``,
-    ``classification``) before they land in ``LiteLLM_SpendLogs.metadata``.
+    ``classification``) to ``None`` before they land in ``LiteLLM_SpendLogs.metadata``.
 
     Guardrail hooks may echo the LLM request payload back into
     ``guardrail_response``, and two first-party hooks
@@ -1191,17 +1197,53 @@ def _sanitize_guardrail_information_for_spend_logs(
     here to match OTEL's defensive read pattern; otherwise iteration would
     yield the dict's keys and crash the whole spend-log write.
     """
-    if guardrail_information is None or stores_full_prompts_in_spend_logs(metadata):
+    if guardrail_information is None or (not no_log and stores_full_prompts_in_spend_logs(metadata)):
         return guardrail_information
     entries: Final = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
+
+
+def _holds_nothing(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (str, list, tuple, dict)):
+        return len(value) == 0  # pyright: ignore[reportUnknownArgumentType]  # only its length is read
+    return False
+
+
+def _has_text_key(keys: Iterable[object]) -> bool:
+    return any(isinstance(key, str) for key in keys)
+
+
+def _stored_prompt_field(value: object) -> object:
+    """What a prompt-carrying field is stored as when prompts are not stored: the value itself when its
+    JSON form holds nothing, otherwise ``None``.
+
+    The native row builder makes the same choice on the JSON form of the value, where a string of NUL
+    bytes is ``""``, an empty set is ``[]``, and a dict with no string key or a pydantic model with no
+    field is ``{}``. Only those shapes can have an empty form, so only they are checked: a large value
+    is never walked, and a dict stops at its first string key.
+    """
+    if _holds_nothing(value):
+        return value
+    if isinstance(value, str):
+        return None if strip_null_bytes(value) else ""
+    if isinstance(value, set):
+        return None if value else []
+    text_keyed: Final = as_str_mapping(value)
+    if isinstance(value, dict) and text_keyed is not None:
+        return None if _has_text_key(text_keyed) else {}
+    if isinstance(value, BaseModel) and not type(value).model_fields and not value.model_extra:
+        return {}
+    return None
 
 
 def _redact_prompt_fields_in_guardrail_entry(
     entry: StandardLoggingGuardrailInformation,
 ) -> StandardLoggingGuardrailInformation:
     """
-    Replace prompt-carrying fields with the redaction marker. Purely numeric
+    Store ``None`` in place of every prompt-carrying field that holds a value. A field whose JSON
+    form is ``None`` or an empty string, list or dict is stored as that empty form. Purely numeric
     compression stats inside ``guardrail_response`` (e.g. Headroom's
     ``tokens_saved``) cannot carry prompt content, so they are preserved as a
     stats-only dict; spend aggregation reads them via
@@ -1210,7 +1252,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     preserved_stats: Final = numeric_compression_stats(entry)
     redacted: Final[StandardLoggingGuardrailInformation] = {
         **entry,
-        **{key: REDACTED_BY_LITELM_STRING for key in PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
+        **{key: _stored_prompt_field(value) for key, value in entry.items() if key in PROMPT_CARRYING_GUARDRAIL_FIELDS},
     }
     if preserved_stats is None:
         return redacted
@@ -1221,6 +1263,7 @@ def sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
     original_exception: BaseException | None = None,
     metadata: Mapping[str, object] | None = None,
+    no_log: bool = False,
 ) -> StandardLoggingPayloadErrorInformation | None:
     """
     Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
@@ -1249,7 +1292,7 @@ def sanitize_error_information_for_spend_logs(
     )
     sanitized = cast(dict, {**persisted})
 
-    if not stores_full_prompts_in_spend_logs(metadata):
+    if no_log or not stores_full_prompts_in_spend_logs(metadata):
         for field in ("error_message", "traceback"):
             value = sanitized.get(field)
             if isinstance(value, str):
@@ -1342,11 +1385,12 @@ def _error_information_without_ip_addresses(error_information: Mapping[object, o
 def _get_vector_store_request_for_spend_logs_payload(
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None,
     metadata: Mapping[str, object] | None = None,
+    no_log: bool = False,
 ) -> list[StandardLoggingVectorStoreRequest] | None:
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
-    if stores_full_prompts_in_spend_logs(metadata):
+    if not no_log and stores_full_prompts_in_spend_logs(metadata):
         return vector_store_request_metadata
 
     if vector_store_request_metadata is None:
@@ -1380,8 +1424,15 @@ def _disables_prompt_storage(tenant_metadata: object) -> bool:
     return value is False or (isinstance(value, str) and str_to_bool(value) is False)
 
 
+def is_no_log_call(kwargs: Mapping[str, object]) -> bool:
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    return (
+        litellm_params is not None and litellm_params.get("no-log") is True and not litellm.global_disable_no_log_param
+    )
+
+
 def should_store_prompts_for_call(kwargs: Mapping[str, object]) -> bool:
-    return should_store_prompts_and_responses_in_spend_logs(
+    return not is_no_log_call(kwargs) and should_store_prompts_and_responses_in_spend_logs(
         _SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(get_litellm_metadata_from_kwargs(dict(kwargs)))
     )
 

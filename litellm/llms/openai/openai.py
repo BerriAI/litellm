@@ -2,7 +2,7 @@ import inspect
 import json
 import time
 import types
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
@@ -80,11 +80,13 @@ from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
     OpenAIError,
+    asend_create_without_duplicates,
     build_output_token_limit_response,
     drop_params_from_unprocessable_entity_error,
     is_openai_backed_api_base,
     is_output_token_limit_error,
     model_dump_provider_response,
+    send_create_without_duplicates,
     upstream_error_response,
 )
 from .speech_usage_stream import speech_response_with_usage, with_usage_stream
@@ -136,7 +138,7 @@ class MistralEmbeddingConfig:
             "encoding_format",
         ]
 
-    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict):
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
         for param, value in non_default_params.items():
             if param == "encoding_format":
                 optional_params["encoding_format"] = value
@@ -282,12 +284,14 @@ class OpenAIConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         *,
         reasoning_drop_logger: WarningLogger = verbose_logger,
+        declared_reasoning_efforts: Collection[str] | None = None,
+        allowed_openai_params: Collection[str] = (),
     ) -> dict:
         """ """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
@@ -296,6 +300,9 @@ class OpenAIConfig(BaseConfig):
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
+                declared_reasoning_efforts=declared_reasoning_efforts,
+                allowed_openai_params=allowed_openai_params,
+                reasoning_drop_logger=reasoning_drop_logger,
             )
         elif self._routes_to_gpt_5_config(model):
             return openAIGPT5Config.map_openai_params(
@@ -331,10 +338,10 @@ class OpenAIConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         messages = self._transform_messages(messages=messages, model=model)
         return {"model": model, "messages": messages, **optional_params}
 
@@ -344,10 +351,10 @@ class OpenAIConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -371,8 +378,8 @@ class OpenAIConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -781,7 +788,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model_response: ModelResponse,
         timeout: float | httpx.Timeout,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         model: str | None = None,
         messages: list[AllMessageValues] | None = None,
@@ -1030,8 +1037,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     async def acompletion(
         self,
         messages: list,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         provider_config: BaseConfig,
         model: str,
         model_response: ModelResponse,
@@ -1215,8 +1222,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         self,
         timeout: float | httpx.Timeout,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         provider_config: BaseConfig,
         model: str,
         logging_obj: LiteLLMLoggingObj,
@@ -1464,7 +1471,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
         model_response: EmbeddingResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,
@@ -1915,7 +1922,9 @@ class OpenAIFilesAPI(BaseLLM):
         create_file_data: CreateFileRequest,
         openai_client: AsyncOpenAI,
     ) -> OpenAIFileObject:
-        response: Final = await openai_client.files.create(**create_file_data)
+        response: Final = await asend_create_without_duplicates(
+            openai_client, create_file_data, lambda client, request: client.files.create(**request)
+        )
         return OpenAIFileObject.model_validate(response.model_dump())
 
     def create_file(
@@ -1951,7 +1960,9 @@ class OpenAIFilesAPI(BaseLLM):
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
             return self.acreate_file(create_file_data=create_file_data, openai_client=openai_client)
-        response: Final = cast(OpenAI, openai_client).files.create(**create_file_data)
+        response: Final = send_create_without_duplicates(
+            cast(OpenAI, openai_client), create_file_data, lambda client, request: client.files.create(**request)
+        )
         return OpenAIFileObject.model_validate(response.model_dump())
 
     async def afile_content(
@@ -2298,7 +2309,9 @@ class OpenAIBatchesAPI(BaseLLM):
         create_batch_data: CreateBatchRequest,
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
-        response: Final = await openai_client.batches.create(**create_batch_data)
+        response: Final = await asend_create_without_duplicates(
+            openai_client, create_batch_data, lambda client, request: client.batches.create(**request)
+        )
         return LiteLLMBatch.model_validate(response.model_dump())
 
     def create_batch(
@@ -2334,7 +2347,9 @@ class OpenAIBatchesAPI(BaseLLM):
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
             return self.acreate_batch(create_batch_data=create_batch_data, openai_client=openai_client)
-        response: Final = cast(OpenAI, openai_client).batches.create(**create_batch_data)
+        response: Final = send_create_without_duplicates(
+            cast(OpenAI, openai_client), create_batch_data, lambda client, request: client.batches.create(**request)
+        )
 
         return LiteLLMBatch.model_validate(response.model_dump())
 
@@ -2825,7 +2840,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self, 
         thread_id: str,
-        message_data: dict,
+        message_data: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -2842,7 +2857,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self, 
         thread_id: str,
-        message_data: dict,
+        message_data: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -3387,7 +3402,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
-        client,
+        client: object,
         arun_thread: Literal[True], 
         event_handler: AssistantEventHandler | None,
         *,
@@ -3411,7 +3426,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
-        client,
+        client: object,
         arun_thread: Literal[False] | None, 
         event_handler: AssistantEventHandler | None,
         *,

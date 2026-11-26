@@ -164,7 +164,7 @@ class BaseLLMAIOHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: Mapping[str, str],
-        data: dict | None,
+        data: dict[str, object] | None,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
         form_data: FormData | None = None,
@@ -208,7 +208,7 @@ class BaseLLMAIOHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict,
-        data: dict,
+        data: dict[str, object],
         timeout: float | httpx.Timeout | None,
         litellm_params: dict,
         stream: bool = False,
@@ -434,7 +434,7 @@ class BaseLLMAIOHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict[str, object],
-        data: dict,
+        data: dict[str, object],
         model: str,
         messages: list,
         logging_obj: LiteLLMLoggingObj,
@@ -442,7 +442,7 @@ class BaseLLMAIOHTTPHandler:
         timeout: float | httpx.Timeout,
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
-    ) -> tuple[object, dict]:
+    ) -> tuple[object, dict[str, object]]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = get_httpx_client()
         else:

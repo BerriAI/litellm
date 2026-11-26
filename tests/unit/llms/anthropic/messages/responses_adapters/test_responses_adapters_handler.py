@@ -120,6 +120,15 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
     ]
 
 
+def _messages_history(history: tuple[tuple[str, str], ...]) -> tuple[dict[str, str], ...]:
+    return tuple(
+        chain.from_iterable(
+            ({"role": "user", "content": question}, {"role": "assistant", "content": answer})
+            for question, answer in history
+        )
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_params,wire_controls,preserve_instructions",
@@ -181,10 +190,12 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         ),
     ],
 )
+@pytest.mark.parametrize("history", [(), (("earlier", "answer"),)], ids=["first_turn", "continued_turn"])
 async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation_holds_it(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
+    history: tuple[tuple[str, str], ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -216,14 +227,14 @@ async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation
             model="openai/responses/gpt-6.2-sol",
             max_tokens=16,
             system="Stable prefix",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=[*_messages_history(history), {"role": "user", "content": "hi"}],
             api_key="sk-test",
             cache={"no-cache": True},
             **request_params,
         )
         await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-6.2-sol",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=[*_messages_history(history), {"role": "user", "content": "hi"}],
             contents=None,
             system="Stable prefix",
             messages_format="anthropic",
@@ -241,13 +252,23 @@ async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation
         if key in request_body
     } == wire_controls
     user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    earlier_input: Final = tuple(
+        chain.from_iterable(
+            (
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": question}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": answer}]},
+            )
+            for question, answer in history
+        )
+    )
     if preserve_instructions:
         assert request_body["instructions"] == "Stable prefix"
-        assert request_body["input"] == [user_input]
+        assert request_body["input"] == [*earlier_input, user_input]
     else:
         assert "instructions" not in request_body
         assert request_body["input"] == [
             {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+            *earlier_input,
             user_input,
         ]
 
@@ -596,12 +617,13 @@ def test_build_responses_kwargs_drops_a_bare_client_none_on_o3_only_under_drop_p
     )
 
     o3_row: Final = litellm.model_cost["o3"]
-    unconfirmed_none: Final = (
-        model_reasoning_efforts("o3", "openai") is None
-        and o3_row.get("supports_reasoning") is True
-        and o3_row.get("supports_none_reasoning_effort") is not True
+    o3_levels: Final = model_reasoning_efforts("o3", "openai")
+    refuses_none: Final = (
+        "none" not in o3_levels
+        if o3_levels is not None
+        else o3_row.get("supports_reasoning") is True and o3_row.get("supports_none_reasoning_effort") is not True
     )
-    assert responses_kwargs.get("reasoning") == (None if drop_params and unconfirmed_none else {"effort": "none"})
+    assert responses_kwargs.get("reasoning") == (None if drop_params and refuses_none else {"effort": "none"})
 
 
 def test_build_responses_kwargs_keeps_a_pinned_effort_out_when_drop_params_drops_the_client_effort() -> None:
@@ -950,6 +972,9 @@ OTHER_HOST: Final = {"custom_llm_provider": "openai", "api_base": "https://gatew
 EPHEMERAL: Final = {"type": "ephemeral"}
 
 
+LOOKUP_SCHEMA: Final = {"type": "object", "properties": {}}
+
+
 def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> dict[str, object]:
     mark: Final = {} if cache_control is None else {"cache_control": cache_control}
     return {
@@ -958,9 +983,18 @@ def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> di
         "messages": [
             {"role": "user", "content": [{"type": "text", "text": "look", **mark}, {"type": "text", "text": "now"}]}
         ],
+        "tools": [{"name": "lookup", "input_schema": LOOKUP_SCHEMA, **mark}],
     }
 
 
+@pytest.mark.parametrize(
+    ("cache_control", "breakpoint"),
+    [
+        pytest.param({**EPHEMERAL, "ttl": "1h"}, {"mode": "explicit", "ttl": "12h"}, id="1h-asks-for-12h"),
+        pytest.param({**EPHEMERAL, "ttl": "5m"}, {"mode": "explicit"}, id="5m-keeps-the-request-ttl"),
+        pytest.param(EPHEMERAL, {"mode": "explicit"}, id="no-ttl-keeps-the-request-ttl"),
+    ],
+)
 @pytest.mark.parametrize(
     "extra_kwargs",
     [
@@ -969,15 +1003,134 @@ def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> di
     ],
 )
 def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_the_same_block(
-    extra_kwargs: dict[str, object],
+    extra_kwargs: dict[str, object], cache_control: dict[str, str], breakpoint: dict[str, str]
 ) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
         extra_kwargs=extra_kwargs,
-        **_request_with_client_cache_marks({**EPHEMERAL, "ttl": "1h"}),
+        **_request_with_client_cache_marks(cache_control),
     )
 
     assert "instructions" not in responses_kwargs
+    assert responses_kwargs["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Be concise."},
+                {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": breakpoint},
+            ],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "look", "prompt_cache_breakpoint": breakpoint},
+                {"type": "input_text", "text": "now"},
+            ],
+        },
+    ]
+    assert responses_kwargs["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "strict": False,
+            "parameters": LOOKUP_SCHEMA,
+            "prompt_cache_breakpoint": breakpoint,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("last_message", "marked_content"),
+    [
+        pytest.param(
+            {"role": "user", "content": [{"type": "text", "text": "look"}, {"type": "text", "text": "now"}]},
+            [{"type": "input_text", "text": "look"}, {"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}],
+            id="block-list",
+        ),
+        pytest.param(
+            {"role": "user", "content": "now"},
+            [{"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}],
+            id="string-content",
+        ),
+    ],
+)
+def test_top_level_cache_control_marks_the_last_block_of_the_conversation(
+    last_message: dict[str, object], marked_content: list[dict[str, object]]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "ok"}, last_message],
+        extra_kwargs={**OPENAI_API, "cache_control": {**EPHEMERAL, "ttl": "1h"}},
+    )
+
+    assert "cache_control" not in responses_kwargs
+    assert responses_kwargs["input"][0]["content"] == [{"type": "input_text", "text": "earlier"}]
+    assert responses_kwargs["input"][-1] == {"type": "message", "role": "user", "content": marked_content}
+
+
+def test_top_level_cache_control_marks_the_turn_before_an_assistant_prefill() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "now"}, {"role": "assistant", "content": "Sure,"}],
+        extra_kwargs={**OPENAI_API, "cache_control": {**EPHEMERAL, "ttl": "1h"}},
+    )
+
+    assert responses_kwargs["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}
+            ],
+        },
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Sure,"}]},
+    ]
+
+
+def test_top_level_cache_control_marks_nothing_when_the_deployment_drops_it() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "now"}],
+        extra_kwargs={
+            **OPENAI_API,
+            "cache_control": {**EPHEMERAL, "ttl": "1h"},
+            "additional_drop_params": ["cache_control"],
+        },
+    )
+
+    assert responses_kwargs["input"][-1] == {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "now"}],
+    }
+
+
+def test_top_level_cache_control_keeps_the_mark_the_last_block_already_carries() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "now", "cache_control": EPHEMERAL}]}],
+        extra_kwargs={**OPENAI_API, "cache_control": {**EPHEMERAL, "ttl": "1h"}},
+    )
+
+    assert responses_kwargs["input"][-1]["content"] == [
+        {"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+
+
+def test_a_1h_cache_control_reaches_azure_ai_without_the_12h_ttl_only_openai_takes() -> None:
+    """Azure AI Foundry Responses answered 400 for a 12h breakpoint ttl on 2026-10-30."""
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="gpt-6.1-sol",
+        extra_kwargs={"custom_llm_provider": "azure_ai"},
+        **_request_with_client_cache_marks({**EPHEMERAL, "ttl": "1h"}),
+    )
+
     assert responses_kwargs["input"] == [
         {
             "type": "message",
@@ -1046,17 +1199,20 @@ RAW_BREAKPOINT: Final = {"mode": "explicit"}
 
 RAW_LOG_OUTPUT: Final = [{"type": "input_text", "text": "build ok", "prompt_cache_breakpoint": RAW_BREAKPOINT}]
 RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoint": RAW_BREAKPOINT}
+LOOKUP_FUNCTION: Final = {"type": "function", "name": "lookup", "strict": False, "parameters": LOOKUP_SCHEMA}
+RAW_LOOKUP_FUNCTION: Final = {**LOOKUP_FUNCTION, "prompt_cache_breakpoint": RAW_BREAKPOINT}
 
 
 @pytest.mark.parametrize(
-    ("model", "extra_kwargs", "log_output", "question"),
+    ("model", "extra_kwargs", "log_output", "question", "tool"),
     [
-        pytest.param("openai/gpt-5.5", OPENAI_API, RAW_LOG_OUTPUT, RAW_QUESTION, id="sent-as-is"),
+        pytest.param("openai/gpt-5.5", OPENAI_API, RAW_LOG_OUTPUT, RAW_QUESTION, RAW_LOOKUP_FUNCTION, id="sent-as-is"),
         pytest.param(
             "openai/gpt-5.5",
             {**OPENAI_API, "drop_params": True},
             "build ok",
             {"type": "input_text", "text": "q"},
+            LOOKUP_FUNCTION,
             id="dropped-under-drop-params",
         ),
         pytest.param(
@@ -1064,6 +1220,7 @@ RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoi
             {**OTHER_HOST, "drop_params": True},
             RAW_LOG_OUTPUT,
             RAW_QUESTION,
+            RAW_LOOKUP_FUNCTION,
             id="kept-under-drop-params-for-a-model-that-takes-them",
         ),
         pytest.param(
@@ -1071,16 +1228,18 @@ RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoi
             {**OTHER_HOST, "drop_params": True, "base_model": "gpt-5.6"},
             RAW_LOG_OUTPUT,
             RAW_QUESTION,
+            RAW_LOOKUP_FUNCTION,
             id="kept-under-drop-params-for-a-base-model-that-takes-them",
         ),
     ],
 )
 def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drops_them_for_a_model_that_takes_none(
-    model: str, extra_kwargs: dict[str, object], log_output: object, question: dict[str, object]
+    model: str, extra_kwargs: dict[str, object], log_output: object, question: dict[str, object], tool: object
 ) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model=model,
         extra_kwargs=extra_kwargs,
+        tools=[{"name": "lookup", "input_schema": LOOKUP_SCHEMA, "prompt_cache_breakpoint": RAW_BREAKPOINT}],
         max_tokens=1024,
         messages=[
             {
@@ -1101,6 +1260,7 @@ def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drop
         {"type": "function_call_output", "call_id": "toolu_log", "output": log_output},
         {"type": "message", "role": "user", "content": [question]},
     ]
+    assert responses_kwargs["tools"] == [tool]
 
 
 def _gpt_5_6_input_for_a_cached_block(drop_params: bool, raw_mark: Mapping[str, object]) -> object:
@@ -1219,6 +1379,24 @@ def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str,
     ]
 
 
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+def test_non_string_user_text_answers_400_naming_its_field(text_block: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6",
+            extra_kwargs=OPENAI_API,
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "run the build"},
+                {"role": "assistant", "content": "on it"},
+                {"role": "user", "content": [{"type": "text", "text": "and test"}, dict(text_block)]},
+            ],
+        )
+
+    assert rejected.value.status_code == 400
+    assert "messages.2.content.1.text: Input should be a valid string" in rejected.value.message
+
+
 def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_text() -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
@@ -1312,55 +1490,225 @@ async def test_recomputed_cost_of_a_served_bridge_response_prices_the_reasoning_
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
 
 
-_DEEPWIKI_SERVER: Final = {"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}
-
-
-def test_mcp_servers_the_responses_bridge_cannot_run_answer_400(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
-        _build_responses_kwargs(
-            model="gpt-5.6",
-            extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER]},
-            max_tokens=1024,
-            messages=MESSAGES,
-        )
-
-    assert rejected.value.status_code == 400
-    assert "to gpt-5.6 on openai, so the MCP server `deepwiki` would not run" in rejected.value.message
+DOCS_SERVER: Final = {"type": "url", "name": "docs", "url": "https://mcp.example.com/sse"}
 
 
 @pytest.mark.parametrize(
-    "drop_form",
-    [{"drop_params": True}, {"additional_drop_params": ["mcp_servers"]}],
-    ids=["drop_params", "additional_drop_params"],
+    ("speed", "extra_kwargs", "service_tier"),
+    [
+        pytest.param("fast", OPENAI_API, "priority", id="fast"),
+        pytest.param("fast", {**OPENAI_API, "service_tier": "flex"}, "flex", id="forwarded-tier-wins-over-fast"),
+        pytest.param("fast", {**OPENAI_API, "service_tier": "auto"}, "priority", id="fast-wins-over-auto"),
+        pytest.param(None, {**OPENAI_API, "service_tier": "flex"}, "flex", id="forwarded-tier"),
+        pytest.param(None, {**OPENAI_API, "service_tier": "auto"}, "auto", id="forwarded-auto"),
+    ],
 )
-def test_drop_params_keeps_mcp_servers_off_the_responses_request(
-    monkeypatch: pytest.MonkeyPatch, drop_form: Mapping[str, object]
+def test_speed_fast_asks_for_the_priority_tier_unless_a_specific_service_tier_is_forwarded(
+    speed: str | None, extra_kwargs: dict[str, object], service_tier: str
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6", max_tokens=1024, messages=MESSAGES, speed=speed, extra_kwargs=extra_kwargs
+    )
+    assert responses_kwargs["service_tier"] == service_tier
+
+
+CONTAINERS: Final = (
+    pytest.param("container_abc", id="container-id"),
+    pytest.param({"id": "container_abc"}, id="container-params"),
+)
+
+
+@pytest.mark.parametrize("container", CONTAINERS)
+def test_speed_mcp_servers_and_container_never_reach_the_responses_call_raw(
+    container: str | dict[str, object],
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=MESSAGES,
+        speed="fast",
+        mcp_servers=[DOCS_SERVER],
+        container=container,
+        top_k=40,
+        extra_kwargs={**OPENAI_API, "drop_params": True, "inference_geo": "us"},
+    )
+    assert {"speed", "mcp_servers", "container", "top_k", "inference_geo"}.isdisjoint(responses_kwargs)
+    assert responses_kwargs["tools"] == [
+        {
+            "type": "mcp",
+            "server_label": "docs",
+            "server_url": "https://mcp.example.com/sse",
+            "require_approval": "never",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "request_fields"),
+    [
+        pytest.param("container", {"container": "container_abc"}, id="container-id"),
+        pytest.param("container", {"container": {"id": "container_abc"}}, id="container-params"),
+        pytest.param("top_k", {"top_k": 40}, id="top-k"),
+        pytest.param("inference_geo", {"extra_kwargs": {**OPENAI_API, "inference_geo": "us"}}, id="inference-geo"),
+    ],
+)
+def test_a_field_without_a_responses_equivalent_answers_400_without_drop_params(
+    field: str, request_fields: dict[str, object]
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6", max_tokens=1024, messages=MESSAGES, **{"extra_kwargs": OPENAI_API, **request_fields}
+        )
+
+    assert rejected.value.status_code == 400
+    assert f"no equivalent for {field}" in rejected.value.message
+
+
+@pytest.mark.parametrize("container", CONTAINERS)
+def test_additional_drop_params_leaves_out_a_listed_speed_and_container(
+    monkeypatch: pytest.MonkeyPatch, container: str | dict[str, object]
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     responses_kwargs: Final = _build_responses_kwargs(
-        model="gpt-5.6",
-        extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], **drop_form},
+        model="openai/gpt-5.6",
         max_tokens=1024,
         messages=MESSAGES,
+        speed="fast",
+        container=container,
+        top_k=40,
+        extra_kwargs={
+            **OPENAI_API,
+            "inference_geo": "us",
+            "additional_drop_params": ["speed", "container", "top_k", "inference_geo"],
+        },
     )
 
-    assert "mcp_servers" not in responses_kwargs
-    assert responses_kwargs["input"]
+    assert {"service_tier", "speed", "container", "top_k", "inference_geo"}.isdisjoint(responses_kwargs)
 
 
-def test_drop_params_drops_the_mcp_toolset_tools_of_dropped_mcp_servers(monkeypatch: pytest.MonkeyPatch) -> None:
+WIRE_RESPONSE: Final = {
+    "id": "resp_fields",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.6",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "{}", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": False,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+}
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "wire_fields"),
+    [
+        pytest.param(
+            {
+                "tools": [
+                    dict(BASH_TOOL),
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": 2,
+                        "allowed_domains": ["docs.python.org"],
+                    },
+                ],
+                "tool_choice": {"type": "auto", "disable_parallel_tool_use": True},
+                "speed": "fast",
+                "output_format": {"type": "json_schema", "schema": {"type": "object", "properties": {}}},
+            },
+            {
+                "parallel_tool_calls": False,
+                "service_tier": "priority",
+                "max_tool_calls": 2,
+                "web_search": {"type": "web_search", "filters": {"allowed_domains": ["docs.python.org"]}},
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "structured_output",
+                        "schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+                        "strict": True,
+                    }
+                },
+            },
+            id="parallel-speed-web-search-structured-output",
+        ),
+        pytest.param(
+            {
+                "mcp_servers": [{**DOCS_SERVER, "authorization_token": "tok"}],
+                "tools": [
+                    {
+                        "type": "mcp_toolset",
+                        "mcp_server_name": "docs",
+                        "default_config": {"enabled": False},
+                        "configs": {"search": {"enabled": True}},
+                    }
+                ],
+            },
+            {
+                "mcp": {
+                    "type": "mcp",
+                    "server_label": "docs",
+                    "server_url": "https://mcp.example.com/sse",
+                    "require_approval": "never",
+                    "authorization": "tok",
+                    "allowed_tools": ["search"],
+                }
+            },
+            id="mcp-server",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_messages_fields_reach_the_openai_responses_request_body(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    request_fields: dict[str, object],
+    wire_fields: dict[str, object],
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fields-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        status_code=200, json=WIRE_RESPONSE
+    )
+
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024, messages=MESSAGES, model="openai/gpt-5.6", custom_llm_provider="openai", **request_fields
+    )
+
+    body: Final = json.loads(upstream.calls.last.request.content)
+    tools_by_type: Final = {tool["type"]: tool for tool in body.get("tools", [])}
+    sent: Final = {**body, **tools_by_type}
+    assert {key: sent.get(key) for key in wire_fields} == wire_fields
+    assert {"speed", "mcp_servers", "output_format"}.isdisjoint(body)
+
+
+def test_additional_drop_params_drops_mcp_servers_and_their_mcp_toolset_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     weather_tool: Final = {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}
     responses_kwargs: Final = _build_responses_kwargs(
-        model="gpt-5.6",
-        extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], "drop_params": True},
+        model="openai/gpt-5.6",
         max_tokens=1024,
         messages=MESSAGES,
-        tools=[{"type": "mcp_toolset", "mcp_server_name": "deepwiki"}, weather_tool],
+        mcp_servers=[DOCS_SERVER],
+        tools=[{"type": "mcp_toolset", "mcp_server_name": "docs"}, weather_tool],
+        extra_kwargs={**OPENAI_API, "additional_drop_params": ["mcp_servers"]},
     )
 
-    assert [tool["name"] for tool in responses_kwargs["tools"]] == ["get_weather"]
+    assert [(tool["type"], tool.get("name")) for tool in responses_kwargs["tools"]] == [("function", "get_weather")]
+    assert "mcp_servers" not in responses_kwargs
 
 
 TEXT_RESPONSE: Final = {
@@ -1383,6 +1731,8 @@ TEXT_RESPONSE: Final = {
     "tools": [],
     "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
 }
+
+
 CLEAR_EDIT: Final = {
     "type": "clear_tool_uses_20250919",
     "trigger": {"type": "tool_uses", "value": 1},
@@ -2682,3 +3032,111 @@ async def test_a_summary_refused_while_replayed_reasoning_is_resent_is_not_logge
     assert "summary" not in answered.get("reasoning", {})
     assert _replayed_reasoning_counts(upstream)[-1] == 0
     assert failure_log.rejections == ()
+
+
+WEB_SEARCH_FILTERS_REFUSAL: Final = {
+    "error": {
+        "message": "Parameter 'filters' not supported with model 'gpt-4o-mini'",
+        "type": "invalid_request_error",
+        "param": "tools",
+        "code": None,
+    }
+}
+FILTERED_WEB_SEARCH: Final = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "allowed_domains": ["docs.litellm.ai"],
+    "user_location": {"type": "approximate", "city": "San Francisco", "country": "US"},
+}
+
+
+def _sends_filters(tools: list[dict[str, object]]) -> bool:
+    return any("filters" in tool for tool in tools)
+
+
+def _refuse_web_search_filters(request: httpx.Request) -> httpx.Response:
+    if _sends_filters(json.loads(request.content)["tools"]):
+        return httpx.Response(400, json=WEB_SEARCH_FILTERS_REFUSAL)
+    return httpx.Response(200, json=TEXT_RESPONSE)
+
+
+async def _filtered_search_turn(*, sync: bool, drop_params: bool) -> None:
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=64,
+            messages=MESSAGES,
+            model="openai/gpt-4o-mini",
+            tools=[dict(FILTERED_WEB_SEARCH)],
+            drop_params=drop_params,
+            num_retries=2,
+        )
+        return
+    await litellm.anthropic.messages.acreate(
+        max_tokens=64,
+        messages=MESSAGES,
+        model="openai/gpt-4o-mini",
+        tools=[dict(FILTERED_WEB_SEARCH)],
+        drop_params=drop_params,
+        num_retries=2,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_web_search_filters_the_model_refuses_are_sent_again_once_without_them(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    upstream: Final = _upstream_refusing_every_summary(respx_mock, monkeypatch, answer=_refuse_web_search_filters)
+
+    await _filtered_search_turn(sync=sync, drop_params=True)
+
+    first, second = (json.loads(call.request.content) for call in upstream.calls)
+    (search,) = first["tools"]
+    assert search["filters"] == {"allowed_domains": ["docs.litellm.ai"]}
+    assert second == {**first, "tools": [{key: value for key, value in search.items() if key != "filters"}]}
+    assert failure_log.rejections == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_without_drop_params_web_search_filters_the_model_refuses_are_never_dropped(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    upstream: Final = _upstream_refusing_every_summary(respx_mock, monkeypatch, answer=_refuse_web_search_filters)
+
+    with pytest.raises(litellm.BadRequestError, match="Parameter 'filters' not supported"):
+        await _filtered_search_turn(sync=sync, drop_params=False)
+
+    assert all(_sends_filters(json.loads(call.request.content)["tools"]) for call in upstream.calls)
+
+
+@pytest.mark.asyncio
+async def test_under_drop_params_a_turn_refused_for_its_summary_then_its_web_search_filters_is_sent_without_both(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream_after(
+        respx_mock,
+        monkeypatch,
+        (httpx.Response(400, json=SUMMARY_REFUSAL), httpx.Response(400, json=WEB_SEARCH_FILTERS_REFUSAL)),
+        False,
+    )
+
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        custom_llm_provider="openai",
+        thinking={"type": "adaptive", "display": "summarized"},
+        output_config={"effort": "high"},
+        tools=[dict(FILTERED_WEB_SEARCH)],
+        drop_params=True,
+    )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert [("summary" in body["reasoning"], _sends_filters(body["tools"])) for body in bodies] == [
+        (True, True),
+        (False, True),
+        (False, False),
+    ]
