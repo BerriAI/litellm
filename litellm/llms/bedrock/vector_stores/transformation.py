@@ -203,16 +203,6 @@ def _filename_from_uri(uri: str) -> str:
     return parsed_uri.path.rstrip("/").split("/")[-1] or parsed_uri.netloc or uri
 
 
-def _names_only_a_host(uri: str) -> bool:
-    if uri.startswith("s3://"):
-        return not uri.removeprefix("s3://").partition("/")[2].strip("/")
-    try:
-        parsed_uri: Final = urlparse(uri)
-    except ValueError:
-        return False
-    return not (parsed_uri.path.strip("/") or parsed_uri.query or parsed_uri.fragment)
-
-
 def _document_from_location(location: BedrockKBLocation) -> tuple[str, str] | None:
     custom_document_id: Final = (location.get("customDocumentLocation") or {}).get("id")
     if custom_document_id:
@@ -220,14 +210,10 @@ def _document_from_location(location: BedrockKBLocation) -> tuple[str, str] | No
     location_uris: Final = (
         (location.get("s3Location") or {}).get("uri"),
         (location.get("webLocation") or {}).get("url"),
-        (location.get("confluenceLocation") or {}).get("url"),
-        (location.get("salesforceLocation") or {}).get("url"),
-        (location.get("sharePointLocation") or {}).get("url"),
-        (location.get("googleDriveLocation") or {}).get("url"),
         (location.get("oneDriveLocation") or {}).get("url"),
         (location.get("kendraDocumentLocation") or {}).get("uri"),
     )
-    document_uri: Final = next((uri for uri in location_uris if uri and not _names_only_a_host(uri)), None)
+    document_uri: Final = next((uri for uri in location_uris if uri), None)
     return (document_uri, _filename_from_uri(document_uri)) if document_uri else None
 
 
