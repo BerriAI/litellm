@@ -219,6 +219,7 @@ from litellm.litellm_core_utils.redact_messages import (
     MESSAGE_REDACTION_ENABLE_HEADERS,
     TokenDataCheckedFields,
     drop_token_ids,
+    should_redact_message_logging,
     without_hidden_token_data,
 )
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
@@ -4812,6 +4813,7 @@ class ProxyLogging:
         effective_route: Final = route or (
             getattr(user_api_key_dict, "request_route", None) if user_api_key_dict is not None else None
         )
+        request_redaction: Final = _asks_for_message_redaction(request_fields)
         if litellm_logging_obj is None:
             from litellm._uuid import uuid
             from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
@@ -4819,19 +4821,25 @@ class ProxyLogging:
 
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
 
+            redact_at_setup: Final = request_redaction or litellm.turn_off_message_logging is True
             route_call_type: Final = _call_type_for_route(effective_route)
             route_prompt: Final = request_fields.get(_PROMPT_FIELD_BY_SETUP_CALL_TYPE.get(route_call_type, ""))
             litellm_logging_obj, data = litellm.utils.function_setup(
                 original_function=(
                     route_call_type
-                    if _is_text_or_message_prompt(route_prompt) and not _asks_for_message_redaction(request_fields)
+                    if _is_text_or_message_prompt(route_prompt) and not redact_at_setup
                     else effective_route
                 )
                 or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
                 **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
-                    request_fields, logged_metadata_keys
+                    {
+                        key: value
+                        for key, value in request_fields.items()
+                        if not redact_at_setup or key not in _PROMPT_FIELDS
+                    },
+                    logged_metadata_keys,
                 ),
                 **key_and_team_logging_fields(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config),
             )
@@ -4845,6 +4853,11 @@ class ProxyLogging:
             )
 
         if litellm_logging_obj is not None:
+            if request_redaction:
+                litellm_logging_obj.standard_callback_dynamic_params["turn_off_message_logging"] = True
+            redact_messages: Final = request_redaction or should_redact_message_logging(
+                litellm_logging_obj.model_call_details
+            )
             ## UPDATE LOGGING INPUT
             _optional_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
             _litellm_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
@@ -4895,7 +4908,7 @@ class ProxyLogging:
                     if "custom_llm_provider" in attribution
                     else {}
                 ),
-                **{key: value for key, value in logged_fields.items() if key in _PROMPT_FIELDS},
+                **{key: value for key, value in logged_fields.items() if key in _PROMPT_FIELDS and not redact_messages},
             )
 
             body_shape_call_type: str | None = None
@@ -4919,36 +4932,36 @@ class ProxyLogging:
 
             current_call_type: Final = litellm_logging_obj.call_type
             input: list | str | dict = ""
-            if current_call_type in (CallTypes.adecisions.value, CallTypes.decisions.value):
-                if not _asks_for_message_redaction(request_data):
-                    from litellm.decisions.call import log_caller_request
+            if redact_messages:
+                litellm_logging_obj.model_call_details["input"] = input
+            elif current_call_type in (CallTypes.adecisions.value, CallTypes.decisions.value):
+                from litellm.decisions.call import log_caller_request
 
-                    decisions_payload: Final[dict[str, object]] = {
-                        "input": request_data.get("input"),
-                        "questions": request_data.get("questions"),
-                        "audio": request_data.get("audio"),
-                        "videos": request_data.get("videos"),
-                        "prompt_cache_key": request_data.get("prompt_cache_key"),
-                        "prompt_cache_options": request_data.get("prompt_cache_options"),
-                        **{k: request_data[k] for k in ("state", "images", "assets") if k in request_data},
-                    }
-                    log_caller_request({"litellm_logging_obj": litellm_logging_obj}, decisions_payload)
+                decisions_payload: Final[dict[str, object]] = {
+                    "input": request_data.get("input"),
+                    "questions": request_data.get("questions"),
+                    "audio": request_data.get("audio"),
+                    "videos": request_data.get("videos"),
+                    "prompt_cache_key": request_data.get("prompt_cache_key"),
+                    "prompt_cache_options": request_data.get("prompt_cache_options"),
+                    **{k: request_data[k] for k in ("state", "images", "assets") if k in request_data},
+                }
+                log_caller_request({"litellm_logging_obj": litellm_logging_obj}, decisions_payload)
                 if "input" in request_data:
                     input = request_data["input"]
                     litellm_logging_obj.model_call_details["input"] = input
             elif current_call_type in (CallTypes.asystemone.value, CallTypes.systemone.value):
-                if not _asks_for_message_redaction(request_data):
-                    from litellm.decisions.call import SystemOneRequestFields, log_caller_request
+                from litellm.decisions.call import SystemOneRequestFields, log_caller_request
 
-                    fields: Final = SystemOneRequestFields(
-                        state=request_data.get("state"),
-                        questions=request_data.get("questions"),
-                        images=request_data.get("images"),
-                        assets=request_data.get("assets"),
-                        audio=request_data.get("audio"),
-                        videos=request_data.get("videos"),
-                    )
-                    log_caller_request({"litellm_logging_obj": litellm_logging_obj}, fields)
+                fields: Final = SystemOneRequestFields(
+                    state=request_data.get("state"),
+                    questions=request_data.get("questions"),
+                    images=request_data.get("images"),
+                    assets=request_data.get("assets"),
+                    audio=request_data.get("audio"),
+                    videos=request_data.get("videos"),
+                )
+                log_caller_request({"litellm_logging_obj": litellm_logging_obj}, fields)
                 input = ""
             elif current_call_type in (CallTypes.aresponses.value, CallTypes.responses.value):
                 raw_input: Final = (
@@ -4956,7 +4969,7 @@ class ProxyLogging:
                 )
                 input = raw_input if raw_input is not None else ""
                 litellm_logging_obj.model_call_details["input"] = input
-                if _is_text_or_message_prompt(raw_input) and not _asks_for_message_redaction(request_data):
+                if _is_text_or_message_prompt(raw_input):
                     normalized_messages: list[dict[str, object]] = []
                     if isinstance(raw_input, str):
                         normalized_messages = [{"role": "user", "content": raw_input}]

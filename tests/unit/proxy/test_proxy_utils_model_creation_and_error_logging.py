@@ -5511,3 +5511,28 @@ async def test_decisions_proxy_only_error_redaction_and_isolation(monkeypatch: p
         {"role": "user", "content": REDACTED_BY_LITELLM}
     ]
     assert "questions" not in logging_obj.model_call_details.get("optional_params", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/decisions", "/v1/responses"])
+@pytest.mark.parametrize(
+    "redaction_fields",
+    [
+        {"turn_off_message_logging": True},
+        {"proxy_server_request": {"headers": {"litellm-enable-message-redaction": "true"}}},
+    ],
+)
+async def test_proxy_only_error_redacts_caller_input(route: str, redaction_fields: Mapping[str, object]) -> None:
+    data: Final[dict[str, object]] = {"model": "test-model", "input": "private prompt", **redaction_fields}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=401, detail="rejected"),
+    )
+
+    logging_obj = data["litellm_logging_obj"]
+    assert isinstance(logging_obj, Logging)
+    assert logging_obj.model_call_details["input"] == ""
+    assert logging_obj.standard_callback_dynamic_params["turn_off_message_logging"] is True
