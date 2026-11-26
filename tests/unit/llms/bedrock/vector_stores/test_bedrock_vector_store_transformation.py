@@ -269,10 +269,28 @@ S3_VECTORS_METADATA: Final = {
             "https://kendra.example.com/faq.html",
         ),
         (
-            {"type": "CUSTOM", "customDocumentLocation": {"id": "doc-42"}},
+            {"type": "CUSTOM", "customDocumentLocation": {"id": "manual:doc-42"}},
             S3_VECTORS_METADATA,
-            "doc-42",
-            "doc-42",
+            "manual:doc-42",
+            "manual:doc-42",
+        ),
+        (
+            {"type": "S3", "s3Location": {"uri": "s3://kb-docs/reports/Q1#draft?.txt"}},
+            S3_VECTORS_METADATA,
+            "Q1#draft?.txt",
+            "s3://kb-docs/reports/Q1#draft?.txt",
+        ),
+        (
+            {"type": "CONFLUENCE", "confluenceLocation": {"url": "https://example.atlassian.net"}},
+            S3_VECTORS_METADATA,
+            "bedrock-kb-document-CYQOANZ7OJ",
+            "bedrock-kb-764f684b-5a68-4950-9881-50250f22e87d",
+        ),
+        (
+            {"type": "SALESFORCE", "salesforceLocation": {"url": "https://example.my.salesforce.com/"}},
+            S3_VECTORS_METADATA,
+            "bedrock-kb-document-CYQOANZ7OJ",
+            "bedrock-kb-764f684b-5a68-4950-9881-50250f22e87d",
         ),
         (
             {"type": "SQL", "sqlLocation": {"query": "SELECT * FROM policies"}},
