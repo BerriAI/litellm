@@ -14,9 +14,14 @@ JSON array of thinking blocks on the response side.
 """
 
 import json
+from collections.abc import Mapping, Sequence
+from typing import Final
 
+import httpx
 import pytest
 
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -382,3 +387,119 @@ class TestNonReasoningInputItemUnchanged:
         assert len(out) == 1
         assert out[0]["role"] == "assistant"
         assert out[0]["content"] == "hi"
+
+
+class _RecordingChatServer:
+    def __init__(self) -> None:
+        self.request_body: Mapping[str, object] | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "qwen3",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Four"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+            },
+            request=request,
+        )
+
+
+_QUESTION: Final = {"role": "user", "content": "What is 2+2?"}
+_FOLLOW_UP: Final = {"role": "user", "content": "Answer in one word."}
+_REASONING: Final = {
+    "type": "reasoning",
+    "id": "rs_1",
+    "summary": [{"type": "summary_text", "text": "The user asks a simple sum."}],
+}
+_SECOND_REASONING: Final = {
+    "type": "reasoning",
+    "id": "rs_2",
+    "summary": [{"type": "summary_text", "text": "Keep it short."}],
+}
+_ANSWER: Final = {"role": "assistant", "content": "4"}
+
+
+class TestBridgedReasoningReachesStrictChatServers:
+    """llama.cpp answers 400 to an assistant message with neither content nor tool_calls (#54504)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("input_items", "expected_assistant_contents"),
+        [
+            pytest.param((_QUESTION, _REASONING, _FOLLOW_UP), ("",), id="reasoning-then-user"),
+            pytest.param((_QUESTION, _REASONING), ("",), id="trailing-reasoning"),
+            pytest.param((_QUESTION, _REASONING, _SECOND_REASONING, _FOLLOW_UP), ("", ""), id="two-reasoning-items"),
+            pytest.param((_QUESTION, _REASONING, _ANSWER, _FOLLOW_UP), ("4",), id="reasoning-then-answer"),
+        ],
+    )
+    async def test_every_assistant_message_on_the_wire_carries_content(
+        self, input_items: Sequence[Mapping[str, object]], expected_assistant_contents: tuple[str, ...]
+    ) -> None:
+        server: Final = _RecordingChatServer()
+        client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(server))
+
+        await litellm.aresponses(
+            model="hosted_vllm/qwen3",
+            api_base="http://llama.invalid/v1",
+            api_key="none",
+            input=list(input_items),
+            use_chat_completions_api=True,
+            client=client,
+        )
+
+        assert server.request_body is not None, "the bridged turn never reached the provider"
+        wire_messages: Final = server.request_body["messages"]
+        assert isinstance(wire_messages, list)
+        assistant_messages: Final = tuple(m for m in wire_messages if m["role"] == "assistant")
+        assert tuple(m.get("content") for m in assistant_messages) == expected_assistant_contents
+        assert "The user asks a simple sum." in {m.get("reasoning_content") for m in assistant_messages}
+
+
+class _RecordingAnthropicServer:
+    def __init__(self) -> None:
+        self.request_body: Mapping[str, object] | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "4"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_signed_dangling_reasoning_item_reaches_anthropic_as_thinking_alone() -> None:
+    signed_thinking: Final = {"type": "thinking", "thinking": "The user asks a simple sum.", "signature": "sig-one"}
+    server: Final = _RecordingAnthropicServer()
+
+    await litellm.aresponses(
+        model="anthropic/claude-sonnet-5-5",
+        api_key="sk-ant-test",
+        input=[
+            _QUESTION,
+            {"type": "reasoning", "id": "rs_1", "encrypted_content": json.dumps([signed_thinking])},
+            _FOLLOW_UP,
+        ],
+        reasoning={"effort": "high"},
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(server)),
+    )
+
+    assert server.request_body is not None, "the bridged turn never reached Anthropic"
+    wire_messages: Final = server.request_body["messages"]
+    assert isinstance(wire_messages, list)
+    assert [m["content"] for m in wire_messages if m["role"] == "assistant"] == [[signed_thinking]]
