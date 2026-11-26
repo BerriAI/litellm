@@ -9,7 +9,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 
 import copy
 import logging
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from botocore.exceptions import (
@@ -19,9 +19,11 @@ from botocore.exceptions import (
 )
 
 import litellm
+from litellm.litellm_core_utils import model_cost_table
 from litellm.llms.bedrock_mantle.responses.transformation import (
     BedrockMantleResponsesAPIConfig,
 )
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -536,6 +538,42 @@ class TestBedrockMantleSamplingParams:
             drop_params=False,
         )
         assert mapped["top_p"] == 0.9
+
+    @pytest.mark.parametrize(
+        ("model", "row_key"),
+        [
+            ("openai.sampling-test-model", "bedrock_mantle/openai.sampling-test-model"),
+            ("us-east-2/openai.sampling-test-model", "bedrock_mantle/openai.sampling-test-model"),
+            ("us-east-2/openai.sampling-test-model", "bedrock_mantle/us-east-2/openai.sampling-test-model"),
+        ],
+        ids=["bare-row", "region-prefix-reads-the-bare-row", "regional-row"],
+    )
+    @pytest.mark.parametrize("effort", ["medium", "none"])
+    def test_a_row_without_sampling_support_refuses_or_drops_both_params(
+        self,
+        local_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        model: str,
+        row_key: str,
+        effort: Literal["medium", "none"],
+    ) -> None:
+        row: Final = {"litellm_provider": "bedrock_mantle", "mode": "responses", "supports_sampling_params": False}
+        monkeypatch.setitem(model_cost_table.published(), row_key, row)
+        request: Final[ResponsesAPIOptionalRequestParams] = {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "reasoning": {"effort": effort},
+        }
+        with pytest.raises(litellm.UnsupportedParamsError, match="supports_sampling_params: false"):
+            BedrockMantleResponsesAPIConfig().map_openai_params(
+                response_api_optional_params=request, model=model, drop_params=False
+            )
+
+        mapped: Final = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=request, model=model, drop_params=True
+        )
+
+        assert mapped == {"reasoning": {"effort": effort}}, mapped
 
 
 class TestBedrockMantleResponsesWebSearch:

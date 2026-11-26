@@ -5446,24 +5446,6 @@ def test_a_system_first_openai_compatible_deployment_sends_sanitized_tools_besid
 
 _NO_SAMPLING_ROWS: Final = (
     pytest.param(OpenAIResponsesAPIConfig, "sampling-test-model", "sampling-test-model", id="openai"),
-    pytest.param(
-        BedrockMantleResponsesAPIConfig,
-        "openai.sampling-test-model",
-        "bedrock_mantle/openai.sampling-test-model",
-        id="bedrock_mantle",
-    ),
-    pytest.param(
-        BedrockMantleResponsesAPIConfig,
-        "us-east-2/openai.sampling-test-model",
-        "bedrock_mantle/openai.sampling-test-model",
-        id="bedrock_mantle-region-prefix",
-    ),
-    pytest.param(
-        BedrockMantleResponsesAPIConfig,
-        "us-east-2/openai.sampling-test-model",
-        "bedrock_mantle/us-east-2/openai.sampling-test-model",
-        id="bedrock_mantle-regional-row",
-    ),
 )
 _SAMPLED_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {
     "temperature": 0.0,
@@ -5475,8 +5457,7 @@ _NO_SAMPLING: Final = {"supports_sampling_params": False}
 
 
 def _responses_row(row_key: str, flags: Mapping[str, bool]) -> dict[str, object]:
-    provider: Final = "bedrock_mantle" if row_key.startswith("bedrock_mantle/") else "openai"
-    return {"litellm_provider": provider, "mode": "responses", "supports_reasoning": True, **flags}
+    return {"litellm_provider": "openai", "mode": "responses", "supports_reasoning": True, **flags}
 
 
 @pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
