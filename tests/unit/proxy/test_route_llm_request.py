@@ -3934,6 +3934,22 @@ async def test_a_failed_rerouted_latest_alias_request_returns_its_input_tokens_t
     assert retried["model"] == "pinned"
 
 
+@pytest.mark.asyncio
+async def test_a_rerouted_latest_alias_request_refused_before_dispatch_returns_its_input_tokens() -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        _serve_latest_alias_from_versioned_model_group,
+        route_request,
+    )
+
+    router: Final = _io_token_limited_latest_alias_router(itpm=50)
+    with pytest.raises(ProxyMissingRequiredParamError):
+        await route_request(_latest_alias_request(words=40), router, None, "arerank")
+    retried: Final = _latest_alias_request(words=40)
+    await _serve_latest_alias_from_versioned_model_group(retried, router)
+    assert retried["model"] == "pinned"
+
+
 def _latest_alias_and_two_targets() -> tuple[str, str, str]:
     from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 

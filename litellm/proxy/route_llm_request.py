@@ -39,7 +39,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     team_deployment_the_caller_may_use,
 )
 from litellm.router import router_arguments
-from litellm.router_api import admit_on_model_group, router_init_args
+from litellm.router_api import admit_on_model_group, release_model_group_admission, router_init_args
 from litellm.router_attempt import metadata_field
 from litellm.router_config import build_router_config
 
@@ -910,7 +910,8 @@ async def _serve_latest_alias_from_versioned_model_group(
     data: dict[str, object],  # mutable-ok: request body is the proxy-wide mutable dict shared with route_request
     llm_router: LitellmRouter | None,
     route_type: str | None = None,
-) -> None:
+) -> Mapping[str, object] | None:
+    """The admission a rerouted request holds on its latest-alias deployment, to release if it is never dispatched"""
     requested: Final = data.get("model")
     metadata: Final = tuple(filter(_is_request_metadata, (data.get(key) for key in _METADATA_CHANNELS)))
     for value in metadata:
@@ -920,10 +921,10 @@ async def _serve_latest_alias_from_versioned_model_group(
         data.get("user_config") is None and route_type not in _ROUTE_TYPES_ADMITTING_EVERY_TURN_ON_ONE_DEPLOYMENT
     )
     if llm_router is None or not isinstance(requested, str) or not served_by_shared_router:
-        return
+        return None
     target: Final = latest_alias_versioned_model_group(requested, llm_router)
     if target is None:
-        return
+        return None
     _raise_if_model_fully_blocked(llm_router, requested, get_team_id_from_data(data))
     admitted: Final = await admit_on_model_group(llm_router, requested, data)
     for value in metadata:
@@ -931,6 +932,7 @@ async def _serve_latest_alias_from_versioned_model_group(
         if admitted is not None:
             value[LATEST_ALIAS_REQUESTED_DEPLOYMENT_METADATA_KEY] = admitted
     data["model"] = target  # rebind-ok: route_request serves the shared request body it was handed
+    return admitted
 
 
 async def route_request(
@@ -944,7 +946,24 @@ async def route_request(
     Common helper to route the request
     """
     enforce_total_timeout_scope(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
-    await _serve_latest_alias_from_versioned_model_group(data, llm_router, route_type)
+    admitted: Final = await _serve_latest_alias_from_versioned_model_group(data, llm_router, route_type)
+    try:
+        return await _route_request_with_registry_read_through(
+            data, llm_router, user_model, route_type, user_api_key_dict
+        )
+    except Exception:
+        if admitted is not None:
+            await release_model_group_admission(admitted)
+        raise
+
+
+async def _route_request_with_registry_read_through(
+    data: dict[str, object],  # mutable-ok: request body is the proxy-wide mutable dict shared with route_request
+    llm_router: LitellmRouter | None,
+    user_model: str | None,
+    route_type: RouteType,
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> Awaitable[object]:
     router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     try:
         return await _route_request_single_attempt(

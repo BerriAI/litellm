@@ -2015,6 +2015,22 @@ def _is_request_metadata(
     return isinstance(value, dict)
 
 
+async def release_model_group_admission(admitted: Mapping[str, object]) -> None:
+    """Return the input and output tokens ``admit_on_model_group`` held for a request that was never dispatched"""
+    import litellm
+    from litellm.litellm_core_utils.core_helpers import as_str_mapping
+    from litellm.litellm_core_utils.model_latest_aliases import LATEST_ALIAS_IO_TOKEN_RESERVATION_KEY
+    from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_refund_held_io_token_reservation
+    from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+    held: Final = as_str_mapping(admitted.get(LATEST_ALIAS_IO_TOKEN_RESERVATION_KEY))
+    check: Final = next(
+        (callback for callback in litellm.callbacks if isinstance(callback, ModelRateLimitingCheck)), None
+    )
+    if held is not None and check is not None:
+        await async_refund_held_io_token_reservation(check.usage, held)
+
+
 async def admit_on_model_group(
     router: "Router",
     model_group: str,
