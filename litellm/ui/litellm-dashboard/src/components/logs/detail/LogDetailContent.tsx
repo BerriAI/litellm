@@ -225,9 +225,7 @@ export function LogDetailContent({
       {isLoadingDetails ? (
         <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
           <UiLoadingSpinner className="inline-block size-5" />
-          <div className="mt-2 text-muted-foreground">
-            {t("logs.detail.content.loadingDetails")}
-          </div>
+          <div className="mt-2 text-muted-foreground">{t("logs.detail.content.loadingDetails")}</div>
         </div>
       ) : null}
       {!isLoadingDetails && hasClassifierAudit && (
@@ -348,9 +346,7 @@ function TagsSection({ tags }: { tags: Record<string, any> }) {
   const { t } = useTranslation();
   return (
     <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
-      <span className="mb-2 block text-[16px] font-semibold">
-        {t("logs.detail.content.tags")}
-      </span>
+      <span className="mb-2 block text-[16px] font-semibold">{t("logs.detail.content.tags")}</span>
       <div className="flex flex-wrap items-center gap-2">
         {Object.entries(tags).map(([key, value]) => (
           <Badge key={key} variant="outline">
@@ -692,9 +688,7 @@ function RequestResponseSection({
               ) : (
                 <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
               )}
-              <h3 className="m-0 text-lg font-medium text-foreground">
-                {t("logs.detail.requestResponse.title")}
-              </h3>
+              <h3 className="m-0 text-lg font-medium text-foreground">{t("logs.detail.requestResponse.title")}</h3>
             </CollapsibleTrigger>
             <TabsList className="mr-4">
               <TabsTrigger value="pretty">{t("logs.detail.requestResponse.pretty")}</TabsTrigger>
@@ -716,10 +710,7 @@ function RequestResponseSection({
                 />
               </TabsContent>
               <TabsContent value="json">
-                <Tabs
-                  value={activeTab}
-                  onValueChange={(key) => setActiveTab(key as typeof activeTab)}
-                >
+                <Tabs value={activeTab} onValueChange={(key) => setActiveTab(key as typeof activeTab)}>
                   <div className="flex items-center justify-between">
                     <TabsList>
                       <TabsTrigger value="request">{t("logs.detail.requestResponse.request")}</TabsTrigger>

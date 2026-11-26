@@ -115,14 +115,8 @@ function ModelProviderSection({
         />
       )}
       <div className="flex items-center gap-2">
-        <span className="text-[14px] font-semibold">
-          {model}
-        </span>
-        {providerName && (
-          <span className="text-[12px] text-muted-foreground">
-            {providerName}
-          </span>
-        )}
+        <span className="text-[14px] font-semibold">{model}</span>
+        {providerName && <span className="text-[12px] text-muted-foreground">{providerName}</span>}
         <AutoRouterTag modelGroup={modelGroup} />
         <ClassifyTag origin={internalCallOrigin} />
       </div>
@@ -130,15 +124,7 @@ function ModelProviderSection({
   );
 }
 
-function CopyableId({
-  value,
-  label,
-  muted,
-}: {
-  value: string;
-  label: string;
-  muted?: boolean;
-}) {
+function CopyableId({ value, label, muted }: { value: string; label: string; muted?: boolean }) {
   const [copied, setCopied] = useState(false);
   const { t } = useTranslation();
 
@@ -241,9 +227,7 @@ function StatusBar({
         <span className="text-[13px] text-muted-foreground">
           {moment(log.startTime).format("MMM D, YYYY h:mm:ss A")}
         </span>
-        <span className="text-[13px] text-muted-foreground">
-          ({moment(log.startTime).fromNow()})
-        </span>
+        <span className="text-[13px] text-muted-foreground">({moment(log.startTime).fromNow()})</span>
       </div>
     </div>
   );
