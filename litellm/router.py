@@ -425,6 +425,7 @@ if TYPE_CHECKING:
     from litellm.responses.streaming_iterator import (
         BaseResponsesAPIStreamingIterator,
         PricedPartial,
+        StreamEndLog,
     )
     from litellm.router_strategy.adaptive_router.adaptive_router import (
         AdaptiveRouter,
@@ -3755,7 +3756,7 @@ class Router:
 
                 keep_responses_stream_open_for_disconnect_drain(source_iterator)
 
-            async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+            async def settle_after_consumer_left(self, *, drain: bool) -> "StreamEndLog":
                 from litellm.responses.streaming_iterator import settle_responses_stream_after_consumer_left
 
                 primary_alone: Final = self._billing_source is source_iterator and self._primary_partial is None
