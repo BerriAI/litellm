@@ -168,8 +168,6 @@ fn member_index(row: &[(Value, Value)]) -> Option<HashMap<String, usize>> {
         let member = MemberEntry::from_value(value).ok()?;
         if let Some(user_id) = member.user_id {
             index.entry(user_id).or_insert(position);
-        } else if member.user_email.is_none() {
-            return None;
         }
     }
     Some(index)

@@ -10,7 +10,8 @@ use litellm_repositories::{KeyRepository, KeyView, ObjectPermissionRepository, S
 use crate::{
     Error,
     column::{column, nullable, time},
-    member::member,
+    error::within,
+    member::team_member_column,
     object_permission::object_permission_entry,
 };
 
@@ -89,6 +90,7 @@ impl KeyDatabase {
             .await?
             .map(object_permission_entry)
             .transpose()
+            .map_err(within("object_permission"))
     }
 }
 
@@ -243,7 +245,7 @@ fn key_entry(
         team_blocked: *team_blocked,
         soft_budget: *soft_budget,
         team_model_aliases: nullable("team_model_aliases", team_model_aliases.as_ref())?,
-        team_member: team_member.as_ref().map(member).transpose()?,
+        team_member: team_member.as_ref().map(team_member_column).transpose()?,
         team_metadata: nullable("team_metadata", team_metadata.as_ref())?,
         team_object_permission_id: team_object_permission_id.clone(),
         team_member_spend: *team_member_spend,

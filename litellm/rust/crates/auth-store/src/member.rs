@@ -1,21 +1,30 @@
 //! A roster entry as the auth cache holds it, nested in a cached key.
 
-use litellm_redis_store::auth_cache::MemberEntry;
+use litellm_python_compat::{Value, json};
+use litellm_redis_store::{DecodeError, FromValue, auth_cache::MemberEntry};
 use litellm_repositories::RawJson;
 
-use crate::{Error, column::column};
+use crate::{Error, error::within};
 
-/// The roster entry as `Member` dumps it: its three fields, whatever else the entry holds. The
-/// model refuses an entry that names neither a user id nor an email.
-pub(crate) fn member(entry: &RawJson) -> Result<MemberEntry, Error> {
-    let member: MemberEntry = column("team_member", entry)?;
-    if member.user_id.is_none() && member.user_email.is_none() {
-        return Err(Error::Row {
-            column: "team_member",
-        });
+/// [`member`] for the key's `team_member` column.
+pub(crate) fn team_member_column(raw: &RawJson) -> Result<MemberEntry, Error> {
+    json::loads(raw.get())
+        .map_err(|_| Error::row("team_member"))
+        .and_then(|entry| member("team_member", &entry))
+}
+
+/// The roster entry under `field` as `Member` dumps it: its three fields, whatever else the entry
+/// holds. A refused field is named under `field`, and an entry the model refuses as a whole, one
+/// that is no object or names neither a user id nor an email, is `field` itself.
+pub(crate) fn member(field: &'static str, entry: &Value) -> Result<MemberEntry, Error> {
+    match MemberEntry::from_value(entry) {
+        Ok(member) => Ok(MemberEntry {
+            unread: Vec::new(),
+            ..member
+        }),
+        Err(DecodeError::Shape(column @ ("user_id" | "user_email" | "role"))) => {
+            Err(within(field)(Error::row(column)))
+        }
+        Err(_) => Err(Error::row(field)),
     }
-    Ok(MemberEntry {
-        unread: Vec::new(),
-        ..member
-    })
 }
