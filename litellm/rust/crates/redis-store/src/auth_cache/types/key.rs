@@ -1,11 +1,15 @@
+use litellm_config::LitellmRole;
 use litellm_python_compat::{Value, datetime::IsoDateTime};
 
 use super::{
     bag::{Bag, Lists},
+    end_user::ModelRegion,
     member::MemberEntry,
     object_permission::ObjectPermissionEntry,
-    record::record,
+    record::{Literal, record},
 };
+
+impl Literal for LitellmRole {}
 
 record! {
     /// `UserAPIKeyAuth.model_dump(mode="json")`, the value under
@@ -101,8 +105,8 @@ record! {
         project_metadata: Option<Bag>,
         last_refreshed_at: Option<f64>,
         api_key: Option<String>,
-        user_role: Option<String>,
-        allowed_model_region: Option<String>,
+        user_role: Option<LitellmRole>,
+        allowed_model_region: Option<ModelRegion>,
         #[redact(with = "[REDACTED]")]
         parent_otel_span: Option<Value>,
         rpm_limit_per_model: Option<Bag>,
@@ -133,6 +137,35 @@ mod tests {
 
     use super::KeyEntry;
     use crate::{DecodeError, FromValue, IntoValue};
+
+    #[rstest]
+    #[case::a_role_the_model_does_not_take(r#"{"user_role": "bogus"}"#, "user_role")]
+    #[case::a_region_the_model_does_not_take(
+        r#"{"allowed_model_region": "ap"}"#,
+        "allowed_model_region"
+    )]
+    #[case::a_region_in_capitals(r#"{"allowed_model_region": "EU"}"#, "allowed_model_region")]
+    fn a_key_refuses_a_role_or_region_the_model_refuses(
+        #[case] entry: &str,
+        #[case] refused: &str,
+    ) {
+        assert!(matches!(key(entry), Err(DecodeError::Shape(field)) if field == refused));
+    }
+
+    #[rstest]
+    fn a_key_keeps_a_role_and_region_the_model_takes() {
+        let entry = json::dumps(
+            &key(r#"{"user_role": "proxy_admin_viewer", "allowed_model_region": "eu"}"#)
+                .unwrap()
+                .into_value(),
+        )
+        .unwrap();
+
+        assert!(
+            entry.contains(r#""user_role": "proxy_admin_viewer", "allowed_model_region": "eu""#),
+            "{entry}"
+        );
+    }
 
     fn key(entry: &str) -> Result<KeyEntry, DecodeError> {
         KeyEntry::from_value(&json::loads(entry).unwrap())
