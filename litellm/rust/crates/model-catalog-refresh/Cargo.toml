@@ -12,6 +12,7 @@ litellm-auth-gcp.workspace = true
 litellm-auth-types.workspace = true
 litellm-error.workspace = true
 litellm-http.workspace = true
+litellm-model-catalog.workspace = true
 litellm-s3.workspace = true
 tracing.workspace = true
 percent-encoding.workspace = true

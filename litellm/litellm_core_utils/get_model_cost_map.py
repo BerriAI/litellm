@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.model_cost_table import (
 )
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.rust_bridge._native import (
+    CostMapRefreshed,
     NativeCostMapSource,
     NativeFetchFailed,
     NativeFetchPolicy,
@@ -372,20 +373,18 @@ async def refetch_model_cost_map(
         _mark_rows_with_rules_set("local", None, True, None, datetime.now(timezone.utc))
         return ModelCostMapReloaded(model_count=_install(model_cost_inputs.install_bundled()))
 
-    fetched: Final = await cost_map_source(url, use_http_settings=True).fetch(fetch_policy(timeout, max_attempts))
-    if isinstance(fetched, NativeFetchFailed):
+    refreshed: Final = await model_cost_inputs.refresh(
+        cost_map_source(url, use_http_settings=True), fetch_policy(timeout, max_attempts)
+    )
+    if not isinstance(refreshed, CostMapRefreshed):
         verbose_logger.warning(
-            "LiteLLM: model cost map reload failed: %s. Keeping the currently loaded map.", fetched.reason
+            "LiteLLM: model cost map reload failed: %s. Keeping the currently loaded map.", refreshed.reason
         )
-        return ModelCostMapReloadUnavailable(reason=fetched.reason)
-    installed: Final = model_cost_inputs.install(fetched.body, fetched.etag)
-    if isinstance(installed, NativeRejected):
-        verbose_logger.warning(
-            "LiteLLM: model cost map reload failed: %s. Keeping the currently loaded map.", installed.reason
+        return ModelCostMapReloadUnavailable(
+            reason=refreshed.reason if isinstance(refreshed, NativeFetchFailed) else _rejected_reason(refreshed, url)
         )
-        return ModelCostMapReloadUnavailable(reason=_rejected_reason(installed, url))
     _mark_rows_with_rules_set("remote", url, False, None, datetime.now(timezone.utc))
-    return ModelCostMapReloaded(model_count=_install(installed))
+    return ModelCostMapReloaded(model_count=_install(model_cost_inputs.install_refreshed(refreshed)))
 
 
 def _retry_remote_fetch_in_background(
