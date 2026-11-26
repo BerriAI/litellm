@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.tool_fields import truncate_tool_name
@@ -132,7 +133,6 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
 from litellm.llms.anthropic.common_utils import (
     eager_input_streaming_flag,
     is_empty_unsigned_thinking_block,
-    normalize_anthropic_tool_use_id,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 from litellm.llms.anthropic.pass_through.context_management import (
@@ -211,6 +211,10 @@ if TYPE_CHECKING:
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
+
+
+def _tool_use_id(tool_call_id: str | None) -> str:
+    return (tool_call_id or "").split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] or str(uuid.uuid4())
 
 
 def target_supports_mid_conversation_system(model: str | None, custom_llm_provider: str | None) -> bool:
@@ -1642,12 +1646,9 @@ class LiteLLMAnthropicMessagesAdapter:
                         tool_name_mapping.get(truncated_name, truncated_name) if tool_name_mapping else truncated_name
                     )
 
-                    # Strip Gemini thought-signature suffix and normalize id chars
-                    # (e.g. ``functions.Bash:0`` from cross-provider clients).
-                    raw_id = tool_call.id or ""
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
-                        id=normalize_anthropic_tool_use_id(raw_id),
+                        id=_tool_use_id(tool_call.id),
                         name=original_name,
                         input=parse_tool_call_arguments(
                             tool_call.function.arguments,
@@ -1858,7 +1859,6 @@ class LiteLLMAnthropicMessagesAdapter:
         Literal["text", "tool_use", "thinking", "redacted_thinking"],
         "ContentBlockContentBlockDict",
     ]:
-        from litellm._uuid import uuid
         from litellm.types.llms.anthropic import TextBlock
 
         for choice in choices:
@@ -1875,7 +1875,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     thought_sig = parts[1] if len(parts) > 1 else None
                 tool_block: dict[str, object] = {
                     "type": "tool_use",
-                    "id": normalize_anthropic_tool_use_id(raw_id),
+                    "id": _tool_use_id(raw_id),
                     "name": tool_name,
                     "input": {},
                 }

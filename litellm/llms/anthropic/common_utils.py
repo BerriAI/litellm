@@ -5,7 +5,7 @@ This file contains common utils for anthropic calls.
 import copy
 import json
 import re
-from collections.abc import Container, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Container, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain
 from types import MappingProxyType
@@ -1890,6 +1890,24 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     return "must contain thinking" in lower
 
 
+_ANTHROPIC_TOOL_USE_ID_PATTERN_ERROR: Final = re.compile(
+    r"(?:tool_use\.id|tool_result\.tool_use_id): String should match pattern"
+)
+
+
+def is_anthropic_tool_use_id_pattern_error(error_text: str) -> bool:
+    """messages.N.content.M.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"""
+    return _ANTHROPIC_TOOL_USE_ID_PATTERN_ERROR.search(error_text) is not None
+
+
+def messages_with_renamed_tool_use_ids(messages: object) -> Sequence[object] | None:
+    listed: Final = as_object_list(messages)
+    if listed is None:
+        return None
+    renamed: Final = sanitize_tool_use_ids_in_anthropic_messages(listed)
+    return None if renamed == listed else renamed
+
+
 _ADAPTIVE_THINKING_KEYS: Final = (
     AnthropicThinkingParam.__required_keys__ | AnthropicThinkingParam.__optional_keys__
 ) - {"budget_tokens"}
@@ -2069,6 +2087,13 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data.pop("thinking", None)
 
 
+def strips_thinking_from_anthropic_messages_request(request_body: Mapping[object, object]) -> bool:
+    messages: Final = as_object_list(request_body.get("messages"))
+    return "thinking" in request_body or (
+        messages is not None and strip_thinking_blocks_from_anthropic_messages(messages) != messages
+    )
+
+
 _DROP_ANTHROPIC_MESSAGE: Final = object()
 
 
@@ -2186,29 +2211,35 @@ def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     """
     base_id = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if THOUGHT_SIGNATURE_SEPARATOR in raw_id else raw_id
     sanitized: Final = re.sub(r"[^a-zA-Z0-9_-]", "_", base_id)
-    return sanitized or "tool_use_id"
+    return fill_empty_tool_use_id(sanitized)
 
 
-def _sanitize_tool_use_id_content_block(block: object) -> object:
+def fill_empty_tool_use_id(raw_id: str) -> str:
+    return raw_id or "tool_use_id"
+
+
+def _sanitize_tool_use_id_content_block(block: object, rename: Callable[[str], str]) -> object:
     if not isinstance(block, dict):
         return block
     block_type: Final = block.get("type")
     if block_type in ("tool_use", "server_tool_use"):
         raw_id = block.get("id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = rename(raw_id)
             if normalized != raw_id:
                 return {**block, "id": normalized}
     elif block_type == "tool_result":
         raw_id = block.get("tool_use_id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = rename(raw_id)
             if normalized != raw_id:
                 return {**block, "tool_use_id": normalized}
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> list[Any]:
+def sanitize_tool_use_ids_in_anthropic_messages(
+    messages: Sequence[object], rename: Callable[[str], str] = normalize_anthropic_tool_use_id
+) -> list[Any]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
@@ -2225,7 +2256,7 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> l
             out.append(m)
             continue
         content = m["content"]
-        new_content = [_sanitize_tool_use_id_content_block(b) for b in content]
+        new_content = [_sanitize_tool_use_id_content_block(b, rename) for b in content]
         if new_content == content:
             out.append(m)
         else:

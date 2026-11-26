@@ -1192,6 +1192,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                         messages=[run[index] for index in group],
                         model=model,
                         llm_provider="anthropic",
+                        rewrites_tool_use_ids=False,
                     )
                 )
 

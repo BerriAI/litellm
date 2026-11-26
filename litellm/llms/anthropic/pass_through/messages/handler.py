@@ -42,8 +42,8 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes, LlmProviders
-from litellm.utils import ProviderConfigManager, client
+from litellm.types.utils import CallTypes
+from litellm.utils import client
 
 from ..adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
@@ -69,7 +69,7 @@ from ..safeguards import (
 )
 from ..utils import RESPONSES_API_PROVIDERS
 from .interceptors import get_messages_interceptors
-from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages
+from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages, provider_messages_config
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
@@ -194,14 +194,7 @@ def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
 def _native_messages_config(
     model: str, custom_llm_provider: str | None, model_info: object
 ) -> BaseAnthropicMessagesConfig | None:
-    provider_config: Final = (
-        ProviderConfigManager.get_provider_anthropic_messages_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
-        )
-        if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]
-        else None
-    )
+    provider_config: Final = provider_messages_config(model, custom_llm_provider)
     if provider_config is not None or not _deployment_passes_through_anthropic_messages(model_info):
         return provider_config
     from litellm.llms.openai_like.messages.transformation import (
