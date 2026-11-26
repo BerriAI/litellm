@@ -24,12 +24,23 @@ pub(super) use model::alias;
 use super::{Admit, Refused};
 use crate::host::NativeRows;
 
-/// Why one request goes to Python: the reason the client is told, and the setting or trait behind
-/// it, which only the log names.
+/// Whether the native app could answer a request a check refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
+pub enum Refusal {
+    /// The native app would answer differently from Python, so it never answers.
+    Unsupported,
+    /// The native app refuses the request too, only in its own words. Python answers it where
+    /// Python is behind, and the native app where nothing is.
+    Denied,
+}
+
+/// Why one request goes to Python: the reason the client is told, the setting or trait behind
+/// it, which only the log names, and whether the native app refuses it as well.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Reason {
     pub why: Refused,
     pub over: Box<str>,
+    pub refusal: Refusal,
 }
 
 impl Reason {
@@ -37,6 +48,14 @@ impl Reason {
         Self {
             why,
             over: over.into(),
+            refusal: Refusal::Unsupported,
+        }
+    }
+
+    pub fn denied(why: Refused, over: impl Into<Box<str>>) -> Self {
+        Self {
+            refusal: Refusal::Denied,
+            ..Self::new(why, over)
         }
     }
 }

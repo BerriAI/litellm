@@ -18,7 +18,7 @@ mod state;
 mod stored;
 #[cfg(test)]
 mod test_support;
-pub use admit::{Admit, Reason, Refused};
+pub use admit::{Admit, Reason, Refusal, Refused};
 pub use callbacks::{
     Callbacks, Registered, Unregistrable,
     model_capacity::{self, ModelCapacity},

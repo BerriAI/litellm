@@ -49,3 +49,10 @@ requests:
     headers: {authorization: Bearer gateway-key}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: rust
+
+  - name: a key the core refuses while the proxy also takes JWTs
+    headers: {authorization: Bearer sk-someone-else}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: invalid_token
