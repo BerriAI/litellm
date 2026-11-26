@@ -998,22 +998,22 @@ async def test_conditional_revocation_deletes_only_the_same_grant_generation(
     monkeypatch.setattr("litellm.proxy.mcp_server.db.datetime", StepDateTime)
 
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
-    tombstone_connected_at: Final = (await _saved_grant(credentials_prisma))["connected_at"]
+    tombstone_generation: Final = (await _saved_grant(credentials_prisma))["grant_id"]
     assert await invalidate_user_oauth_credential_if_grant_matches(
         credentials_prisma, "alice", "srv-1", "at-old", "rt-old"
     )
     assert await delete_user_oauth_credential_if_grant_matches(
-        credentials_prisma, "alice", "srv-1", tombstone_connected_at
+        credentials_prisma, "alice", "srv-1", tombstone_generation
     ) == "deleted"
     assert ("alice", "srv-1") not in rows.rows
 
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
-    rotated_connected_at: Final = (await _saved_grant(credentials_prisma))["connected_at"]
+    rotated_generation: Final = (await _saved_grant(credentials_prisma))["grant_id"]
     assert await store_user_oauth_credential(
         credentials_prisma, "alice", "srv-1", "at-rotated", refresh_token="rt-new", refreshed_from="rt-old"
     )
     assert await delete_user_oauth_credential_if_grant_matches(
-        credentials_prisma, "alice", "srv-1", rotated_connected_at
+        credentials_prisma, "alice", "srv-1", rotated_generation
     ) == "deleted"
     assert ("alice", "srv-1") not in rows.rows
 
@@ -1023,6 +1023,7 @@ async def test_conditional_revocation_deletes_only_the_same_grant_generation(
     assert legacy_decoded is not None
     legacy_payload: Final = json.loads(legacy_decoded)
     legacy_payload.pop("connected_at")
+    legacy_payload.pop("grant_id")
     rows.rows = {
         **rows.rows,
         ("alice", "srv-1"): SimpleNamespace(
@@ -1037,18 +1038,19 @@ async def test_conditional_revocation_deletes_only_the_same_grant_generation(
         refresh_token="rt-legacy-new",
         refreshed_from="rt-legacy",
     )
-    assert "connected_at" not in await _saved_grant(credentials_prisma)
+    legacy_rotated: Final = await _saved_grant(credentials_prisma)
+    assert "connected_at" not in legacy_rotated and "grant_id" not in legacy_rotated
     assert await delete_user_oauth_credential_if_grant_matches(credentials_prisma, "alice", "srv-1", None) == "deleted"
     assert ("alice", "srv-1") not in rows.rows
 
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
-    replaced_connected_at: Final = (await _saved_grant(credentials_prisma))["connected_at"]
+    replaced_generation: Final = (await _saved_grant(credentials_prisma))["grant_id"]
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new", refresh_token="rt-new")
     replacement: Final = await _saved_grant(credentials_prisma)
-    assert replacement["connected_at"] != replaced_connected_at
+    assert replacement["grant_id"] != replaced_generation
 
     assert await delete_user_oauth_credential_if_grant_matches(
-        credentials_prisma, "alice", "srv-1", replaced_connected_at
+        credentials_prisma, "alice", "srv-1", replaced_generation
     ) == "changed"
     grant: Final = await _saved_grant(credentials_prisma)
     assert (grant["access_token"], grant["refresh_token"]) == ("at-new", "rt-new")
@@ -1060,7 +1062,7 @@ async def test_conditional_revocation_retries_when_a_refresh_rotates_the_same_gr
 ) -> None:
     rows: Final = credentials_prisma.db.litellm_mcpusercredentials
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
-    connected_at: Final = (await _saved_grant(credentials_prisma))["connected_at"]
+    grant_generation: Final = (await _saved_grant(credentials_prisma))["grant_id"]
     original_delete_many: Final = rows.delete_many
     attempts: Final = itertools.count()
 
@@ -1080,7 +1082,7 @@ async def test_conditional_revocation_retries_when_a_refresh_rotates_the_same_gr
 
     rows.delete_many = rotate_once_then_delete
     assert await delete_user_oauth_credential_if_grant_matches(
-        credentials_prisma, "alice", "srv-1", connected_at
+        credentials_prisma, "alice", "srv-1", grant_generation
     ) == "deleted"
     assert ("alice", "srv-1") not in rows.rows
 
@@ -1161,7 +1163,7 @@ async def test_refresh_preserves_refusals_without_replacing_a_new_signin(
     assert (
         None if saved is None else (saved["access_token"], saved["refresh_token"], saved.get("needs_scopes"))
     ) == expected[interleaving]
-    same_consent: Final = saved is not None and saved.get("connected_at") == before["connected_at"]
+    same_consent: Final = saved is not None and saved.get("grant_id") == before["grant_id"]
     assert same_consent == (interleaving in ("none", "refusal"))
 
 

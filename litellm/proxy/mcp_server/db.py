@@ -256,6 +256,7 @@ class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
     refresh_token: str
     expires_at: str
     connected_at: str
+    grant_id: ReadOnly[str]
     scopes: list[str]
     server_id: str
     needs_scopes: ReadOnly[Sequence[str]]
@@ -1869,13 +1870,16 @@ async def store_user_oauth_credential(
     if expires_in is not None:
         expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
-    payload: Final[OAuthCredentialPayload] = {
-        "type": "oauth2",
-        "access_token": access_token,
-        "connected_at": datetime.now(timezone.utc).isoformat(),
-        **({"identity_binding_proof": identity_binding_proof} if identity_binding_proof else {}),
-        **({"cimd_client_id": cimd_client_id} if cimd_client_id else {}),
-    }
+    payload: Final[OAuthCredentialPayload] = _OAUTH_CREDENTIAL_PAYLOAD_ADAPTER.validate_python(
+        {
+            "type": "oauth2",
+            "access_token": access_token,
+            "connected_at": datetime.now(timezone.utc).isoformat(),
+            "grant_id": str(uuid.uuid4()),
+            **({"identity_binding_proof": identity_binding_proof} if identity_binding_proof else {}),
+            **({"cimd_client_id": cimd_client_id} if cimd_client_id else {}),
+        }
+    )
     if refresh_token:
         payload["refresh_token"] = refresh_token
     if expires_at:
@@ -1934,9 +1938,10 @@ async def _store_refreshed_oauth_credential(
                 **payload,
                 "refresh_token": payload.get("refresh_token") or refreshed_from,
                 **({"connected_at": grant["connected_at"]} if "connected_at" in grant else {}),
+                **({"grant_id": grant["grant_id"]} if "grant_id" in grant else {}),
                 **({"needs_scopes": grant["needs_scopes"]} if "needs_scopes" in grant else {}),
             }.items()
-            if key != "connected_at" or "connected_at" in grant
+            if key not in ("connected_at", "grant_id") or key in grant
         }
     )
     written: Final = await _user_credential_actions(prisma_client).update_many(
@@ -1953,7 +1958,7 @@ async def _store_refreshed_oauth_credential(
         return False
     if latest.credential_b64 == row.credential_b64:
         return False
-    if latest_grant.get("connected_at") != grant.get("connected_at"):
+    if _oauth_grant_generation(latest_grant) != _oauth_grant_generation(grant):
         return False
     return await _store_refreshed_oauth_credential(prisma_client, latest, payload, refreshed_from)
 
@@ -2010,6 +2015,10 @@ async def get_user_oauth_credential(
     return payload
 
 
+def _oauth_grant_generation(grant: OAuthCredentialPayload) -> str | None:
+    return grant.get("grant_id") or grant.get("connected_at")
+
+
 async def invalidate_user_oauth_credential_if_grant_matches(
     prisma_client: PrismaClient,
     user_id: str,
@@ -2035,26 +2044,26 @@ async def delete_user_oauth_credential_if_grant_matches(
     prisma_client: PrismaClient,
     user_id: str,
     server_id: str,
-    connected_at: str | None,
+    grant_generation: str | None,
 ) -> Literal["deleted", "missing", "changed"]:
     row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
     current: prisma_db_models.LiteLLM_MCPUserCredentials | None = row
     for _ in range(3):
-        grant: Final = None if current is None else decode_oauth_payload(current.credential_b64)
+        grant = None if current is None else decode_oauth_payload(current.credential_b64)
         if current is None or grant is None:
             return "missing"
-        if grant.get("connected_at") != connected_at:
+        if _oauth_grant_generation(grant) != grant_generation:
             return "changed"
-        deleted: Final = await _user_credential_actions(prisma_client, use_writer=True).delete_many(
+        deleted = await _user_credential_actions(prisma_client, use_writer=True).delete_many(
             where={"user_id": current.user_id, "server_id": current.server_id, "credential_b64": current.credential_b64}
         )
         if deleted > 0:
             return "deleted"
-        latest: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
-        latest_grant: Final = None if latest is None else decode_oauth_payload(latest.credential_b64)
+        latest = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
+        latest_grant = None if latest is None else decode_oauth_payload(latest.credential_b64)
         if latest is None:
             return "missing"
-        if latest_grant is None or latest_grant.get("connected_at") != connected_at:
+        if latest_grant is None or _oauth_grant_generation(latest_grant) != grant_generation:
             return "changed"
         current = latest
     return "changed"
@@ -2092,10 +2101,10 @@ async def _record_oauth_scope_refusal(
     latest_grant: Final = None if latest is None else decode_oauth_payload(latest.credential_b64)
     if latest is None or latest_grant is None or latest.credential_b64 == row.credential_b64:
         return
-    connected_at: Final = grant.get("connected_at")
+    generation: Final = _oauth_grant_generation(grant)
     same_grant: Final = (
-        latest_grant.get("connected_at") == connected_at
-        if connected_at
+        _oauth_grant_generation(latest_grant) == generation
+        if generation
         else {key: value for key, value in latest_grant.items() if key != "needs_scopes"}
         == {key: value for key, value in grant.items() if key != "needs_scopes"}
     )

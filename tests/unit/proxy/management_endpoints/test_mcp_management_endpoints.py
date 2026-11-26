@@ -6012,7 +6012,7 @@ async def test_delete_mcp_oauth_user_credential_reads_invalidated_grants_for_rev
 
     reader.assert_awaited_once_with(prisma, user_id, server_id, use_writer=True, include_invalidated=True)
     delete_mock.assert_awaited_once_with(
-        prisma, user_id, server_id, connected_at=None
+        prisma, user_id, server_id, grant_generation=None
     )
     invalidate_mock.assert_awaited_once_with(user_id, server_id)
     assert result.has_credential is False
@@ -10647,7 +10647,7 @@ class TestMCPServerResolutionCharacterization:
             ),
         )
         credential_read: Final = AsyncMock(return_value={"type": "oauth2", "access_token": "lit3974-token"})
-        delete_credential: Final = AsyncMock()
+        conditional_delete: Final = AsyncMock(return_value="deleted")
         invalidate: Final = AsyncMock()
 
         with (
@@ -10660,7 +10660,7 @@ class TestMCPServerResolutionCharacterization:
             ),
             patch.object(manager, "invalidate_user_oauth_token_cache", invalidate),
             patch.object(mgmt_endpoints, "get_user_oauth_credential", credential_read),
-            patch.object(mgmt_endpoints, "delete_user_credential", delete_credential),
+            patch.object(mgmt_endpoints, "delete_user_oauth_credential_if_grant_matches", conditional_delete),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
             patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
@@ -10676,8 +10676,8 @@ class TestMCPServerResolutionCharacterization:
             "is_expired": False,
             "connected_at": None,
         }
-        credential_read.assert_awaited_once_with(prisma, user_id, server_id)
-        delete_credential.assert_awaited_once_with(prisma, user_id, server_id)
+        credential_read.assert_awaited_once_with(prisma, user_id, server_id, use_writer=True, include_invalidated=True)
+        conditional_delete.assert_awaited_once_with(prisma, user_id, server_id, grant_generation=None)
         invalidate.assert_awaited_once_with(user_id, server_id)
         assert httpx_mock.calls.call_count == 0
 

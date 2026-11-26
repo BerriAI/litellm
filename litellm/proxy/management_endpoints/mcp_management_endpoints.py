@@ -2823,7 +2823,7 @@ if MCP_AVAILABLE:
                 prisma_client,
                 target_user_id,
                 server_id,
-                connected_at=cred_to_delete.get("connected_at"),
+                grant_generation=cred_to_delete.get("grant_id") or cred_to_delete.get("connected_at"),
             )
             if delete_result == "changed":
                 raise HTTPException(
