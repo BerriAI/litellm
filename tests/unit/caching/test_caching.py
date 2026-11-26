@@ -804,9 +804,9 @@ def test_extra_body_cache_key_keeps_its_preimage(
     monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool, extra_body: object, extra_body_preimage: str
 ) -> None:
     monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
-    expected: Final = hashlib.sha256(f"model: mmessages: hi{extra_body_preimage}".encode()).hexdigest()
+    expected: Final = hashlib.sha256(extra_body_preimage.encode()).hexdigest()
 
-    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(extra_body=extra_body) == expected
 
 
 @pytest.mark.parametrize("mapping_type", [MappingProxyType, UserDict])
@@ -2673,9 +2673,9 @@ def test_extra_body_cache_key_formats_any_accepted_value_like_the_request(
 ) -> None:
     monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
     extra_body: Final = {"payload": case}
-    expected: Final = hashlib.sha256(f"model: mmessages: hiextra_body: {extra_body}".encode()).hexdigest()
+    expected: Final = hashlib.sha256(f"extra_body: {extra_body}".encode()).hexdigest()
 
-    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(extra_body=extra_body) == expected
 
 
 def test_cache_key_for_a_top_level_lone_surrogate_still_raises() -> None:
