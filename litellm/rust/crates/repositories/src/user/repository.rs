@@ -193,6 +193,21 @@ impl UserRepository {
             .await
     }
 
+    /// [`Self::backfill_email`], returning the row as stored rather than its email, or `None` when another user
+    /// holds the email or the row is gone.
+    pub async fn backfill_email_returning(
+        &self,
+        user_id: &str,
+        user_email: &str,
+        links_any_user: bool,
+    ) -> Result<Option<User>, litellm_db::Error> {
+        self.database
+            .run(UPDATE_MANY_USERS, || async {
+                backfill_once(&mut &self.database, user_id, user_email, links_any_user).await
+            })
+            .await
+    }
+
     /// Sets the role of `user_id` and returns the row as stored, or `None` when no row has that id.
     pub async fn set_role(
         &self,
@@ -241,6 +256,29 @@ impl UserRepository {
             }
         });
     }
+}
+
+/// The fill, then, when it filled nothing, the stored row in a statement of its own, since a fill that waited on a
+/// concurrent one cannot see the email that one committed.
+pub(super) async fn backfill_once(
+    connections: &mut impl Connections,
+    user_id: &str,
+    user_email: &str,
+    links_any_user: bool,
+) -> Result<Option<User>, litellm_db::Error> {
+    let filled = connections
+        .with(Side::Writer, async |db| {
+            queries::fill_missing_user_email(db, user_id, user_email, links_any_user).await
+        })
+        .await?;
+    if filled.is_some() {
+        return Ok(filled);
+    }
+    connections
+        .with(Side::Writer, async |db| {
+            queries::find_user_with_stored_email(db, user_id, user_email, links_any_user).await
+        })
+        .await
 }
 
 /// The insert, then on a conflict the read a later sign-in would make, in a statement of its own because the
