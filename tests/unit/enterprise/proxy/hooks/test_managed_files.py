@@ -6248,12 +6248,20 @@ async def test_responses_input_checks_managed_file_access(nested: bool) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("file_id", [None, "file-unregistered"], ids=["file-data-only", "with-file-id"])
 @pytest.mark.parametrize("nested", [False, True], ids=["direct", "message-content"])
-async def test_responses_input_file_data_uri_checks_file_ownership(file_id: str | None, nested: bool) -> None:
+@pytest.mark.parametrize("inner", [None, {"file_data": "data:text/plain;base64,aGk="}], ids=["flat", "inner-file"])
+async def test_responses_input_file_data_uri_checks_file_ownership(
+    file_id: str | None, nested: bool, inner: dict[str, str] | None
+) -> None:
     managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
     owner: Final = UserAPIKeyAuth(user_id="owner", team_id="team-owner")
     other: Final = UserAPIKeyAuth(user_id="other", team_id="team-other")
     uri: Final = "https://generativelanguage.googleapis.com/v1beta/files/batch-out1"
-    file: Final = {"type": "input_file", "file_data": uri, **({"file_id": file_id} if file_id else {})}
+    file: Final = {
+        "type": "input_file",
+        "file_data": uri,
+        **({"file_id": file_id} if file_id else {}),
+        **({"file": inner} if inner else {}),
+    }
     item: Final = {"role": "user", "content": [file]} if nested else file
     request: Final = {"model": "gemini/gemini-4-argon", "input": [item]}
 

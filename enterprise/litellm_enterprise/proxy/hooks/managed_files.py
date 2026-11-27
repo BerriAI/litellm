@@ -233,8 +233,8 @@ def _gemini_file_part_uris(part: object) -> tuple[str, ...]:
     fields: Final = as_str_mapping(part)
     if fields is None or fields.get("type") not in ("file", "input_file"):
         return ()
-    file_fields: Final = {**fields, **(as_str_mapping(fields.get("file")) or {})}
-    candidates: Final = (file_fields.get(key) for key in ("file_id", "file_data", "file_url"))
+    nested: Final = as_str_mapping(fields.get("file")) or {}
+    candidates: Final = (source.get(key) for source in (fields, nested) for key in ("file_id", "file_data", "file_url"))
     return tuple(
         dict.fromkeys(
             value for value in candidates if isinstance(value, str) and value.startswith(GEMINI_FILES_API_URI_PREFIXES)
