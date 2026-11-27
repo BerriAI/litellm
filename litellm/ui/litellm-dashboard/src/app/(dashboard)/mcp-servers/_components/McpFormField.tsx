@@ -8,9 +8,9 @@ import { McpValidationContext } from "./schema";
 export const McpFormField = (props: ComponentProps<typeof MountedFormField>) => {
   const registerValidation = useContext(McpValidationContext);
   const name = typeof props.name === "string" ? props.name : props.name.join(".");
-  const validate = props.rules?.validate;
+  const { validate, ...rules } = props.rules ?? {};
   useEffect(() => (validate ? registerValidation?.(name, validate) : undefined), [name, registerValidation, validate]);
-  return <MountedFormField {...props} rules={registerValidation ? undefined : props.rules} />;
+  return <MountedFormField {...props} rules={registerValidation ? rules : props.rules} />;
 };
 
 export const McpFormProvider = ({
