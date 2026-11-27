@@ -607,4 +607,40 @@ describe("TeamVirtualKeysTable", () => {
       expect(within(row).queryByRole("link", { name: "Default Proxy Admin" })).not.toBeInTheDocument();
     });
   });
+  it("selects keys by stable hash and clears selection when filters change", async () => {
+    const user = userEvent.setup();
+    const data: KeysResponse = {
+      keys: [createMockKey({ token: "hash-a" }), createMockKey({ token: "hash-b" })],
+      total_count: 2,
+      current_page: 1,
+      total_pages: 1,
+    };
+    mockUseKeys.mockReturnValue(createKeysQueryResult(data));
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} canEdit />);
+    await user.click(screen.getByTestId("datatable-select-all"));
+    expect(screen.getByRole("button", { name: "Bulk actions (2 keys)" })).toBeEnabled();
+    await user.click(screen.getByTestId("datatable-select-row-hash-b"));
+    expect(screen.getByRole("button", { name: "Bulk actions (1 keys)" })).toBeEnabled();
+    fireEvent.change(screen.getByPlaceholderText("Search by key alias or ID…"), { target: { value: "alice" } });
+    expect(screen.getByRole("button", { name: "Bulk actions (0 keys)" })).toBeDisabled();
+  });
+
+  it("does not expose bulk key selection to viewers", () => {
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+    expect(screen.queryByTestId("datatable-select-all")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Bulk actions/ })).not.toBeInTheDocument();
+  });
+  it("prevents selecting placeholder keys while the next team or page loads", () => {
+    const data: KeysResponse = {
+      keys: [createMockKey({ token: "old-team-hash" })],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    };
+    const query = createKeysQueryResult(data);
+    mockUseKeys.mockReturnValue({ ...query, isPlaceholderData: true });
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} canEdit />);
+    expect(screen.getByTestId("datatable-select-row-old-team-hash")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Bulk actions (0 keys)" })).toBeDisabled();
+  });
 });

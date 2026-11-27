@@ -1962,6 +1962,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           teamAlias={info.team_alias}
           organization={organization}
           initialOwnerFilter={keyOwnerFilter}
+          canEdit={canEditTeam}
         />
       ),
     },
