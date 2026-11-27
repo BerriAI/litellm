@@ -219,6 +219,7 @@ from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
+    as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
     safe_deep_copy,
@@ -5419,6 +5420,41 @@ def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDis
     )
 
 
+def _bridge_params_without_unretrievable_background_run(
+    optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    *,
+    streams_upstream: bool | None,
+    routing_kwargs: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        requests_background_run,
+        unretrievable_background_run,
+        without_background,
+    )
+    from litellm.litellm_core_utils.tool_fields import drop_policy
+    from litellm.responses.main import native_responses_dispatch
+
+    if not requests_background_run(optional_params):
+        return optional_params
+    dispatch: Final = native_responses_dispatch(
+        f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
+    )
+    if dispatch is None:
+        return optional_params
+    extra_body: Final = as_str_mapping(optional_params.get("extra_body")) or {}
+    if extra_body.get("stream", streams_upstream) is True and not dispatch.fakes_stream():
+        return optional_params
+    if drop_policy(routing_kwargs).drops("background"):
+        return without_background(optional_params)
+    if dispatch.starts_background_runs():
+        raise unretrievable_background_run(model, custom_llm_provider)
+    return optional_params
+
+
 @tracer.wrap()
 @client
 def completion(
@@ -5988,9 +6024,10 @@ def completion(
         def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
             return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
 
-        optional_params = optional_params_for_model_info(
+        typed_deployment_model_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
+        optional_params = optional_params_for_model_info(typed_deployment_model_info)
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
@@ -6213,7 +6250,15 @@ def completion(
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                optional_params=optional_params,
+                optional_params=_bridge_params_without_unretrievable_background_run(
+                    cast("dict[str, object]", optional_params),  # cast-ok: completion's untyped optional_params
+                    streams_upstream=dispatch_stream,
+                    routing_kwargs=cast("Mapping[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=api_base,
+                    deployment_model_info=typed_deployment_model_info,
+                ),
                 litellm_params=litellm_params,
                 timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client

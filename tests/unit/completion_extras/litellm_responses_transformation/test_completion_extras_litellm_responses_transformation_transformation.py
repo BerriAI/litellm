@@ -6,7 +6,8 @@ import itertools
 import json
 import os
 import unittest
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
@@ -28,6 +29,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.responses.stored_system_prompt import awithout_stored_instructions
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT
 
@@ -7416,6 +7418,641 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+_BACKGROUND_BRIDGED_PROVIDERS: Final = pytest.mark.parametrize(
+    ("model", "url", "provider_kwargs"),
+    [
+        ("openai/gpt-5.3-codex", "https://api.openai.com/v1/responses", {}),
+        (
+            "bedrock_mantle/openai.gpt-5.6-terra",
+            "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses",
+            {"aws_region_name": "us-east-1"},
+        ),
+    ],
+    ids=["openai-responses-only", "bedrock-mantle"],
+)
+
+
+def _foreground_responses_body(model: str) -> Mapping[str, object]:
+    return {
+        "id": "resp_foreground",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_foreground",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "pong", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _foreground_responses_sse(model: str) -> str:
+    body: Final = _foreground_responses_body(model)
+    events: Final = (
+        {"type": "response.created", "response": {**body, "status": "in_progress", "output": [], "usage": None}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_foreground",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "pong",
+        },
+        {"type": "response.completed", "response": body},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+def _background_chat_request(
+    model: str, provider_kwargs: Mapping[str, object], background_kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "api_key": "test-key",
+        "cache": {"no-cache": True},
+        **provider_kwargs,
+        **background_kwargs,
+    }
+
+
+@pytest.mark.parametrize(
+    "background_kwargs",
+    [
+        {"background": True},
+        {"extra_body": {"background": True}},
+        {"background": "true"},
+        {"background": 0},
+        {"background": True, "stream": True, "fake_stream": True},
+        {"background": True, "stream": True, "extra_body": {"stream": False}},
+    ],
+    ids=["top-level", "extra-body", "truthy-string", "falsy-int", "faked-stream", "stream-turned-off-in-extra-body"],
+)
+@_BACKGROUND_BRIDGED_PROVIDERS
+def test_bridged_chat_rejects_background_before_any_upstream_call(
+    monkeypatch: pytest.MonkeyPatch,
+    background_kwargs: Mapping[str, object],
+    model: str,
+    url: str,
+    provider_kwargs: Mapping[str, object],
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body(model))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(**_background_chat_request(model, provider_kwargs, background_kwargs))
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("global_drop_params", "background_kwargs"),
+    [
+        (False, {"background": True, "drop_params": True}),
+        (False, {"extra_body": {"background": True}, "drop_params": True}),
+        (False, {"background": True, "additional_drop_params": ["background"]}),
+        (False, {"extra_body": {"background": True}, "additional_drop_params": ["background"]}),
+        (True, {"background": True}),
+    ],
+    ids=[
+        "drop-params",
+        "drop-params-extra-body",
+        "additional-drop-params",
+        "additional-drop-params-extra-body",
+        "global-drop-params",
+    ],
+)
+@_BACKGROUND_BRIDGED_PROVIDERS
+def test_bridged_chat_serves_a_foreground_run_when_background_is_dropped_or_off(
+    monkeypatch: pytest.MonkeyPatch,
+    global_drop_params: bool,
+    background_kwargs: Mapping[str, object],
+    model: str,
+    url: str,
+    provider_kwargs: Mapping[str, object],
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body(model))
+        )
+        response: Final = litellm.completion(**_background_chat_request(model, provider_kwargs, background_kwargs))
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
+@pytest.mark.parametrize(
+    "background_kwargs",
+    [{"background": False}, {"extra_body": {"background": False}}],
+    ids=["top-level", "extra-body"],
+)
+@_BACKGROUND_BRIDGED_PROVIDERS
+def test_bridged_chat_sends_background_false_as_the_caller_set_it(
+    monkeypatch: pytest.MonkeyPatch,
+    background_kwargs: Mapping[str, object],
+    model: str,
+    url: str,
+    provider_kwargs: Mapping[str, object],
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body(model))
+        )
+        response: Final = litellm.completion(**_background_chat_request(model, provider_kwargs, background_kwargs))
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert json.loads(upstream.calls.last.request.content)["background"] is False
+
+
+@pytest.mark.parametrize(
+    ("model", "url", "provider_kwargs", "streams_upstream"),
+    [
+        ("chatgpt/gpt-5.5", "https://chatgpt.com/backend-api/codex/responses", {}, True),
+        (
+            "bedrock/in.openai.gpt-5.6-luna",
+            "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/responses",
+            {"aws_region_name": "us-east-1"},
+            False,
+        ),
+    ],
+    ids=["chatgpt", "bedrock-runtime"],
+)
+def test_bridged_chat_keeps_serving_background_on_a_provider_that_never_sends_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: "os.PathLike[str]",
+    model: str,
+    url: str,
+    provider_kwargs: Mapping[str, object],
+    streams_upstream: bool,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost,
+        "bedrock/in.openai.gpt-5.6-luna",
+        {
+            "litellm_provider": "bedrock",
+            "mode": "responses",
+            "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+        },
+    )
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    for chatgpt_env in ("CHATGPT_AUTH_FILE", "CHATGPT_API_BASE", "OPENAI_CHATGPT_API_BASE"):
+        monkeypatch.delenv(chatgpt_env, raising=False)
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", os.fspath(tmp_path))
+    with open(os.path.join(tmp_path, "auth.json"), "w") as auth_file:
+        json.dump({"access_token": "token", "account_id": "acct", "expires_at": 4102444800}, auth_file)
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=(
+                httpx.Response(200, text=_foreground_responses_sse(model), headers={"content-type": "text/event-stream"})
+                if streams_upstream
+                else httpx.Response(200, json=_foreground_responses_body(model))
+            )
+        )
+        response: Final = litellm.completion(**_background_chat_request(model, provider_kwargs, {"background": True}))
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
+def test_bridged_chat_rejects_background_on_a_model_the_provider_cannot_stream_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost,
+        "faked-stream-responses-model",
+        {"litellm_provider": "openai", "mode": "responses", "supports_native_streaming": False},
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body("faked-stream-responses-model"))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(
+                **_background_chat_request(
+                    "openai/faked-stream-responses-model", {}, {"background": True, "stream": True}
+                )
+            )
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://api.openai.com/v1",
+        "https://eu.api.openai.com/v1",
+        "https://my-resource.openai.azure.com/openai/v1",
+        "https://my-resource.cognitiveservices.azure.com/openai/v1",
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["not-streamed", "stream-the-model-cannot-serve-live"])
+def test_bridged_chat_rejects_background_on_a_pass_through_deployment_openai_serves(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, api_base: str
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost,
+        "custom_openai/passthrough-model",
+        {"litellm_provider": "custom_openai", "mode": "responses", "supports_native_streaming": False},
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith=api_base).mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body("passthrough-model"))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(
+                model="custom_openai/passthrough-model",
+                messages=[{"role": "user", "content": "ping"}],
+                api_base=api_base,
+                api_key="test-key",
+                stream=stream,
+                background=True,
+                model_info={"mode": "responses", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]},
+            )
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+def _price_as_a_responses_model(monkeypatch: pytest.MonkeyPatch, model: str, **row: object) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost, model, {"litellm_provider": model.split("/", 1)[0], "mode": "responses", **row}
+    )
+
+
+_PASS_THROUGH_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType(
+    {"mode": "responses", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]}
+)
+
+_INLINE_SERVERS: Final = pytest.mark.parametrize(
+    "model",
+    [
+        "openai/self-hosted-model",
+        "openai/responses/self-hosted-model",
+        "custom_openai/self-hosted-model",
+        "hosted_vllm/self-hosted-model",
+        "litellm_proxy/self-hosted-model",
+        "openrouter/openai/gpt-5.3-codex",
+        "edenai/google/gemma-4-31b-it",
+        "edenai/google-model-without-a-prefix",
+    ],
+)
+
+
+def _inline_request(model: str) -> Mapping[str, object]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "api_base": "https://inline-server.invalid/v1",
+        "api_key": "test-key",
+        "background": True,
+        "model_info": dict(_PASS_THROUGH_MODEL_INFO),
+    }
+
+
+@_INLINE_SERVERS
+def test_bridged_chat_sends_background_to_a_server_not_known_to_start_a_run(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    _price_as_a_responses_model(monkeypatch, model)
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__regex=r"https://inline-server\.invalid/.*/responses").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body("self-hosted-model"))
+        )
+        response: Final = litellm.completion(**_inline_request(model))
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert json.loads(upstream.calls.last.request.content)["background"] is True
+
+
+def test_bridged_chat_keeps_serving_a_faked_stream_with_background_on_a_server_not_known_to_start_a_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _price_as_a_responses_model(monkeypatch, "openai/self-hosted-model", supports_native_streaming=False)
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://inline-server.invalid/v1/responses").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body("self-hosted-model"))
+        )
+        stream: Final = litellm.completion(**_inline_request("openai/self-hosted-model"), stream=True)
+        assert isinstance(stream, CustomStreamWrapper)
+        text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
+
+    assert text == "pong"
+    assert json.loads(upstream.calls.last.request.content)["background"] is True
+
+
+@pytest.mark.parametrize(
+    "drop_kwargs",
+    [{"drop_params": True}, {"additional_drop_params": ["background"]}],
+    ids=["drop-params", "additional-drop-params"],
+)
+@_INLINE_SERVERS
+def test_bridged_chat_drops_background_on_any_server_when_the_caller_asks_to(
+    monkeypatch: pytest.MonkeyPatch, drop_kwargs: Mapping[str, object], model: str
+) -> None:
+    _price_as_a_responses_model(monkeypatch, model)
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://inline-server.invalid/").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body("self-hosted-model"))
+        )
+        response: Final = litellm.completion(**_inline_request(model), **drop_kwargs)
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
+def _unfinished_run_body(status: str) -> Mapping[str, object]:
+    return {
+        "id": "resp_unfinished_run",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": status,
+        "background": True,
+        "model": "self-hosted-model",
+        "output": [],
+        "usage": None,
+    }
+
+
+async def _background_call_to_a_retried_queueing_server(caller: str) -> object:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "queueing-server",
+                "litellm_params": {
+                    "model": "openai/self-hosted-model",
+                    "api_base": "https://queueing-server.invalid/v1",
+                    "api_key": "test-key",
+                },
+                "model_info": {"mode": "responses"},
+            }
+        ],
+        num_retries=2,
+        retry_after=0,
+    )
+    request: Final = {
+        "model": "queueing-server",
+        "messages": [{"role": "user", "content": "ping"}],
+        "background": True,
+    }
+    if caller == "acompletion":
+        return await router.acompletion(**request)
+    return router.completion(**request)
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress"])
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_bridged_chat_answers_400_after_one_run_when_an_unknown_server_starts_it(
+    monkeypatch: pytest.MonkeyPatch, caller: str, status: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://queueing-server.invalid/v1/responses").mock(
+            return_value=httpx.Response(200, json=_unfinished_run_body(status))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            await _background_call_to_a_retried_queueing_server(caller)
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert "started a background run" in raised.value.message
+    assert upstream.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("model", "api_base"),
+    [
+        ("edenai/openai/gpt-5.3-codex", "https://run-starter.invalid/v3"),
+        ("edenai/azure/gpt-5.3-codex", "https://run-starter.invalid/v3"),
+        ("edenai/microsoft/mai-model", "https://run-starter.invalid/v3"),
+        ("edenai/meta/muse-model", "https://run-starter.invalid/v3"),
+        ("edenai/gpt-5.3-codex", "https://run-starter.invalid/v3"),
+        ("sail/any-model", "https://run-starter.invalid/v1"),
+        ("neosantara/any-model", "https://run-starter.invalid/v1"),
+        ("meta/any-model", "https://run-starter.invalid/v1"),
+        ("manus/any-model", "https://run-starter.invalid"),
+        ("perplexity/any-model", "https://run-starter.invalid"),
+        ("azure_ai/any-model", "https://my-resource.services.ai.azure.com"),
+        ("openai/any-model", "https://my-resource.openai.azure.com/openai/v1"),
+        ("openai/any-model", "https://my-resource.services.ai.azure.com/openai/v1"),
+        ("openai/any-model", "https://my-resource.cognitiveservices.azure.com/openai/v1"),
+        ("openai/responses/any-model", "https://api.openai.com/v1"),
+    ],
+)
+def test_bridged_chat_rejects_background_on_a_provider_that_starts_a_run(
+    monkeypatch: pytest.MonkeyPatch, model: str, api_base: str
+) -> None:
+    _price_as_a_responses_model(monkeypatch, model)
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith=api_base).mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body(model.split("/", 1)[1]))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                api_base=api_base,
+                api_key="test-key",
+                background=True,
+                allowed_openai_params=["background"],
+                model_info={"mode": "responses"},
+            )
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+_FUNCTION_TOOL: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "function",
+        "function": {"name": "lookup", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}},
+    }
+)
+
+
+@pytest.mark.parametrize("deployment", ["gpt-5.5-demo1", "gpt-5.5-o4"])
+def test_bridged_chat_streams_the_run_of_an_azure_deployment_bridged_for_its_tools(deployment: str) -> None:
+    api_base: Final = "https://my-resource.openai.azure.com"
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=f"{api_base}/openai/responses").mock(
+            return_value=httpx.Response(
+                200,
+                text=_foreground_responses_sse(deployment),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        stream: Final = litellm.completion(
+            model=f"azure/{deployment}",
+            messages=[{"role": "user", "content": "ping"}],
+            api_base=api_base,
+            api_key="test-key",
+            api_version="2025-04-01-preview",
+            tools=[dict(_FUNCTION_TOOL)],
+            reasoning_effort="low",
+            stream=True,
+            background=True,
+        )
+        assert isinstance(stream, CustomStreamWrapper)
+        text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
+
+    sent: Final = json.loads(upstream.calls.last.request.content)
+    assert text == "pong"
+    assert (sent["stream"], sent["background"]) == (True, True)
+
+
+def test_bridged_chat_rejects_background_on_a_model_bridged_for_its_tools_that_cannot_stream_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost,
+        "gpt-5.5-faked-stream",
+        {"litellm_provider": "openai", "mode": "chat", "supports_native_streaming": False},
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith="https://api.openai.com/v1/").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body("gpt-5.5-faked-stream"))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(
+                model="openai/gpt-5.5-faked-stream",
+                messages=[{"role": "user", "content": "ping"}],
+                api_key="test-key",
+                tools=[dict(_FUNCTION_TOOL)],
+                reasoning_effort="low",
+                stream=True,
+                background=True,
+            )
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+def test_bridged_chat_keeps_serving_allowed_background_on_a_provider_that_starts_no_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost, "volcengine/seed-2-0-mini-260428", {"litellm_provider": "volcengine", "mode": "responses"}
+    )
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://inline-provider.invalid/").mock(
+            return_value=httpx.Response(200, json=_foreground_responses_body("seed-2-0-mini-260428"))
+        )
+        response: Final = litellm.completion(
+            model="volcengine/seed-2-0-mini-260428",
+            messages=[{"role": "user", "content": "ping"}],
+            api_base="https://inline-provider.invalid/v1",
+            api_key="test-key",
+            background=True,
+            allowed_openai_params=["background"],
+            model_info={"mode": "responses"},
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
+def test_bridged_chat_keeps_serving_background_on_a_deployment_that_falls_back_to_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost, "azure_ai/serverless-responses-model", {"litellm_provider": "azure_ai", "mode": "responses"}
+    )
+    api_base: Final = "https://serverless-endpoint.eastus2.models.ai.azure.com"
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=api_base).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-serverless",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "serverless-responses-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        )
+        response: Final = litellm.completion(
+            model="azure_ai/serverless-responses-model",
+            messages=[{"role": "user", "content": "ping"}],
+            api_base=api_base,
+            api_key="test-key",
+            background=True,
+        )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
+@_BACKGROUND_BRIDGED_PROVIDERS
+def test_bridged_chat_stream_forwards_background_and_streams_the_run(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, provider_kwargs: Mapping[str, object]
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    request: Final = {**_background_chat_request(model, provider_kwargs, {"background": True}), "stream": True}
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=url).mock(
+            return_value=httpx.Response(
+                200, text=_foreground_responses_sse(model), headers={"content-type": "text/event-stream"}
+            )
+        )
+        stream: Final = litellm.completion(**request)
+        assert isinstance(stream, CustomStreamWrapper)
+        text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
+
+    assert text == "pong"
+    assert json.loads(upstream.calls.last.request.content)["background"] is True
 
 
 @pytest.mark.parametrize(

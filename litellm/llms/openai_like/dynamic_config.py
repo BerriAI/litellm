@@ -392,16 +392,18 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             litellm_params: dict,
         ) -> str:
             if not api_base:
-                if provider.api_base_env:
-                    api_base = get_secret_str(provider.api_base_env)
-                if not api_base:
-                    api_base = provider.base_url
+                api_base = (
+                    get_secret_str(provider.api_base_env) if provider.api_base_env else None
+                ) or provider.base_url
 
             if api_base is None:
                 raise ValueError(f"api_base is required for provider {provider.slug}")
 
             api_base = api_base.rstrip("/")
             return f"{api_base}/responses"
+
+        def starts_background_runs(self, model: str, api_base: str | None) -> bool:
+            return provider.special_handling_for(model).get("starts_background_runs") is True
 
         def _reads_prompt_cache_breakpoints(
             self, model: str, litellm_params: GenericLiteLLMParams, prompt_cache_options: object

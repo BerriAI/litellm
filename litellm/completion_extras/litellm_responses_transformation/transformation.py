@@ -282,6 +282,46 @@ def _drops_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool
     return not _supports_audio_input(model, litellm_params)
 
 
+_UNFINISHED_RUN_STATUSES: Final = frozenset({"queued", "in_progress"})
+
+
+def requests_background_run(params: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(params.get("extra_body")) or {}
+    return any(
+        value is not None and value is not False for value in (params.get("background"), extra_body.get("background"))
+    )
+
+
+def without_background(
+    optional_params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    kept: Final = {key: value for key, value in optional_params.items() if key != "background"}
+    extra_body: Final = as_str_mapping(optional_params.get("extra_body"))
+    if extra_body is None or "background" not in extra_body:
+        return kept
+    return {**kept, "extra_body": {key: value for key, value in extra_body.items() if key != "background"}}
+
+
+def unretrievable_background_run(
+    model: str, custom_llm_provider: str | None, *, started: bool = False
+) -> litellm.UnsupportedParamsError:
+    outcome: Final = (
+        "The provider started a background run and answered with a response id"
+        if started
+        else "Unless the call streams live, a background run answers with a response id"
+    )
+    return litellm.UnsupportedParamsError(
+        model=model,
+        llm_provider=custom_llm_provider,
+        message=(
+            f"LiteLLM does not support parameters: ['background'], for model={model} outside the Responses API. "
+            f"{outcome} that only the Responses API can retrieve. "
+            "To drop it, pass `additional_drop_params=['background']`, set `litellm.drop_params=True`, "
+            "or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+        ),
+    )
+
+
 def responses_provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
     return MappingProxyType(
         {
@@ -1727,6 +1767,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         if len(choices) == 0 and not response_is_incomplete:
+            if raw_response.status in _UNFINISHED_RUN_STATUSES and requests_background_run(
+                cast("Mapping[str, object]", request_data)  # cast-ok: request_data is an untyped dict
+            ):
+                raise unretrievable_background_run(
+                    model,
+                    _served_provider(
+                        cast("Mapping[str, object]", litellm_params)  # cast-ok: litellm_params is an untyped dict
+                    ),
+                    started=True,
+                )
             raise ValueError(f"Unknown items in responses API response: {output_items}")
 
         if response_is_incomplete:

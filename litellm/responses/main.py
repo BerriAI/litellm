@@ -738,6 +738,35 @@ def _will_bridge_to_chat_completions(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class NativeResponsesDispatch:
+    provider_config: BaseResponsesAPIConfig
+    model: str
+    custom_llm_provider: str
+    api_base: str | None
+
+    def fakes_stream(self) -> bool:
+        return self.provider_config.should_fake_stream(
+            model=self.model, stream=True, custom_llm_provider=self.custom_llm_provider
+        )
+
+    def starts_background_runs(self) -> bool:
+        return self.provider_config.starts_background_runs(self.model, self.api_base)
+
+
+def native_responses_dispatch(
+    model: str, custom_llm_provider: str, model_info: object, api_base: str | None
+) -> NativeResponsesDispatch | None:
+    normalized_model, use_chat_completions_api = _normalize_openai_chat_completions_responses_model(model)
+    dispatched_model: Final = _dispatched_model_name(normalized_model, custom_llm_provider, api_base)
+    provider_config: Final = _resolve_responses_api_provider_config(
+        dispatched_model, custom_llm_provider, model_info, api_base
+    )
+    if provider_config is None or _bridges_to_chat_completions(provider_config, use_chat_completions_api):
+        return None
+    return NativeResponsesDispatch(provider_config, dispatched_model, custom_llm_provider, api_base)
+
+
 def provider_stores_the_conversation(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
     """Whether the provider, not a LiteLLM spend log, holds this turn for a `previous_response_id` follow-up.
 
