@@ -848,7 +848,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 else batch_usage.total_tokens
             )
             token_limit_label: Final = (
-                "TPD" if descriptor.get("key", "").endswith(BATCH_TPD_DESCRIPTOR_SUFFIX) else "TPM"
+                "TPD"
+                if descriptor.get("key", "").endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
+                else "OTPM"
+                if descriptor.get("key") in OTPM_DESCRIPTOR_KEYS
+                else "TPM"
             )
             detail = (
                 f"Batch rate limit exceeded for {descriptor.get('key', 'unknown')}: {descriptor.get('value', 'unknown')}. "

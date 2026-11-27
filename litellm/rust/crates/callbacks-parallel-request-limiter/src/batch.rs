@@ -123,6 +123,8 @@ impl BatchFacts {
         } else {
             let label = if key.ends_with(TPD_SUFFIX) {
                 "TPD"
+            } else if descriptor.is_otpm() {
+                "OTPM"
             } else {
                 "TPM"
             };
@@ -267,19 +269,19 @@ mod tests {
     #[case::project_output_tokens_for_every_group_naming_the_model(
         json!([{"key": "model_per_project_otpm", "value": "p:alias", "rate_limit": {"tokens_per_unit": 100}}]),
         status("model_per_project_otpm", Some("p:alias"), LimitKind::Tokens), None,
-        "Batch rate limit exceeded for model_per_project_otpm: p:alias. Batch contains 1 tokens but only 0 tokens remaining out of 100 TPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
+        "Batch rate limit exceeded for model_per_project_otpm: p:alias. Batch contains 1 tokens but only 0 tokens remaining out of 100 OTPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
         60
     )]
     #[case::project_output_tokens_fall_back_to_the_batch(
         json!([{"key": "model_per_project_otpm", "value": "p:other", "rate_limit": {"tokens_per_unit": 100}}]),
         status("model_per_project_otpm", Some("p:other"), LimitKind::Tokens), None,
-        "Batch rate limit exceeded for model_per_project_otpm: p:other. Batch contains 300 tokens but only 0 tokens remaining out of 100 TPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
+        "Batch rate limit exceeded for model_per_project_otpm: p:other. Batch contains 300 tokens but only 0 tokens remaining out of 100 OTPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
         60
     )]
     #[case::key_output_tokens_for_the_rows_model(
         json!([{"key": "model_per_key_otpm", "value": "k:alias", "rate_limit": {"tokens_per_unit": 100}}]),
         status("model_per_key_otpm", Some("k:alias"), LimitKind::Tokens), None,
-        "Batch rate limit exceeded for model_per_key_otpm: k:alias. Batch contains 1 tokens but only 0 tokens remaining out of 100 TPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
+        "Batch rate limit exceeded for model_per_key_otpm: k:alias. Batch contains 1 tokens but only 0 tokens remaining out of 100 OTPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
         60
     )]
     #[case::team_input_tokens_for_the_rows_model(
