@@ -23,7 +23,7 @@ pub(crate) fn reserve_process_for_forking() -> PyResult<()> {
 
 /// Resolves once every log line a native task queued so far has gone through Python's handlers.
 #[pyfunction]
-pub(crate) fn native_log_lines_delivered(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+pub(crate) fn rust_log_lines_delivered(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     litellm_host_python::run_async_value(py, async {
         crate::logger::delivered().await;
         Ok(())

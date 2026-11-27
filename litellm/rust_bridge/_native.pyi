@@ -2732,7 +2732,7 @@ class HuggingFaceEncoding:
     def n_sequences(self) -> int: ...
 
 def gil_stats() -> dict[str, int]: ...
-def native_log_lines_delivered() -> Future[None]: ...
+def rust_log_lines_delivered() -> Future[None]: ...
 def process_state_started() -> bool: ...
 def reserve_process_for_forking() -> None: ...
 
@@ -2874,7 +2874,6 @@ __all__ = [
     "jwt_unverified_claims",
     "messages",
     "messages_optional_params",
-    "native_log_lines_delivered",
     "native_redis_breaker_states",
     "ocr",
     "ocr_health_check_document",
@@ -2882,6 +2881,7 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
+    "rust_log_lines_delivered",
     "trace_encode_error",
     "transcription",
     "unsupported_tls_settings",

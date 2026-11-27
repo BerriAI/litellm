@@ -63,7 +63,7 @@ from litellm.proxy.v2_proxy_fields import (
     PRE_CALL_SOURCES,
 )
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, RateLimitScope, RateLimitStore
-from litellm.rust_bridge._native import native_log_lines_delivered
+from litellm.rust_bridge._native import rust_log_lines_delivered
 from litellm.rust_bridge.host import redis_events
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
 from litellm.types.utils import (
@@ -609,7 +609,7 @@ async def _differential(
 
 async def _logged_step(side: Side, step: Step, tap: _UnlicensedTap) -> list[object]:
     outcome: Final = await _run_step(side, step)
-    await native_log_lines_delivered()
+    await rust_log_lines_delivered()
     return [*outcome, ("unlicensed", tap.take()), ("logged", tap.take_lines())]
 
 
