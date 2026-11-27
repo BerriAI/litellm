@@ -102,8 +102,9 @@ fn master_key(config: &Config) -> Option<&litellm_secret_value::SecretValue> {
 }
 
 /// What the core reads of this host beside `general_settings`. `database` is whether this host reads keys from one, and without one the core refuses every
-/// token but the master key before it asks for a key. The gateway guards its inference routes
-/// alone, so it names no route group, and it serves no UI login. The proxy budget, the license
+/// token but the master key before it asks for a key. The route groups are the checked-in
+/// `LiteLLMRoutes`, which is enough while no pass-through endpoint is served here, and the
+/// gateway serves no UI login. The proxy budget, the license
 /// and the environment only shape steps and text this host does not answer with.
 fn settings(config: &Config, database: bool) -> Settings {
     Settings::new(
@@ -116,7 +117,7 @@ fn settings(config: &Config, database: bool) -> Settings {
             ui_login: false,
             proxy_budget: false,
             metrics_require_auth: true,
-            route_groups: RouteGroups::default(),
+            route_groups: RouteGroups::litellm_routes(),
         },
         &|_| None,
     )
@@ -663,6 +664,26 @@ mod tests {
                 expires.map(|at| at.parse::<Timestamp>().unwrap()),
                 models.iter().map(|model| (*model).to_owned()).collect(),
             )
+        );
+    }
+
+    #[rstest]
+    #[case::openai("openai_routes", "/v1/chat/completions", true)]
+    #[case::anthropic("anthropic_routes", "/v1/messages", true)]
+    #[case::info("info_routes", "/key/info", true)]
+    #[case::mcp("mcp_routes", "/mcp/tools/call", true)]
+    #[case::a_template("openai_routes", "/v1/batches/batch-1", true)]
+    #[case::another_groups_route("openai_routes", "/v1/messages", false)]
+    fn a_route_group_an_operator_names_stands_for_its_routes(
+        #[case] group: &str,
+        #[case] route: &str,
+        #[case] permitted: bool,
+    ) {
+        let settings = settings(&with_master_key(), false);
+
+        assert_eq!(
+            settings.jwt.route_groups.is_route_allowed(route, &[group]),
+            permitted
         );
     }
 

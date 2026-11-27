@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
 use strum::VariantArray;
 
@@ -23,6 +26,15 @@ impl Entries {
             .any(|template| template.matches_compiled(route))
     }
 }
+
+/// `LiteLLMRoutes` as checked in, which `tests/unit/rust_bridge/host/test_route_groups.py` holds to
+/// the enum.
+static LITELLM_ROUTES: LazyLock<RouteGroups> = LazyLock::new(|| {
+    let table: HashMap<String, Vec<String>> =
+        serde_json::from_str(include_str!("litellm_routes.json"))
+            .expect("litellm_routes.json maps each group to its routes");
+    RouteGroups::new(table).expect("litellm_routes.json holds every group the core reads")
+});
 
 /// `LiteLLMRoutes` by member name, which the host hands in with its settings.
 #[derive(Clone, Debug, Default)]
@@ -61,6 +73,12 @@ impl<'a> RouteAllowlist<'a> {
 }
 
 impl RouteGroups {
+    /// `LiteLLMRoutes` as it is when Python imports it, for a host with no Python to read it from.
+    /// It lacks the routes a registered pass-through endpoint adds to `openai_routes`.
+    pub fn litellm_routes() -> Self {
+        LITELLM_ROUTES.clone()
+    }
+
     /// Fails on a table without a group the core's rules read, so a group the host renames stops
     /// the settings build instead of reading as empty.
     pub fn new(
@@ -193,6 +211,21 @@ mod tests {
     )]
     fn allowed_routes(#[case] allowed: &str, #[case] route: &str, #[case] expected: bool) {
         assert_eq!(route_groups().is_route_allowed(route, &[allowed]), expected);
+    }
+
+    #[rstest]
+    #[case::a_route("anthropic_routes", "/v1/messages", true)]
+    #[case::a_template("openai_routes", "/v1/files/file-1/content", true)]
+    #[case::another_groups_route("info_routes", "/v1/messages", false)]
+    fn the_checked_in_groups_are_read_like_a_hosts(
+        #[case] group: &str,
+        #[case] route: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            RouteGroups::litellm_routes().is_route_allowed(route, &[group]),
+            expected
+        );
     }
 
     #[test]

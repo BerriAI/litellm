@@ -86,6 +86,7 @@
 - The gateway owns its rows, `NativeRows`. Each field of a cached row is read once, in `host/auth`, into the facts the core decides on, and a field this host does not serve declines the key there. Nothing after authentication reads a row's column again
 - A type one consumer reads lives beside that consumer, as a limiter's view of a key lives with the limiter. `host/auth` holds only what the core's steps ask of it
 - An `Infallible` row in `NativeRows` means an association this host does not serve. No identity that needs one exists, and a step that would need one declines, before any counter is written. A key has a row, `host::auth::Key`, and its owner, team, project and the rest are `Infallible`, so a key that names one is declined
+- The host hands the core `RouteGroups::litellm_routes()`, the `LiteLLMRoutes` groups checked in with `gateway-auth-core`, so a group name in an operator's route list stands for the routes it stands for in Python. The file does not hold the routes Python adds to `openai_routes` when a pass-through endpoint registers. That is sound only while `checks/config.rs` sends a config that sets `pass_through_endpoints` to Python, so the change that serves one natively has to give the host those routes too
 - A key whose row has no stored hash is declined at the read, and the core refuses one too, so every key that is a caller is named by `Caller::hash`. Never name a key by the token a request presented
 
 ## Callbacks
