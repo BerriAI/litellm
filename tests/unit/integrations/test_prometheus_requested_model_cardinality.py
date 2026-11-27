@@ -10,6 +10,7 @@ names, aliases, and wildcard-matched names keep their own label values.
 import sys
 import types
 from datetime import datetime
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -129,11 +130,11 @@ async def test_unknown_models_collapse_to_one_series_on_proxy_request_metrics(ro
 async def test_configured_deployment_name_is_kept_only_with_a_provider_handoff(
     handoff: datetime | float | None, expected: str
 ) -> None:
-    deployment = "openai/gpt-4o-mini"
-    router = litellm.Router(
+    deployment: Final = "openai/gpt-4o-mini"
+    router: Final = litellm.Router(
         model_list=[{"model_name": "chat", "litellm_params": {"model": deployment, "api_key": "fake-key"}}],
     )
-    logger = PrometheusLogger()
+    logger: Final = PrometheusLogger()
 
     with patch(
         "litellm.proxy.proxy_server.llm_router", router, create=True
