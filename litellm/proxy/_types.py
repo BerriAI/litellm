@@ -935,6 +935,7 @@ class LiteLLMRoutes(enum.Enum):
         # through the team_admin_editable_team_fields setting
         "/team/update",
         "/team/member_add",
+        "/team/bulk_member_add",
         "/team/member_delete",
         "/management/v1/teams/{team_id}/members",
         "/management/v1/teams/{team_id}/members/bulk_delete",
