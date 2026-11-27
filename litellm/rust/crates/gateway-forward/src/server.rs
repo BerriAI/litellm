@@ -1,90 +1,120 @@
-use std::{convert::Infallible, io, net::SocketAddr, pin::pin, time::Duration};
+use std::{convert::Infallible, future::ready, io, pin::pin, time::Duration};
 
-use axum::{body::Body, extract::Request};
-use hyper::{body::Incoming, server::conn::http1, service::service_fn};
-use hyper_util::rt::{TokioIo, TokioTimer};
-use tokio::net::TcpListener;
+use axum::{
+    Extension,
+    body::Body,
+    extract::{ConnectInfo, Request},
+    response::Response,
+};
+use futures_util::{Stream, StreamExt, stream};
+use hyper::{body::Incoming, server::conn::http1};
+use hyper_util::{
+    rt::{TokioIo, TokioTimer},
+    service::TowerToHyperService,
+};
+use tokio::net::{TcpListener, TcpStream};
+use tower::{Service, ServiceBuilder};
 
-use crate::{Forward, forward::MAX_HEADERS};
-
-/// The client's TCP connection to the public listener.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ClientSocket {
-    pub peer: SocketAddr,
-    pub local: SocketAddr,
-}
+use crate::{client::ClientSocket, connections::Connections, forward::MAX_HEADERS};
 
 /// Serves each public connection with hyper directly, because `axum::serve` cannot configure
-/// the connection timeouts uvicorn applied to the same clients.
-pub(crate) async fn serve(
-    forward: Forward,
+/// the connection timeouts uvicorn applied to the same clients. Every request reaches `app` with
+/// its `ClientSocket` in the extensions, and its peer as axum's `ConnectInfo`, which the native
+/// app reads it from in both modes. The listener closes once `shutdown` resolves, before
+/// the drain starts.
+pub(crate) async fn serve<S>(
+    app: S,
     listener: TcpListener,
+    keepalive: Duration,
+    connections: Connections,
     shutdown: impl Future<Output = ()>,
     drain: Duration,
-) {
-    let connections = forward.connections().clone();
+) where
+    S: Service<Request, Response = Response, Error = Infallible> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
     let _close_on_drop = connections.close_on_drop();
-    let keepalive = forward.keepalive();
-    let builder = builder(keepalive);
-    let mut shutdown = pin!(shutdown);
-    loop {
-        let (stream, peer) = tokio::select! {
-            () = &mut shutdown => break,
-            accepted = listener.accept() => match accepted {
-                Ok(accepted) => accepted,
-                Err(error) => {
-                    back_off(error).await;
-                    continue;
-                }
-            },
-        };
-        let local = match stream.local_addr() {
-            Ok(local) => local,
-            Err(error) => {
-                tracing::debug!(%error, "client connection closed before it was served");
-                continue;
-            }
-        };
-        if let Err(error) = stream.set_nodelay(true) {
-            tracing::warn!(%error, "could not disable Nagle on a client connection");
+    let http = builder(keepalive);
+    let open = connections.clone();
+    clients(listener)
+        .take_until(shutdown)
+        .for_each(move |(stream, socket)| {
+            open.spawn(exchange(
+                http.clone(),
+                stream,
+                socket,
+                app.clone(),
+                open.clone(),
+            ));
+            ready(())
+        })
+        .await;
+    connections.shut_down(drain).await;
+}
+
+fn clients(listener: TcpListener) -> impl Stream<Item = (TcpStream, ClientSocket)> {
+    stream::unfold(listener, |listener| async move {
+        let client = accept(&listener).await;
+        Some((client, listener))
+    })
+    .filter_map(ready)
+}
+
+async fn accept(listener: &TcpListener) -> Option<(TcpStream, ClientSocket)> {
+    let (stream, peer) = match listener.accept().await {
+        Ok(accepted) => accepted,
+        Err(error) => {
+            back_off(error).await;
+            return None;
         }
-        let socket = ClientSocket { peer, local };
-        let forward = forward.clone();
-        let service = service_fn(move |request: Request<Incoming>| {
-            let forward = forward.clone();
-            async move { Ok::<_, Infallible>(forward.handle(socket, request.map(Body::new)).await) }
-        });
-        let connection = builder
-            .serve_connection(TokioIo::new(stream), service)
-            .with_upgrades();
-        let draining = connections.clone();
-        connections.spawn(async move {
-            let mut connection = pin!(connection);
-            let ended = tokio::select! {
-                ended = connection.as_mut() => ended,
-                () = draining.draining() => {
-                    connection.as_mut().graceful_shutdown();
-                    connection.await
-                }
-            };
-            if let Err(error) = ended {
-                tracing::debug!(%error, "client connection ended with an error");
-            }
-        });
+    };
+    let local = match stream.local_addr() {
+        Ok(local) => local,
+        Err(error) => {
+            tracing::debug!(%error, "client connection closed before it was served");
+            return None;
+        }
+    };
+    if let Err(error) = stream.set_nodelay(true) {
+        tracing::warn!(%error, "could not disable Nagle on a client connection");
     }
-    drop(listener);
-    connections.begin_shutdown();
-    if tokio::time::timeout(drain, connections.wait())
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            ?drain,
-            "closing connections still open after the shutdown drain"
-        );
+    Some((stream, ClientSocket { peer, local }))
+}
+
+/// One client connection, from its first request until it ends. Once the gateway drains, the
+/// connection finishes the exchange it is in and closes.
+async fn exchange<S>(
+    http: http1::Builder,
+    stream: TcpStream,
+    socket: ClientSocket,
+    app: S,
+    connections: Connections,
+) where
+    S: Service<Request, Response = Response, Error = Infallible> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    let per_connection = ServiceBuilder::new()
+        .map_request(|request: Request<Incoming>| request.map(Body::new))
+        .layer(Extension(socket))
+        .layer(Extension(ConnectInfo(socket.peer)))
+        .service(app);
+    let connection = http
+        .serve_connection(
+            TokioIo::new(stream),
+            TowerToHyperService::new(per_connection),
+        )
+        .with_upgrades();
+    let mut connection = pin!(connection);
+    let ended = tokio::select! {
+        ended = connection.as_mut() => ended,
+        () = connections.draining() => {
+            connection.as_mut().graceful_shutdown();
+            connection.await
+        }
+    };
+    if let Err(error) = ended {
+        tracing::debug!(%error, "client connection ended with an error");
     }
-    connections.close();
-    connections.wait().await;
 }
 
 // uvicorn closes a client connection that sits idle for `--keepalive_timeout` between requests.

@@ -12,10 +12,10 @@ from openai.types.responses.input_token_count_params import InputTokenCountParam
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_attributes
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.messages.convertible_blocks import malformed_tool_result_text_error
+from litellm.llms.anthropic.messages.convertible_blocks import malformed_text_error
 from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
@@ -93,10 +93,11 @@ def _anthropic_output_schema(output_format: JsonValue) -> AnthropicOutputSchema 
 
 
 def _chat_image_block_to_responses_part(image_url: object) -> ResponsesInputImagePart | None:
-    url: Final = image_url.get("url") if isinstance(image_url, Mapping) else image_url
+    image_mapping: Final = as_str_mapping(image_url)
+    url: Final = image_mapping.get("url") if image_mapping is not None else image_url
     if not isinstance(url, str) or not url:
         return None
-    detail: Final = image_url.get("detail") if isinstance(image_url, Mapping) else None
+    detail: Final = image_mapping.get("detail") if image_mapping is not None else None
     part: Final[ResponsesInputImagePart] = {
         "type": "input_image",
         "image_url": url,
@@ -107,10 +108,11 @@ def _chat_image_block_to_responses_part(image_url: object) -> ResponsesInputImag
 
 def _chat_file_block_to_responses_part(file_value: object) -> ResponsesInputFilePart | None:
     """Only an inline file round trips: OpenAI rejects `file_data` without the `filename` beside it."""
-    if not isinstance(file_value, Mapping):
+    file_mapping: Final = as_str_mapping(file_value)
+    if file_mapping is None:
         return None
-    filename: Final = file_value.get("filename")
-    file_data: Final = file_value.get("file_data")
+    filename: Final = file_mapping.get("filename")
+    file_data: Final = file_mapping.get("file_data")
     if not isinstance(filename, str) or not filename or not isinstance(file_data, str) or not file_data:
         return None
     part: Final[ResponsesInputFilePart] = {
@@ -125,20 +127,21 @@ def _chat_block_to_responses_part(block: object, role: ResponsesContentRole) -> 
     if isinstance(block, str):
         bare: Final[ResponsesInputTextPart] = {"type": "input_text", "text": block}
         return bare
-    if not isinstance(block, Mapping):
+    block_mapping: Final = as_str_mapping(block)
+    if block_mapping is None:
         return None
-    match block.get("type"):
+    match block_mapping.get("type"):
         case "text":
-            text_value: Final = block.get("text")
+            text_value: Final = block_mapping.get("text")
             text: Final[ResponsesInputTextPart] = {
                 "type": "input_text",
                 "text": text_value if isinstance(text_value, str) else "",
             }
             return text
         case "image_url" if role == "user":
-            return _chat_image_block_to_responses_part(block.get("image_url"))
+            return _chat_image_block_to_responses_part(block_mapping.get("image_url"))
         case "file" if role == "user":
-            return _chat_file_block_to_responses_part(block.get("file"))
+            return _chat_file_block_to_responses_part(block_mapping.get("file"))
         case _:
             return None
 
@@ -334,7 +337,7 @@ class OpenAICountTokensConfig:
             return "; ".join(
                 f"messages.{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in e.errors()
             )
-        return None if drop_params else malformed_tool_result_text_error(messages)
+        return None if drop_params else malformed_text_error(messages)
 
     @staticmethod
     def anthropic_messages_to_responses_input(
@@ -343,6 +346,8 @@ class OpenAICountTokensConfig:
         system: object,
         tools: Sequence[Mapping[str, object]] | None,
         output_format: JsonValue = None,
+        *,
+        preserve_system_instructions: bool = False,
     ) -> ResponsesCountRequestParts:
         """Convert with the adapter /v1/messages inference uses, so the count sees the same input it bills."""
         anthropic_request: Final = AnthropicMessagesRequest(
@@ -354,7 +359,9 @@ class OpenAICountTokensConfig:
         )
         translated: Final = _TRANSLATED_REQUEST.validate_python(
             LiteLLMAnthropicToResponsesAPIAdapter().translate_request(
-                anthropic_request, include_encrypted_reasoning=False
+                anthropic_request,
+                include_encrypted_reasoning=False,
+                preserve_system_instructions=preserve_system_instructions,
             )
         )
         return OpenAICountTokensConfig.count_request_parts(

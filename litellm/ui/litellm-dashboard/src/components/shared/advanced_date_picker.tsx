@@ -19,12 +19,17 @@ interface AdvancedDatePickerProps {
   showTimeRange?: boolean;
   align?: "left" | "right";
   compact?: boolean;
+  presets?: readonly RelativeTimeOption[];
+  maxRangeDays?: number;
 }
 
-export function matchRelativeTimeOption(value: DateRangePickerValue): RelativeTimeOption | undefined {
+export function matchRelativeTimeOption(
+  value: DateRangePickerValue,
+  presets: readonly RelativeTimeOption[] = relativeTimeOptions,
+): RelativeTimeOption | undefined {
   const { from, to } = value;
   if (!from || !to) return undefined;
-  return relativeTimeOptions.find((option) => {
+  return presets.find((option) => {
     const optionRange = option.getValue();
     return moment(from).isSame(optionRange.from, "day") && moment(to).isSame(optionRange.to, "day");
   });
@@ -42,8 +47,11 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   showTimeRange = true,
   align = "right",
   compact = false,
+  presets = relativeTimeOptions,
+  maxRangeDays,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const language = i18n.resolvedLanguage ?? i18n.language;
   const inputId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
@@ -57,8 +65,9 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const getMatchingOption = useCallback(
-    (currentValue: DateRangePickerValue): string | null => matchRelativeTimeOption(currentValue)?.shortLabel ?? null,
-    [],
+    (currentValue: DateRangePickerValue): string | null =>
+      matchRelativeTimeOption(currentValue, presets)?.shortLabel ?? null,
+    [presets],
   );
 
   // Update selected option when value changes
@@ -70,7 +79,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   // Validation logic - simplified for dates only
   const validateDateRange = useCallback(() => {
     if (!startDate || !endDate) {
-      return { isValid: true, error: "" };
+      return { isValid: showTimeRange, error: "" };
     }
 
     const start = moment(startDate, "YYYY-MM-DD");
@@ -84,8 +93,12 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
       return { isValid: false, error: t("shared.advancedDatePicker.endBeforeStart") };
     }
 
+    if (maxRangeDays !== undefined && end.diff(start, "days") > maxRangeDays) {
+      return { isValid: false, error: t("shared.advancedDatePicker.rangeTooLong", { days: maxRangeDays }) };
+    }
+
     return { isValid: true, error: "" };
-  }, [startDate, endDate, t]);
+  }, [startDate, endDate, showTimeRange, maxRangeDays, t]);
 
   const validation = validateDateRange();
 
@@ -123,13 +136,31 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
       if (!from || !to) return t("shared.advancedDatePicker.selectDateRange");
 
       const formatDateTime = (date: Date) => {
-        return moment(date).format("D MMM, HH:mm");
+        if (language.startsWith("en")) return moment(date).format(showTimeRange ? "D MMM, HH:mm" : "D MMM YYYY");
+        return new Intl.DateTimeFormat(
+          language,
+          showTimeRange
+            ? { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }
+            : { day: "numeric", month: "short", year: "numeric" },
+        ).format(date);
       };
 
       return `${formatDateTime(from)} - ${formatDateTime(to)}`;
     },
-    [t],
+    [t, showTimeRange, language],
   );
+
+  const formatSelectionDate = (date: Date) => {
+    if (language.startsWith("en"))
+      return moment(date).format(showTimeRange ? "MMM D, YYYY [at] HH:mm:ss" : "MMM D, YYYY");
+    const selectionDateOptions: Intl.DateTimeFormatOptions = {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      ...(showTimeRange && { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }),
+    };
+    return new Intl.DateTimeFormat(language, selectionDateOptions).format(date);
+  };
 
   // CRITICAL: Apply the same date adjustment logic as the original component
   const adjustDateRange = useCallback((newValue: DateRangePickerValue): DateRangePickerValue => {
@@ -205,6 +236,11 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
   const handleApply = () => {
     if (tempValue.from && tempValue.to && validation.isValid) {
+      if (!showTimeRange) {
+        onValueChange(adjustDateRange(tempValue), pickedPreset);
+        setIsOpen(false);
+        return;
+      }
       // First call with immediate value for UI responsiveness
       onValueChange(tempValue, pickedPreset);
 
@@ -296,7 +332,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   </span>
                 </div>
                 <div className={cn("overflow-y-auto", compact ? "grid h-auto grid-cols-2" : "h-[350px]")}>
-                  {relativeTimeOptions.map((option) => {
+                  {presets.map((option) => {
                     const isSelected = selectedOption === option.shortLabel;
                     return (
                       <button
@@ -412,11 +448,11 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                     <div className={cn("bg-info/10 p-3 rounded-md space-y-1", compact && "col-span-2")}>
                       <div className="text-xs text-info">
                         <span className="font-medium">{t("shared.advancedDatePicker.from")}</span>{" "}
-                        {moment(tempValue.from).format("MMM D, YYYY [at] HH:mm:ss")}
+                        {formatSelectionDate(tempValue.from)}
                       </div>
                       <div className="text-xs text-info">
                         <span className="font-medium">{t("shared.advancedDatePicker.to")}</span>{" "}
-                        {moment(tempValue.to).format("MMM D, YYYY [at] HH:mm:ss")}
+                        {formatSelectionDate(tempValue.to)}
                       </div>
                     </div>
                   )}

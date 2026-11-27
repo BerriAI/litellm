@@ -72,7 +72,11 @@ def test_chatgpt_stream_top_level_rate_limit_fails_with_the_provider_code_and_me
     frames: Final = data_frames(response.text)
     assert [frame["type"] for frame in frames] == ["response.created", "response.failed"], response.text
     error: Final = object_value(object_value(frames[-1]["response"])["error"])
-    assert error == {"code": "rate_limit_exceeded", "message": RATE_LIMIT_MESSAGE}, error
+    assert error == {
+        "code": "rate_limit_exceeded",
+        "message": RATE_LIMIT_MESSAGE,
+        "provider_specific_fields": {"code": "rate_limit_exceeded"},
+    }, error
 
 
 def test_chatgpt_aggregated_top_level_rate_limit_answers_429_with_the_provider_message(rig: _Rig) -> None:

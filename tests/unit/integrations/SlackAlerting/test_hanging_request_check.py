@@ -1,6 +1,10 @@
+import asyncio
 import json
 import time
-from typing import Optional
+from collections.abc import Iterator
+from contextlib import suppress
+from dataclasses import dataclass
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,7 +14,12 @@ import pytest
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )
-from litellm.types.integrations.slack_alerting import HangingRequestData
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.integrations.slack_alerting import (
+    MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
+    HangingRequestData,
+)
 
 
 class TestAlertingHangingRequestCheck:
@@ -335,3 +344,154 @@ class TestAlertingHangingRequestCheck:
 
         # Should not crash and should not send any alerts
         hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
+
+
+START: Final = 1000.0
+DEADLOCK_GUARD_SECONDS: Final = 30.0
+
+
+@dataclass(slots=True)
+class ControlledClock:
+    now: float
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@dataclass(frozen=True, slots=True)
+class AlertingProxy:
+    logger: ProxyLogging
+    clock: ControlledClock
+
+    @property
+    def checker(self) -> AlertingHangingRequestCheck:
+        return self.logger.slack_alerting_instance.hanging_request_check
+
+    async def track(self, request_id: str, *, alerted: bool = False) -> None:
+        await self.checker.hanging_request_cache.async_set_cache(
+            key=request_id,
+            value=HangingRequestData(
+                request_id=request_id, model=request_id, created_at=self.clock.now, alerted=alerted
+            ),
+            ttl=self.checker.hanging_request_cache_ttl,
+        )
+
+    async def tick_at(self, elapsed: float) -> None:
+        self.clock.now = START + elapsed
+        await self.checker.send_alerts_for_hanging_requests()
+
+    def alerted_models(self) -> tuple[str, ...]:
+        return tuple(
+            text.split("Request Model: `", 1)[1].split("`", 1)[0]
+            for text in (item["payload"]["text"] for item in self.logger.slack_alerting_instance.log_queue)
+        )
+
+
+@pytest.fixture
+def alerting_proxy() -> Iterator[AlertingProxy]:
+    logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    logger.alerting = ["slack"]
+    slack: Final = logger.slack_alerting_instance
+    slack.alerting = ["slack"]
+    slack.default_webhook_url = "https://example.invalid/hanging-alerts"
+    slack.batch_size = 10_000
+    slack.periodic_started = True
+    clock: Final = ControlledClock(now=START)
+    with patch("time.time", new=clock), patch("litellm.proxy.proxy_server.proxy_logging_obj", new=logger):
+        yield AlertingProxy(logger=logger, clock=clock)
+
+
+@pytest.mark.asyncio
+async def test_completed_burst_never_alerts_after_its_status_markers_expire(alerting_proxy):
+    for index in range(61):
+        await alerting_proxy.track(f"finished-{index}")
+        await alerting_proxy.logger.update_request_status(f"finished-{index}", "success")
+    await alerting_proxy.track("pending")
+
+    for elapsed in (150, 300, 450):
+        await alerting_proxy.tick_at(elapsed)
+
+    assert alerting_proxy.alerted_models() == ("pending",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["success", "fail"])
+async def test_status_written_before_registration_still_clears_the_request(alerting_proxy, status):
+    await alerting_proxy.logger.update_request_status("late", status)
+    await alerting_proxy.track("late")
+
+    await alerting_proxy.tick_at(150)
+    await alerting_proxy.tick_at(450)
+
+    assert alerting_proxy.alerted_models() == ()
+    assert await alerting_proxy.checker.hanging_request_cache.async_get_cache(key="late") is None
+
+
+@pytest.mark.asyncio
+async def test_every_real_hang_beyond_one_batch_alerts_exactly_once(alerting_proxy):
+    hang_ids: Final = tuple(f"hang-{index}" for index in range(2 * MAX_OLDEST_HANGING_REQUESTS_TO_CHECK + 1))
+    for hang_id in hang_ids:
+        await alerting_proxy.track(hang_id)
+
+    await alerting_proxy.tick_at(300)
+    await alerting_proxy.tick_at(450)
+
+    assert alerting_proxy.alerted_models() == hang_ids
+
+
+@pytest.mark.asyncio
+async def test_already_alerted_oldest_requests_do_not_hide_a_newer_hang(alerting_proxy):
+    for index in range(2 * MAX_OLDEST_HANGING_REQUESTS_TO_CHECK):
+        await alerting_proxy.track(f"already-alerted-{index}", alerted=True)
+    alerting_proxy.clock.now = START + 1
+    await alerting_proxy.track("newer")
+
+    await alerting_proxy.tick_at(301)
+
+    assert alerting_proxy.alerted_models() == ("newer",)
+
+
+@pytest.mark.asyncio
+async def test_a_hang_alerts_at_exactly_the_threshold_and_never_again(alerting_proxy):
+    await alerting_proxy.track("pending")
+
+    await alerting_proxy.tick_at(299.999)
+    assert alerting_proxy.alerted_models() == ()
+    assert await alerting_proxy.checker.hanging_request_cache.async_get_cache(key="pending") is not None
+
+    await alerting_proxy.tick_at(300)
+    await alerting_proxy.tick_at(450)
+    assert alerting_proxy.alerted_models() == ("pending",)
+
+
+@pytest.mark.asyncio
+async def test_scan_lets_other_tasks_run_between_batches_and_sees_their_completions(alerting_proxy):
+    hang_ids: Final = tuple(f"hang-{index}" for index in range(2 * MAX_OLDEST_HANGING_REQUESTS_TO_CHECK + 1))
+    for hang_id in hang_ids:
+        await alerting_proxy.track(hang_id)
+    completed_id: Final = hang_ids[-1]
+    ready: Final = asyncio.Event()
+    permission: Final = asyncio.Event()
+
+    async def complete_a_later_request_when_the_scan_yields() -> int:
+        ready.set()
+        await permission.wait()
+        alerts_already_sent: Final = len(alerting_proxy.logger.slack_alerting_instance.log_queue)
+        await alerting_proxy.logger.update_request_status(completed_id, "success")
+        return alerts_already_sent
+
+    alerting_proxy.clock.now = START + 300
+    worker: Final = asyncio.create_task(complete_a_later_request_when_the_scan_yields())
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=DEADLOCK_GUARD_SECONDS)
+        permission.set()
+        await alerting_proxy.checker.send_alerts_for_hanging_requests()
+        alerts_sent_when_the_worker_ran: Final = await asyncio.wait_for(worker, timeout=DEADLOCK_GUARD_SECONDS)
+    finally:
+        if not worker.done():
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
+
+    assert alerts_sent_when_the_worker_ran == MAX_OLDEST_HANGING_REQUESTS_TO_CHECK
+    assert alerting_proxy.alerted_models() == hang_ids[:-1]

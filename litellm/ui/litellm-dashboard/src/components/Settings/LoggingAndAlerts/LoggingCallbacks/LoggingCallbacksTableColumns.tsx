@@ -10,7 +10,9 @@ import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -60,6 +62,7 @@ function CallbackRowActions({ callback, onTest, onEdit, onDelete }: CallbackRowA
       </span>
     );
   }
+  const configOwned = callback.source === "config";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -70,6 +73,16 @@ function CallbackRowActions({ callback, onTest, onEdit, onDelete }: CallbackRowA
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
+        {configOwned && (
+          <>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel data-testid="callback-config-owned-hint">
+                {t("loggingAndAlerts.loggingCallbacks.table.configOwnedHint")}
+              </DropdownMenuLabel>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuItem data-testid="callback-action-test" onClick={() => void onTest(callback)}>
           <Play />
           {t("loggingAndAlerts.loggingCallbacks.table.actions.test")}
@@ -79,13 +92,29 @@ function CallbackRowActions({ callback, onTest, onEdit, onDelete }: CallbackRowA
           {t("loggingAndAlerts.loggingCallbacks.table.actions.edit")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" data-testid="callback-action-delete" onClick={() => onDelete(callback)}>
+        <DropdownMenuItem
+          variant="destructive"
+          data-testid="callback-action-delete"
+          disabled={configOwned}
+          onClick={() => onDelete(callback)}
+        >
           <Trash2 />
           {t("loggingAndAlerts.loggingCallbacks.table.actions.delete")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function CallbackSourceBadge({ callback }: { callback: CallbackRow }) {
+  const { t } = useTranslation();
+  if (callback.read_only) {
+    return null;
+  }
+  if (callback.source === "config") {
+    return <StatusBadge tone="neutral" label={t("loggingAndAlerts.loggingCallbacks.table.sources.config")} />;
+  }
+  return <StatusBadge tone="info" label={t("loggingAndAlerts.loggingCallbacks.table.sources.db")} />;
 }
 
 interface LoggingCallbacksTableColumnsDeps {
@@ -130,6 +159,14 @@ export const getLoggingCallbacksTableColumns = (
         />
       );
     },
+  },
+  {
+    id: "source",
+    meta: { title: t("loggingAndAlerts.loggingCallbacks.table.columns.source") },
+    header: t("loggingAndAlerts.loggingCallbacks.table.columns.source"),
+    size: 140,
+    enableSorting: false,
+    cell: ({ row }) => <CallbackSourceBadge callback={row.original} />,
   },
   {
     id: "actions",

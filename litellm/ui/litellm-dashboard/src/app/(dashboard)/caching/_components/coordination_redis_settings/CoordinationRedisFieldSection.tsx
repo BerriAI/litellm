@@ -1,6 +1,6 @@
 import React from "react";
 import CoordinationRedisFormField from "./CoordinationRedisFormField";
-import { fieldsForSection } from "./coordinationRedisUtils";
+import { fieldsForSection } from "./mapper";
 import { CoordinationRedisType, CoordinationSection } from "./coordinationRedisFields";
 
 interface CoordinationRedisFieldSectionProps {

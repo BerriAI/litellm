@@ -11,7 +11,7 @@ Usage:
 import os
 import time
 from collections.abc import AsyncIterable, Iterable
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
@@ -20,6 +20,13 @@ from litellm.integrations.mock_client_factory import (
     MockResponse,
     create_mock_client_factory,
 )
+
+if TYPE_CHECKING:
+    import httpx
+    from httpx._types import RequestFiles
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 # Use factory for should_use_mock and MockResponse
 # Braintrust uses both HTTPHandler (sync) and AsyncHTTPHandler (async)
@@ -56,7 +63,7 @@ _mocks_initialized = False
 _MOCK_LATENCY_SECONDS: Final = float(os.getenv("BRAINTRUST_MOCK_LATENCY_MS", "100")) / 1000.0
 
 
-def _is_braintrust_url(url: str) -> bool:
+def _is_braintrust_url(url: object) -> bool:
     """Check if URL is a Braintrust API URL."""
     if not isinstance(url, str):
         return False
@@ -76,17 +83,17 @@ def _is_braintrust_url(url: str) -> bool:
 
 
 def _mock_http_handler_post(
-    self,
-    url,
-    data=None,
-    json=None,
-    params=None,
-    headers=None,
-    timeout=None,
-    stream=False,
-    files=None,
+    self: "HTTPHandler",
+    url: str,
+    data: "dict[str, object] | str | bytes | None" = None,
+    json: "dict[str, object] | None" = None,  # mutable-ok: dict-typed callees take it
+    params: "dict[str, object] | None" = None,
+    headers: "dict[str, object] | None" = None,
+    timeout: "float | httpx.Timeout | None" = None,
+    stream: bool = False,
+    files: "dict[str, object] | RequestFiles | None" = None,
     content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
-    logging_obj=None,
+    logging_obj: "LiteLLMLoggingObject | None" = None,
 ):
     """Monkey-patched HTTPHandler.post that intercepts Braintrust calls with endpoint-specific responses."""
     # Only mock Braintrust API calls

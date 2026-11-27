@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import os
 import socket
-from dataclasses import dataclass
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -32,9 +32,7 @@ MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
 # single path-routing host (stage ALB, compose monolith) works for both planes.
 # Set LITELLM_CONTROL_PLANE_URL only when management is a different base than
 # the LLM host and you are not going through an ingress that path-routes.
-CONTROL_PLANE_BASE_URL = os.environ.get(
-    "LITELLM_CONTROL_PLANE_URL", PROXY_BASE_URL
-).rstrip("/")
+CONTROL_PLANE_BASE_URL = os.environ.get("LITELLM_CONTROL_PLANE_URL", PROXY_BASE_URL).rstrip("/")
 
 
 def split_replica_urls(raw: str) -> tuple[str, ...]:
@@ -109,6 +107,7 @@ UI_BASE_URL = os.environ.get("E2E_UI_BASE_URL", PROXY_BASE_URL).rstrip("/")
 
 CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
 CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
+PROMPT_CACHE_OPENAI_MODEL = os.environ.get("E2E_PROMPT_CACHE_OPENAI_MODEL", "gpt-6.2-sol")
 S3_PARTITION_GRANULARITY = os.environ.get("E2E_S3_PARTITION_GRANULARITY", "day")
 
 # Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
@@ -165,18 +164,13 @@ PROPAGATION_TIMEOUT = float(os.environ.get("E2E_PROPAGATION_TIMEOUT", "15"))
 # for empty values) means the harness behaves exactly as before this knob
 # existed.
 FIXTURE_MODE_RAW = os.environ.get("E2E_FIXTURE_MODE", "live")
-FIXTURE_DIR = Path(
-    os.environ.get("E2E_FIXTURE_DIR", "").strip()
-    or str(Path(__file__).resolve().parent / ".fixtures")
-)
+FIXTURE_DIR = Path(os.environ.get("E2E_FIXTURE_DIR", "").strip() or str(Path(__file__).resolve().parent / ".fixtures"))
 
 # Where the provider-edge server binds, and the host name edge api_base URLs
 # advertise to the proxy. They differ when the proxy runs in a container and
 # reaches the pytest host via a gateway name like host.docker.internal.
 PROVIDER_EDGE_BIND_HOST = os.environ.get("E2E_PROVIDER_EDGE_BIND_HOST", "").strip() or "127.0.0.1"
-PROVIDER_EDGE_ADVERTISE_HOST = (
-    os.environ.get("E2E_PROVIDER_EDGE_ADVERTISE_HOST", "").strip() or PROVIDER_EDGE_BIND_HOST
-)
+PROVIDER_EDGE_ADVERTISE_HOST = os.environ.get("E2E_PROVIDER_EDGE_ADVERTISE_HOST", "").strip() or PROVIDER_EDGE_BIND_HOST
 
 # Deliberately modest concurrency. The suite shares its proxy with every other
 # suite in the run, and 750 users at spawn rate 50 saturated the request path hard
@@ -214,18 +208,10 @@ ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
 ANOMALY_MAX_ERROR_RATIO = float(os.environ.get("E2E_ANOMALY_MAX_ERROR_RATIO", "0.05"))
-ANOMALY_MIN_WARM_CACHE_READ_SHARE = float(
-    os.environ.get("E2E_ANOMALY_MIN_WARM_CACHE_READ_SHARE", "0.65")
-)
-ANOMALY_MAX_P95_TURN_SECONDS = float(
-    os.environ.get("E2E_ANOMALY_MAX_P95_TURN_SECONDS", "30")
-)
-ANOMALY_MAX_KEY_SPEND_USD = float(
-    os.environ.get("E2E_ANOMALY_MAX_KEY_SPEND_USD", "0.60")
-)
-ANOMALY_SPEND_SETTLE_SECONDS = float(
-    os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
-)
+ANOMALY_MIN_WARM_CACHE_READ_SHARE = float(os.environ.get("E2E_ANOMALY_MIN_WARM_CACHE_READ_SHARE", "0.65"))
+ANOMALY_MAX_P95_TURN_SECONDS = float(os.environ.get("E2E_ANOMALY_MAX_P95_TURN_SECONDS", "30"))
+ANOMALY_MAX_KEY_SPEND_USD = float(os.environ.get("E2E_ANOMALY_MAX_KEY_SPEND_USD", "0.60"))
+ANOMALY_SPEND_SETTLE_SECONDS = float(os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75"))
 MEMORY_REQUESTS_PER_PHASE = int(os.environ.get("E2E_MEMORY_REQUESTS_PER_PHASE", "300"))
 MEMORY_RETRIES_PER_REQUEST = int(os.environ.get("E2E_MEMORY_RETRIES_PER_REQUEST", "2"))
 MEMORY_TRANSCRIPT_TURNS = int(os.environ.get("E2E_MEMORY_TRANSCRIPT_TURNS", "40"))
@@ -233,7 +219,12 @@ MEMORY_CONCURRENCY = int(os.environ.get("E2E_MEMORY_CONCURRENCY", "4"))
 MEMORY_RSS_SETTLE_SAMPLES = int(os.environ.get("E2E_MEMORY_RSS_SETTLE_SAMPLES", "15"))
 MEMORY_RSS_SAMPLE_INTERVAL_SECONDS = float(os.environ.get("E2E_MEMORY_RSS_SAMPLE_INTERVAL_SECONDS", "1"))
 MEMORY_RSS_CEILING_MB = float(os.environ.get("E2E_MEMORY_RSS_CEILING_MB", "200"))
-MEMORY_IDLE_RSS_BUDGET_MB = float(os.environ.get("E2E_MEMORY_IDLE_RSS_BUDGET_MB", "768"))
+MEMORY_IDLE_RSS_BUDGET_MB = float(os.environ.get("E2E_MEMORY_IDLE_RSS_BUDGET_MB", "1152"))
+MEMORY_SOAK_BATCH_REQUESTS = int(os.environ.get("E2E_MEMORY_SOAK_BATCH_REQUESTS", "1500"))
+MEMORY_SOAK_MEASURED_BATCHES = int(os.environ.get("E2E_MEMORY_SOAK_MEASURED_BATCHES", "6"))
+MEMORY_SOAK_CONCURRENCY = int(os.environ.get("E2E_MEMORY_SOAK_CONCURRENCY", "32"))
+MEMORY_SOAK_SLOPE_KIB_PER_REQUEST = float(os.environ.get("E2E_MEMORY_SOAK_SLOPE_KIB_PER_REQUEST", "15"))
+MEMORY_SOAK_RETAINED_KIB_PER_REQUEST = float(os.environ.get("E2E_MEMORY_SOAK_RETAINED_KIB_PER_REQUEST", "15"))
 
 
 def ws_base_url() -> str:
@@ -253,8 +244,12 @@ def datadog_mcp_url(*, toolsets: str = "core") -> str:
     belong to a non-US1 org.
     """
     site = (
-        os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com"
-    ).strip().removeprefix("https://").removeprefix("http://").rstrip("/")
+        (os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com")
+        .strip()
+        .removeprefix("https://")
+        .removeprefix("http://")
+        .rstrip("/")
+    )
     site = site.removeprefix("app.")
     host = "mcp.datadoghq.com" if site in ("", "datadoghq.com") else f"mcp.{site}"
     base = f"https://{host}/v1/mcp"

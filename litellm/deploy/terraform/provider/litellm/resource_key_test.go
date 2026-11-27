@@ -1240,6 +1240,238 @@ func TestKeyReadExposesUndeclaredMetadataInServerMetadata(t *testing.T) {
 	}
 }
 
+func TestKeyReadOmitsServerCallbackVars(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{
+		"logging": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse",
+			"callback_vars": map[string]interface{}{"langfuse_secret_key": "litellm_enc::example"},
+		}},
+		"callback_settings": `{"callback_vars":{"langfuse_secret_key":"legacy-value"}}`,
+	}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	d := newKeyResourceData(t, nil)
+	d.SetId("hash-1")
+	if diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true)); diags.HasError() {
+		t.Fatalf("read failed: %v", diags)
+	}
+	want := map[string]interface{}{"logging": `[{"callback_name":"langfuse"}]`}
+	if got := d.Get("server_metadata"); !reflect.DeepEqual(got, want) {
+		t.Errorf("server metadata = %v, want %v", got, want)
+	}
+}
+
+func TestKeyReadMatchesManagedCallbacksByIdentity(t *testing.T) {
+	checkManagedCallbackRefresh(t, func(t *testing.T, prior, stored []interface{}) []interface{} {
+		proxy := &fakeKeyProxy{metadata: map[string]interface{}{"logging": stored}}
+		srv := httptest.NewServer(proxy.handler())
+		defer srv.Close()
+		d := newKeyResourceData(t, map[string]interface{}{loggingCallbackAttr: prior})
+		d.SetId("hash-1")
+		if diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true)); diags.HasError() {
+			t.Fatalf("read failed: %v", diags)
+		}
+		return d.Get(loggingCallbackAttr).([]interface{})
+	})
+}
+
+func checkManagedCallbackRefresh(t *testing.T, read func(*testing.T, []interface{}, []interface{}) []interface{}) {
+	t.Helper()
+	block := func(name, callbackType string, version int) map[string]interface{} {
+		return map[string]interface{}{"callback_name": name, "callback_type": callbackType,
+			"callback_vars_wo_version": version, "callback_vars_wo": ""}
+	}
+	entry := func(name, callbackType string) map[string]interface{} {
+		return map[string]interface{}{"callback_name": name, "callback_type": callbackType,
+			"callback_vars": map[string]interface{}{"langfuse_secret_key": "litellm_enc::fixture"}}
+	}
+	first := block("langfuse", "success", 3)
+	second := block("langfuse", "failure", 17)
+	third := block("langsmith", defaultLoggingCallbackType, 29)
+	prior := []interface{}{first, second, third}
+	for _, tc := range []struct {
+		name         string
+		stored, want []interface{}
+	}{
+		{"out of band and reordered", []interface{}{entry("gcs", "success"), entry("langfuse", "failure"),
+			entry("langsmith", ""), entry("langfuse", "success")}, prior},
+		{"deleted and changed type", []interface{}{entry("langfuse", "failure"), entry("langsmith", "failure")}, []interface{}{second}},
+		{"all managed entries gone", []interface{}{entry("gcs", "success")}, []interface{}{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := read(t, prior, tc.stored); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("refreshed callback blocks = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestKeyCallbackUpdatesPreserveUnmanagedEntries(t *testing.T) {
+	external := map[string]interface{}{
+		"callback_name": "langfuse", "callback_type": "failure",
+		"callback_vars": map[string]interface{}{"langfuse_secret_key": "litellm_enc::external"},
+	}
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{
+		"logging": []interface{}{external, map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+		}},
+	}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+	prior := map[string]string{
+		"key_alias": "alias-1", "logging_callback.#": "1", "logging_callback.0.callback_name": "langfuse",
+		"logging_callback.0.callback_type": "success", "logging_callback.0.callback_vars_wo_version": "1",
+	}
+	applyKeyUpdate(t, client, prior, map[string]interface{}{
+		"key_alias": "alias-1",
+		"logging_callback": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+			"callback_vars_wo": `{"langfuse_secret_key":"rotated-fixture"}`, "callback_vars_wo_version": 2,
+		}},
+	})
+	logging, _ := proxy.metadata["logging"].([]interface{})
+	if !reflect.DeepEqual(logging, []interface{}{map[string]interface{}{
+		"callback_name": "langfuse", "callback_type": "success",
+		"callback_vars": map[string]interface{}{"langfuse_secret_key": "rotated-fixture"},
+	}, external}) {
+		t.Errorf("logging after rotation = %v, want rotated and external callbacks", logging)
+	}
+	prior["logging_callback.0.callback_vars_wo_version"] = "2"
+	applyKeyUpdate(t, client, prior, map[string]interface{}{"key_alias": "alias-1"})
+	if got := proxy.metadata["logging"]; !reflect.DeepEqual(got, []interface{}{external}) {
+		t.Errorf("logging after removal = %v, want only external callback", got)
+	}
+}
+
+func TestKeyUpdateRotatesAndRemovesManagedLoggingCallback(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{
+		"department": "engineering",
+		"logging": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+			"callback_vars": map[string]interface{}{"langfuse_secret_key": "litellm_enc::old"},
+		}},
+	}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+	prior := map[string]string{
+		"key_alias": "alias-1", "logging_callback.#": "1", "logging_callback.0.callback_name": "langfuse",
+		"logging_callback.0.callback_type": "success", "logging_callback.0.callback_vars_wo_version": "1",
+	}
+	config := map[string]interface{}{
+		"key_alias": "alias-1",
+		"logging_callback": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+			"callback_vars_wo": `{"langfuse_secret_key":"rotated-fixture"}`, "callback_vars_wo_version": 2,
+		}},
+	}
+	applyKeyUpdate(t, client, prior, config)
+	want := []interface{}{map[string]interface{}{
+		"callback_name": "langfuse", "callback_type": "success",
+		"callback_vars": map[string]interface{}{"langfuse_secret_key": "rotated-fixture"},
+	}}
+	if got := proxy.metadata["logging"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("updated logging = %v, want %v", got, want)
+	}
+	prior["logging_callback.0.callback_vars_wo_version"] = "2"
+	applyKeyUpdate(t, client, prior, map[string]interface{}{"key_alias": "alias-1"})
+	if _, exists := proxy.metadata["logging"]; exists || proxy.metadata["department"] != "engineering" {
+		t.Errorf("removal should preserve only unrelated metadata, got %v", proxy.metadata)
+	}
+}
+
+func TestKeyUpdateSendsCallbackVarsFromRawConfig(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{
+		"department": "server-department",
+		"logging": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+			"callback_vars": map[string]interface{}{"langfuse_secret_key": "litellm_enc::old"},
+		}},
+	}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+	ctx := context.Background()
+	r := resourceKey()
+	state := &terraform.InstanceState{ID: "hash-1", Attributes: map[string]string{
+		"key_alias": "alias-1", "logging_callback.#": "1", "logging_callback.0.callback_name": "langfuse",
+		"logging_callback.0.callback_type": "success", "logging_callback.0.callback_vars_wo_version": "1",
+		"metadata.%": "1", "metadata.department": "planned-department",
+	}}
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"key_alias": "alias-1",
+		"metadata":  map[string]interface{}{"department": "planned-department"},
+		"logging_callback": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success", "callback_vars_wo_version": 2,
+		}},
+	})
+	diff, err := r.Diff(ctx, state, config, client)
+	if err != nil || diff == nil {
+		t.Fatalf("expected a version change, got diff %v, error %v", diff, err)
+	}
+	diff.RawConfig = cty.ObjectVal(map[string]cty.Value{
+		"logging_callback": cty.ListVal([]cty.Value{cty.ObjectVal(map[string]cty.Value{
+			"callback_name": cty.StringVal("langfuse"), "callback_type": cty.StringVal("success"),
+			"callback_vars_wo_version": cty.NumberIntVal(2),
+			"callback_vars_wo":         cty.StringVal(`{"langfuse_secret_key":"raw-config-fixture"}`),
+		})}),
+	})
+	r.UpdateContext = func(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+		if d.Get("logging_callback.0.callback_vars_wo") != "" {
+			t.Fatal("fixture must not expose the write-only value through ResourceData.Get")
+		}
+		return resourceKeyUpdate(ctx, d, m)
+	}
+	if _, diags := r.Apply(ctx, state, diff, client); diags.HasError() {
+		t.Fatalf("apply failed: %v", diags)
+	}
+	want := []interface{}{map[string]interface{}{
+		"callback_name": "langfuse", "callback_type": "success",
+		"callback_vars": map[string]interface{}{"langfuse_secret_key": "raw-config-fixture"},
+	}}
+	if len(proxy.updates) != 1 {
+		t.Fatalf("expected one key update, got %d", len(proxy.updates))
+	}
+	metadata, _ := proxy.updates[0]["metadata"].(map[string]interface{})
+	if got := metadata["logging"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("sent logging = %v, want %v", got, want)
+	}
+	if got := metadata["department"]; got != "server-department" {
+		t.Errorf("sent department = %v, want server-department", got)
+	}
+}
+
+func TestKeyCallbackRotationClearsRemovedGuardrails(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{
+		"department": "server-department", "guardrails": []interface{}{"old-guardrail"},
+		"logging": []interface{}{map[string]interface{}{"callback_name": "langfuse", "callback_type": "success"}},
+	}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	applyKeyUpdate(t, NewClient(srv.URL, "test-key", true), map[string]string{
+		"key_alias": "alias-1", "guardrails.#": "1", "guardrails.0": "old-guardrail",
+		"logging_callback.#": "1", "logging_callback.0.callback_name": "langfuse",
+		"logging_callback.0.callback_type": "success", "logging_callback.0.callback_vars_wo_version": "1",
+	}, map[string]interface{}{
+		"key_alias": "alias-1",
+		"logging_callback": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+			"callback_vars_wo": `{"langfuse_secret_key":"rotated-fixture"}`, "callback_vars_wo_version": 2,
+		}},
+	})
+	want := map[string]interface{}{
+		"department": "server-department",
+		"logging": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+			"callback_vars": map[string]interface{}{"langfuse_secret_key": "rotated-fixture"},
+		}},
+	}
+	if got := proxy.metadata; !reflect.DeepEqual(got, want) {
+		t.Errorf("stored metadata = %v, want %v", got, want)
+	}
+}
+
 func TestKeyUpdateSendsChangedDuration(t *testing.T) {
 	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
 	srv := httptest.NewServer(proxy.handler())

@@ -1,9 +1,16 @@
 "use client";
 
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import ModelInsightsView from "./_components/ModelInsightsView";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import LoadingScreen from "@/components/common_components/LoadingScreen";
+import { uiHref } from "@/utils/uiHref";
 
 export default function ModelInsightsPage() {
-  const { accessToken } = useAuthorized();
-  return <ModelInsightsView accessToken={accessToken} />;
+  const router = useRouter();
+
+  useEffect(() => {
+    router.replace(`${uiHref("usage")}${window.location.search}${window.location.hash}`);
+  }, [router]);
+
+  return <LoadingScreen />;
 }

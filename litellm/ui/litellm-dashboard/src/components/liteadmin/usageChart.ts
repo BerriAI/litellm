@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { TFunction } from "i18next";
 import i18n from "@/i18n/i18n";
 import type { AriaAccess } from "./operations";
 
@@ -33,17 +34,29 @@ const queryFields = {
 };
 const usageQuerySchema = z.object(queryFields);
 
-export interface UsageChartSource {
-  report: z.infer<typeof usageReportSchema>;
-  period: string;
-  scope: string;
+type DefaultUsageScope = "gateway" | "allTeams" | "allTags";
+type UsageScope =
+  | DefaultUsageScope
+  | "yours"
+  | "permittedTeams"
+  | {
+      userId: string | null | undefined;
+      teamIds: string | null | undefined;
+      tags: string | null | undefined;
+    };
+
+interface UsageChartContext {
+  period: { start: string; end: string };
+  scope: UsageScope;
 }
 
-export interface UsageChart {
+export interface UsageChartSource extends UsageChartContext {
+  report: z.infer<typeof usageReportSchema>;
+}
+
+export interface UsageChart extends UsageChartContext {
   kind: "bar" | "line";
   title: string;
-  period: string;
-  scope: string;
   unit: "usd" | "requests" | "tokens";
   total: number | null;
   data: { label: string; value: number | null }[];
@@ -54,18 +67,52 @@ export function usageChartSource(
   value: unknown,
   query: unknown,
   access: AriaAccess,
-  defaultScope: "Gateway usage" | "All teams" | "All tags" = "Gateway usage",
+  defaultScope: DefaultUsageScope = "gateway",
 ): UsageChartSource | undefined {
   const report = usageReportSchema.safeParse(value);
   const args = usageQuerySchema.safeParse(query);
   if (!report.success || !args.success) return undefined;
   const { start_date, end_date, user_id, team_ids, tags } = args.data;
-  const filters = [user_id && `User ${user_id}`, team_ids && `Teams ${team_ids}`, tags && `Tags ${tags}`].filter(
-    Boolean,
-  );
-  const scope =
-    access.mode === "usage" && access.scope.type === "user" ? "Your usage" : filters.join(" · ") || defaultScope;
-  return { report: report.data, period: `${start_date} to ${end_date} (UTC)`, scope };
+  const ownScope = defaultScope === "allTeams" ? "permittedTeams" : "yours";
+  const filters = user_id || team_ids || tags ? { userId: user_id, teamIds: team_ids, tags } : defaultScope;
+  const scope = access.mode === "usage" && access.scope.type !== "global" ? ownScope : filters;
+  return { report: report.data, period: { start: start_date, end: end_date }, scope };
+}
+
+const toolScopeLabels = {
+  gateway: "Gateway usage",
+  allTeams: "All teams",
+  allTags: "All tags",
+  yours: "Your usage",
+  permittedTeams: "Your permitted team usage",
+} satisfies Record<Extract<UsageScope, string>, string>;
+
+export function formatUsageChartToolContext({ period, scope }: UsageChartContext) {
+  const scopeLabel =
+    typeof scope === "string"
+      ? toolScopeLabels[scope]
+      : [
+          scope.userId && `User ${scope.userId}`,
+          scope.teamIds && `Teams ${scope.teamIds}`,
+          scope.tags && `Tags ${scope.tags}`,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+  return { scope: scopeLabel, period: `${period.start} to ${period.end} (UTC)` };
+}
+
+export function formatUsageChartContext({ period, scope }: UsageChartContext, t: TFunction) {
+  const scopeLabel =
+    typeof scope === "string"
+      ? t(`aria.chart.scopes.${scope}`)
+      : [
+          scope.userId && t("aria.chart.scopes.user", { id: scope.userId }),
+          scope.teamIds && t("aria.chart.scopes.teams", { ids: scope.teamIds }),
+          scope.tags && t("aria.chart.scopes.tags", { tags: scope.tags }),
+        ]
+          .filter(Boolean)
+          .join(" · ");
+  return { scope: scopeLabel, period: t("aria.chart.period", period) };
 }
 
 function knownTotal(values: readonly (number | null | undefined)[]): number | null {

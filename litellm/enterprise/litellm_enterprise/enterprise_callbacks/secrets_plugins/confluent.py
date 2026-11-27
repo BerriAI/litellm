@@ -15,7 +15,7 @@ class ConfluentDetector(RegexBasedDetector):
         return "Confluent Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Confluent Access Token
             re.compile(

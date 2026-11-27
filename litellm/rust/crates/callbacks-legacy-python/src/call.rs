@@ -10,6 +10,16 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
+/// A param a provider's Messages logging reads from `litellm_params`, which Python's handler
+/// took from the caller's own kwargs: for calls to `provider`, the first of `read_from` that
+/// holds non-empty text, logged as `logged_as`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoggedCallParam {
+    pub provider: &'static str,
+    pub read_from: &'static [&'static str],
+    pub logged_as: &'static str,
+}
+
 pub struct PublicCall {
     args: Py<PyTuple>,
     kwargs: Py<PyDict>,

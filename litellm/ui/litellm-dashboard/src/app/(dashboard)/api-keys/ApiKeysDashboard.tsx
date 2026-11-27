@@ -1,6 +1,5 @@
 "use client";
 
-import { Page } from "@/components/shared/Page";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
@@ -64,21 +63,19 @@ export default function ApiKeysDashboard() {
   }, [accessToken, userID, userRole]);
 
   return (
-    <Page className="h-full">
-      <VirtualKeysTable
-        headerActions={
-          isViewOnly ? undefined : (
-            <CreateKey
-              team={null}
-              teams={teams}
-              data={keys}
-              addKey={addKey}
-              autoOpenCreate={autoOpenCreate}
-              prefillData={prefillData}
-            />
-          )
-        }
-      />
-    </Page>
+    <VirtualKeysTable
+      headerActions={
+        isViewOnly ? undefined : (
+          <CreateKey
+            team={null}
+            teams={teams}
+            data={keys}
+            addKey={addKey}
+            autoOpenCreate={autoOpenCreate}
+            prefillData={prefillData}
+          />
+        )
+      }
+    />
   );
 }

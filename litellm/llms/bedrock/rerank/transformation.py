@@ -31,11 +31,11 @@ from litellm.types.rerank import (
 
 
 class BedrockRerankConfig:
-    def _transform_sources(self, documents: list[str | dict]) -> list[BedrockRerankSource]:
+    def _transform_sources(self, documents: list[str | dict[object, object]]) -> list[BedrockRerankSource]:
         """
         Transform the sources from RerankRequest format to Bedrock format.
         """
-        _sources: Final = []
+        _sources: Final[list[BedrockRerankSource]] = []
         for document in documents:
             if isinstance(document, str):
                 _sources.append(

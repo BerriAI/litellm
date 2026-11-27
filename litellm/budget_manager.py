@@ -22,6 +22,7 @@ from litellm.constants import (
     DAYS_IN_A_YEAR,
     HOURS_IN_A_DAY,
 )
+from litellm.litellm_core_utils.core_helpers import subscript
 from litellm.utils import ModelResponse
 
 _BUDGET_SERVER_REPLY: Final = TypeAdapter(object)
@@ -33,7 +34,7 @@ class BudgetManager:
         project_name: str,
         client_type: str = "local",
         api_base: str | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ):
         self.client_type = client_type
         self.project_name = project_name
@@ -42,7 +43,7 @@ class BudgetManager:
         ## load the data or init the initial dictionaries
         self.load_data()
 
-    def print_verbose(self, print_statement):
+    def print_verbose(self, print_statement: object):
         try:
             if litellm.set_verbose:
                 import logging
@@ -114,17 +115,20 @@ class BudgetManager:
     def get_total_budget(self, user: str):
         return self.user_dict[user]["total_budget"]
 
-    def update_cost(
+    def _cost_and_model(
         self,
-        user: str,
-        completion_obj: ModelResponse | None = None,
-        model: str | None = None,
-        input_text: str | None = None,
-        output_text: str | None = None,
-    ):
+        completion_obj: ModelResponse | None,
+        model: str | None,
+        input_text: str | None,
+        output_text: str | None,
+    ) -> tuple[float, object]:
         if model and input_text and output_text:
-            prompt_tokens = litellm.token_counter(model=model, messages=[{"role": "user", "content": input_text}])
-            completion_tokens = litellm.token_counter(model=model, messages=[{"role": "user", "content": output_text}])
+            prompt_tokens: Final = litellm.token_counter(
+                model=model, messages=[{"role": "user", "content": input_text}]
+            )
+            completion_tokens: Final = litellm.token_counter(
+                model=model, messages=[{"role": "user", "content": output_text}]
+            )
             (
                 prompt_tokens_cost_usd_dollar,
                 completion_tokens_cost_usd_dollar,
@@ -133,28 +137,39 @@ class BudgetManager:
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
-            cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
-        elif completion_obj:
-            cost = litellm.completion_cost(completion_response=completion_obj)
-            model = completion_obj["model"]  # if this throws an error try, model = completion_obj['model']
-        else:
-            raise ValueError(
-                "Either a chat completion object or the text response needs to be passed in. Learn more - https://docs.litellm.ai/docs/budget_manager"
-            )
+            return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar, model
+        if completion_obj:
+            completion_cost: Final = litellm.completion_cost(completion_response=completion_obj)
+            return completion_cost, subscript(completion_obj, "model")
+        raise ValueError(
+            "Either a chat completion object or the text response needs to be passed in. Learn more - https://docs.litellm.ai/docs/budget_manager"
+        )
+
+    def update_cost(
+        self,
+        user: str,
+        completion_obj: ModelResponse | None = None,
+        model: str | None = None,
+        input_text: str | None = None,
+        output_text: str | None = None,
+    ):
+        cost, cost_model = self._cost_and_model(completion_obj, model, input_text, output_text)
 
         self.user_dict[user]["current_cost"] = cost + self.user_dict[user].get("current_cost", 0)
         if "model_cost" in self.user_dict[user]:
-            self.user_dict[user]["model_cost"][model] = cost + self.user_dict[user]["model_cost"].get(model, 0)
+            self.user_dict[user]["model_cost"][cost_model] = cost + self.user_dict[user]["model_cost"].get(
+                cost_model, 0
+            )
         else:
-            self.user_dict[user]["model_cost"] = {model: cost}
+            self.user_dict[user]["model_cost"] = {cost_model: cost}
 
         self._save_data_thread()  # [Non-Blocking] Update persistent storage without blocking execution
         return {"user": self.user_dict[user]}
 
-    def get_current_cost(self, user):
+    def get_current_cost(self, user: str):
         return self.user_dict[user].get("current_cost", 0)
 
-    def get_model_cost(self, user):
+    def get_model_cost(self, user: str):
         return self.user_dict[user].get("model_cost", 0)
 
     def is_valid_user(self, user: str) -> bool:
@@ -163,7 +178,7 @@ class BudgetManager:
     def get_users(self):
         return list(self.user_dict.keys())
 
-    def reset_cost(self, user):
+    def reset_cost(self, user: str):
         """
         Reset the tracked spend for a user back to zero.
 
@@ -214,6 +229,9 @@ class BudgetManager:
             return {"status": "success"}
         elif self.client_type == "hosted":
             url: Final = self.api_base + "/set_budget"
-            data: Final = {"project_name": self.project_name, "user_dict": self.user_dict}
+            data: Final[dict[str, object]] = {
+                "project_name": self.project_name,
+                "user_dict": self.user_dict,
+            }
             response: Final = litellm.module_level_client.post(url, headers=self.headers, json=data)
             return _BUDGET_SERVER_REPLY.validate_python(response.json())

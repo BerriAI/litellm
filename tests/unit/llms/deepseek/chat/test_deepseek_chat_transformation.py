@@ -145,7 +145,7 @@ def test_drop_unsupported_tools_keeps_function_tools_only():
         "tool_choice": "auto",
     }
 
-    result = DeepSeekChatConfig._drop_unsupported_tools(optional_params)
+    result = DeepSeekChatConfig.drop_unsupported_tools(optional_params)
 
     assert [tool["function"]["name"] for tool in result["tools"]] == [
         "shell",
@@ -163,7 +163,7 @@ def test_drop_unsupported_tools_drops_dangling_tool_choice_when_none_survive():
         "temperature": 0.2,
     }
 
-    result = DeepSeekChatConfig._drop_unsupported_tools(optional_params)
+    result = DeepSeekChatConfig.drop_unsupported_tools(optional_params)
 
     assert "tools" not in result
     assert "tool_choice" not in result
@@ -177,7 +177,7 @@ def test_drop_unsupported_tools_is_noop_for_function_only():
         "tool_choice": "auto",
     }
 
-    result = DeepSeekChatConfig._drop_unsupported_tools(optional_params)
+    result = DeepSeekChatConfig.drop_unsupported_tools(optional_params)
 
     assert result is optional_params
 
@@ -185,7 +185,7 @@ def test_drop_unsupported_tools_is_noop_for_function_only():
 def test_drop_unsupported_tools_is_noop_without_tools():
     optional_params = {"temperature": 0.7}
 
-    result = DeepSeekChatConfig._drop_unsupported_tools(optional_params)
+    result = DeepSeekChatConfig.drop_unsupported_tools(optional_params)
 
     assert result is optional_params
 
@@ -733,7 +733,7 @@ class TestDeepSeekThinkingParams:
             "parallel_tool_calls": True,
         }
 
-        result = self.config._drop_unsupported_tools(optional_params)
+        result = self.config.drop_unsupported_tools(optional_params)
 
         assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
         assert "tool_choice" not in result
@@ -998,6 +998,21 @@ def test_deepseek_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(mo
     assert "tools" not in result
     assert "tool_choice" not in result
     assert "parallel_tool_calls" not in result
+
+
+def test_deepseek_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    result: Final = DeepSeekChatConfig().map_openai_params(
+        {
+            "tools": [_HOSTED_MCP_TOOL, _function_tool("shell")],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        {},
+        "deepseek-v4-flash",
+        True,
+    )
+    assert result["tools"] == [_function_tool("shell")]
+    assert "tool_choice" not in result
 
 
 def _budget_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:

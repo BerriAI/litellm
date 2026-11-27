@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
 use litellm_model_catalog::{
-    BUNDLED_REGISTRY, Catalog, Error, ErrorKind, IntegrityLimits, Mode, Rejects, Written,
+    BUNDLED_MODEL_COUNT, BUNDLED_REGISTRY, Catalog, Error, ErrorKind, IntegrityLimits, Mode, Model,
+    Rejects, Written,
 };
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
@@ -24,6 +25,12 @@ fn loaded(document: Value) -> litellm_model_catalog::Loaded<Catalog> {
 
 fn catalog(document: Value) -> Catalog {
     loaded(document).value
+}
+
+fn utf16(text: &[u8], mark: [u8; 2], bytes: fn(u16) -> [u8; 2]) -> Vec<u8> {
+    mark.into_iter()
+        .chain(text.iter().flat_map(|byte| bytes(u16::from(*byte))))
+        .collect()
 }
 
 fn written(catalog: &Catalog) -> String {
@@ -53,17 +60,32 @@ fn error_text(document: Value) -> Vec<String> {
 #[case::legacy_evaluation("evaluation", Mode::Evaluation)]
 fn parses_decision_modes(#[case] mode: &str, #[case] expected: Mode) {
     let catalog = catalog(json!({"Test": {"litellm_provider": "test", "mode": mode}}));
-    assert_eq!(
-        catalog
-            .lookup("Test")
-            .unwrap()
-            .entry
-            .model()
-            .unwrap()
-            .attributes
-            .mode,
-        Some(expected)
-    );
+    let model = Model::from_fields(catalog.lookup("Test").unwrap().entry.fields()).unwrap();
+    assert_eq!(model.attributes.mode, Some(expected));
+}
+
+#[rstest]
+fn a_minimum_billed_input_token_count_is_read_and_mergeable() {
+    let document = json!({
+        "fallback_generalizations": {"rules": [{"name": "family", "pattern": "^new-", "model_info": {}}]},
+        "Test": {"litellm_provider": "test", "min_billed_input_tokens": 600}
+    });
+    let problems: Vec<String> = Catalog::problems(document.to_string().as_bytes())
+        .iter()
+        .map(report)
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+    let catalog = catalog(document);
+    let model = Model::from_fields(catalog.lookup("Test").unwrap().entry.fields()).unwrap();
+    assert_eq!(model.attributes.min_billed_input_tokens, Some(600));
+}
+
+#[rstest]
+fn a_negative_minimum_billed_input_token_count_is_reported_on_its_row() {
+    let problems =
+        error_text(json!({"Test": {"litellm_provider": "test", "min_billed_input_tokens": -1}}));
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].starts_with("Test.min_billed_input_tokens: invalid value"));
 }
 
 #[rstest]
@@ -74,12 +96,12 @@ fn unknown_keys_are_kept_raw_and_listed_as_unrecognized(fixture_catalog: Catalog
         Some(&json!({"nested":[1,{"x":true}]}))
     );
     assert_eq!(
-        fixture_catalog.unrecognized().collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            ("Alpha", "enabled"),
-            ("Alpha", "price"),
-            ("Alpha", "unknown")
-        ])
+        Model::from_fields(entry.fields())
+            .unwrap()
+            .unrecognized
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["enabled", "price", "unknown"].map(String::from))
     );
 }
 
@@ -118,8 +140,8 @@ fn a_bad_entry_is_reported_by_model_and_key_and_kept_raw() {
     assert!(problems[0].starts_with("Bad.mode: invalid value: unknown variant `chatt`"));
     assert!(problems[1].starts_with("Bad.input_cost_per_token: invalid value"));
     assert_eq!(problems[2], "Worse.litellm_provider: required");
-    assert!(catalog.lookup("Good").unwrap().entry.model().is_some());
-    assert!(catalog.lookup("Bad").unwrap().entry.model().is_none());
+    assert!(Model::from_fields(catalog.lookup("Good").unwrap().entry.fields()).is_ok());
+    assert!(Model::from_fields(catalog.lookup("Bad").unwrap().entry.fields()).is_err());
     assert_eq!(catalog.model_count(), 3);
     assert!(
         parsed
@@ -452,16 +474,39 @@ fn a_dangling_alias_of_row_is_rejected_and_dropped_from_the_written_document() {
 }
 
 #[rstest]
-fn an_alias_of_row_with_other_fields_is_never_served() {
+fn an_alias_of_row_with_other_fields_is_served_as_its_target_until_its_row_is_rejected() {
     let parsed = loaded(json!({
-        "Real": {"litellm_provider": "t"},
-        "real-latest": {"alias_of": "Real", "mode": "chat"}
+        "Real": {"litellm_provider": "t", "input_cost_per_token": 1e-6},
+        "real-latest": {"alias_of": "Real", "input_cost_per_token": 9e-6}
     }));
-    assert!(parsed.value.lookup("real-latest").is_none());
+    let found = parsed.value.lookup("real-latest").unwrap();
+    assert_eq!(found.canonical_key, "Real");
+    assert_eq!(
+        found.entry.field("input_cost_per_token"),
+        Some(&json!(1e-6))
+    );
     let (catalog, removed) = parsed.value.without_rejected(&parsed.errors);
     assert_eq!(removed.len(), 1);
     assert!(catalog.lookup("real-latest").is_none());
-    assert_eq!(written(&catalog), r#"{"Real":{"litellm_provider":"t"}}"#);
+    assert_eq!(
+        written(&catalog),
+        r#"{"Real":{"litellm_provider":"t","input_cost_per_token":1e-6}}"#
+    );
+}
+
+#[rstest]
+#[case::utf8_with_a_byte_order_mark([b"\xEF\xBB\xBF".as_slice(), br#"{"m":{"litellm_provider":"p"}}"#].concat())]
+#[case::utf16_little_endian(utf16(br#"{"m":{"litellm_provider":"p"}}"#, [0xFF, 0xFE], u16::to_le_bytes))]
+#[case::utf16_big_endian(utf16(br#"{"m":{"litellm_provider":"p"}}"#, [0xFE, 0xFF], u16::to_be_bytes))]
+fn a_document_that_starts_with_a_byte_order_mark_parses_as_its_text(#[case] body: Vec<u8>) {
+    let catalog = Catalog::parse(&body).unwrap().value;
+    assert_eq!(catalog.model_names().collect::<Vec<_>>(), ["m"]);
+}
+
+#[rstest]
+fn a_byte_order_mark_before_bytes_that_are_not_its_encoding_is_invalid_json() {
+    let error = Catalog::parse(&[0xFF, 0xFE, b'{', b'}', b'x']).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Json);
 }
 
 #[rstest]
@@ -476,5 +521,31 @@ fn a_pointer_row_that_repeats_a_listed_alias_is_dropped_and_the_model_is_kept() 
     assert_eq!(
         written(&catalog),
         r#"{"Real":{"litellm_provider":"t","aliases":["real-latest"]}}"#
+    );
+}
+
+#[rstest]
+fn bundled_model_count_matches_the_parsed_registry() {
+    let parsed = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+
+    assert_eq!(BUNDLED_MODEL_COUNT, parsed.model_count());
+}
+
+#[rstest]
+fn the_bundled_catalog_serves_the_registry_like_a_full_parse() {
+    let full = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+    let bundled = Catalog::bundled().unwrap().value;
+
+    assert_eq!(bundled.aliases(), full.aliases());
+    assert!(bundled.served().eq(full.served()));
+    assert!(
+        bundled
+            .written()
+            .map(|(key, _)| key)
+            .eq(full.written().map(|(key, _)| key))
+    );
+    assert_eq!(
+        bundled.fallback_rules().map(<[_]>::len),
+        full.fallback_rules().map(<[_]>::len)
     );
 }

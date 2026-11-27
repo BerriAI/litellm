@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TraceConversationPage",
+  "type": "object",
+  "properties": {
+    "turns": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TraceConversationTurn"
+      }
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "turns",
+    "next_cursor"
+  ],
+  "$defs": {
+    "TraceConversationTurn": {
+      "type": "object",
+      "properties": {
+        "trace_id": {
+          "type": "string"
+        },
+        "trace_ref": {
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "start_time": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "input_ui": {
+          "$ref": "#/$defs/UIContent"
+        },
+        "output_ui": {
+          "$ref": "#/$defs/UIContent"
+        }
+      },
+      "required": [
+        "trace_id",
+        "trace_ref",
+        "span_id",
+        "start_time",
+        "input",
+        "output",
+        "input_ui",
+        "output_ui"
+      ]
+    },
+    "UIContent": {
+      "oneOf": [
+        {
+          "title": "UIMessages",
+          "type": "object",
+          "properties": {
+            "messages": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/UIMessage"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "messages"
+            }
+          },
+          "required": [
+            "kind",
+            "messages"
+          ]
+        },
+        {
+          "title": "UIFields",
+          "type": "object",
+          "properties": {
+            "fields": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/UIField"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "fields"
+            }
+          },
+          "required": [
+            "kind",
+            "fields"
+          ]
+        },
+        {
+          "title": "UIText",
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ]
+        }
+      ]
+    },
+    "UIMessage": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/ChatRole"
+        },
+        "content": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_calls": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/UIToolCall"
+          }
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
+    },
+    "ChatRole": {
+      "type": "string",
+      "enum": [
+        "system",
+        "user",
+        "assistant",
+        "tool"
+      ]
+    },
+    "UIToolCall": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "arguments"
+      ]
+    },
+    "UIField": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ]
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n    EXISTS (\n        SELECT 1\n        FROM \"LiteLLM_GuardrailsTable\"\n        WHERE status = 'active'\n          AND COALESCE(lower(litellm_params ->> 'default_on'), 'false') NOT IN ('false', '0', 'no', 'off', 'f', 'n', '')\n    ) AS \"default_on_guardrails!\",\n    EXISTS (SELECT 1 FROM \"LiteLLM_PolicyAttachmentTable\") AS \"policy_attachments!\",\n    EXISTS (\n        SELECT 1\n        FROM \"LiteLLM_ToolTable\"\n        WHERE input_policy <> 'untrusted' OR output_policy <> 'untrusted'\n    ) AS \"tool_policies!\",\n    EXISTS (\n        SELECT 1\n        FROM \"LiteLLM_CacheConfig\"\n        WHERE id = 'cache_config'\n          AND cache_settings NOT IN ('{}'::jsonb, 'null'::jsonb, '\"\"'::jsonb)\n    ) AS \"cache_settings!\",\n    EXISTS (\n        SELECT 1\n        FROM \"LiteLLM_ConfigOverrides\"\n        WHERE config_type IN ('hashicorp_vault', 'cyberark')\n    ) AS \"config_overrides!\",\n    EXISTS (\n        SELECT 1\n        FROM \"LiteLLM_Config\"\n        WHERE param_name = 'anthropic_beta_headers_reload_config'\n    ) AS \"anthropic_beta_headers_reload!\",\n    EXISTS (\n        SELECT 1\n        FROM \"LiteLLM_Config\"\n        WHERE param_name = 'model_cost_map_reload_config'\n    ) AS \"model_cost_map_reload!\"\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "default_on_guardrails!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "policy_attachments!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "tool_policies!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "cache_settings!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "config_overrides!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "anthropic_beta_headers_reload!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "model_cost_map_reload!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "9937a75016cf526970fcb0801c56099816d78e53de7e725e9cec1deb0acb6b0f"
+}

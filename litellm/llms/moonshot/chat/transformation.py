@@ -87,8 +87,8 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -96,7 +96,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         """
         return ensure_api_route(api_base or "https://api.moonshot.ai/v1", "chat/completions")
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for Moonshot AI models
 
@@ -209,9 +209,9 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
@@ -239,7 +239,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         )
 
     def _add_tool_choice_required_message(
-        self, messages: list[AllMessageValues], optional_params: dict
+        self, messages: list[AllMessageValues], optional_params: dict[str, object]
     ) -> list[AllMessageValues]:
         """
         Add a message to the messages list to indicate that the tool choice is required.

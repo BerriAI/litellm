@@ -5,7 +5,9 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.anthropic.messages.deferred_tools import usable_deferred_tools_mode
 from litellm.llms.anthropic.messages.native import handler as main
+from litellm.llms.anthropic.messages.native.utils import provider_messages_config
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import catalog, detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
@@ -105,10 +107,17 @@ def _route_target(
     api_base: str | None,
     compacting: bool,
 ) -> Target:
-    native_config: Final = main._native_messages_config(model, provider, model_info, api_base)  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough lookup
-    if native_config is not None:
+    if provider_messages_config(model, provider, api_base) is not None:
         return Target.MESSAGES
-    if not compacting and main._should_route_to_responses_api(provider, requested_model, model, model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice
+    if main._deployment_passes_through_anthropic_messages(model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough opt-in
+        return Target.MESSAGES_PASSTHROUGH
+    if not compacting and main._should_route_to_responses_api(  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice
+        provider,
+        requested_model,
+        model,
+        model_info,
+        native_deferred_tools=usable_deferred_tools_mode(model_info, provider) == "native",
+    ):
         return Target.RESPONSES
     return Target.CHAT_COMPLETIONS
 

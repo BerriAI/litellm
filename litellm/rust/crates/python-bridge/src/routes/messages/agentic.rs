@@ -6,11 +6,13 @@ use litellm_host::{
     lifecycle::Timing,
 };
 use litellm_host_python::{HookStep, PythonOwned, PythonRuntime, json_to_py, to_py};
+use litellm_llms::bedrock_mantle::messages::transformation::mantle_capability_lookup;
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
 };
+use serde_json::Value;
 
 use super::host::ROUTE_HOST_MODULE;
 
@@ -120,7 +122,7 @@ impl CallHooks<PythonRuntime> for AgenticLoop {
             self.sent = Some(Sent {
                 request,
                 hooked: hooked_flag,
-                body: to_py(py, &wire.body)?,
+                body: to_py(py, &hooked_body(&wire.body, context))?,
                 model: context.model.clone(),
                 provider: context.custom_llm_provider.clone(),
                 requested: json_to_py(py, &context.optional_params)?.unbind(),
@@ -150,6 +152,24 @@ impl CallHooks<PythonRuntime> for AgenticLoop {
     }
 }
 
+/// The body Python's agentic hooks read as the call's params. Python hands them the params from
+/// before its Mantle transform, so they keep the `stream: false` the Mantle wire body leaves out.
+fn hooked_body(body: &Value, context: &RequestContext) -> Value {
+    let requested_stream = context.optional_params.get("stream");
+    match (body, requested_stream) {
+        (Value::Object(fields), Some(stream))
+            if !fields.contains_key("stream")
+                && mantle_capability_lookup(&context.custom_llm_provider, &context.model)
+                    .is_some() =>
+        {
+            let mut fields = fields.clone();
+            fields.insert("stream".to_string(), stream.clone());
+            Value::Object(fields)
+        }
+        _ => body.clone(),
+    }
+}
+
 impl PythonOwned for AgenticLoop {
     fn close(&mut self, _: Python<'_>) {
         self.request = None;
@@ -168,5 +188,37 @@ impl PythonOwned for AgenticLoop {
             visit.call(&sent.requested)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::*;
+
+    fn context(provider: &str, model: &str) -> RequestContext {
+        RequestContext {
+            model: model.to_string(),
+            custom_llm_provider: provider.to_string(),
+            optional_params: json!({"max_tokens": 8, "stream": false}),
+            secret_fields: Vec::new(),
+            api_key: None,
+            host_transport: false,
+        }
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle("bedrock_mantle", "anthropic.claude-sonnet-5-5", Some(json!(false)))]
+    #[case::bedrock_mantle_route("bedrock", "mantle/anthropic.claude-sonnet-5-5", Some(json!(false)))]
+    #[case::bedrock_invoke("bedrock", "anthropic.claude-sonnet-5-5", None)]
+    fn agentic_hooks_read_the_requested_stream_flag_on_mantle_routes(
+        #[case] provider: &str,
+        #[case] model: &str,
+        #[case] expected: Option<Value>,
+    ) {
+        let body = hooked_body(&json!({"max_tokens": 8}), &context(provider, model));
+        assert_eq!(body.get("stream").cloned(), expected);
     }
 }

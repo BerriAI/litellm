@@ -1,8 +1,10 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
 import type { TFunction } from "i18next";
 import {
   ArrowLeftIcon,
   BotIcon,
+  DatabaseIcon,
   EditIcon,
   KeyIcon,
   LayersIcon,
@@ -109,7 +111,7 @@ function ResourceBadge({
 }
 
 export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const { data: accessGroup, isLoading } = useAccessGroupDetails(accessGroupId);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
@@ -117,7 +119,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
 
   if (isLoading) {
     return (
-      <div className="p-6 px-12">
+      <div>
         <div className="flex min-h-[300px] items-center justify-center">
           <UiLoadingSpinner className="size-8 text-primary" />
         </div>
@@ -127,7 +129,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
 
   if (!accessGroup) {
     return (
-      <div className="p-6 px-12">
+      <div>
         <Button
           variant="ghost"
           size="icon"
@@ -146,6 +148,8 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
   const mcpServers = accessGroup.access_mcp_servers;
   const agents = accessGroup.access_agents;
   const skills = (accessGroup.access_skill_names ?? []).map((name) => ({ id: name, name: null }));
+  const vectorStores =
+    accessGroup.access_vector_stores ?? (accessGroup.access_vector_store_ids ?? []).map((id) => ({ id, name: null }));
   const keys = accessGroup.assigned_keys;
   const teams = accessGroup.assigned_teams;
 
@@ -153,7 +157,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
   const displayedTeams = showAllTeams ? teams : teams.slice(0, MAX_PREVIEW);
 
   return (
-    <div className="p-6 px-12">
+    <div>
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" aria-label={t("accessGroups.detail.back")} onClick={onBack}>
@@ -186,7 +190,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             <dd className="text-foreground">{accessGroup.description || "—"}</dd>
             <dt className="text-muted-foreground">{t("accessGroups.detail.created")}</dt>
             <dd className="flex items-center gap-1 text-foreground">
-              {new Date(accessGroup.created_at).toLocaleString()}
+              {displayTimestamp(new Date(accessGroup.created_at), locale.language)}
               {accessGroup.created_by && (
                 <>
                   <span>{t("accessGroups.detail.by")}</span>
@@ -196,7 +200,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             </dd>
             <dt className="text-muted-foreground">{t("accessGroups.detail.lastUpdated")}</dt>
             <dd className="flex items-center gap-1 text-foreground">
-              {new Date(accessGroup.updated_at).toLocaleString()}
+              {displayTimestamp(new Date(accessGroup.updated_at), locale.language)}
               {accessGroup.updated_by && (
                 <>
                   <span>{t("accessGroups.detail.by")}</span>
@@ -273,7 +277,10 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
       <Card>
         <CardContent>
           <Tabs defaultValue="models">
-            <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
+            <TabsList
+              variant="line"
+              className="w-full flex-wrap justify-start rounded-none border-b p-0 group-data-horizontal/tabs:h-auto"
+            >
               <TabsTrigger value="models" className="flex-none gap-2 rounded-none px-4 py-2">
                 <LayersIcon className="size-4" />
                 {t("accessGroups.detail.tabs.models")}
@@ -294,6 +301,11 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
                 {t("accessGroups.detail.tabs.skills")}
                 <Badge variant="secondary">{skills.length}</Badge>
               </TabsTrigger>
+              <TabsTrigger value="vector-stores" className="flex-none gap-2 rounded-none px-4 py-2">
+                <DatabaseIcon className="size-4" />
+                {t("accessGroups.detail.tabs.vectorStores")}
+                <Badge variant="secondary">{vectorStores.length}</Badge>
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="models" className="pt-4">
               <ResourceList items={models} emptyMessage={t("accessGroups.detail.empty.models")} />
@@ -307,6 +319,9 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             </TabsContent>
             <TabsContent value="skills" className="pt-4">
               <ResourceList items={skills} emptyMessage={t("accessGroups.detail.empty.skills")} />
+            </TabsContent>
+            <TabsContent value="vector-stores" className="pt-4">
+              <ResourceList items={vectorStores} emptyMessage={t("accessGroups.detail.empty.vectorStores")} />
             </TabsContent>
           </Tabs>
         </CardContent>

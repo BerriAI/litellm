@@ -9,9 +9,9 @@ Provides:
 import base64
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 from urllib.parse import urlsplit
 
 import orjson
@@ -27,6 +27,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, LITELLM_PROXY_ADMIN_NAM
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes, require_get
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import get_request_route, is_request_body_safe
@@ -34,6 +35,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     open_sse_before_first_byte,
+    refuse_s3_media_the_key_may_not_read,
     ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -51,11 +53,11 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     authorize_managed_resource_id,
     detect_content_type_from_filename,
     explicit_request_credentials,
-    get_team_provider_deployment,
     is_base64_encoded_unified_file_id,
     managed_file_copy_on_deployment,
+    model_less_team_deployment,
     provider_file_id_from_managed_id,
-    team_deployment_the_caller_may_use,
+    team_deployment_as_the_caller_reaches_it,
 )
 from litellm.proxy.rag_endpoints.upload_security import (
     MAX_UPLOAD_SIZE_BYTES,
@@ -67,7 +69,7 @@ from litellm.proxy.rag_endpoints.upload_security import (
 from litellm.proxy.vector_store_endpoints.endpoints import (
     build_request_data_from_managed_vector_store,
     reject_caller_embedding_selection_params,
-    reject_caller_opensearch_index_name,
+    reject_caller_opensearch_store_params,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
@@ -102,6 +104,18 @@ def _as_string_keyed_mapping(value: object) -> Mapping[str, object] | None:
     return None
 
 
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _as_list(value: object) -> Sequence[object] | None:
+    if isinstance(value, list):
+        return value
+    return None
+
+
 def _response_attr(source: object, name: str) -> object:
     return getattr(source, name, None)
 
@@ -123,16 +137,18 @@ def _append_payload_to_scan_stack(
     value: object,
     next_depth: int,
 ) -> None:
+    entry: Final[tuple[object, int]] = (value, next_depth)
+    items: Final = _as_list(value)
     if isinstance(value, dict):
         if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
             _raise_vector_store_scan_depth_exceeded()
-        payload_stack.append((value, next_depth))
-    elif isinstance(value, list):
+        payload_stack.append(entry)
+    elif items is not None:
         if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
-            if any(isinstance(item, (dict, list)) for item in value):
+            if any(isinstance(item, (dict, list)) for item in items):
                 _raise_vector_store_scan_depth_exceeded()
             return
-        payload_stack.append((value, next_depth))
+        payload_stack.append(entry)
 
 
 def _collect_vector_store_ids_from_payload(payload: object) -> set[str]:
@@ -144,8 +160,10 @@ def _collect_vector_store_ids_from_payload(payload: object) -> set[str]:
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
             _raise_vector_store_scan_depth_exceeded()
 
-        if isinstance(current_payload, dict):
-            for key, value in current_payload.items():
+        current_fields = _as_dict(current_payload)
+        current_items = _as_list(current_payload)
+        if current_fields is not None:
+            for key, value in current_fields.items():
                 if key == "vector_store_id":
                     if not isinstance(value, str) or not value:
                         raise HTTPException(
@@ -160,8 +178,8 @@ def _collect_vector_store_ids_from_payload(payload: object) -> set[str]:
                         value=value,
                         next_depth=depth + 1,
                     )
-        elif isinstance(current_payload, list):
-            for item in current_payload:
+        elif current_items is not None:
+            for item in current_items:
                 _append_payload_to_scan_stack(
                     payload_stack=payload_stack,
                     value=item,
@@ -299,6 +317,10 @@ async def _admin_set_store_target(
     return creator_row is not None and creator_row.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
+class _VectorStoreOptions(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+
 _MANAGED_STORE_CALLER_OPTIONS: Final = frozenset(
     {
         "vector_store_id",
@@ -313,7 +335,7 @@ _MANAGED_STORE_CALLER_OPTIONS: Final = frozenset(
 
 
 def _caller_vector_store_options(
-    request_vector_store_config: Mapping[str, object],
+    request_vector_store_config: _VectorStoreOptions,
     managed_store: LiteLLM_ManagedVectorStore | None,
 ) -> Mapping[str, object]:
     if managed_store is None:
@@ -327,7 +349,7 @@ def _is_blank(value: object) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def _without_blank_credentials(config: Mapping[str, object]) -> Mapping[str, object]:
+def _without_blank_credentials(config: _VectorStoreOptions) -> Mapping[str, object]:
     return MappingProxyType(
         {key: value for key, value in config.items() if key not in EXPLICIT_CREDENTIAL_KEYS or not _is_blank(value)}
     )
@@ -380,7 +402,7 @@ def _with_request_credentials(
     return MappingProxyType({**team_credentials, **explicit_request_credentials(request_data)})
 
 
-def _team_provider_deployment(
+async def _team_provider_deployment(
     effective_config: Mapping[str, object],
     llm_router: "Router | None",
     user_api_key_dict: UserAPIKeyAuth,
@@ -391,11 +413,7 @@ def _team_provider_deployment(
     if _store_provider(effective_config) != _TEAM_CREDENTIAL_PROVIDER:
         return None
 
-    return get_team_provider_deployment(
-        llm_router=llm_router,
-        user_api_key_dict=user_api_key_dict,
-        custom_llm_provider=_TEAM_CREDENTIAL_PROVIDER,
-    )
+    return await model_less_team_deployment(llm_router, user_api_key_dict, _TEAM_CREDENTIAL_PROVIDER)
 
 
 def _team_provider_credentials(deployment: TeamProviderDeployment | None) -> Mapping[str, object]:
@@ -782,6 +800,8 @@ async def parse_rag_ingest_request(
     # api_base is also blocked: a user-controlled base URL causes the server
     # to send its configured provider credentials to an attacker endpoint.
     _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS: Final = {
+        "fallbacks",
+        "_vector_store_fallback_plan",
         "vertex_credentials",
         "vertex_ai_credentials",
         "aws_access_key_id",
@@ -896,9 +916,15 @@ async def rag_ingest(
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
-        managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
+        request_vector_store_mapping: Final = require_get(request_vector_store_config)
+        requested_vector_store_id: Final = request_vector_store_mapping.get("vector_store_id")
+        managed_store: Final = (
+            resolved_stores.get(requested_vector_store_id) if isinstance(requested_vector_store_id, str) else None
+        )
         requested_base: Final = {
-            **_caller_vector_store_options(request_vector_store_config, managed_store),
+            **_caller_vector_store_options(
+                require_attributes(request_vector_store_mapping, _VectorStoreOptions, "items"), managed_store
+            ),
             **_managed_store_overrides(managed_store),
         }
         vertex_target_checked: Final = _vertex_target_is_checked(
@@ -920,7 +946,7 @@ async def rag_ingest(
         forwarded_credentials: Final = _forwarded_store_credentials(
             base, _with_body_drop_params(request_data, await _rag_ingest_body(request))
         )
-        team_deployment: Final = _team_provider_deployment(base, llm_router, user_api_key_dict)
+        team_deployment: Final = await _team_provider_deployment(base, llm_router, user_api_key_dict)
         merged_vector_store_config: Final = {
             **_team_provider_credentials(team_deployment),
             **forwarded_credentials,
@@ -946,8 +972,8 @@ async def rag_ingest(
 
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         credential_deployment: Final = None if forwarded_credentials else team_deployment
-        upload_deployment: Final = await team_deployment_the_caller_may_use(
-            credential_deployment, llm_router, user_api_key_dict
+        upload_deployment: Final = await team_deployment_as_the_caller_reaches_it(
+            credential_deployment, _TEAM_CREDENTIAL_PROVIDER, llm_router, user_api_key_dict
         )
         ingest_file_id: Final = await _provider_file_id_for_ingest(
             file_id, credential_deployment, managed_files_obj, user_api_key_dict
@@ -1153,7 +1179,7 @@ async def rag_query(
             **retrieval_config,
             **store_data,
         }
-        reject_caller_opensearch_index_name(
+        reject_caller_opensearch_store_params(
             caller_body=retrieval_config,
             request_fields=merged_retrieval_config,
             source="retrieval_config",
@@ -1165,6 +1191,9 @@ async def rag_query(
                 {key: value for key, value in retrieval_config.items() if key not in EXPLICIT_CREDENTIAL_KEYS}
             )
         )
+        await refuse_s3_media_the_key_may_not_read(
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
         request_data: Final[dict[str, object]] = await add_litellm_data_to_request(
             data={},
             request=request,
@@ -1175,7 +1204,7 @@ async def rag_query(
         )
         team_credentials: Final = _with_request_credentials(
             _team_provider_credentials(
-                _team_provider_deployment(effective_vector_store_config, llm_router, user_api_key_dict)
+                await _team_provider_deployment(effective_vector_store_config, llm_router, user_api_key_dict)
             ),
             _with_body_drop_params(request_data, data),
         )

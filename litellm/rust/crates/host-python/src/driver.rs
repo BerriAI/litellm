@@ -14,7 +14,7 @@ use litellm_host::{
     lifecycle::{CallEvent, ExecutionEvent, FailureOrigin, Timing, epoch_seconds},
     machine::{HostFailure, Machine, MachineStep},
     observation::ObservationSender,
-    protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
+    protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery, UnobservedTail},
 };
 
 use crate::PythonHostCalls;
@@ -28,11 +28,8 @@ type ProtocolOf<H> = <H as PythonBinding>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
 type ResponseOf<H> = <ProtocolOf<H> as Protocol>::Response;
 type Interruption<H> = Option<HostFailure<ErrorOf<H>>>;
-type StartMachine<P, M> = Box<
-    dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, <P as Protocol>::Request) -> PyResult<M>
-        + Send
-        + Sync,
->;
+type StartMachine<D, M> =
+    Box<dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, D) -> PyResult<M> + Send + Sync>;
 type Body = Coroutine<Yielded, PyResult<Py<PyAny>>>;
 
 pub struct CallOptions {
@@ -131,8 +128,11 @@ where
     caller: PythonCaller,
     parts: SharedParts<H, L>,
     native: NativeMachine<M>,
-    start: Option<StartMachine<ProtocolOf<H>, M>>,
+    start: Option<StartMachine<<H as PythonBinding>::Decoded, M>>,
     streaming: bool,
+    detached: bool,
+    drains: bool,
+    unobserved_tail: Option<UnobservedTail>,
 }
 
 impl<H, M, L> CallBody<H, M, L>
@@ -238,6 +238,13 @@ where
                 NativePoll::Ready(result) => result,
                 NativePoll::Suspend(awaitable) => match self.caller.await_python(awaitable).await {
                     Ok(_) => self.native.take_result()?,
+                    Err(error) if self.drains_after(&error) => {
+                        self.detached = true;
+                        Python::attach(|py| {
+                            self.parts().interrupted = Some(error.into_value(py));
+                        });
+                        continue;
+                    }
                     Err(error) if self.parts().interrupted.is_none() => {
                         interruption = Some(self.interrupt(error));
                         continue;
@@ -258,6 +265,14 @@ where
                 Err(InvokeError::Python(error)) => Some(self.interrupt(error)),
             };
         }
+    }
+
+    fn drains_after(&self, error: &PyErr) -> bool {
+        self.drains
+            && self.streaming
+            && !self.detached
+            && self.parts().interrupted.is_none()
+            && Python::attach(|py| is_cancellation(py, error))
     }
 
     fn interrupt(&self, error: PyErr) -> HostFailure<ErrorOf<H>> {
@@ -320,6 +335,8 @@ where
             }
             HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                 self.streaming = true;
+                self.drains = ProtocolOf::<H>::detached_drain(&head).is_some();
+                self.unobserved_tail = ProtocolOf::<H>::unobserved_tail(&head);
                 let head = {
                     let mut parts = self.parts();
                     let Parts { binding, hooks, .. } = &mut *parts;
@@ -333,16 +350,28 @@ where
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
+                let observed = !self
+                    .unobserved_tail
+                    .as_ref()
+                    .is_some_and(UnobservedTail::begun);
                 let chunk = {
                     let mut parts = self.parts();
                     let Parts { binding, hooks, .. } = &mut *parts;
                     Python::attach(|py| {
                         let chunk = binding.encode_chunk(py, chunk)?;
-                        hooks.on_stream_chunk(py, &chunk)?;
+                        if observed {
+                            hooks.on_stream_chunk(py, &chunk)?;
+                        }
                         Ok::<_, PyErr>(chunk)
                     })?
                 };
-                reply.send(self.caller.yield_chunk(chunk).await);
+                if self.detached {
+                    reply.send(std::ops::ControlFlow::Break(()));
+                    return Ok(());
+                }
+                let flow = self.caller.yield_chunk(chunk).await;
+                self.detached = flow.is_break();
+                reply.send(flow);
                 Ok(())
             }
         }
@@ -384,7 +413,14 @@ where
             HostedCompletion::Complete(response) => response,
             HostedCompletion::StreamEnded | HostedCompletion::Detached => {
                 let none = Python::attach(|py| py.None());
-                return self.succeeded(none).await;
+                let succeeded = self.succeeded(none).await;
+                let cancelled = self.parts().interrupted.take();
+                return match cancelled {
+                    Some(cancelled) => Err(Python::attach(|py| {
+                        PyErr::from_value(cancelled.into_bound(py).into_any())
+                    })),
+                    None => succeeded,
+                };
             }
         };
         let encoded = {
@@ -422,15 +458,24 @@ where
     }
 
     async fn machine_failed(&mut self, error: ErrorOf<H>) -> PyResult<Py<PyAny>> {
+        let origin = if self.detached {
+            FailureOrigin::DetachedStream
+        } else {
+            FailureOrigin::Call
+        };
         let error = {
             let mut parts = self.parts();
             parts.observation.ended_at.get_or_insert_with(epoch_seconds);
-            Python::attach(|py| match parts.interrupted.take() {
-                Some(retained) => PyErr::from_value(retained.into_bound(py).into_any()),
-                None => classified(py, &parts.binding, error),
+            Python::attach(|py| {
+                if !self.detached
+                    && let Some(retained) = parts.interrupted.take()
+                {
+                    return PyErr::from_value(retained.into_bound(py).into_any());
+                }
+                classified(py, &parts.binding, error)
             })
         };
-        self.failure(error, FailureOrigin::Call).await
+        self.failure(error, origin).await
     }
 
     /// The terminal hooks may suspend. Until they finish, the selected response is held
@@ -457,8 +502,8 @@ where
             .ok_or_else(|| Error::MissingState.into())
     }
 
-    /// As [`Self::succeeded`], with the selected exception held as its value and raised
-    /// again once the hooks finish.
+    /// Notify hooks with the selected exception, then raise it or restore the
+    /// caller's interruption if the upstream failed during a detached drain.
     async fn failure(&mut self, error: PyErr, origin: FailureOrigin) -> PyResult<Py<PyAny>> {
         let step = {
             let mut parts = self.parts();
@@ -480,9 +525,20 @@ where
             })?
         };
         self.settle(step).await?;
-        let mut parts = self.parts();
-        parts.observation.finish();
-        let selected = parts.selected.take().ok_or(Error::MissingState)?;
+        let (selected, interrupted) = {
+            let mut parts = self.parts();
+            parts.observation.finish();
+            (
+                parts.selected.take().ok_or(Error::MissingState)?,
+                parts.interrupted.take(),
+            )
+        };
+        if origin == FailureOrigin::DetachedStream {
+            return Python::attach(|py| match interrupted {
+                Some(cancelled) => Err(PyErr::from_value(cancelled.into_bound(py).into_any())),
+                None => Ok(py.None()),
+            });
+        }
         Err(Python::attach(|py| {
             PyErr::from_value(selected.into_bound(py))
         }))
@@ -602,11 +658,7 @@ where
 
 pub fn run_call<H, M, L>(
     py: Python<'_>,
-    start: impl FnOnce(
-        Python<'_>,
-        &Bound<'_, PyDict>,
-        <H::Protocol as Protocol>::Request,
-    ) -> PyResult<M>
+    start: impl FnOnce(Python<'_>, &Bound<'_, PyDict>, H::Decoded) -> PyResult<M>
     + Send
     + Sync
     + 'static,
@@ -645,6 +697,9 @@ where
                 native: NativeMachine::new(asynchronous),
                 start: Some(Box::new(start)),
                 streaming: false,
+                detached: false,
+                drains: false,
+                unobserved_tail: None,
             }
             .run()
         }

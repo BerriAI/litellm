@@ -29,9 +29,10 @@ from claude_code.cli_driver import (
 
 
 AZURE_MODELS = [
-    "claude-haiku-4-5-azure",
-    "claude-sonnet-4-5-azure",
-    "claude-opus-4-7-azure",
+    "claude-haiku-5-5-azure",
+    "claude-sonnet-5-5-azure",
+    "claude-opus-5-5-azure",
+    "claude-fable-5-2-azure",
 ]
 
 CACHE_1H_ENV = {"ENABLE_PROMPT_CACHING_1H": "1"}

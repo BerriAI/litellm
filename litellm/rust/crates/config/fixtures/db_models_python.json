@@ -1,0 +1,162 @@
+{
+  "source": "ProxyConfig._add_deployment, load_credential_list, CredentialAccessor.upsert_credentials and utils.with_named_credential on litellm.Router, captured once",
+  "input": {
+    "file": {
+      "model_list": [
+        {
+          "model_name": "file-a",
+          "litellm_params": {
+            "model": "openai/gpt-a",
+            "litellm_credential_name": "from-file"
+          }
+        },
+        {
+          "model_name": "shared",
+          "litellm_params": {
+            "model": "openai/gpt-file"
+          },
+          "model_info": {
+            "id": "shared-id"
+          }
+        },
+        {
+          "model_name": "file-c",
+          "litellm_params": {
+            "model": "openai/gpt-c",
+            "api_key": "own-key",
+            "litellm_credential_name": "overridden"
+          },
+          "model_info": {
+            "id": "file-c-id"
+          }
+        }
+      ],
+      "credential_list": [
+        {
+          "credential_name": "from-file",
+          "credential_values": {
+            "api_key": "file-key",
+            "api_base": "https://file.example"
+          },
+          "credential_info": {}
+        },
+        {
+          "credential_name": "overridden",
+          "credential_values": {
+            "api_key": "file-key-2",
+            "api_base": "https://file2.example"
+          },
+          "credential_info": {}
+        }
+      ]
+    },
+    "db_models": [
+      {
+        "model_id": "shared-id",
+        "model_name": "shared",
+        "litellm_params": {
+          "model": "openai/gpt-db"
+        },
+        "model_info": {
+          "id": "stale",
+          "team_id": "t1"
+        },
+        "blocked": false
+      },
+      {
+        "model_id": "db-b",
+        "model_name": "db-b",
+        "litellm_params": {
+          "model": "openai/gpt-b",
+          "litellm_credential_name": "from-db"
+        },
+        "model_info": {},
+        "blocked": true
+      },
+      {
+        "model_id": "db-missing",
+        "model_name": "db-missing",
+        "litellm_params": {
+          "model": "openai/gpt-m",
+          "api_key": "m-key",
+          "litellm_credential_name": "nowhere"
+        },
+        "model_info": {},
+        "blocked": false
+      }
+    ],
+    "db_credentials": [
+      {
+        "credential_name": "from-db",
+        "credential_values": {
+          "api_key": "db-key",
+          "github_copilot_app_private_key": "pem"
+        }
+      },
+      {
+        "credential_name": "overridden",
+        "credential_values": {
+          "api_key": "db-key-2",
+          "api_base": "https://db2.example"
+        }
+      }
+    ]
+  },
+  "expected": [
+    {
+      "model_name": "file-a",
+      "id": null,
+      "db_model": false,
+      "blocked": false,
+      "litellm_params": {
+        "litellm_credential_name": "from-file",
+        "model": "openai/gpt-a",
+        "api_key": "file-key",
+        "api_base": "https://file.example"
+      }
+    },
+    {
+      "model_name": "file-c",
+      "id": "file-c-id",
+      "db_model": false,
+      "blocked": false,
+      "litellm_params": {
+        "api_key": "own-key",
+        "litellm_credential_name": "overridden",
+        "model": "openai/gpt-c",
+        "api_base": "https://db2.example"
+      }
+    },
+    {
+      "model_name": "shared",
+      "id": "shared-id",
+      "db_model": true,
+      "blocked": false,
+      "litellm_params": {
+        "model": "openai/gpt-db"
+      }
+    },
+    {
+      "model_name": "db-b",
+      "id": "db-b",
+      "db_model": true,
+      "blocked": true,
+      "litellm_params": {
+        "litellm_credential_name": "from-db",
+        "model": "openai/gpt-b",
+        "api_key": "db-key"
+      }
+    },
+    {
+      "model_name": "db-missing",
+      "id": "db-missing",
+      "db_model": true,
+      "blocked": false,
+      "litellm_params": {
+        "api_key": "m-key",
+        "litellm_credential_name": "nowhere",
+        "model": "openai/gpt-m"
+      }
+    }
+  ]
+}

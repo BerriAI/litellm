@@ -1,5 +1,7 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useState } from "react";
 import { useQuery, type QueryKey } from "@tanstack/react-query";
+import { Controller } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import {
@@ -7,6 +9,7 @@ import {
   getSkillSubmission,
   listSkillSubmissions,
   reviewSkillSubmission,
+  withdrawSkillSubmission,
 } from "@/components/networking";
 import type { SkillHubSkill, SkillSubmission } from "@/components/claude_code_plugins/types";
 import { Badge } from "@/components/ui/badge";
@@ -14,10 +17,35 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable/useUrlTableState";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toSkillReviewPayload } from "./skill-review/mapper";
+import { skillReviewSchema } from "./skill-review/schema";
 import SkillScanPanel from "./SkillScanPanel";
 import { toast } from "@/lib/toast";
+import AddPluginForm from "./add_plugin_form";
+import { useUserIdentityLookup, userIdentityLabel } from "@/app/(dashboard)/hooks/users/useUsers";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
-const METADATA_FIELDS = ["name", "version", "description", "source", "keywords", "domain", "namespace"] as const;
+const METADATA_FIELDS = [
+  "name",
+  "version",
+  "description",
+  "source",
+  "author",
+  "category",
+  "homepage",
+  "keywords",
+  "domain",
+  "namespace",
+] as const;
 
 const displayValue = (value: unknown): string => {
   if (value === null || value === undefined || value === "") return "";
@@ -28,6 +56,7 @@ const STATUS_CLASSES = {
   pending_review: "border-warning/30 text-warning",
   approved: "border-success/30 text-success",
   rejected: "border-destructive/30 text-destructive",
+  withdrawn: "border-muted text-muted-foreground",
 };
 
 const SUBMISSION_TABLE_STATE: UrlTableStateOptions<never> = {
@@ -48,15 +77,23 @@ function SubmissionStatus({ status }: { status: SkillSubmission["status"] }) {
   );
 }
 
-function SubmissionSummary({ submission }: { submission: SkillSubmission }) {
-  const { t } = useTranslation();
+function SubmissionSummary({
+  submission,
+  scope,
+}: {
+  submission: SkillSubmission;
+  scope: Pick<SubmissionReviewProps, "accessToken" | "userRole" | "isViewOnly">;
+}) {
+  const { t, i18n: locale } = useTranslation();
+  const users = useUserIdentityLookup([submission.submitted_by, submission.reviewed_by], scope);
+  const reviewed = submission.status === "approved" || submission.status === "rejected";
   return (
     <>
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <SubmissionStatus status={submission.status} />
         <span>{t(`skills.submissions.operation.${submission.operation}`)}</span>
-        <span className="text-muted-foreground">
-          {t("skills.submissions.submittedBy", { name: submission.submitted_by })}
+        <span className="text-muted-foreground" title={submission.submitted_by}>
+          {t("skills.submissions.submittedBy", { name: userIdentityLabel(submission.submitted_by, users) })}
         </span>
       </div>
       {submission.status === "pending_review" && (
@@ -67,11 +104,11 @@ function SubmissionSummary({ submission }: { submission: SkillSubmission }) {
           {t("skills.submissions.rejectionReason", { reason: submission.rejection_reason })}
         </p>
       )}
-      {submission.reviewed_at && (
-        <p className="text-sm text-muted-foreground">
-          {t("skills.submissions.reviewedBy", {
-            name: submission.reviewed_by,
-            date: new Date(submission.reviewed_at).toLocaleString(),
+      {submission.reviewed_at && reviewed && (
+        <p className="text-sm text-muted-foreground" title={submission.reviewed_by ?? undefined}>
+          {t(submission.status === "approved" ? "skills.submissions.approvedBy" : "skills.submissions.rejectedBy", {
+            name: userIdentityLabel(submission.reviewed_by, users),
+            date: displayTimestamp(new Date(submission.reviewed_at), locale.language),
           })}
         </p>
       )}
@@ -82,77 +119,108 @@ function SubmissionSummary({ submission }: { submission: SkillSubmission }) {
 function SubmissionComparison({
   submission,
   current,
+  onDownload,
+  downloading,
 }: {
   submission: SkillSubmission;
   current?: SkillHubSkill | null;
+  onDownload: () => Promise<void>;
+  downloading: boolean;
 }) {
   const { t } = useTranslation();
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full table-fixed border-collapse text-sm">
-        <thead>
-          <tr className="border-b">
-            <th className="w-1/5 p-2 text-left">{t("skills.submissions.field")}</th>
-            <th className="p-2 text-left">{t("skills.submissions.current")}</th>
-            <th className="p-2 text-left">{t("skills.submissions.proposed")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {METADATA_FIELDS.map((field) => (
-            <tr key={field} className="border-b align-top">
-              <th className="p-2 text-left font-medium">{t(`skills.submissions.fields.${field}`)}</th>
+    <>
+      {!current && <p className="text-sm text-muted-foreground">{t("skills.submissions.noCurrent")}</p>}
+      <div className="overflow-x-auto">
+        <table className="w-full table-fixed border-collapse text-sm">
+          <thead>
+            <tr className="border-b">
+              <th className="w-1/5 p-2 text-left">{t("skills.submissions.field")}</th>
+              <th className="p-2 text-left">{t("skills.submissions.current")}</th>
+              <th className="p-2 text-left">{t("skills.submissions.proposed")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {METADATA_FIELDS.map((field) => (
+              <tr key={field} className="border-b align-top">
+                <th className="p-2 text-left font-medium">{t(`skills.submissions.fields.${field}`)}</th>
+                <td className="p-2">
+                  <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                    {displayValue(current?.[field]) || t("skills.submissions.notSet")}
+                  </pre>
+                </td>
+                <td className="p-2">
+                  <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                    {field === "version" && submission.operation === "update" && !submission.proposal.version
+                      ? t("skills.submissions.nextPatchVersion")
+                      : displayValue(submission.proposal[field]) || t("skills.submissions.notSet")}
+                  </pre>
+                </td>
+              </tr>
+            ))}
+            <tr className="border-b align-top">
+              <th className="p-2 text-left font-medium">{t("skills.submissions.fields.agent_skill")}</th>
+              <td className="p-2 text-muted-foreground">{t("skills.submissions.descriptorUnavailable")}</td>
               <td className="p-2">
                 <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-                  {displayValue(current?.[field]) || t("skills.submissions.notSet")}
-                </pre>
-              </td>
-              <td className="p-2">
-                <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-                  {field === "version" && submission.operation === "update" && !submission.proposal.version
-                    ? t("skills.submissions.nextPatchVersion")
-                    : displayValue(submission.proposal[field]) || t("skills.submissions.notSet")}
+                  {displayValue(submission.proposal.agent_skill) || t("skills.submissions.notSet")}
                 </pre>
               </td>
             </tr>
-          ))}
-          <tr className="border-b align-top">
-            <th className="p-2 text-left font-medium">{t("skills.submissions.fields.agent_skill")}</th>
-            <td className="p-2 text-muted-foreground">{t("skills.submissions.descriptorUnavailable")}</td>
-            <td className="p-2">
-              <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-                {displayValue(submission.proposal.agent_skill) || t("skills.submissions.notSet")}
-              </pre>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+          </tbody>
+        </table>
+      </div>
+      {submission.has_archive && (
+        <Button variant="outline" onClick={onDownload} disabled={downloading}>
+          {t(downloading ? "skills.submissions.downloading" : "skills.submissions.download")}
+        </Button>
+      )}
+    </>
   );
 }
 
 interface SubmissionReviewProps {
+  userRole: string;
+  isViewOnly: boolean;
   id: string;
   accessToken: string;
   queryScope: QueryKey;
   canReview: boolean;
+  canWrite: boolean;
   onClose: () => void;
   onChanged: () => Promise<void>;
 }
 
-function SubmissionReview({ id, accessToken, queryScope, canReview, onClose, onChanged }: SubmissionReviewProps) {
+function SubmissionReview({
+  userRole,
+  isViewOnly,
+  id,
+  accessToken,
+  queryScope,
+  canReview,
+  canWrite,
+  onClose,
+  onChanged,
+}: SubmissionReviewProps) {
   const { t } = useTranslation();
-  const [reason, setReason] = useState("");
+  const { control, getValues } = useZodForm(skillReviewSchema, { defaultValues: { reason: "" } });
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const detail = useQuery({
+  const [editing, setEditing] = useState<SkillSubmission | null>(null);
+  const [withdrawing, setWithdrawing] = useState<SkillSubmission | null>(null);
+  const detailOptions = {
     queryKey: [...queryScope, "submission", id],
     queryFn: () => getSkillSubmission(accessToken, id),
-  });
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  };
+  const detail = useQuery(detailOptions);
   const { submission, current_skill: current } = detail.data ?? {};
   const canDecide = canReview && submission?.status === "pending_review";
+  const actionsDisabled = busy || detail.isFetching || detail.isError;
   const review = async (action: "approve" | "reject") => {
-    if (!canDecide || busy) return;
+    if (!canDecide || !submission || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -160,13 +228,31 @@ function SubmissionReview({ id, accessToken, queryScope, canReview, onClose, onC
         accessToken,
         id,
         action,
-        action === "reject" ? { reason: reason.trim() || null } : undefined,
+        toSkillReviewPayload(skillReviewSchema.parse(getValues()), action, submission.revision),
       );
       onClose();
       await onChanged();
       toast.success(t(action === "approve" ? "skills.submissions.approved" : "skills.submissions.rejected"));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("skills.submissions.actionFailed"));
+      await onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const withdraw = async () => {
+    if (!withdrawing || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await withdrawSkillSubmission(accessToken, withdrawing);
+      setWithdrawing(null);
+      onClose();
+      await onChanged();
+      toast.success(t("skills.submissions.withdrawn"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("skills.submissions.actionFailed"));
+      setWithdrawing(null);
       await onChanged();
     } finally {
       setBusy(false);
@@ -185,92 +271,142 @@ function SubmissionReview({ id, accessToken, queryScope, canReview, onClose, onC
     }
   };
   return (
-    <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[960px]">
-        <DialogHeader>
-          <DialogTitle>{t("skills.submissions.reviewTitle", { name: submission?.skill_name ?? "" })}</DialogTitle>
-        </DialogHeader>
-        {detail.isPending && <p>{t("skills.submissions.loading")}</p>}
-        {detail.isError && (
-          <div role="alert" className="text-destructive">
-            {t("skills.submissions.loadFailed")}
-            <Button variant="link" onClick={() => void detail.refetch()}>
-              {t("skills.submissions.retry")}
-            </Button>
-          </div>
-        )}
-        {submission && (
-          <>
-            <SubmissionSummary submission={submission} />
-            {!current && <p className="text-sm text-muted-foreground">{t("skills.submissions.noCurrent")}</p>}
-            <SubmissionComparison submission={submission} current={current} />
-            {submission.has_archive && submission.proposal.agent_skill && (
-              <Button variant="outline" onClick={download} disabled={downloading}>
-                {t(downloading ? "skills.submissions.downloading" : "skills.submissions.download")}
+    <>
+      <Dialog open={!editing && !withdrawing} onOpenChange={(open) => !open && !busy && onClose()}>
+        <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[960px]">
+          <DialogHeader>
+            <DialogTitle>{t("skills.submissions.reviewTitle", { name: submission?.skill_name ?? "" })}</DialogTitle>
+          </DialogHeader>
+          {detail.isPending && <p>{t("skills.submissions.loading")}</p>}
+          {detail.isError && (
+            <div role="alert" className="text-destructive">
+              {t("skills.submissions.loadFailed")}
+              <Button variant="link" onClick={() => void detail.refetch()}>
+                {t("skills.submissions.retry")}
               </Button>
-            )}
-            {canReview && (
-              <SkillScanPanel
-                id={id}
-                accessToken={accessToken}
-                queryScope={queryScope}
-                pending={submission.status === "pending_review"}
+            </div>
+          )}
+          {submission && (
+            <>
+              <SubmissionSummary submission={submission} scope={{ accessToken, userRole, isViewOnly }} />
+              <SubmissionComparison
+                submission={submission}
+                current={current}
+                onDownload={download}
+                downloading={downloading}
               />
-            )}
-            {canDecide && (
-              <>
-                <label htmlFor="skill-rejection-reason" className="text-sm font-medium">
-                  {t("skills.submissions.reasonLabel")}
-                </label>
-                <Textarea
-                  id="skill-rejection-reason"
-                  value={reason}
-                  maxLength={2000}
-                  onChange={(event) => setReason(event.target.value)}
-                  disabled={busy}
-                />
-                <div className="flex justify-end gap-2">
-                  <Button
-                    variant="destructive"
-                    onClick={() => void review("reject")}
-                    disabled={busy || detail.isFetching || detail.isError}
-                  >
-                    {t("skills.submissions.reject")}
+              {canWrite && submission.can_edit && (
+                <div className="flex gap-2">
+                  <Button variant="outline" disabled={actionsDisabled} onClick={() => setEditing(submission)}>
+                    {t("skills.submissions.edit")}
                   </Button>
-                  <Button onClick={() => void review("approve")} disabled={busy || detail.isFetching || detail.isError}>
-                    {t("skills.submissions.approve")}
+                  <Button variant="destructive" disabled={actionsDisabled} onClick={() => setWithdrawing(submission)}>
+                    {t("skills.submissions.withdraw")}
                   </Button>
                 </div>
-              </>
-            )}
-          </>
-        )}
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
-      </DialogContent>
-    </Dialog>
+              )}
+              {canReview && (
+                <SkillScanPanel
+                  id={id}
+                  accessToken={accessToken}
+                  queryScope={queryScope}
+                  pending={submission.status === "pending_review"}
+                />
+              )}
+              {canDecide && (
+                <>
+                  <label htmlFor="skill-rejection-reason" className="text-sm font-medium">
+                    {t("skills.submissions.reasonLabel")}
+                  </label>
+                  <Controller
+                    control={control}
+                    name="reason"
+                    render={({ field }) => (
+                      <Textarea
+                        id="skill-rejection-reason"
+                        value={field.value}
+                        maxLength={2000}
+                        onChange={(event) => field.onChange(event.target.value)}
+                        disabled={busy}
+                      />
+                    )}
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button variant="destructive" onClick={() => void review("reject")} disabled={actionsDisabled}>
+                      {t("skills.submissions.reject")}
+                    </Button>
+                    <Button onClick={() => void review("approve")} disabled={actionsDisabled}>
+                      {t("skills.submissions.approve")}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+        </DialogContent>
+      </Dialog>
+      {editing && (
+        <AddPluginForm
+          key={`${editing.id}-${editing.revision}`}
+          visible
+          accessToken={accessToken}
+          skill={{ ...editing.proposal, id: editing.id, visibility: "private", security_scan_passed: false }}
+          submission={{
+            value: editing,
+            publishedVersion: current?.version ?? null,
+            onChanged: () => {
+              void onChanged();
+            },
+          }}
+          onClose={() => setEditing(null)}
+          requiresApproval
+        />
+      )}
+      <AlertDialog open={Boolean(withdrawing)} onOpenChange={(open) => !open && !busy && setWithdrawing(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("skills.submissions.withdraw")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("skills.submissions.withdrawNotice")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>{t("skills.addForm.cancel")}</AlertDialogCancel>
+            <Button variant="destructive" disabled={busy} onClick={() => void withdraw()}>
+              {t("skills.submissions.confirmWithdraw")}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
 interface SkillSubmissionsProps {
+  userRole: string;
+  isViewOnly: boolean;
   accessToken: string;
   queryScope: QueryKey;
   canReview: boolean;
+  canWrite: boolean;
   adminView: boolean;
   onChanged: () => Promise<void>;
 }
 
 export default function SkillSubmissions({
+  userRole,
+  isViewOnly,
   accessToken,
   queryScope,
   canReview,
+  canWrite,
   adminView,
   onChanged,
 }: SkillSubmissionsProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { pagination, onPaginationChange } = useUrlTableState(SUBMISSION_TABLE_STATE);
   const { pageIndex, pageSize } = pagination;
@@ -278,6 +414,10 @@ export default function SkillSubmissions({
     queryKey: [...queryScope, "submissions", pageIndex, pageSize],
     queryFn: () => listSkillSubmissions(accessToken, { limit: pageSize, offset: pageIndex * pageSize }),
   });
+  const users = useUserIdentityLookup(
+    submissions.data?.submissions.flatMap((submission) => [submission.submitted_by, submission.reviewed_by]) ?? [],
+    { accessToken, userRole, isViewOnly },
+  );
   const isEmpty = submissions.isSuccess && submissions.data.submissions.length === 0;
   const changePage = (page: number) => {
     setSelectedId(null);
@@ -314,9 +454,9 @@ export default function SkillSubmissions({
                 </span>
               </div>
               <p className="text-sm text-muted-foreground">{submission.proposal.description}</p>
-              <p className="text-xs text-muted-foreground">
-                {t("skills.submissions.submittedBy", { name: submission.submitted_by })} ·{" "}
-                {new Date(submission.created_at).toLocaleString()}
+              <p className="text-xs text-muted-foreground" title={submission.submitted_by}>
+                {t("skills.submissions.submittedBy", { name: userIdentityLabel(submission.submitted_by, users) })} ·{" "}
+                {displayTimestamp(new Date(submission.created_at), locale.language)}
               </p>
               {submission.rejection_reason && (
                 <p className="text-sm text-destructive">
@@ -353,11 +493,14 @@ export default function SkillSubmissions({
       </div>
       {selectedId && (
         <SubmissionReview
+          userRole={userRole}
+          isViewOnly={isViewOnly}
           key={selectedId}
           id={selectedId}
           accessToken={accessToken}
           queryScope={queryScope}
           canReview={canReview}
+          canWrite={canWrite}
           onClose={() => setSelectedId(null)}
           onChanged={onChanged}
         />

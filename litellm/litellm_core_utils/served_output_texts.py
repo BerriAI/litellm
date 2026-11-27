@@ -3,7 +3,7 @@ post-call guardrail rewrote rather than the provider response the proxy assemble
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import Final, Literal
 
@@ -191,13 +191,38 @@ def overlay_served_output_texts(
     }
 
 
+def _without_token_data(holder: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = _as_json_object(holder.get("provider_specific_fields"))
+    dropped: Final = {
+        **holder,
+        **{key: None for key in ("token_ids", "logprobs") if holder.get(key) is not None},
+    }
+    if fields is None or fields.get("token_ids") is None:
+        return dropped
+    return {**dropped, "provider_specific_fields": {**fields, "token_ids": None}}
+
+
+def keeps_original_output(original: object, served: object) -> bool:
+    return original == served or (isinstance(original, str) and isinstance(served, str) and served.startswith(original))
+
+
 def _choice_with_text(choice: object, text: str | None) -> object:
     choice_obj: Final = _as_json_object(choice)
     if choice_obj is None or text is None:
         return choice
     message: Final = _as_json_object(choice_obj.get("message"))
     if message is not None:
-        return choice if message.get("content") == text else {**choice_obj, "message": {**message, "content": text}}
+        if message.get("content") == text:
+            return choice
+        served_message: Final = {**message, "content": text}
+        if keeps_original_output(message.get("content"), text):
+            return {**choice_obj, "message": served_message}
+        return _without_token_data({**choice_obj, "message": _without_token_data(served_message)})
     if isinstance(choice_obj.get("text"), str):
-        return {**choice_obj, "text": text}
+        if choice_obj.get("text") == text:
+            return choice
+        served_choice: Final = {**choice_obj, "text": text}
+        return (
+            served_choice if keeps_original_output(choice_obj.get("text"), text) else _without_token_data(served_choice)
+        )
     return choice

@@ -85,15 +85,8 @@ def happy_path_upsert(monkeypatch):
 
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "premium_user", False)
-    monkeypatch.setattr(
-        team_endpoints,
-        "team_info",
-        AsyncMock(
-            return_value={
-                "team_info": team_row,
-                "team_memberships": [types.SimpleNamespace(user_id="user-1", budget_id="bud-1")],
-            }
-        ),
+    prisma_client.db.litellm_teammembership.find_unique = AsyncMock(
+        return_value=types.SimpleNamespace(user_id="user-1", budget_id="bud-1")
     )
     upsert_mock = AsyncMock()
     monkeypatch.setattr(team_endpoints, "upsert_budget_and_membership", upsert_mock)

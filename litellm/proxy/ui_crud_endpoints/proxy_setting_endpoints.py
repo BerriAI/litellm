@@ -47,12 +47,12 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import CONFIG_PARAMS_TARGET, invalidate_config_param
+from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
-    AccessGroupRepository,
     SSOConfigRepository,
     UISettingsRepository,
 )
@@ -223,6 +223,11 @@ class _SettingsWithSchema(LiteLLMBaseModel):
     field_schema: dict[str, object]
 
 
+class _SettingsWithSchemaPayload(TypedDict):
+    values: ReadOnly[dict[str, object]]
+    field_schema: ReadOnly[dict[str, object]]
+
+
 class BackgroundChatSettings(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -282,7 +287,7 @@ class UISettings(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     usage_default_time_range: Literal["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"] = Field(
-        default="last_7_days",
+        default="month_to_date",
         description="Default date range when opening Usage without an explicit URL range. Calendar ranges use the browser timezone.",
     )
 
@@ -377,6 +382,16 @@ class UISettings(LiteLLMBaseModel):
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
+    disable_aria: bool = Field(
+        default=False,
+        description="Hides Aria for everyone on this deployment.",
+    )
+
+    aria_internal_user_access: Literal["none", "own_usage", "own_and_team_usage"] = Field(
+        default="own_usage",
+        description="Aria access for internal users. Proxy admins and proxy-wide spend viewers are unaffected.",
+    )
+
     moyai_url: str | None = Field(
         default=None,
         description="URL of a connected Moyai deployment. When set, the Moyai entry in the UI navigation opens this deployment instead of the Moyai landing page.",
@@ -412,6 +427,9 @@ class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
 
     source: dict[str, FieldSource]
+    supports_similarity_threshold: bool = Field(
+        default=False, description="Whether the active response cache supports similarity thresholds"
+    )
 
 
 # Allowlist of UI settings that can be stored
@@ -432,6 +450,8 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    "disable_aria",
+    "aria_internal_user_access",
     "moyai_url",
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 }
@@ -472,6 +492,8 @@ def _derived_ui_setting_value(key: str) -> object:
 
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "disable_model_add_for_internal_users",
     "allow_public_health_readiness_details",
@@ -497,12 +519,6 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
 # instances of ``type`` — so tightening this to ``type`` would reject
 # valid inputs.
 _EXTRA_UI_SETTINGS_FIELDS: Final[dict[str, tuple[object, FieldInfo]]] = {}
-
-# Settings OSS knows about as enterprise-gated. If a caller sends one of
-# these keys and no extension package has registered it, the PATCH
-# endpoint returns 403 instead of silently dropping the value, so the
-# client gets a clear signal that the feature requires LiteLLM Enterprise.
-_ENTERPRISE_ONLY_UI_SETTINGS: Final[set[str]] = {"enable_projects_ui"}
 
 # Memoized effective class; invalidated on registration.
 _EFFECTIVE_UI_SETTINGS_CLASS: type[UISettings] | None = None
@@ -850,9 +866,10 @@ def _root_schema(settings_class: type[BaseModel]) -> _RootSchema:
 
 def _model_field_default(settings_class: type[BaseModel], field_name: str) -> object:
     field_info: Final = settings_class.model_fields.get(field_name)
-    if field_info is None or field_info.default is PydanticUndefined:
+    if field_info is None:
         return None
-    return cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+    default: Final = cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+    return None if default is PydanticUndefined else default
 
 
 def _ui_setting_source(
@@ -873,7 +890,7 @@ async def _get_settings_with_schema(
     settings_key: str,
     settings_class: type[BaseModel],
     config: dict,
-) -> dict:
+) -> _SettingsWithSchemaPayload:
     """
     Common utility function to get settings with schema information.
 
@@ -1836,10 +1853,10 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     Cache hit  → return cached dict immediately.
     Cache miss → read from DB, populate cache, return dict.
     """
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client, ui_settings_cache
 
     # 1. Try cache
-    cached: Final = _DECODED_JSON.validate_python(await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY))
+    cached: Final = _DECODED_JSON.validate_python(await ui_settings_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY))
     if cached is not None and isinstance(cached, dict):
         return cached
 
@@ -1859,7 +1876,7 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     # 3. Populate cache with TTL
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
+    await ui_settings_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     return ui_settings
 
@@ -2007,7 +2024,6 @@ async def update_background_chat_settings(
 async def get_ui_settings():
     """
     Get UI-specific configuration flags.
-    All authenticated users can fetch these settings for client-side behavior.
     """
     from litellm.proxy.proxy_server import prisma_client, proxy_config
 
@@ -2030,9 +2046,9 @@ async def get_ui_settings():
     apply_runtime_general_settings_flags(ui_settings)
 
     # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import ui_settings_cache
 
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
+    await ui_settings_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     effective_ui_settings: Final[Mapping[str, object]] = MappingProxyType(
         {
@@ -2070,10 +2086,12 @@ async def get_ui_settings():
             for key in values
         }
     )
+    response_cache: Final = litellm.cache
     return UISettingsResponse(
         values=values,
         field_schema=resolved_settings.field_schema,
         source=source,
+        supports_similarity_threshold=response_cache is not None and response_cache.is_semantic_cache(),
     )
 
 
@@ -2160,20 +2178,6 @@ async def update_ui_settings(
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict: Final = _json_settings(settings.model_dump(exclude_unset=True))
 
-    # Reject enterprise-only settings up front so the caller gets a clear
-    # signal instead of a silent drop.
-    blocked_enterprise_keys = sorted((settings_dict.keys() & _ENTERPRISE_ONLY_UI_SETTINGS) - ALLOWED_UI_SETTINGS_FIELDS)
-    if blocked_enterprise_keys:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": (
-                    f"Setting(s) {blocked_enterprise_keys} are a LiteLLM "
-                    "Enterprise feature and are not available on this build."
-                )
-            },
-        )
-
     # Enforce allowlist and drop anything unexpected
     incoming: Final = {k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
@@ -2205,10 +2209,10 @@ async def update_ui_settings(
     apply_runtime_general_settings_flags(ui_settings)
 
     # Invalidate + set DualCache so subsequent reads see the new values immediately
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import ui_settings_cache
 
     sanitized: Final = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL)
+    await ui_settings_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL)
 
     asyncio.create_task(
         create_config_audit_log(

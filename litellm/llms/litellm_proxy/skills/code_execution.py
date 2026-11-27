@@ -17,10 +17,13 @@ from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Final, Protocol, TypedDict
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import SupportsGet, length_of, require_attributes, require_get
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _ToolParameterSchema(TypedDict, total=False):
@@ -49,10 +52,6 @@ class _AnthropicToolSpec(TypedDict, total=False):
     name: ReadOnly[str]
     description: ReadOnly[str]
     input_schema: ReadOnly[_ToolArgumentSchema]
-
-
-class _CodeExecutionArguments(TypedDict, total=False):
-    code: ReadOnly[str]
 
 
 class _GeneratedFile(TypedDict, total=False):
@@ -115,8 +114,8 @@ class _CodeExecutionOutcome(TypedDict, total=False):
     max_iterations_reached: ReadOnly[bool]
 
 
-def _parse_code_execution_arguments(serialized_arguments: str) -> _CodeExecutionArguments:
-    return json.loads(serialized_arguments)
+def _parse_code_execution_arguments(serialized_arguments: str) -> SupportsGet:
+    return require_get(_DECODED_JSON.validate_python(json.loads(serialized_arguments)))
 
 
 class LiteLLMInternalTools(str, Enum):
@@ -202,7 +201,7 @@ class CodeExecutionHandler:
         tools: list[_OpenAIToolSpec],
         skill_files: dict[str, bytes],
         skill_id: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> _CodeExecutionOutcome:
         """
         Execute an LLM call with automatic code execution handling.
@@ -298,7 +297,7 @@ class CodeExecutionHandler:
                         args = _parse_code_execution_arguments(tool_call.function.arguments)
                         code = args.get("code", "")
 
-                        verbose_logger.debug("CodeExecutionHandler: Executing code (%s chars)", len(code))
+                        verbose_logger.debug("CodeExecutionHandler: Executing code (%s chars)", length_of(code))
 
                         exec_result: _SandboxExecutionResult = executor.execute(
                             code=code,

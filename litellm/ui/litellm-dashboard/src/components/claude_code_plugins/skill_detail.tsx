@@ -1,3 +1,4 @@
+import { displayDate } from "@/i18n/displayDate";
 import React, { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy, Download, Link2 } from "lucide-react";
@@ -20,13 +21,14 @@ import {
 import type { Plugin, SkillHubSkill } from "./types";
 import SkillVersionHistory from "./SkillVersionHistory";
 import SkillInstallDialog from "./SkillInstallDialog";
+import { userIdentityLabel, type UserIdentityLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 type SkillDetailData = Pick<
   SkillHubSkill,
   "id" | "name" | "source" | "version" | "description" | "domain" | "namespace" | "keywords" | "updated_at"
 > &
   Pick<Plugin, "enabled"> &
-  Partial<Pick<Plugin, "created_at" | "category" | "author">> & {
+  Partial<Pick<Plugin, "created_at" | "created_by" | "approved_by" | "category" | "author" | "homepage">> & {
     portable?: boolean;
     downloadAvailable?: boolean;
   };
@@ -34,17 +36,9 @@ type SkillDetailData = Pick<
 export const legacySkillDetail = (skill: Plugin): SkillDetailData => skill;
 
 export const skillHubDetail = (skill: SkillHubSkill): SkillDetailData => ({
-  id: skill.id,
-  name: skill.name,
-  source: skill.source,
-  version: skill.version,
-  description: skill.description,
-  domain: skill.domain,
-  namespace: skill.namespace,
-  keywords: skill.keywords,
-  updated_at: skill.updated_at,
+  ...skill,
   enabled: skill.visibility === "public",
-  portable: true,
+  portable: Boolean(skill.content_url),
   downloadAvailable: Boolean(skill.download_url),
 });
 
@@ -79,8 +73,7 @@ const SkillSource: React.FC<
       setDownloading(false);
     }
   };
-  const link = getSourceLink(source);
-  const href = link && source.source === "git-subdir" && source.path ? `${link}/tree/main/${source.path}` : link;
+  const href = getSourceLink(source);
   if (!archivePath && !href && !source.url) return null;
   return (
     <div className="mb-6">
@@ -117,6 +110,7 @@ const SkillSource: React.FC<
 };
 
 interface SkillDetailProps {
+  users?: UserIdentityLookup;
   skill: SkillDetailData;
   onBack: () => void;
   isAdmin?: boolean;
@@ -127,6 +121,7 @@ interface SkillDetailProps {
 }
 
 const SkillDetail: React.FC<SkillDetailProps> = ({
+  users = {},
   skill,
   onBack,
   accessToken,
@@ -134,7 +129,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
   onRestored,
   isAdmin = false,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
@@ -161,10 +156,11 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
 
   const installCommand = formatInstallCommand(skill);
 
-  const settingsSnippet = buildMarketplaceSettingsSnippet(
-    typeof window !== "undefined" ? window.location.origin : "<proxy-url>",
-    marketplaceRequiresKey,
-  );
+  const proxyBaseUrl = getProxyBaseUrl().replace(/\/+$/, "");
+  const marketplaceCommand = `/plugin marketplace add ${proxyBaseUrl}/claude-code/marketplace.json`;
+  const settingsSnippet = buildMarketplaceSettingsSnippet(proxyBaseUrl, marketplaceRequiresKey);
+  const creator = skill.created_by ? users[skill.created_by] : undefined;
+  const author = skill.author ?? (creator ? { name: creator.user_alias, email: creator.user_email } : undefined);
 
   const detailRows = [
     ...(skill.category
@@ -177,14 +173,22 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
     ...(skill.version
       ? [{ property: t("claudeCodePlugins.skillDetail.properties.version"), value: skill.version }]
       : []),
-    ...(skill.author?.name
-      ? [{ property: t("claudeCodePlugins.skillDetail.properties.author"), value: skill.author.name }]
+    ...(author?.name ? [{ property: t("claudeCodePlugins.skillDetail.properties.author"), value: author.name }] : []),
+    ...(author?.email
+      ? [{ property: t("claudeCodePlugins.skillDetail.properties.authorEmail"), value: author.email }]
       : []),
+    ...(accessToken && skill.created_by
+      ? [{ property: t("skills.table.columns.createdBy"), value: userIdentityLabel(skill.created_by, users) }]
+      : []),
+    ...(accessToken && skill.approved_by
+      ? [{ property: t("skills.table.columns.approvedBy"), value: userIdentityLabel(skill.approved_by, users) }]
+      : []),
+    ...(skill.homepage ? [{ property: t("skills.submissions.fields.homepage"), value: skill.homepage }] : []),
     ...(skill.created_at
       ? [
           {
             property: t("claudeCodePlugins.skillDetail.properties.added"),
-            value: new Date(skill.created_at).toLocaleDateString(),
+            value: displayDate(new Date(skill.created_at), locale.language),
           },
         ]
       : []),
@@ -451,13 +455,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
                     {t("claudeCodePlugins.skillDetail.runInClaudeCode")}
                   </span>
                   <button
-                    onClick={() => {
-                      const origin = typeof window !== "undefined" ? window.location.origin : "";
-                      copyToClipboard(
-                        `/plugin marketplace add ${origin}/claude-code/marketplace.json`,
-                        "marketplace-cmd",
-                      );
-                    }}
+                    onClick={() => copyToClipboard(marketplaceCommand, "marketplace-cmd")}
                     className={cn(
                       "flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 text-xs",
                       copiedKey === "marketplace-cmd" ? "text-success" : "text-info",
@@ -470,7 +468,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
                   </button>
                 </div>
                 <pre className="m-0 bg-card px-4 py-3.5 font-mono text-[13px] text-foreground">
-                  {`/plugin marketplace add ${typeof window !== "undefined" ? window.location.origin : "<proxy-url>"}/claude-code/marketplace.json`}
+                  {marketplaceCommand}
                 </pre>
               </div>
 

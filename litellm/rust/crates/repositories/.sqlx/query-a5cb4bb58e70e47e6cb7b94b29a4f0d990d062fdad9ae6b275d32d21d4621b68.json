@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT model_id,\n       model_name,\n       litellm_params AS \"litellm_params: RawJson\",\n       model_info AS \"model_info: RawJson\",\n       blocked,\n       created_at,\n       created_by,\n       updated_at,\n       updated_by\nFROM \"LiteLLM_ProxyModelTable\"\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProxyModelTable\"",
+            "name": "model_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "model_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProxyModelTable\"",
+            "name": "model_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "litellm_params: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProxyModelTable\"",
+            "name": "litellm_params"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "model_info: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProxyModelTable\"",
+            "name": "model_info"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "blocked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProxyModelTable\"",
+            "name": "blocked"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProxyModelTable\"",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "created_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProxyModelTable\"",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProxyModelTable\"",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProxyModelTable\"",
+            "name": "updated_by"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a5cb4bb58e70e47e6cb7b94b29a4f0d990d062fdad9ae6b275d32d21d4621b68"
+}

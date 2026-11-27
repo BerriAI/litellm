@@ -43,7 +43,7 @@ import pytest
 from botocore.session import get_session
 from pydantic import TypeAdapter
 
-from litellm.integrations.s3_v2 import S3Logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.sqs import SQSLogger
 from litellm.llms.aws_polly.text_to_speech.transformation import AWSPollyTextToSpeechConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -55,7 +55,11 @@ from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 from litellm.llms.bedrock.model_listing import BedrockModelLister
 from litellm.llms.bedrock.passthrough.transformation import BedrockAgentRuntimeAWS
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
-from litellm.llms.bedrock.web_identity_session_policy import WebIdentitySessionPolicy, _SessionPolicyStatement
+from litellm.llms.bedrock.web_identity_session_policy import (
+    S3_LOGGING_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+    _SessionPolicyStatement,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
 from litellm.llms.s3_vectors.vector_stores.transformation import S3VectorsVectorStoreConfig
@@ -433,9 +437,12 @@ class TestSessionPolicyGrantsEveryBedrockRoute:
         assert len(_captured_policy_document()) <= _STS_SESSION_POLICY_PLAINTEXT_LIMIT
 
 
-def _s3_logger() -> S3Logger:
-    with patch("asyncio.create_task"):
-        return S3Logger(s3_bucket_name="litellm-logs", s3_region_name="us-east-1")
+class _S3LoggingSession(BaseAWSLLM):
+    _web_identity_session_policy = S3_LOGGING_SESSION_POLICY
+
+
+def _s3_logger() -> _S3LoggingSession:
+    return _S3LoggingSession()
 
 
 def _sqs_logger() -> SQSLogger:
@@ -454,7 +461,9 @@ def _bedrock_knowledge_base_ingestion() -> BedrockRAGIngestion:
 
 
 def _bedrock_model_lister() -> BedrockModelLister:
-    return BedrockModelLister(deployment={"aws_region_name": "us-east-1"}, client=HTTPHandler())
+    return BedrockModelLister(
+        deployment={"aws_region_name": "us-east-1"}, client=HTTPHandler(), endpoint_failures=InMemoryCache()
+    )
 
 
 def _s3_vectors_ingestion() -> S3VectorsRAGIngestion:
@@ -840,8 +849,8 @@ class TestEachCallerGetsItsOwnCeiling:
 
 _OPENSEARCH_ENDPOINT_ACTIONS: Final = MappingProxyType(
     {
-        "https://search-docs-abc123.us-east-1.es.amazonaws.com": "es:ESHttpPost",
-        "https://abc123.us-east-1.aoss.amazonaws.com": "aoss:APIAccessAll",
+        "https://search-docs-abc123.us-east-1.es.amazonaws.com": frozenset({"es:ESHttpGet", "es:ESHttpPost"}),
+        "https://abc123.us-east-1.aoss.amazonaws.com": frozenset({"aoss:APIAccessAll"}),
     }
 )
 
@@ -868,13 +877,15 @@ def _opensearch_policy(api_base: str) -> WebIdentitySessionPolicy:
 
 
 class TestOpenSearchSearchGetsItsOwnCeiling:
-    @pytest.mark.parametrize(("api_base", "action"), sorted(_OPENSEARCH_ENDPOINT_ACTIONS.items()))
-    def test_search_action_is_granted_by_the_opensearch_ceiling(self, api_base: str, action: str):
-        assert action in _granted_actions(_opensearch_policy(api_base))
+    @pytest.mark.parametrize(("api_base", "actions"), sorted(_OPENSEARCH_ENDPOINT_ACTIONS.items()))
+    def test_search_and_mapping_read_actions_are_granted_by_the_opensearch_ceiling(
+        self, api_base: str, actions: frozenset[str]
+    ):
+        assert actions <= _granted_actions(_opensearch_policy(api_base))
 
     @pytest.mark.parametrize("api_base", sorted(_OPENSEARCH_ENDPOINT_ACTIONS))
     def test_opensearch_ceiling_grants_only_opensearch_services(self, api_base: str):
-        allowed: Final = frozenset(_service(action) for action in _OPENSEARCH_ENDPOINT_ACTIONS.values())
+        allowed: Final = frozenset(map(_service, frozenset[str]().union(*_OPENSEARCH_ENDPOINT_ACTIONS.values())))
         extra: Final = sorted(a for a in _granted_actions(_opensearch_policy(api_base)) if _service(a) not in allowed)
         assert not extra, f"the OpenSearch session policy also grants {extra}"
 

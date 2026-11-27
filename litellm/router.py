@@ -50,13 +50,14 @@ from litellm.types.utils import GenericBudgetConfigType
 
 if TYPE_CHECKING:
     from litellm.router_rust.core import RustCore
+    from litellm.router_utils.dynamic_queue_router import DynamicQueueSettings
 
 
 # ``Router(...)``'s parameters, their defaults and its docstring: ``router_arguments`` binds a call
 # against them and ``Router.__init__`` reports them. The body is never run.
 def _router_init(
     self: object,
-    model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
+    model_list: list[DeploymentTypedDict] | Sequence[Mapping[str, object]] | None = None,
     ## ASSISTANTS API ##
     assistants_config: AssistantsTypedDict | None = None,
     ## SEARCH API ##
@@ -66,29 +67,30 @@ def _router_init(
     ## CACHING ##
     redis_url: str | None = None,
     redis_host: str | None = None,
-    redis_port: int | None = None,
+    redis_port: int | str | None = None,
     redis_password: str | None = None,
     redis_db: int | None = None,
     cache_responses: bool | None = False,
-    cache_kwargs: dict = {},  # additional kwargs to pass to RedisCache (see caching.py)
-    caching_groups: list[tuple] | None = None,  # if you want to cache across model groups
+    cache_kwargs: Mapping[str, object] = {},  # additional kwargs to pass to RedisCache (see caching.py)
+    caching_groups: Sequence[tuple[object, ...]] | None = None,  # if you want to cache across model groups
     client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
     ## SCHEDULER ##
     polling_interval: float | None = None,
     default_priority: int | None = None,
+    dynamic_queue: "DynamicQueueSettings | Mapping[str, object] | None" = None,
     ## RELIABILITY ##
     num_retries: int | None = None,
     max_fallbacks: int | None = None,  # max fallbacks to try before exiting the call. Defaults to 5.
     timeout: float | None = None,
     stream_timeout: float | None = None,
-    default_litellm_params: dict | None = None,  # default params for Router.chat.completion.create
+    default_litellm_params: Mapping[str, object] | None = None,  # default params for Router.chat.completion.create
     default_max_parallel_requests: int | None = None,
     set_verbose: bool = False,
     debug_level: Literal["DEBUG", "INFO"] = "INFO",
     default_fallbacks: list[str] | None = None,  # generic fallbacks, works across all deployments
-    fallbacks: list = [],
-    context_window_fallbacks: list = [],
-    content_policy_fallbacks: list = [],
+    fallbacks: Sequence[object] = [],
+    context_window_fallbacks: Sequence[object] = [],
+    content_policy_fallbacks: Sequence[object] = [],
     model_group_alias: dict[str, str | RouterModelGroupAliasItem] | None = {},
     enable_pre_call_checks: bool = False,
     enable_tag_filtering: bool = False,
@@ -96,7 +98,7 @@ def _router_init(
     tag_routing_prefix: str = "",
     plugins: list[RoutingPlugin] | None = None,
     retry_after: int = 0,  # min time to wait before retrying a failed request
-    retry_policy: RetryPolicy | dict | None = None,  # set custom retries for different exceptions
+    retry_policy: RetryPolicy | Mapping[str, object] | None = None,  # set custom retries for different exceptions
     model_group_retry_policy: dict[str, RetryPolicy] = {},  # set custom retry policies based on model group
     allowed_fails: int | None = None,  # Number of times a deployment can failbefore being added to cooldown
     allowed_fails_policy: AllowedFailsPolicy | None = None,  # set custom allowed fails policy
@@ -105,8 +107,8 @@ def _router_init(
     fallback_on_unsupported_params: bool = True,
     routing_strategy: RoutingStrategyName = "simple-shuffle",
     optional_pre_call_checks: OptionalPreCallChecks | None = None,
-    routing_strategy_args: dict = {},  # just for latency-based
-    routing_groups: list[RoutingGroup | dict] | None = None,
+    routing_strategy_args: Mapping[str, object] = {},  # just for latency-based
+    routing_groups: Sequence[RoutingGroup | Mapping[str, object]] | None = None,
     provider_budget_config: GenericBudgetConfigType | None = None,
     alerting_config: AlertingConfig | None = None,
     router_general_settings: RouterGeneralSettings | None = RouterGeneralSettings(),
@@ -124,7 +126,7 @@ def _router_init(
     fallback_rate_limit_check: FallbackRateLimitCheck | None = None,
     auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     session_affinity_repin_on_failover: bool = False,
-    _host: PythonHost = python_host,
+    enable_cross_model_group_collision_check: bool | None = None,
 ) -> None:
     """
     Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -133,7 +135,7 @@ def _router_init(
         model_list (Optional[list]): List of models to be used. Defaults to None.
         redis_url (Optional[str]): URL of the Redis server. Defaults to None.
         redis_host (Optional[str]): Hostname of the Redis server. Defaults to None.
-        redis_port (Optional[int]): Port of the Redis server. Defaults to None.
+        redis_port (int | str | None): Port of the Redis server. Defaults to None.
         redis_password (Optional[str]): Password of the Redis server. Defaults to None.
         cache_responses (Optional[bool]): Flag to enable caching of responses. Defaults to False.
         cache_kwargs (dict): Additional kwargs to pass to RedisCache. Defaults to {}.
@@ -141,6 +143,7 @@ def _router_init(
         client_ttl (int): Time-to-live for cached clients in seconds. Defaults to 3600.
         polling_interval: (Optional[float]): frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms.
         default_priority: (Optional[int]): the priority given to every chat or text completion request that sets no 'priority' of its own; '.acompletion()' and '.atext_completion()' queue it through the scheduler. Default is None.
+        dynamic_queue: (Optional[dict]): opt-in per-deployment queuing for async non-streaming chat completions, shared across workers through the router's Redis. A provider 429 or 529 congests the deployment the router picked, and later requests picked onto it wait for its turn in priority order. Keys: 'enabled' (False), 'queue_timeout' (seconds a request may wait in total across its attempts, default 30), 'max_waiting' (waiters per deployment, a whole number from 1 to 64, required when enabled). Enabled, it needs 'default_priority'; the scheduler admits every request as before, and a request it admits then waits in the queue only where an attempt goes out on a congested deployment. A request that runs out of queue time gets the usual timeout error and a full queue answers 503 with the code 'queue_full'; when the queue's Redis is unavailable, requests are routed as they would be without the queue. Default is None.
         num_retries (Optional[int]): Number of retries for failed requests. Defaults to 2.
         timeout (Optional[float]): Timeout for requests. Defaults to None.
         default_litellm_params (dict): Default parameters for Router.chat.completion.create. Defaults to {}.
@@ -165,6 +168,7 @@ def _router_init(
             whose deployment is in cooldown or removed. Async routes only. Defaults to False. Applied at startup.
         ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
         enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+        enable_cross_model_group_collision_check (Optional[bool]): When True, a request naming a raw `litellm_params.model` string (with or without `specific_deployment`) whose eligible deployments belong to more than one model group is refused with a 400 instead of load-balanced across those groups. When None, read from the `LITELLM_ENABLE_CROSS_MODEL_GROUP_COLLISION_CHECK` environment variable. Defaults to off.
         enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
         fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
@@ -258,7 +262,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, LiteLLMFineTuningJob, ModelResponse
     from litellm.types.vector_stores import VectorStoreCreateResponse
 
-    _P: Final = ParamSpec("_P")
+    _P = ParamSpec("_P")
 
     def _takes_parameters_of(source: Callable[_P, None]) -> Callable[[Callable[..., None]], Callable[_P, None]]: ...
 
@@ -320,6 +324,7 @@ if TYPE_CHECKING:
         afile_delete: Callable[..., Awaitable[FileDeleted]]
         avector_store_create: Callable[..., Awaitable[VectorStoreCreateResponse]]
         allm_passthrough_route: Callable[..., Awaitable[httpx.Response | AsyncGenerator[bytes, bytes]]]
+        schedule_acompletion: Callable[..., Awaitable[object]]
 
         def __getattr__(self, name: str) -> Any: ...  # the endpoints served by name
 
@@ -484,9 +489,7 @@ else:
             core: Final = self.__dict__.get("_core")
             return sorted({*super().__dir__(), *(dir(core) if core is not None else ())})
 
-    Router.__init__.__signature__ = _CORE_SIGNATURE.replace(  # pyright: ignore[reportFunctionMemberAccess]  # inspect reads it
-        parameters=[parameter for parameter in _CORE_SIGNATURE.parameters.values() if parameter.name != "_host"]
-    )
+    Router.__init__.__signature__ = _CORE_SIGNATURE  # pyright: ignore[reportFunctionMemberAccess]  # inspect reads it
     Router.__init__.__doc__ = _router_init.__doc__
 
 

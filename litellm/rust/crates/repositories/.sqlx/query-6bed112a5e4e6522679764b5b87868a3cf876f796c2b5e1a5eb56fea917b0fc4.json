@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_TeamTable\" (\n    team_id,\n    organization_id,\n    admins,\n    members,\n    members_with_roles,\n    models,\n    blocked,\n    allow_team_guardrail_config,\n    model_spend,\n    router_settings,\n    max_budget,\n    budget_duration,\n    budget_reset_at,\n    tpm_limit,\n    rpm_limit,\n    team_member_permissions,\n    access_group_ids,\n    created_at,\n    updated_at\n)\nVALUES (\n    $1,\n    $2,\n    '{}',\n    '{}',\n    '[]',\n    '{}',\n    false,\n    false,\n    '{}',\n    '{}',\n    $3,\n    $4,\n    $5,\n    $6,\n    $7,\n    COALESCE($8::text[], '{}'),\n    COALESCE($9::text[], '{}'),\n    NOW() AT TIME ZONE 'UTC',\n    NOW() AT TIME ZONE 'UTC'\n)\nON CONFLICT DO NOTHING\nRETURNING team_id\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "team_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8",
+        "Text",
+        "Timestamp",
+        "Int8",
+        "Int8",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6bed112a5e4e6522679764b5b87868a3cf876f796c2b5e1a5eb56fea917b0fc4"
+}

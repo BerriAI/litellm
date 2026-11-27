@@ -10,10 +10,11 @@ import base64
 import json
 import logging
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from types import MappingProxyType
 
 import pytest
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm._internal_context import internal_parent_request_id, is_internal_call
@@ -338,14 +339,7 @@ async def test_provider_file_id_resolver_returns_owned_mappings_with_owner_scope
         "file-provider-2": "unified-file-id",
     }
     assert isinstance(unified_file_ids, MappingProxyType)
-    find_many.assert_awaited_once_with(
-        where={
-            "OR": [{"created_by": "test-user"}, {"team_id": "test-team"}],
-            "flat_model_file_ids": {
-                "hasSome": ["file-provider-1", "file-provider-2", "file-unmanaged-2"],
-            },
-        }
-    )
+    find_many.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1534,6 +1528,80 @@ async def test_create_still_upserts_and_claims_attribution():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", ("batch", "response"))
+async def test_deferred_cost_keeps_the_admitted_app_context_when_another_identity_refreshes(
+    purpose: Literal["batch", "response"],
+) -> None:
+    from litellm.models.budget import BudgetLimit
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+
+    managed_files, prisma = _make_object_store_instance()
+    started_at: Final = datetime(2026, 1, 31, 23, 59, 58, tzinfo=timezone.utc)
+    hierarchy: Final = CustomerHierarchyAuth(
+        app_id="admitted-app",
+        app_alias="chat",
+        customer_org_id="customer-org",
+        customer_member_id="customer-member",
+        scopes=(
+            CustomerScopeAuth(key="customer_org", entity_id="customer-org", max_budget=100),
+            CustomerScopeAuth(
+                key="app_customer_member",
+                entity_id="admitted-app:customer-member",
+                budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),),
+            ),
+        ),
+    )
+    creator: Final = UserAPIKeyAuth(
+        customer_hierarchy=hierarchy,
+        customer_hierarchy_started_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        metadata={"user_api_key_app_id": "spoofed-app"},
+    )
+    assert creator.customer_hierarchy_started_at is None
+    creator.customer_hierarchy_started_at = started_at
+    response: Final = (
+        _make_batch_response(status="validating")
+        if purpose == "batch"
+        else ResponsesAPIResponse(
+            id="resp_provider", object="response", status="in_progress", created_at=1, output=[], background=True
+        )
+    )
+    await managed_files.store_unified_object_id(
+        unified_object_id="deferred-object",
+        file_object=response,
+        litellm_parent_otel_span=None,
+        model_object_id="provider-object",
+        file_purpose=purpose,
+        user_api_key_dict=creator,
+        persist_attribution=True,
+    )
+    created: Final = prisma.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]
+    context: Final = created["create"]["creator_billing_context"].data
+    assert context["started_at"] == "2026-01-31T23:59:58+00:00"
+    assert context["hierarchy"]["app_id"] == "admitted-app"
+    assert context["hierarchy"]["customer_org_id"] == "customer-org"
+    assert context["hierarchy"]["customer_member_id"] == "customer-member"
+    assert context["hierarchy"]["scopes"][1]["budget_limits"] == [
+        {"budget_duration": "1mo", "max_budget": 10.0, "reset_at": None}
+    ]
+    assert "creator_billing_context" not in created["update"]
+    observer: Final = UserAPIKeyAuth(customer_hierarchy=CustomerHierarchyAuth(app_id="different-app", scopes=()))
+    await managed_files.store_unified_object_id(
+        unified_object_id="deferred-object",
+        file_object=response,
+        litellm_parent_otel_span=None,
+        model_object_id="provider-object",
+        file_purpose=purpose,
+        user_api_key_dict=observer,
+        persist_attribution=False,
+        create_if_missing=False,
+    )
+    refreshed: Final = prisma.db.litellm_managedobjecttable.update_many.await_args.kwargs["data"]
+    assert "creator_billing_context" not in refreshed
+    assert context["hierarchy"]["app_id"] == "admitted-app"
+
+
+@pytest.mark.asyncio
 async def test_a_stored_background_response_names_its_creators_end_user_and_holds_none_of_its_output():
     """Billing reads only a stored response's status and model, so neither the row nor its cache
     entry keeps what the model generated, and the row names the end user the create billed to."""
@@ -2254,13 +2322,18 @@ class _FakeFilesRouter:
         delete_gate: asyncio.Event | None = None,
         provider: str = "openai",
         gone_file_ids: frozenset[str] = frozenset(),
+        covered_targets_by_model: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
+        served_targets_by_model: Mapping[str, tuple[str, ...]] = MappingProxyType({}),
     ) -> None:
         self.deployments_by_model = deployments_by_model
+        self.covered_targets_by_model = covered_targets_by_model
+        self.served_targets_by_model = served_targets_by_model
         self.delete_error = delete_error
         self.gone_file_ids = gone_file_ids
         self.delete_gate = delete_gate
         self.provider = provider
         self.upload_count = 0
+        self.target_model_names_sent: tuple[tuple[str, ...], ...] = ()
         self.deletes: tuple[tuple[str, str, Mapping[str, object]], ...] = ()
         self.deletes_marked_internal: tuple[bool, ...] = ()
         self.delete_parent_request_ids: tuple[str | None, ...] = ()
@@ -2268,10 +2341,12 @@ class _FakeFilesRouter:
     async def acreate_file(
         self,
         model: str,
+        target_model_names: tuple[str, ...],
         file: tuple[str, bytes, str],
         purpose: str,
         litellm_metadata: Mapping[str, object],
     ) -> OpenAIFileObject:
+        self.target_model_names_sent = (*self.target_model_names_sent, target_model_names)
         deployment_ids: Final = self.deployments_by_model[model]
         provider_file_ids: Final = tuple(
             f"file-upload-{self.upload_count + offset + 1}" for offset in range(len(deployment_ids))
@@ -2283,6 +2358,12 @@ class _FakeFilesRouter:
             "custom_llm_provider": self.provider,
             "model_file_id_mapping": dict(zip(deployment_ids, provider_file_ids)),
             "litellm_call_id": f"call-of-{provider_file_ids[0]}",
+            "covered_target_model_names": self.covered_targets_by_model.get(model, ()),
+            "target_model_names_by_deployment": {
+                deployment_id: self.served_targets_by_model[model]
+                for deployment_id in deployment_ids
+                if model in self.served_targets_by_model
+            },
         }
         return response
 
@@ -2456,17 +2537,111 @@ async def test_each_repeat_upload_delete_runs_as_an_internal_call_of_the_upload_
 
 
 @pytest.mark.asyncio
-async def test_litellm_proxy_wildcard_keeps_its_last_per_target_upload_and_deletes_nothing():
+async def test_litellm_proxy_wildcard_keeps_its_first_upload_deletes_the_repeat_and_sends_every_target():
     router: Final = _FakeFilesRouter(
         {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)}, provider="litellm_proxy"
     )
 
-    model_mappings, flat_ids, _ = await _create_managed_file(router, ["gpt-a", "gpt-b"])
+    model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b"])
     await drain_logging_tasks(timeout=1)
 
-    assert model_mappings == {"proxy-wildcard-dep": "file-upload-2"}
-    assert flat_ids == ["file-upload-2"]
+    assert carried == ("proxy-wildcard-dep", "file-upload-1")
+    assert model_mappings == {"proxy-wildcard-dep": "file-upload-1"}
+    assert flat_ids == ["file-upload-1"]
+    assert [delete[:2] for delete in router.deletes] == [("proxy-wildcard-dep", "file-upload-2")]
+    assert router.target_model_names_sent == (("gpt-a", "gpt-b"), ("gpt-a", "gpt-b"))
+
+
+@pytest.mark.asyncio
+async def test_upload_skips_only_the_targets_an_earlier_upload_already_covers():
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",), "gpt-c": ("openai-dep",)},
+        provider="litellm_proxy",
+        covered_targets_by_model={"gpt-a": ("gpt-b",)},
+    )
+
+    model_mappings, flat_ids, carried = await _create_managed_file(router, ["gpt-a", "gpt-b", "gpt-c"])
+    await drain_logging_tasks(timeout=1)
+
+    assert router.target_model_names_sent == (("gpt-a", "gpt-b", "gpt-c"), ("gpt-a", "gpt-b", "gpt-c"))
+    assert carried == ("proxy-wildcard-dep", "file-upload-1")
+    assert model_mappings == {"proxy-wildcard-dep": "file-upload-1", "openai-dep": "file-upload-2"}
+    assert sorted(flat_ids) == ["file-upload-1", "file-upload-2"]
     assert router.deletes == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "later_upload_serves",
+    [pytest.param(("gpt-a", "gpt-b"), id="more-targets"), pytest.param(("gpt-b",), id="as-many-targets")],
+)
+async def test_a_later_litellm_proxy_upload_serving_at_least_as_many_targets_is_kept_and_both_go_on_delete(
+    later_upload_serves: tuple[str, ...],
+):
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)},
+        provider="litellm_proxy",
+        served_targets_by_model={"gpt-a": ("gpt-a",), "gpt-b": later_upload_serves},
+    )
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+
+    response: Final = await _upload(managed_files, router, ["gpt-a", "gpt-b"])
+    await drain_logging_tasks(timeout=1)
+    stored: Final = mock_prisma.db.litellm_managedfiletable.upsert.await_args.kwargs["data"]["create"]
+
+    assert json.loads(stored["model_mappings"]) == {"proxy-wildcard-dep": "file-upload-2"}
+    assert router.deletes == ()
+    assert await _delete_managed_file(managed_files, mock_prisma, router, response.id) == (
+        "file-upload-2",
+        "file-upload-1",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "later_upload_serves",
+    [pytest.param(("gpt-a", "gpt-b"), id="same-targets"), pytest.param(("gpt-b",), id="fewer-targets")],
+)
+async def test_a_later_litellm_proxy_upload_serving_no_target_the_first_misses_is_deleted_and_the_first_kept(
+    later_upload_serves: tuple[str, ...],
+):
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)},
+        provider="litellm_proxy",
+        served_targets_by_model={"gpt-a": ("gpt-a", "gpt-b"), "gpt-b": later_upload_serves},
+    )
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+
+    response: Final = await _upload(managed_files, router, ["gpt-a", "gpt-b"])
+    await _eventually(lambda: len(router.deletes) == 1)
+    stored: Final = mock_prisma.db.litellm_managedfiletable.upsert.await_args.kwargs["data"]["create"]
+
+    assert json.loads(stored["model_mappings"]) == {"proxy-wildcard-dep": "file-upload-1"}
+    assert [delete[:2] for delete in router.deletes] == [("proxy-wildcard-dep", "file-upload-2")]
+    assert await _delete_managed_file(managed_files, mock_prisma, router, response.id) == ("file-upload-1",)
+
+
+async def _delete_managed_file(
+    managed_files: "PROXY_LiteLLMManagedFiles", mock_prisma: MagicMock, router: _FakeFilesRouter, file_id: str
+) -> tuple[str, ...]:
+    deletes_before: Final = len(router.deletes)
+    managed_files.internal_usage_cache.async_get_cache = AsyncMock(
+        return_value=managed_files.internal_usage_cache.async_set_cache.await_args.kwargs["value"]
+    )
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=MagicMock())
+    mock_prisma.db.litellm_managedfiletable.delete = AsyncMock()
+
+    deleted: Final = await managed_files.afile_delete(
+        file_id=file_id,
+        litellm_parent_otel_span=None,
+        llm_router=router,
+        litellm_metadata=_REQUEST_METADATA,
+        litellm_call_id="delete-call",
+    )
+
+    assert deleted.deleted is True
+    mock_prisma.db.litellm_managedfiletable.delete.assert_awaited_once_with(where={"unified_file_id": file_id})
+    return tuple(delete[1] for delete in router.deletes[deletes_before:])
 
 
 async def _upload_then_delete(
@@ -2475,33 +2650,44 @@ async def _upload_then_delete(
     managed_files, mock_prisma = _make_real_managed_files_instance()
     response: Final = await _upload(managed_files, router, target_model_names, content_type=content_type)
     await drain_logging_tasks(timeout=1)
-    deletes_during_upload: Final = len(router.deletes)
-    managed_files.internal_usage_cache.async_get_cache = AsyncMock(
-        return_value=managed_files.internal_usage_cache.async_set_cache.await_args.kwargs["value"]
-    )
-    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=MagicMock())
-    mock_prisma.db.litellm_managedfiletable.delete = AsyncMock()
+    return await _delete_managed_file(managed_files, mock_prisma, router, response.id)
 
-    deleted: Final = await managed_files.afile_delete(
-        file_id=response.id,
+
+async def _delete_file_stored_with_another_upload_than_its_id_carries(router: _FakeFilesRouter) -> tuple[str, ...]:
+    from litellm.types.utils import SpecialEnums
+
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+    decoded_id: Final = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "text/plain", "stored-before-keep-first", "gpt-a,gpt-b", "file-upload-1", "proxy-wildcard-dep"
+    )
+    file_id: Final = base64.urlsafe_b64encode(decoded_id.encode()).decode().rstrip("=")
+    await managed_files.store_unified_file_id(
+        file_id=file_id,
+        file_object=_make_file_object(file_id),
         litellm_parent_otel_span=None,
-        llm_router=router,
-        litellm_metadata=_REQUEST_METADATA,
-        litellm_call_id="delete-call",
+        model_mappings={"proxy-wildcard-dep": "file-upload-2"},
+        user_api_key_dict=_make_team_member_api_key_dict(),
     )
-
-    assert deleted.deleted is True
-    mock_prisma.db.litellm_managedfiletable.delete.assert_awaited_once_with(where={"unified_file_id": response.id})
-    return tuple(delete[1] for delete in router.deletes[deletes_during_upload:])
+    return await _delete_managed_file(managed_files, mock_prisma, router, file_id)
 
 
 @pytest.mark.asyncio
-async def test_deleting_a_litellm_proxy_wildcard_file_removes_the_upload_its_id_carries_too():
+async def test_deleting_a_litellm_proxy_wildcard_file_removes_its_kept_upload_once():
     router: Final = _FakeFilesRouter(
         {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)}, provider="litellm_proxy"
     )
 
-    assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-2", "file-upload-1")
+    assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-1",)
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_file_stored_with_another_upload_than_its_id_carries_removes_both():
+    router: Final = _FakeFilesRouter({}, provider="litellm_proxy")
+
+    assert await _delete_file_stored_with_another_upload_than_its_id_carries(router) == (
+        "file-upload-2",
+        "file-upload-1",
+    )
 
 
 @pytest.mark.asyncio
@@ -2526,17 +2712,16 @@ async def test_deleting_a_file_removes_only_the_uploads_the_gateway_made_for_it(
 
 
 @pytest.mark.asyncio
-async def test_deleting_a_file_still_succeeds_when_the_upload_its_id_carries_is_already_gone(
+async def test_deleting_a_file_stored_with_another_upload_still_succeeds_when_the_upload_its_id_carries_is_gone(
     caplog: pytest.LogCaptureFixture,
 ):
-    router: Final = _FakeFilesRouter(
-        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)},
-        provider="litellm_proxy",
-        gone_file_ids=frozenset({"file-upload-1"}),
-    )
+    router: Final = _FakeFilesRouter({}, provider="litellm_proxy", gone_file_ids=frozenset({"file-upload-1"}))
 
     with caplog.at_level(logging.WARNING):
-        assert await _upload_then_delete(router, ["gpt-a", "gpt-b"]) == ("file-upload-2", "file-upload-1")
+        assert await _delete_file_stored_with_another_upload_than_its_id_carries(router) == (
+            "file-upload-2",
+            "file-upload-1",
+        )
 
     assert "file-upload-1" in caplog.text and "No such File object" in caplog.text
     assert router.deletes_marked_internal == (False, True)

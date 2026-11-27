@@ -21,6 +21,7 @@ _ENV_KEY: Final = "synthetic-ollama-env-key"
 _GLOBAL_KEY: Final = "synthetic-global-key-never-sent"
 _CALLER_TOKEN: Final = "Bearer synthetic-caller-token"
 _DELAY_SECONDS: Final = 5.0
+_MODEL_INFO_TARGET: Final = "/api/show"
 _SHORT_DELAY_SECONDS: Final = 1.0
 
 Mode = Literal["sync", "async"]
@@ -53,10 +54,23 @@ def _no_ambient_ollama_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
 
 
+def _answering_model_info(respond: Callable[[Request], Reply]) -> Callable[[Request], Reply]:
+    def route(request: Request) -> Reply:
+        if request.target == _MODEL_INFO_TARGET:
+            return Reply(body=json.dumps({"template": "", "model_info": {}}).encode())
+        return respond(request)
+
+    return route
+
+
 @contextmanager
 def _peer(respond: Callable[[Request], Reply] = _embeddings) -> Iterator[Wire]:
-    with wire_server(respond) as wire:
+    with wire_server(_answering_model_info(respond)) as wire:
         yield wire
+
+
+def _embedding_requests(wire: Wire) -> list[Request]:
+    return [request for request in wire.drain() if request.target != _MODEL_INFO_TARGET]
 
 
 async def _call(mode: Mode, **kwargs: object) -> EmbeddingResponse:
@@ -73,7 +87,7 @@ async def _seconds_until_timeout(mode: Mode, **kwargs: object) -> float:
 
 
 def _only(wire: Wire) -> Request:
-    received: Final = wire.drain()
+    received: Final = _embedding_requests(wire)
     assert [(request.method, request.target) for request in received] == [("POST", "/api/embed")], [
         (request.method, request.target) for request in received
     ]
@@ -200,7 +214,7 @@ async def test_guard_non_text_input_is_rejected_before_ollama_is_called(mode: Mo
         with pytest.raises(litellm.BadRequestError):
             await _call(mode, input=[[1, 2, 3]], api_base=wire.url, api_key=_EXPLICIT_KEY)
         await _call(mode, input=valid, api_base=wire.url)
-        received: Final = wire.drain()
+        received: Final = _embedding_requests(wire)
     assert [JSON_OBJECT.validate_json(request.body)["input"] for request in received] == [[valid]]
 
 

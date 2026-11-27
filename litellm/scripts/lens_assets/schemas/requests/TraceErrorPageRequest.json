@@ -1,19 +1,35 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TraceErrorPageRequest",
+  "type": "object",
   "properties": {
-    "cursor": {
-      "default": null,
-      "maxLength": 512,
+    "team_id": {
       "type": [
         "string",
         "null"
-      ]
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "api_key_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
     },
     "trace_ref": {
-      "default": "",
-      "type": "string"
+      "type": "string",
+      "default": ""
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 512,
+      "default": null
     }
-  },
-  "title": "TraceErrorPageRequest",
-  "type": "object"
+  }
 }

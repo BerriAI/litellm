@@ -3,7 +3,7 @@ mod credentials;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use litellm_circuit_breaker::Config as BreakerConfig;
-use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
+use litellm_env::{Lookup, ProcessEnvironment};
 use litellm_host_python::PythonContext;
 use litellm_python_compat::number::{self, SecondsError};
 use litellm_redis_client::{RedisClient, RedisEvents};
@@ -96,7 +96,7 @@ fn shared_client(
         Ok(resolution) => {
             logger.scope(|| {
                 for ignored in &resolution.ignored {
-                    litellm_tracing::warn!(
+                    tracing::warn!(
                         "Redis setting {} is not supported by the Rust client and is ignored: {}",
                         ignored.setting,
                         ignored.consequence
@@ -225,7 +225,7 @@ fn unconnected(py: Python<'_>, error: &litellm_redis_connect::Error) -> Option<R
 fn memory_only(py: Python<'_>, error: &(dyn std::error::Error + 'static)) -> Option<RedisClient> {
     let report = litellm_error::Report::new(error).to_string();
     crate::logger::capture(py).scope(|| {
-        litellm_tracing::error!(
+        tracing::error!(
             "Redis is not usable from the Rust stores, their state stays in memory: {report}"
         )
     });

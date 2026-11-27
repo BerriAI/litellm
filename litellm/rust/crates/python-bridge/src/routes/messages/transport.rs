@@ -1,15 +1,9 @@
 use std::fmt;
 
 use bytes::Bytes;
-use futures_util::{StreamExt, future::BoxFuture};
-use litellm_host::{
-    machine::HostServices,
-    protocol::{Protocol, Reply},
-};
-use litellm_host_python::{json_to_py, to_py};
-use litellm_inference_messages::{
-    Delivered, Error, Transport, TransportBody, TransportRequest, TransportResponse,
-};
+use litellm_host::protocol::Reply;
+use litellm_host_python::to_py;
+use litellm_inference_messages::{Error, Sent, SentBody, TransportCall};
 use pyo3::{
     exceptions::{PyBaseException, PyException, PyStopAsyncIteration},
     gc::{PyTraverseError, PyVisit},
@@ -18,74 +12,6 @@ use pyo3::{
 };
 
 use super::host::ROUTE_HOST_MODULE;
-
-pub(crate) enum TransportCall {
-    Send {
-        request: TransportRequest,
-        reply: Reply<Result<Sent, Error>>,
-    },
-    Read {
-        reply: Reply<Result<Option<Bytes>, Error>>,
-    },
-}
-
-pub(crate) struct Sent {
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: SentBody,
-}
-
-enum SentBody {
-    Text(String),
-    Stream,
-    Rejected { text: String, error: Error },
-}
-
-pub(super) struct PythonTransport<P: Protocol> {
-    services: HostServices<P>,
-}
-
-impl<P: Protocol> PythonTransport<P> {
-    pub(super) fn new(services: HostServices<P>) -> Self {
-        Self { services }
-    }
-}
-
-impl<P> Transport for PythonTransport<P>
-where
-    P: Protocol<Error = Error>,
-    P::HostCall: From<TransportCall>,
-{
-    fn send(
-        &self,
-        request: TransportRequest,
-    ) -> BoxFuture<'static, Result<TransportResponse, Error>> {
-        let services = self.services.clone();
-        Box::pin(async move {
-            let sent = services
-                .call(|reply| TransportCall::Send { request, reply }.into())
-                .await??;
-            let delivered = match sent.body {
-                SentBody::Text(text) => Delivered::Complete(text),
-                SentBody::Rejected { text, error } => Delivered::Rejected { text, error },
-                SentBody::Stream => Delivered::Stream(
-                    futures_util::stream::try_unfold(services, |services| async move {
-                        let chunk = services
-                            .call(|reply| TransportCall::Read { reply }.into())
-                            .await??;
-                        Ok(chunk.map(|chunk| (chunk, services)))
-                    })
-                    .boxed(),
-                ),
-            };
-            Ok(TransportResponse {
-                status: sent.status,
-                headers: sent.headers,
-                delivered,
-            })
-        })
-    }
-}
 
 #[derive(thiserror::Error)]
 #[error("the Python HTTP client failed")]
@@ -124,21 +50,44 @@ enum Pending {
     Read(Reply<Result<Option<Bytes>, Error>>),
 }
 
+pub(super) struct Selected {
+    pub(super) hosted: bool,
+    pub(super) read: Vec<(String, Option<String>)>,
+}
+
 #[derive(Default)]
 pub(super) struct HostedTransport {
     handler: Option<Py<PyAny>>,
+    read: Vec<(String, Option<String>)>,
     chunks: Option<Py<PyAny>>,
     pending: Option<Pending>,
 }
 
 impl HostedTransport {
-    pub(super) fn select(&mut self, py: Python<'_>, request: &Bound<'_, PyDict>) -> PyResult<bool> {
-        let handler = py
+    /// Whether the call sends through Python's client, and the secrets the host read to decide it,
+    /// which the native route reuses rather than reading again.
+    pub(super) fn select(
+        &mut self,
+        py: Python<'_>,
+        request: &Bound<'_, PyDict>,
+    ) -> PyResult<Selected> {
+        let (handler, read): (Bound<'_, PyAny>, Vec<(String, Option<String>)>) = py
             .import(ROUTE_HOST_MODULE)?
             .getattr("transport_handler")?
-            .call1((request,))?;
+            .call1((request,))?
+            .extract()?;
         self.handler = (!handler.is_none()).then(|| handler.unbind());
-        Ok(self.handler.is_some())
+        self.read.clone_from(&read);
+        Ok(Selected {
+            hosted: self.handler.is_some(),
+            read,
+        })
+    }
+
+    /// The secrets the host read to choose the transport, such as the `AZURE_API_BASE` the call
+    /// was sent to, which Python's failure mapping reads instead of looking them up again.
+    pub(super) fn read(&self) -> &[(String, Option<String>)] {
+        &self.read
     }
 
     pub(super) fn pending(&self) -> bool {
@@ -160,10 +109,6 @@ impl HostedTransport {
                     .handler
                     .as_ref()
                     .ok_or(litellm_host_python::Error::MissingState)?;
-                let body = match &sent.body {
-                    TransportBody::Json(body) => json_to_py(py, body)?.unbind(),
-                    TransportBody::Signed(bytes) => PyBytes::new(py, bytes).into_any().unbind(),
-                };
                 let awaitable = py
                     .import(ROUTE_HOST_MODULE)?
                     .getattr("transport_send")?
@@ -172,7 +117,7 @@ impl HostedTransport {
                         request,
                         &sent.url,
                         to_py(py, &sent.headers)?,
-                        body,
+                        PyBytes::new(py, &sent.body),
                         sent.stream,
                     ))?;
                 self.pending = Some(Pending::Send(reply));

@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:360896efb0753a5701c48f860e17130c205eae5a264797aa3e7ea126ee2923a7
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:ae9575b121f5776e2f04e192064bc2c5665af9d1c425d620dc773aca31698712
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:360896efb0753a5701c48f860e17130c205eae5a264797aa3e7ea126ee2923a7
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:ae9575b121f5776e2f04e192064bc2c5665af9d1c425d620dc773aca31698712
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 # Pinned by digest like the other base images; bump explicitly on Node upgrades.
 ARG UI_BUILD_IMAGE=node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
@@ -13,6 +13,21 @@ ARG PGBOUNCER_VERSION=1.26.0
 ARG PGBOUNCER_SHA256=afd25dd61ee6775d37b40629b87ce08736b3e6955f3057bb212e410fbf21c71d
 
 FROM $UV_IMAGE AS uvbin
+
+FROM $LITELLM_BUILD_IMAGE AS prisma-openssl-builder
+ARG OPENSSL_VERSION=3.5.9
+ARG OPENSSL_SHA256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+USER root
+RUN apk add --no-cache build-base perl curl
+WORKDIR /build
+RUN curl -fsSL -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz" && \
+    echo "${OPENSSL_SHA256}  openssl.tar.gz" | sha256sum -c - && \
+    tar xzf openssl.tar.gz --strip-components=1 && \
+    ./Configure --prefix=/opt/prisma-openssl --openssldir=/opt/prisma-openssl/ssl shared no-tests && \
+    make -s -j"$(nproc)" build_libs && \
+    mkdir -p /runtime/usr/lib /runtime/opt/prisma-openssl/ssl && \
+    install -m 0755 libssl.so.3 libcrypto.so.3 /runtime/usr/lib/ && \
+    ln -s /etc/ssl/cert.pem /etc/ssl/certs /runtime/opt/prisma-openssl/ssl/
 
 FROM $LITELLM_BUILD_IMAGE AS pgbouncer-builder
 ARG PGBOUNCER_VERSION
@@ -39,7 +54,6 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 WORKDIR /ui
 
 COPY litellm/ui/litellm-dashboard/package.json litellm/ui/litellm-dashboard/package-lock.json ./
-COPY litellm/ui/litellm-dashboard/vendor/ ./vendor/
 RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
 
 COPY litellm/ui/litellm-dashboard/ ./
@@ -156,10 +170,12 @@ USER root
 RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
 
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash openssl libssl3 tzdata nodejs python-3.13 libsndfile libatomic libevent nginx && break; \
+      apk add --no-cache bash openssl-4.0 '!libssl3' '!libcrypto3' tzdata nodejs python-3.13 libsndfile libatomic libevent nginx && break; \
       [ "$i" = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
       sleep 5; \
     done
+COPY --from=prisma-openssl-builder /runtime/ /
+RUN ldconfig
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app
@@ -175,6 +191,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
     PRISMA_SKIP_POSTINSTALL_GENERATE=1 \
     PRISMA_HIDE_UPDATE_MESSAGE=1 \
+    CHECKPOINT_DISABLE=1 \
     PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
     PRISMA_OFFLINE_MODE=true
 

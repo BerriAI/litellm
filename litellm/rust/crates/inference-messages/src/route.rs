@@ -1,18 +1,18 @@
-use std::convert::Infallible;
-
 use bytes::Bytes;
 use litellm_host::{
     call::{HostedCompletion, HostedMachine, hosted_call},
     protocol::Protocol,
 };
 
-use super::{Error, MessagesBody, MessagesCall};
+use super::{Error, MessagesBody, MessagesCall, MessagesHostCall};
 
 pub type MessagesOutput = HostedCompletion<MessagesBody>;
 
 /// The upstream response as the caller sees it at stream hand-off, before any chunk.
 pub struct MessagesStreamHead {
     pub headers: Vec<(String, String)>,
+    pub detached_drain: Option<litellm_host::protocol::DetachedDrain>,
+    pub unobserved_tail: Option<litellm_host::protocol::UnobservedTail>,
 }
 
 pub struct Messages;
@@ -21,16 +21,26 @@ impl Protocol for Messages {
     type Response = MessagesBody;
     type Error = Error;
     type Request = MessagesCall;
-    type HostCall = Infallible;
+    type HostCall = MessagesHostCall;
     type Chunk = Bytes;
     type StreamHead = MessagesStreamHead;
+
+    fn detached_drain(head: &MessagesStreamHead) -> Option<litellm_host::protocol::DetachedDrain> {
+        head.detached_drain
+    }
+
+    fn unobserved_tail(
+        head: &MessagesStreamHead,
+    ) -> Option<litellm_host::protocol::UnobservedTail> {
+        head.unobserved_tail.clone()
+    }
 }
 
 pub type MessagesMachine = HostedMachine<Messages>;
 
 impl super::MessagesRoute {
     pub fn machine(
-        self,
+        mut self,
         request: super::MessagesCall,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> MessagesMachine {
@@ -41,7 +51,7 @@ impl super::MessagesRoute {
         hosted_call(
             request,
             observers,
-            move |call, _, interceptors, observers| async move {
+            move |call, services, interceptors, observers| async move {
                 let context = litellm_inference::context::CallContext::new(
                     &interceptors,
                     litellm_inference::CallOptions {
@@ -49,7 +59,8 @@ impl super::MessagesRoute {
                         observers,
                     },
                 );
-                self.run(call, context).await
+                let route = std::mem::take(&mut self.host_services).serve(self, services);
+                route.run(call, context).await
             },
         )
     }
@@ -66,6 +77,8 @@ impl litellm_inference::caching::StreamCachable for Messages {
         Some(litellm_host::call::CallOutput::Stream {
             head: MessagesStreamHead {
                 headers: Vec::new(),
+                detached_drain: None,
+                unobserved_tail: None,
             },
             chunks: Box::pin(futures_util::stream::iter([Ok(data)])),
         })

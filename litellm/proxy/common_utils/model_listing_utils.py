@@ -57,6 +57,47 @@ def configured_display_names(
     )
 
 
+def configured_descriptions(
+    entries: Sequence[tuple[str, str]],
+    llm_router: Router | None,
+    *,
+    team_id: str | None,
+    include_all_teams: bool = False,
+) -> Mapping[str, str]:
+    if llm_router is None:
+        return MappingProxyType({})
+    registry: Final = llm_router.registry()
+    deployments: Final = (
+        (
+            response_id,
+            next(
+                (
+                    deployment
+                    for deployment in registry.deployments(lookup_id, source="named") or ()
+                    if include_all_teams or registry.includes(deployment, team_id=team_id)
+                ),
+                None,
+            ),
+        )
+        for response_id, lookup_id in entries
+    )
+    descriptions: Final = (
+        (
+            response_id,
+            cast(Mapping[object, object], deployment["model_info"]).get("description"),  # cast-ok: dict field
+        )
+        for response_id, deployment in deployments
+        if deployment is not None and "model_info" in deployment
+    )
+    return MappingProxyType(
+        {
+            response_id: description
+            for response_id, description in descriptions
+            if isinstance(description, str) and description
+        }
+    )
+
+
 def _unmarked(name: str) -> str:
     return name[: -len(_ONE_MILLION_SUFFIX)] if name.lower().endswith(_ONE_MILLION_SUFFIX) else name
 
@@ -352,6 +393,18 @@ def alias_listing_entries(
     return (*retargeted, *added)
 
 
+def unlisted_alias_targets(entries: Sequence[tuple[str, str]], aliases: CallerAliases) -> tuple[str, ...]:
+    layers: Final = _alias_layers(aliases)
+    listed: Final = frozenset(chain.from_iterable(entries))
+    return tuple(
+        dict.fromkeys(
+            target
+            for target, checks_target in (_dispatch(response_id, layers) for response_id, _ in entries)
+            if not checks_target and target not in listed
+        )
+    )
+
+
 def label_entries(listed: Sequence[tuple[str, str]], entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
     """`entries` with every `listed` name read under its own lookup id again, so an alias
     `alias_listing_entries` describes by its target keeps its own display name, the way a
@@ -448,7 +501,7 @@ class TeamModelNameTranslator:
     @staticmethod
     def _response_to_lookup_map(
         model_names: Sequence[str],
-        internal_to_public: dict[str, str],
+        internal_to_public: Mapping[str, str],
     ) -> dict[str, str]:
         """Map each public response id to the first internal lookup id seen in
         `model_names`, preserving first-occurrence order. First-wins keeps list
@@ -483,6 +536,12 @@ class TeamModelNameTranslator:
         if not internal_to_public:
             return [(name, name) for name in model_names]
         return list(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
+
+    @staticmethod
+    def public_name_entries(
+        model_names: Sequence[str], internal_to_public: Mapping[str, str]
+    ) -> tuple[tuple[str, str], ...]:
+        return tuple(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
 
     @staticmethod
     def translate_listing(

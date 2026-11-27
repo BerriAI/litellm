@@ -1,6 +1,9 @@
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import React, { useState, useEffect } from "react";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Tags } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
+import { displayTimestamp } from "@/i18n/displayDate";
 import { Button } from "@/components/ui/button";
 import TagInfoView from "./tag_info";
 import { modelInfoCall } from "@/components/networking";
@@ -31,7 +34,7 @@ interface TagProps {
 }
 
 const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [tags, setTags] = useState<Tag[]>([]);
   const [isLoadingTags, setIsLoadingTags] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
@@ -40,7 +43,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [tagToDelete, setTagToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [lastRefreshed, setLastRefreshed] = useState("");
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
 
   const fetchTags = async () => {
@@ -61,8 +64,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
 
   const handleRefreshClick = () => {
     fetchTags();
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
+    setLastRefreshed(new Date());
   };
 
   const handleCreate = async (formValues: CreateTagFormValues) => {
@@ -129,103 +131,96 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
     fetchTags();
   }, [accessToken]);
 
-  return (
-    <div className="mx-4 h-full">
-      {selectedTagId ? (
-        <TagInfoView
-          tagId={selectedTagId}
-          onClose={() => {
-            setSelectedTagId(null);
-            setEditTag(false);
-          }}
-          accessToken={accessToken}
-          is_admin={userRole === "Admin"}
-          editTag={editTag}
-        />
-      ) : (
-        <div className="flex h-full w-full flex-col p-8 pt-10">
-          <div className="mt-2 mb-4 flex w-full items-center justify-between">
-            <h1>{t("tagManagement.page.title")}</h1>
-            <div className="flex items-center space-x-2">
-              {lastRefreshed && (
-                <p className="text-sm">
-                  {t("tagManagement.page.lastRefreshedPrefix")}
-                  {lastRefreshed}
-                </p>
-              )}
-              <Button
-                variant="outline"
-                size="icon-sm"
-                aria-label={t("tagManagement.page.refresh")}
-                onClick={handleRefreshClick}
-              >
-                <RefreshCw />
-              </Button>
-            </div>
-          </div>
-
-          <div className="mb-4 text-sm">
-            {t("tagManagement.page.intro")}
-            <p>
-              <Trans
-                i18nKey="tagManagement.page.routingHelp"
-                components={{
-                  docs: (
-                    <a
-                      href="https://docs.litellm.ai/docs/proxy/tag_routing"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    />
-                  ),
-                }}
-              />
-            </p>
-          </div>
-
-          <Button className="mb-4 self-start" onClick={() => setIsCreateModalVisible(true)}>
-            {t("tagManagement.page.create")}
-          </Button>
-
-          <div className="mt-2 flex min-h-0 flex-1 flex-col">
-            <TagTable
-              data={tags}
-              isLoading={isLoadingTags}
-              onEdit={(tag) => {
-                setSelectedTagId(tag.name);
-                setEditTag(true);
-              }}
-              onDelete={handleDelete}
-              onSelectTag={setSelectedTagId}
-            />
-          </div>
-
-          {/* Create Tag Modal */}
-          <CreateTagModal
-            visible={isCreateModalVisible}
-            onCancel={() => setIsCreateModalVisible(false)}
-            onSubmit={handleCreate}
-            availableModels={availableModels}
-          />
-
-          {/* Delete Confirmation Modal */}
-          <DeleteResourceModal
-            isOpen={isDeleteModalOpen}
-            title={t("tagManagement.page.deleteDialog.title")}
-            message={t("tagManagement.page.deleteDialog.message")}
-            resourceInformationTitle={t("tagManagement.page.deleteDialog.infoTitle")}
-            resourceInformation={[
-              { label: t("tagManagement.page.deleteDialog.tagName"), value: tagToDelete, code: true },
-            ]}
-            onCancel={() => {
-              setIsDeleteModalOpen(false);
-              setTagToDelete(null);
+  return selectedTagId ? (
+    <TagInfoView
+      tagId={selectedTagId}
+      onClose={() => {
+        setSelectedTagId(null);
+        setEditTag(false);
+      }}
+      accessToken={accessToken}
+      is_admin={userRole === "Admin"}
+      editTag={editTag}
+    />
+  ) : (
+    <PageContent>
+      <PageHeader
+        aside={
+          <>
+            {lastRefreshed && (
+              <p className="text-sm">
+                {t("tagManagement.page.lastRefreshedPrefix")}
+                {displayTimestamp(lastRefreshed, i18n.language)}
+              </p>
+            )}
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label={t("tagManagement.page.refresh")}
+              onClick={handleRefreshClick}
+            >
+              <RefreshCw />
+            </Button>
+          </>
+        }
+      >
+        <PageHeaderTitle>
+          <Tags />
+          {t("tagManagement.page.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>
+          {t("tagManagement.page.intro")}
+          <br />
+          <Trans
+            i18nKey="tagManagement.page.routingHelp"
+            components={{
+              docs: (
+                <a href="https://docs.litellm.ai/docs/proxy/tag_routing" target="_blank" rel="noopener noreferrer" />
+              ),
             }}
-            onOk={confirmDelete}
-            confirmLoading={isDeleting}
           />
-        </div>
-      )}
-    </div>
+        </PageHeaderDescription>
+        <PageHeaderControls>
+          <Button onClick={() => setIsCreateModalVisible(true)}>{t("tagManagement.page.create")}</Button>
+        </PageHeaderControls>
+      </PageHeader>
+
+      <div className="flex min-h-0 flex-1 flex-col">
+        <TagTable
+          data={tags}
+          isLoading={isLoadingTags}
+          onEdit={(tag) => {
+            setSelectedTagId(tag.name);
+            setEditTag(true);
+          }}
+          onDelete={handleDelete}
+          onSelectTag={setSelectedTagId}
+        />
+      </div>
+
+      {/* Create Tag Modal */}
+      <CreateTagModal
+        visible={isCreateModalVisible}
+        onCancel={() => setIsCreateModalVisible(false)}
+        onSubmit={handleCreate}
+        availableModels={availableModels}
+      />
+
+      {/* Delete Confirmation Modal */}
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title={t("tagManagement.page.deleteDialog.title")}
+        message={t("tagManagement.page.deleteDialog.message")}
+        resourceInformationTitle={t("tagManagement.page.deleteDialog.infoTitle")}
+        resourceInformation={[{ label: t("tagManagement.page.deleteDialog.tagName"), value: tagToDelete, code: true }]}
+        onCancel={() => {
+          setIsDeleteModalOpen(false);
+          setTagToDelete(null);
+        }}
+        onOk={confirmDelete}
+        confirmLoading={isDeleting}
+      />
+    </PageContent>
   );
 };
 

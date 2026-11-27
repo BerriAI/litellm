@@ -9,8 +9,10 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import require_attributes, str_param
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.gemini.common_utils import (
@@ -36,6 +38,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GeminiRetrievedContext(TypedDict, total=False):
@@ -103,7 +107,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         self.model_info = GeminiModelInfo()
         self._cached_api_key: str | None = None
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         """Gemini uses x-goog-api-key header for authentication."""
         return {}
 
@@ -123,19 +127,21 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         """Supported parameters for Gemini File Search."""
         return ["max_num_results", "filters"]
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         """Validate and set up headers for Gemini API."""
         headers = headers or {}
         headers.setdefault("Content-Type", "application/json")
         if litellm_params:
-            api_key: Final = litellm_params.get("api_key") or get_api_key_from_env()
+            api_key: Final = str_param(litellm_params, "api_key") or get_api_key_from_env()
             if api_key:
                 self._cached_api_key = api_key
                 headers["x-goog-api-key"] = api_key
 
         return headers
 
-    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         """
         Get the complete base URL for Gemini API.
 
@@ -144,7 +150,9 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         """
         return join_api_base(GeminiModelInfo.get_api_base(api_base), "v1beta")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> GeminiError:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> GeminiError:
         """Return Gemini-specific error class."""
         return GeminiError(
             status_code=status_code,
@@ -161,7 +169,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform search request to Gemini's generateContent format.
 
@@ -191,7 +199,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             # Convert to Gemini filter syntax if it's a dict
             if isinstance(metadata_filter, dict):
                 # Simple conversion - may need more sophisticated mapping
-                filter_parts: Final = []
+                filter_parts: Final[list[str]] = []
                 for key, value in metadata_filter.items():
                     if isinstance(value, str):
                         filter_parts.append(f'{key} = "{value}"')
@@ -230,7 +238,9 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Extracts grounding metadata and citations from the response.
         """
         try:
-            response_data: Final[GeminiFileSearchResponse] = response.json()
+            response_data: Final = require_attributes(
+                _DECODED_JSON.validate_python(response.json()), GeminiFileSearchResponse, "get"
+            )
             results: Final[list[VectorStoreSearchResult]] = []
 
             # Extract candidates and grounding metadata
@@ -317,7 +327,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform create request to Gemini's fileSearchStores format.
         """
@@ -339,7 +349,9 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Transform Gemini's fileSearchStore response to standard format.
         """
         try:
-            response_data: Final[GeminiFileSearchStore] = response.json()
+            response_data: Final = require_attributes(
+                _DECODED_JSON.validate_python(response.json()), GeminiFileSearchStore, "get"
+            )
 
             # Extract store name (format: fileSearchStores/xxxxxxx)
             store_name: Final = response_data.get("name", "")

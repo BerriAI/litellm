@@ -8,19 +8,23 @@ import type { ParseKeys } from "i18next";
 export const TEAM_INFO_TAB_KEYS = {
   OVERVIEW: "overview",
   ACTIVITY: "activity",
+  LENS: "lens",
   MY_USER: "my-user",
   VIRTUAL_KEYS: "virtual-keys",
   MEMBERS: "members",
+  MEMBER_DEFAULTS: "member-defaults",
   MEMBER_PERMISSIONS: "member-permissions",
   SETTINGS: "settings",
 } as const;
 
 export const TEAM_INFO_TAB_LABELS: Record<string, ParseKeys> = {
   [TEAM_INFO_TAB_KEYS.ACTIVITY]: "shared.resourceActivity.title",
+  [TEAM_INFO_TAB_KEYS.LENS]: "lensControls.title",
   [TEAM_INFO_TAB_KEYS.OVERVIEW]: "teams.teamInfo.tabs.overview",
   [TEAM_INFO_TAB_KEYS.MY_USER]: "teams.teamInfo.tabs.myUser",
   [TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]: "teams.teamInfo.tabs.virtualKeys",
   [TEAM_INFO_TAB_KEYS.MEMBERS]: "teams.teamInfo.tabs.members",
+  [TEAM_INFO_TAB_KEYS.MEMBER_DEFAULTS]: "teams.teamInfo.tabs.memberDefaults",
   [TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS]: "teams.teamInfo.tabs.memberPermissions",
   [TEAM_INFO_TAB_KEYS.SETTINGS]: "teams.teamInfo.tabs.settings",
 };
@@ -34,6 +38,7 @@ export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly string[] 
   const baseTabs = [
     TEAM_INFO_TAB_KEYS.OVERVIEW,
     TEAM_INFO_TAB_KEYS.ACTIVITY,
+    TEAM_INFO_TAB_KEYS.LENS,
     TEAM_INFO_TAB_KEYS.MY_USER,
     TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
   ];
@@ -41,6 +46,7 @@ export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly string[] 
     return [
       ...baseTabs,
       TEAM_INFO_TAB_KEYS.MEMBERS,
+      TEAM_INFO_TAB_KEYS.MEMBER_DEFAULTS,
       TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
       TEAM_INFO_TAB_KEYS.SETTINGS,
     ];

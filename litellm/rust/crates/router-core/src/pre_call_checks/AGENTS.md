@@ -1,0 +1,7 @@
+- This folder is `optional_pre_call_checks` (Python `router_utils/pre_call_checks/*`, the `async_pre_call_check` callbacks), named opt-in checks run on the one deployment already picked, on every attempt. It does not depend on `enable_pre_call_checks`, which lives in `../precall/`
+- One file per check, named for its config entry, like `enforce_model_rate_limits.rs`
+- `mod.rs` lists the checks. `core_runs` says which ones the core runs, and `PreCallChecks::admit` and `succeeded` call each one in its own match arm
+- The host runs every check `core_runs` leaves out, and the gateway sends a config naming any of them to Python (`gateway/src/admit/checks/router.rs`, `checked_by_the_host`)
+- Checks run in config order and the first refusal ends the attempt. A refusal is an `Error::Attempt` raised by `RaisedBy::PreCallCheck`, so retries and fallbacks treat it like any attempt failure
+- State goes through `RouterCache` on the same counters Python writes, never a store of the check's own. A cache error lets the request through
+- Porting a check takes a new file, a `core_runs` arm and its `admit` and `succeeded` arms, with an end-to-end test in `gateway-inference/tests/<check>.rs`, all in one PR

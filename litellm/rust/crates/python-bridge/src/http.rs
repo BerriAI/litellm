@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex, PoisonError},
 };
 
-use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_env::ProcessEnvironment;
 use litellm_http::{
     Client, ClientVariant, HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer,
     Resolution, SslVerify, TlsSource, Unsupported,
@@ -28,6 +28,10 @@ const SSL_SECURITY_LEVEL: FieldSpec<Option<String>> =
     FieldSpec::new("ssl_security_level", |field| field.tuning_string());
 const SSL_ECDH_CURVE: FieldSpec<Option<String>> =
     FieldSpec::new("ssl_ecdh_curve", |field| field.tuning_string());
+const CHACHA20_EXCLUDED: FieldSpec<bool> =
+    FieldSpec::new("rsa_key_exchange_and_chacha20_excluded", |field| {
+        Ok(field.exact_true())
+    });
 const FORCE_IPV4: FieldSpec<bool> = FieldSpec::new("force_ipv4", |field| field.truthy());
 const HTTP2: FieldSpec<bool> = FieldSpec::new("http2", |field| Ok(field.exact_true()));
 const AIOHTTP_TRUST_ENV: FieldSpec<bool> =
@@ -81,9 +85,20 @@ fn decode_ssl_verify(field: &Field<'_>) -> Result<Option<SslVerify>, ProjectionE
 }
 
 static RESOURCES: LazyLock<litellm_inference::resources::CoreResources> = LazyLock::new(|| {
-    litellm_inference::resources::CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(
-        PublicDnsResolver,
-    ))))
+    // Bedrock and Claude on Vertex's explicit AWS keys resolve an `oidc/` web identity token
+    // through the same host secrets.
+    let aws = litellm_auth_aws::AwsAuthService::with_web_identity_tokens(Arc::new(
+        crate::secrets::HostWebIdentityTokens,
+    ));
+    litellm_inference::resources::CoreResources {
+        pool: Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver))),
+        auth: Arc::new(litellm_auth::AuthServices {
+            vertex_login: litellm_auth_gcp::vertex::VertexLoginService::default()
+                .with_aws(aws.clone()),
+            aws,
+            ..litellm_auth::AuthServices::default()
+        }),
+    }
 });
 
 pub(crate) fn resources() -> &'static litellm_inference::resources::CoreResources {
@@ -165,7 +180,7 @@ fn resolution(settings: HttpSettings) -> Resolution {
 fn resolved(py: Python<'_>, settings: HttpSettings) -> HttpClientConfig {
     let resolution = resolution(settings);
     for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
-        crate::logger::capture(py).scope(|| litellm_tracing::warn!("{unsupported}"));
+        crate::logger::capture(py).scope(|| tracing::warn!("{unsupported}"));
     }
     resolution.config
 }
@@ -255,6 +270,7 @@ fn configured(snapshot: &Snapshot<'_>) -> PyResult<HttpSettingsLayer> {
         ssl_certificate: snapshot.read(&SSL_CERTIFICATE)?.map(PathBuf::from),
         ssl_security_level: snapshot.read(&SSL_SECURITY_LEVEL)?,
         ssl_ecdh_curve: snapshot.read(&SSL_ECDH_CURVE)?,
+        chacha20_excluded: Some(snapshot.read(&CHACHA20_EXCLUDED)?),
         force_ipv4: Some(snapshot.read(&FORCE_IPV4)?),
         http2: Some(snapshot.read(&HTTP2)?),
         aiohttp_trust_env: Some(snapshot.read(&AIOHTTP_TRUST_ENV)?),
@@ -287,6 +303,7 @@ defaults = dict(
     ssl_certificate=None,
     ssl_security_level=None,
     ssl_ecdh_curve=None,
+    rsa_key_exchange_and_chacha20_excluded=False,
     force_ipv4=False,
     http2=False,
     aiohttp_trust_env=False,
@@ -393,6 +410,7 @@ ssl_verify='/etc/ssl/corp.pem',
 ssl_certificate='/etc/ssl/client.pem',
 ssl_security_level='2',
 ssl_ecdh_curve='X25519',
+rsa_key_exchange_and_chacha20_excluded=True,
 force_ipv4=True,
 http2=True,
 aiohttp_trust_env=True,
@@ -409,6 +427,7 @@ user_agent='litellm/9.9.9',
                     ssl_certificate: Some("/etc/ssl/client.pem".into()),
                     ssl_security_level: Some("2".into()),
                     ssl_ecdh_curve: Some("X25519".into()),
+                    chacha20_excluded: Some(true),
                     force_ipv4: Some(true),
                     http2: Some(true),
                     aiohttp_trust_env: Some(true),

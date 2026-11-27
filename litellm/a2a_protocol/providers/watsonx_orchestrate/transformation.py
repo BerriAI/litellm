@@ -14,7 +14,7 @@ from typing import Final
 from uuid import uuid4
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, iter_items
 from litellm.llms.openai.common_utils import decoded_json_object
 
 
@@ -25,6 +25,10 @@ def _a2a_text_part(part: object) -> Sequence[object]:
     if part_fields.get("kind") in (None, "", "text") and part_fields.get("text"):
         return (part_fields["text"],)
     return ()
+
+
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
 
 
 def _join_with_spaces(texts: Sequence[object]) -> str:
@@ -118,16 +122,16 @@ class WatsonxOrchestrateTransformation:
 
     @staticmethod
     def extract_text_from_a2a_message_response(a2a_response: Mapping[str, object]) -> str:
-        result: Final = a2a_response.get("result")
-        if not isinstance(result, dict):
+        result: Final = _as_dict(a2a_response.get("result"))
+        if result is None:
             verbose_logger.warning("WXO: A2A response missing result object")
             return ""
-        parts: Final = result.get("parts")
-        if not isinstance(parts, list):
+        parts: Final = as_object_list(result.get("parts"))
+        if parts is None:
             verbose_logger.warning("WXO: A2A result has no parts list")
             return ""
-        for part in parts:
-            if isinstance(part, dict) and part.get("kind") == "text" and part.get("text"):
+        for part in (_as_dict(entry) for entry in parts):
+            if part is not None and part.get("kind") == "text" and part.get("text"):
                 return str(part["text"])
         verbose_logger.warning("WXO: A2A result parts contained no text")
         return ""

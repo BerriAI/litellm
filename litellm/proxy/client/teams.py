@@ -59,7 +59,7 @@ class TeamsManagementClient:
             UnauthorizedError: If authentication fails
         """
         url: Final = f"{self._base_url}/team/list"
-        params: Final = {}
+        params: Final[dict[str, str]] = {}
         if user_id:
             params["user_id"] = user_id
         if organization_id:

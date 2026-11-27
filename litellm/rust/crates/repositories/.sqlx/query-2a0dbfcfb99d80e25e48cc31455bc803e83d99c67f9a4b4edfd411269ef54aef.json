@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_AccessGroupTable\"\nSET assigned_team_ids = array_remove(assigned_team_ids, $1)\nWHERE $1 = ANY (COALESCE(assigned_team_ids, ARRAY[]::text[]))\n  AND access_group_id = ANY ($2::text[])\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2a0dbfcfb99d80e25e48cc31455bc803e83d99c67f9a4b4edfd411269ef54aef"
+}

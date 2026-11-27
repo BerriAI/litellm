@@ -19,7 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -28,8 +28,10 @@ from litellm.llms.anthropic.messages.native.streaming_iterator import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Usage
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 
 
 @pytest.fixture(autouse=True)
@@ -332,6 +334,29 @@ async def test_wrap_streaming_iterator_missing_attribute_still_raises(proxy_logg
     assert request_data["metadata"]["applied_guardrails"] == ["hook-bug"]
 
 
+@pytest.mark.asyncio
+async def test_messages_stream_hook_reads_upstream_attributes(proxy_logging, make_user_api_key_auth, monkeypatch):
+    class _ModelIdTagger(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(
+            self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterator[object], request_data: dict[str, object]
+        ) -> AsyncGenerator[object, None]:
+            async for chunk in response:
+                yield f"{response._hidden_params['model_id']}:{chunk}"
+
+    monkeypatch.setattr(litellm, "callbacks", [_ModelIdTagger()])
+
+    served = [
+        chunk
+        async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=_AttributeStream(),
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/messages"),
+            request_data={"metadata": {}},
+        )
+    ]
+
+    assert served == ["m-1:chunk-1", "m-1:chunk-2"]
+
+
 # ---------------------------------------------------------------------------
 # async_post_call_streaming_hook
 # ---------------------------------------------------------------------------
@@ -563,8 +588,12 @@ async def test_native_messages_stream_logging_fires_after_guardrail_end_of_strea
         request_data=request_data,
     ):
         pass
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+
+    async def logging_dispatched() -> None:
+        while len(events) < 2:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(logging_dispatched(), timeout=5)
 
     assert events == ["scan_appended", ("logging_dispatched", "post_call_entry_visible", True)]
 
@@ -657,8 +686,19 @@ def _raising_at_end_of_stream(error: Exception) -> CustomLogger:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "block",
+    [
+        GuardrailRaisedException(guardrail_name="g", message="blocked"),
+        BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="g"),
+    ],
+    ids=["guardrail_raised", "presidio_blocked_entity"],
+)
+@pytest.mark.parametrize(
+    "route", ["/chat/completions", "/v1/messages"], ids=["chat_completions", "messages_bridged_to_chat"]
+)
 async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_success(
-    proxy_logging, make_user_api_key_auth, monkeypatch
+    proxy_logging, make_user_api_key_auth, monkeypatch, block, route
 ):
     """
     A guardrail that raises ``GuardrailRaisedException`` at end of a
@@ -669,36 +709,147 @@ async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_suc
     events: list[str] = []
     request_data: dict[str, object] = {"metadata": {}}
     logging_obj, upstream = _armed_chat_stream("test_chat_stream_guardrail_block", request_data, events)
-    monkeypatch.setattr(
-        litellm,
-        "callbacks",
-        [_raising_at_end_of_stream(GuardrailRaisedException(guardrail_name="g", message="blocked"))],
-    )
+    failures: Final[list[dict[str, object]]] = []
 
-    with pytest.raises(GuardrailRaisedException):
+    class _FailureRecorder(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            failures.append(kwargs["standard_logging_object"])
+
+    monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(block)])
+    logging_obj.dynamic_async_failure_callbacks = [_FailureRecorder()]
+    proxy_logging.alert_types = []
+    user_api_key_dict: Final = make_user_api_key_auth(request_route=route)
+
+    with pytest.raises(type(block)) as raised:
         async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
             response=upstream,
-            user_api_key_dict=make_user_api_key_auth(),
+            user_api_key_dict=user_api_key_dict,
             request_data=request_data,
         ):
             pass
     await asyncio.sleep(0)
     await asyncio.sleep(0)
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=raised.value,
+        user_api_key_dict=user_api_key_dict,
+        route=route,
+    )
 
     snapshot = {
         "events": events,
         "callback_cleared": logging_obj._on_deferred_stream_complete is None,
         "args_cleared": logging_obj._deferred_stream_complete_args is None,
-        "combined_usage_total_tokens": logging_obj.model_call_details["combined_usage_object"].total_tokens,
-        "response_cost_positive": logging_obj.model_call_details["response_cost"] > 0,
+        "failure_rows_total_tokens": [row["total_tokens"] for row in failures],
+        "failure_billed": all(row["response_cost"] > 0 for row in failures),
     }
     assert snapshot == {
         "events": [],
         "callback_cleared": True,
         "args_cleared": True,
-        "combined_usage_total_tokens": 8,
-        "response_cost_positive": True,
+        "failure_rows_total_tokens": [8],
+        "failure_billed": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_refused_by_presidio_logs_its_failure_masked_by_logging_only_guardrails(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    events: Final[list[str]] = []
+    request_data: Final[dict[str, object]] = {
+        "metadata": {},
+        "messages": [{"role": "user", "content": "my phone is 555-0100"}],
+    }
+    logging_obj, upstream = _armed_chat_stream("test_chat_stream_refused_masked", request_data, events)
+    logged: Final[list[tuple[object, object]]] = []
+
+    class _MaskingGuardrail(CustomGuardrail):
+        async def async_logging_hook(self, kwargs, result, call_type):
+            return {**kwargs, "messages": [{**m, "content": "<masked>"} for m in kwargs["messages"]]}, result
+
+    class _FailureRecorder(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            logged.append((kwargs["messages"], kwargs["standard_logging_object"]["messages"]))
+
+    block: Final = BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output")
+    monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(block)])
+    monkeypatch.setattr(
+        litellm,
+        "_async_failure_callback",
+        [_MaskingGuardrail(guardrail_name="mask-logs", event_hook=GuardrailEventHooks.logging_only, default_on=True)],
+    )
+    logging_obj.dynamic_async_failure_callbacks = [_FailureRecorder()]
+    proxy_logging.alert_types = []
+    user_api_key_dict: Final = make_user_api_key_auth(request_route="/chat/completions")
+
+    with pytest.raises(BlockedPiiEntityError) as raised:
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=upstream,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        ):
+            pass
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=raised.value,
+        user_api_key_dict=user_api_key_dict,
+        route="/chat/completions",
+    )
+
+    masked: Final = [{"role": "user", "content": "<masked>"}]
+    assert logged == [(masked, masked)]
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_refused_with_message_logging_off_keeps_the_prompt_from_logging_only_guardrails(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    events: Final[list[str]] = []
+    request_data: Final[dict[str, object]] = {
+        "metadata": {},
+        "messages": [{"role": "user", "content": "my phone is 555-0100"}],
+    }
+    logging_obj, upstream = _armed_chat_stream("test_chat_stream_refused_redacted", request_data, events)
+    seen_by_guardrail: Final[list[object]] = []
+    failures: Final[list[object]] = []
+
+    class _RecordingGuardrail(CustomGuardrail):
+        async def async_logging_hook(self, kwargs, result, call_type):
+            seen_by_guardrail.append(kwargs.get("messages"))
+            return kwargs, result
+
+    class _FailureRecorder(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            failures.append(kwargs["standard_logging_object"]["messages"])
+
+    block: Final = BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output")
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(block)])
+    monkeypatch.setattr(
+        litellm,
+        "_async_failure_callback",
+        [_RecordingGuardrail(guardrail_name="scan-logs", event_hook=GuardrailEventHooks.logging_only, default_on=True)],
+    )
+    logging_obj.dynamic_async_failure_callbacks = [_FailureRecorder()]
+    proxy_logging.alert_types = []
+    user_api_key_dict: Final = make_user_api_key_auth(request_route="/chat/completions")
+
+    with pytest.raises(BlockedPiiEntityError) as raised:
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=upstream,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        ):
+            pass
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=raised.value,
+        user_api_key_dict=user_api_key_dict,
+        route="/chat/completions",
+    )
+
+    assert ("555-0100" in repr(seen_by_guardrail), len(failures), "555-0100" in repr(failures)) == (False, 1, False)
 
 
 @pytest.mark.asyncio
@@ -707,7 +858,8 @@ async def test_chat_stream_generic_callback_error_after_stream_end_still_flushes
 ):
     """
     ``post_call_failure_hook`` only routes proxy-level errors (HTTPException,
-    ProxyException, GuardrailRaisedException) through failure logging. A
+    ProxyException, GuardrailRaisedException, or a BlockedPiiEntityError that refused a stream) through failure
+    logging. A
     callback that dies with any other exception after the stream completed
     must keep flushing the parked success dispatch, or the request ends with
     no terminal log at all.
@@ -759,6 +911,24 @@ async def test_fire_deferred_stream_logging_fires_callback():
         "args_cleared": logging_obj._deferred_stream_complete_args is None,
     }
     assert snapshot == {"arg": "payload", "callback_cleared": True, "args_cleared": True}
+
+
+@pytest.mark.asyncio
+async def test_fired_deferred_stream_logging_survives_garbage_collection_while_pending():
+    async with weakly_parked_logger() as parked:
+        logging_obj: Final = MagicMock()
+
+        async def deferred(assembled_response: object, cache_hit: object) -> None:
+            await parked.park()
+
+        logging_obj._on_deferred_stream_complete = deferred
+        logging_obj._deferred_stream_complete_args = ("assembled", None)
+
+        ProxyLogging.fire_deferred_stream_logging(request_data={"litellm_logging_obj": logging_obj})
+        survived: Final = await parked.survives_collection()
+        await drain_logging_tasks()
+
+        assert (survived, parked.parks, parked.finished.is_set()) == (True, 1, True)
 
 
 def test_fire_deferred_stream_logging_no_logging_obj_no_error():

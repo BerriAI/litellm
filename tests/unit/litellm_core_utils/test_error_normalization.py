@@ -91,6 +91,8 @@ def _proxy_exc(message: str, error_type: str, code: int) -> ProxyException:
                 httpx.RemoteProtocolError(
                     "peer closed connection without sending complete message body (incomplete chunked read)"
                 ),
+                httpx.ReadError(""),
+                httpx.RemoteProtocolError(""),
             ),
             "500_PROVIDER_CONNECTION_ERROR",
         ),

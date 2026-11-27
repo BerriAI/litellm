@@ -52,6 +52,15 @@ def deployment_timeout(litellm_params: Mapping[str, object]) -> float | httpx.Ti
         return None
 
 
+def deployment_litellm_params(deployment: Mapping[str, object] | None) -> Mapping[str, object]:
+    params: Final = None if deployment is None else as_str_mapping(deployment.get("litellm_params"))
+    return MappingProxyType({}) if params is None else params
+
+
+def optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 class BaseTokenCounter(ABC):
     @abstractmethod
     async def count_tokens(
@@ -67,6 +76,7 @@ class BaseTokenCounter(ABC):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         pass
 
@@ -140,8 +150,8 @@ class BaseLLMModelInfo(ABC):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -456,16 +466,16 @@ def names_a_response_format_property(encoded_block: str, schema: ResponseFormatS
     return any(isinstance(value, str) and value in schema.declared_names for value in block.values())
 
 
-def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:
+def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict[str, object]:
     if ref_template is not None and response_format.get("type") == "json_schema":
         # Deep copy to avoid modifying original
         modified_format: Final = copy.deepcopy(response_format)
         schema: Final = modified_format["json_schema"]["schema"]
 
         # Update all $ref values in the schema
-        def update_refs(schema):
-            stack: Final = [(schema, [])]
-            visited: Final = set()
+        def update_refs(schema: object) -> None:
+            stack: Final[list[tuple[object, list[object]]]] = [(schema, [])]
+            visited: Final[set[int]] = set()
 
             while stack:
                 obj, path = stack.pop()
@@ -684,7 +694,7 @@ def _merged_system_runs(messages: Sequence[AllMessageValues]) -> Iterator[AllMes
 _INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
 
 
-def _leading_instruction_block_length(roles: Sequence[str | None]) -> int:
+def leading_instruction_block_length(roles: Sequence[str | None]) -> int:
     return next((index for index, role in enumerate(roles) if role not in _INSTRUCTION_ROLES), len(roles))
 
 
@@ -705,14 +715,14 @@ def hoisted_instruction_indices(roles: Sequence[str | None]) -> tuple[int, ...]:
     stays in place so the request does not end on the assistant's turn. Items without a
     role (tool calls and their outputs) count as conversation.
     """
-    leading_length: Final = _leading_instruction_block_length(roles)
+    leading_length: Final = leading_instruction_block_length(roles)
     closing_start: Final = _closing_instruction_block_start(roles, leading_length)
     moved: Final = tuple(index for index in range(leading_length, closing_start) if roles[index] == "developer")
     return (*range(leading_length), *moved)
 
 
 def closing_instruction_indices(roles: Sequence[str | None]) -> frozenset[int]:
-    closing_start: Final = _closing_instruction_block_start(roles, _leading_instruction_block_length(roles))
+    closing_start: Final = _closing_instruction_block_start(roles, leading_instruction_block_length(roles))
     return frozenset(range(closing_start, len(roles)))
 
 

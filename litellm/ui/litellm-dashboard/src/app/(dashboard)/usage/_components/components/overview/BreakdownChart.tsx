@@ -45,10 +45,12 @@ export const useBreakdown = (
   top = 6,
   colorByKey?: ReadonlyMap<string, string>,
 ) => {
-  const series = useMemo(
-    () => seriesBy(results, dimension, metric, { top, colorByKey }),
-    [results, dimension, metric, top, colorByKey],
-  );
+  const { t, i18n } = useTranslation();
+  const otherLabel = t("usage.overview.otherSeries");
+  const series = useMemo(() => {
+    const seriesOptions = { top, colorByKey, otherLabel, language: i18n.language };
+    return seriesBy(results, dimension, metric, seriesOptions);
+  }, [results, dimension, metric, top, colorByKey, otherLabel, i18n.language]);
   const ranking = useMemo(() => leaderboard(results, dimension, metric), [results, dimension, metric]);
   return { series, ranking };
 };
@@ -84,7 +86,7 @@ export function BreakdownControls({
 }
 
 /** Provider logo on a soft tile with a series-colored dot, so mixed logo styles still read as a set. */
-function ModelMark({ model, color }: { model: string; color: string }) {
+export function ModelMark({ model, color }: { model: string; color: string }) {
   const provider = providerForModel(model);
   return (
     <span className="relative inline-flex size-7 shrink-0 items-center justify-center rounded-md border bg-background">

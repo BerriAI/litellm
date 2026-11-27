@@ -1,5 +1,6 @@
 "use client";
 
+import { displayTimestamp } from "@/i18n/displayDate";
 import React, { useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -34,7 +35,7 @@ export function credentialTypeLabel(
 export function formatTimestamp(value: string | null): string {
   if (value === null) return "-";
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+  return Number.isNaN(parsed.getTime()) ? value : displayTimestamp(parsed);
 }
 
 function CredentialsBody({

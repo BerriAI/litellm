@@ -6,6 +6,7 @@ pick filters, and the names the no-deployments errors carry.
 import asyncio
 import warnings
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -16,6 +17,7 @@ from litellm.exceptions import BadRequestError, EndpointNotSupportedByModelError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.router import RouterRateLimitError
 from tests.unit.test_router.core.fallbacks_helpers import MESSAGES, MakeCore, complete, complete_sync, headers
+from tests.unit.test_router.core.retries_health_helpers import usage_since
 from tests.unit.test_router.core.scripted_host import CORE_BUILDERS, ScriptedHost, completion_response, deployment, server_error
 
 GROUP_LIMITS: Final = {"rpm": 5, "tpm": 1000}
@@ -38,11 +40,24 @@ PYTHON_DUMPS_OF_A_DEPLOYMENT: Final = 4
 # --- x-ratelimit-* and the counts ------------------------------------------------------------------
 
 
-def test_a_sync_call_reads_the_remaining_usage_of_its_group(make_core: MakeCore) -> None:
+def test_a_sync_call_reads_the_remaining_usage_of_its_group(
+    make_core: MakeCore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: Final = datetime.now(timezone.utc)
+    usage_reads: Final[list[datetime]] = []  # mutable-ok: filled by the clock below
+
+    def clock() -> datetime:
+        now: Final = datetime.now(timezone.utc)
+        usage_reads.append(now)
+        return now
+
+    monkeypatch.setattr("litellm.router_rust.surface.model_info.get_utc_datetime", clock)
     core: Final = make_core(model_list=[deployment("g", "d1", **GROUP_LIMITS)], num_retries=0)
     stamped: Final = headers(complete_sync(core, "g"))
+    counted_since_the_read: Final = asyncio.run(usage_since(core, monkeypatch, "g", usage_reads[-1]))[1] or 0
+    assert asyncio.run(usage_since(core, monkeypatch, "g", started)) == (10, 1)
     assert stamped["x-ratelimit-limit-requests"] == 5
-    assert stamped["x-ratelimit-remaining-requests"] == 4
+    assert stamped["x-ratelimit-remaining-requests"] == 5 - counted_since_the_read
     assert stamped["x-ratelimit-limit-tokens"] == 1000
     assert stamped[RETRY_COUNT] == 0
     assert stamped[FALLBACK_COUNT] == 0

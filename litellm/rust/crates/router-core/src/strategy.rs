@@ -3,21 +3,9 @@
 //! routing group the resolved model belongs to (called as the group, or as a member of a
 //! non-priority group), then the router's own strategy.
 
-use crate::{
-    config::RoutingStrategy,
-    registry::{Registry, ResolveKind},
-};
+use litellm_router_types::RoutingStrategy;
 
-/// The per-request overrides `_OVERRIDABLE_ROUTING_STRATEGIES` honours: simple-shuffle and every
-/// strategy with a default selector. Anything else is ignored.
-pub const OVERRIDABLE: [&str; 6] = [
-    "simple-shuffle",
-    "least-busy",
-    "usage-based-routing",
-    "usage-based-routing-v2",
-    "latency-based-routing",
-    "cost-based-routing",
-];
+use crate::registry::{Registry, ResolveKind};
 
 /// Whose selector state a strategy pick reads.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,12 +30,31 @@ impl StrategyScope {
     }
 }
 
-/// A request's `routing_strategy` override, when it is one Python honours.
+/// Whether router-core picks by `strategy` itself. Every other strategy is a
+/// [`crate::RouterHost::select`] step until router-core implements it.
+pub fn implemented(strategy: &RoutingStrategy) -> bool {
+    matches!(
+        strategy,
+        RoutingStrategy::SimpleShuffle | RoutingStrategy::Unset
+    )
+}
+
+/// A request's `routing_strategy` override, when it is one `_OVERRIDABLE_ROUTING_STRATEGIES`
+/// honours: simple-shuffle and every strategy with a default selector.
 pub fn request_override(raw: Option<&str>) -> Option<RoutingStrategy> {
-    let raw = raw?;
-    OVERRIDABLE
-        .contains(&raw)
-        .then(|| raw.parse().unwrap_or_default())
+    match raw?.parse().ok()? {
+        strategy @ (RoutingStrategy::SimpleShuffle
+        | RoutingStrategy::LeastBusy
+        | RoutingStrategy::UsageBased
+        | RoutingStrategy::UsageBasedV2
+        | RoutingStrategy::LatencyBased
+        | RoutingStrategy::CostBased) => Some(strategy),
+        RoutingStrategy::ProviderBudget
+        | RoutingStrategy::Lar1
+        | RoutingStrategy::Priority
+        | RoutingStrategy::Unset
+        | RoutingStrategy::Other(_) => None,
+    }
 }
 
 /// The strategy and selector scope for a pick of `model_group` (the resolved group, after
@@ -75,7 +82,7 @@ pub fn routing_context(
     };
     match group {
         None => (default.clone(), StrategyScope::Default),
-        Some(group) if is_priority(&group.routing_strategy) => {
+        Some(group) if crate::routing_groups::is_priority(group) => {
             (RoutingStrategy::SimpleShuffle, StrategyScope::Default)
         }
         Some(group) => (
@@ -83,10 +90,6 @@ pub fn routing_context(
             StrategyScope::Group(group.group_name.clone()),
         ),
     }
-}
-
-fn is_priority(strategy: &RoutingStrategy) -> bool {
-    matches!(strategy, RoutingStrategy::Other(name) if name == "priority")
 }
 
 #[cfg(test)]
@@ -98,7 +101,14 @@ mod tests {
     #[rstest]
     #[case::honoured(Some("least-busy"), Some(RoutingStrategy::LeastBusy))]
     #[case::shuffle(Some("simple-shuffle"), Some(RoutingStrategy::SimpleShuffle))]
+    #[case::usage_based(Some("usage-based-routing"), Some(RoutingStrategy::UsageBased))]
+    #[case::usage_based_v2(Some("usage-based-routing-v2"), Some(RoutingStrategy::UsageBasedV2))]
+    #[case::latency_based(Some("latency-based-routing"), Some(RoutingStrategy::LatencyBased))]
+    #[case::cost_based(Some("cost-based-routing"), Some(RoutingStrategy::CostBased))]
     #[case::lar1_ignored(Some("lar1"), None)]
+    #[case::priority_ignored(Some("priority"), None)]
+    #[case::provider_budget_ignored(Some("provider-budget-routing"), None)]
+    #[case::none_ignored(Some("None"), None)]
     #[case::unknown_ignored(Some("bogus"), None)]
     #[case::unset(None, None)]
     fn only_overridable_strategies_override(

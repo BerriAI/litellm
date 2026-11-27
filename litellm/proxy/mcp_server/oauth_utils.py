@@ -3,7 +3,7 @@
 
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from ipaddress import ip_address
 from types import MappingProxyType
@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Final, NoReturn
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
-from pydantic import TypeAdapter
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
@@ -132,32 +131,11 @@ def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, st
     return urlunparse(parsed._replace(query=urlencode(merged)))
 
 
-def grant_covers_scopes(
-    granted: tuple[str, ...], requested: tuple[str, ...], server_scopes: Callable[[], frozenset[str]]
-) -> bool:
-    """Whether a stored grant holds every requested scope. A grant stored as one comma-joined token, the form
-    Slack and GitHub reply with, counts as its parts only when every part is a requested or server scope."""
-    if all(scope in granted for scope in requested):
-        return True
-    if len(granted) != 1 or "," not in granted[0]:
-        return False
-    parts: Final = frozenset(granted[0].split(","))
-    known: Final = frozenset(requested) | server_scopes()
-    return parts <= known and all(scope in granted or scope in parts for scope in requested)
+MCP_WILDCARD_SCOPE: Final = "mcp_all"
 
 
-_PUBLISHED_SCOPES: Final = TypeAdapter[tuple[str, ...] | None](tuple[str, ...] | None)
-
-
-def server_scope_names(server: "MCPServer | None") -> frozenset[str]:
-    if server is None:
-        return frozenset()
-    published: Final = (
-        _PUBLISHED_SCOPES.validate_python(server.authorization_server_metadata.get("scopes_supported"))
-        if server.authorization_server_metadata is not None
-        else None
-    )
-    return frozenset((*(server.scopes or ()), *(published or ())))
+def asks_for_wildcard(scope: str | None) -> bool:
+    return MCP_WILDCARD_SCOPE in (scope or "").split()
 
 
 def proxy_base_url_from_env() -> str | None:
@@ -470,7 +448,7 @@ def _matches_trusted_origin_entry(netloc: str, entry: str) -> bool:
 
 
 def _normalize_native_redirect_uri(
-    parsed,
+    parsed: ParseResult,
 ) -> str:
     """Lowercase scheme, netloc, and path for allowlist comparison."""
     return urlunparse(
@@ -515,7 +493,7 @@ def _native_wildcard_prefix_matches(normalized: str, prefix: str) -> bool:
     return suffix[0] == "/"
 
 
-def _matches_trusted_native_redirect_uri(parsed) -> bool:
+def _matches_trusted_native_redirect_uri(parsed: ParseResult) -> bool:
     """Allowlisted private-use / custom-scheme OAuth callbacks for native MCP clients."""
     if parsed.fragment:
         return False

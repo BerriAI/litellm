@@ -80,6 +80,7 @@ def _is_function_tool(tool: Mapping[str, JsonValue]) -> bool:
 def _map_function_tools(
     tools: object | None,
     model: str,
+    allow_parameters_json_schema: bool,
 ) -> tuple[Mapping[str, object], ...] | None | VertexGeminiCountContextError:
     try:
         tool_values: Final = _TOOLS.validate_python(tools or ())
@@ -104,6 +105,7 @@ def _map_function_tools(
                 value=[dict(tool) for tool in chat_tools],
                 optional_params={},
                 send_integer_enums=send_integer_enums,
+                allow_parameters_json_schema=allow_parameters_json_schema,
             ),
             VertexGeminiConfig.is_gemini_3_or_newer(model),
         )
@@ -119,11 +121,12 @@ def vertex_gemini_count_context(
     system: object | None,
     tools: object | None,
     model: str,
+    allow_parameters_json_schema: bool = True,
 ) -> VertexGeminiCountContext | VertexGeminiCountContextError:
     system_parts: Final = _system_parts(system)
     if isinstance(system_parts, VertexGeminiCountContextError):
         return system_parts
-    function_tools: Final = _map_function_tools(tools, model)
+    function_tools: Final = _map_function_tools(tools, model, allow_parameters_json_schema)
     if isinstance(function_tools, VertexGeminiCountContextError):
         return function_tools
     return VertexGeminiCountContext(
@@ -141,14 +144,14 @@ def unconvertible_messages_error(
     return None if error_message is None else VertexGeminiCountContextError(error_message=error_message)
 
 
-def malformed_tool_result_text_count_error(
+def malformed_messages_error(
     messages: Sequence[Mapping[str, object]] | None,
     messages_format: TokenCountMessagesFormat,
     deployment: Mapping[str, object] | None,
 ) -> VertexGeminiCountContextError | None:
-    from litellm.llms.anthropic.messages.convertible_blocks import malformed_tool_result_count_error
+    from litellm.llms.anthropic.messages.convertible_blocks import malformed_text_count_error
 
-    error_message: Final = malformed_tool_result_count_error(messages, messages_format, deployment)
+    error_message: Final = malformed_text_count_error(messages, messages_format, deployment)
     return None if error_message is None else VertexGeminiCountContextError(error_message=error_message)
 
 

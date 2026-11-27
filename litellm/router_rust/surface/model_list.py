@@ -54,6 +54,7 @@ _Stable: TypeAlias = dict[tuple[str, int], tuple[object, Entry]]
 
 
 _DATETIME: Final = TypeAdapter(datetime.datetime)
+_DUMPED_VALUE: Final = TypeAdapter(object)
 _Field = TypeVar("_Field")  # rebind-ok: a TypeVar cannot be Final
 
 
@@ -61,7 +62,7 @@ def _dumped_as(adapter: TypeAdapter[_Field]) -> Callable[[object], object]:
     """A value validated by ``adapter``, then dumped back to its Python form."""
 
     def dump(value: object) -> object:
-        return adapter.dump_python(adapter.validate_python(value), exclude_none=True)
+        return _DUMPED_VALUE.validate_python(adapter.dump_python(adapter.validate_python(value), exclude_none=True))
 
     return dump
 
@@ -255,8 +256,8 @@ class HostedModelList(list[Entry]):
         params: Final = as_str_mapping(record.get("litellm_params"))
         info: Final = as_str_mapping(record.get("model_info"))
         model_id: Final = (info or {}).get("id")
-        live: Final = self._live(model_id) if params is not None else {}
-        live_info: Final = self._live_info(model_id) if info is not None else {}
+        live: Final[Mapping[str, object]] = self._live(model_id) if params is not None else {}
+        live_info: Final[Mapping[str, object]] = self._live_info(model_id) if info is not None else {}
         if live:
             record = {**record, "litellm_params": {**(params or {}), **live}}  # rebind-ok: given its live values
         if live_info:

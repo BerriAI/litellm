@@ -87,7 +87,7 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
     ) -> "ImageResponse":
         """
         Process output response - typically not needed for image generation.

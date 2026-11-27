@@ -67,13 +67,14 @@ where
         let state = Arc::clone(self.state.as_ref().ok_or(Error::MissingState)?);
         let future = async move {
             let mut state = state.lock().await;
-            let result = match interruption {
-                Some(failure) => state
+            let result = match (interruption, state.result.take()) {
+                (Some(failure), _) => state
                     .machine
                     .interrupt(failure)
                     .await
                     .map(MachineStep::Complete),
-                None => state.machine.resume().await,
+                (None, Some(settled)) => settled,
+                (None, None) => state.machine.resume().await,
             };
             state.result = Some(result);
             Ok(())

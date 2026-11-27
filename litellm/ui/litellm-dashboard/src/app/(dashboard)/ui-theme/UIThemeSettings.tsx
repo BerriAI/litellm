@@ -1,4 +1,8 @@
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
+import { Palette } from "lucide-react";
 import React, { useState, useEffect } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,6 +12,9 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { resolveThemeImages, useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toUIThemeFields, toUIThemeUpdate } from "./mapper";
+import { uiThemeSchema } from "./schema";
 
 interface UIThemeSettingsProps {
   userID: string | null;
@@ -18,9 +25,10 @@ interface UIThemeSettingsProps {
 const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, accessToken }) => {
   const { t } = useTranslation();
   const { setLogoUrl, setLogoUrlDark, setFaviconUrl } = useTheme();
-  const [logoUrlInput, setLogoUrlInput] = useState<string>("");
-  const [logoUrlDarkInput, setLogoUrlDarkInput] = useState<string>("");
-  const [faviconUrlInput, setFaviconUrlInput] = useState<string>("");
+  const { control, getValues, reset } = useZodForm(uiThemeSchema, { defaultValues: toUIThemeFields() });
+  const { field: logoUrl } = useController({ control, name: "logoUrl" });
+  const { field: logoUrlDark } = useController({ control, name: "logoUrlDark" });
+  const { field: faviconUrl } = useController({ control, name: "faviconUrl" });
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -43,9 +51,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
       if (response.ok) {
         const data = await response.json();
         const images = resolveThemeImages(data, proxyBaseUrl);
-        setLogoUrlInput(data.values?.logo_url || "");
-        setLogoUrlDarkInput(data.values?.logo_url_dark || "");
-        setFaviconUrlInput(data.values?.favicon_url || "");
+        reset(toUIThemeFields(data.values));
         setLogoUrl(images.logoUrl);
         setLogoUrlDark(images.logoUrlDark);
         setFaviconUrl(images.faviconUrl);
@@ -56,6 +62,9 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   };
 
   const handleSave = async () => {
+    const draft = uiThemeSchema.safeParse(getValues());
+    if (!draft.success) return;
+    const payload = toUIThemeUpdate(draft.data);
     setLoading(true);
     try {
       const proxyBaseUrl = getProxyBaseUrl();
@@ -66,17 +75,13 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
           [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          logo_url: logoUrlInput || null,
-          logo_url_dark: logoUrlDarkInput || null,
-          favicon_url: faviconUrlInput || null,
-        }),
+        body: JSON.stringify(payload),
       });
       if (response.ok) {
         toast.success(t("uiTheme.settings.toasts.updated"));
-        setLogoUrl(logoUrlInput || null);
-        setLogoUrlDark(logoUrlDarkInput || null);
-        setFaviconUrl(faviconUrlInput || null);
+        setLogoUrl(payload.logo_url);
+        setLogoUrlDark(payload.logo_url_dark);
+        setFaviconUrl(payload.favicon_url);
       } else {
         throw new Error("Failed to update settings");
       }
@@ -89,9 +94,8 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   };
 
   const handleReset = async () => {
-    setLogoUrlInput("");
-    setLogoUrlDarkInput("");
-    setFaviconUrlInput("");
+    const defaults = toUIThemeFields();
+    reset(defaults);
     setLogoUrl(null);
     setLogoUrlDark(null);
     setFaviconUrl(null);
@@ -105,7 +109,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
           [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ logo_url: null, logo_url_dark: null, favicon_url: null }),
+        body: JSON.stringify(toUIThemeUpdate(defaults)),
       });
       if (response.ok) {
         toast.success(t("uiTheme.settings.toasts.reset"));
@@ -125,12 +129,15 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   }
 
   return (
-    <div className="w-full mx-auto max-w-4xl px-6 py-8">
-      <div className="mb-8">
-        <h1 className="mb-2 text-2xl font-bold">{t("uiTheme.settings.title")}</h1>
-        <p className="text-sm text-muted-foreground">{t("uiTheme.settings.description")}</p>
-      </div>
-      <Card>
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Palette />
+          {t("uiTheme.settings.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("uiTheme.settings.description")}</PageHeaderDescription>
+      </PageHeader>
+      <Card className="w-full max-w-4xl">
         <CardContent className="space-y-6">
           <div>
             <Label htmlFor="ui-theme-logo-url" className="mb-2">
@@ -139,9 +146,9 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
             <Input
               id="ui-theme-logo-url"
               placeholder="https://example.com/logo.png"
-              value={logoUrlInput}
+              value={logoUrl.value}
               onChange={(event) => {
-                setLogoUrlInput(event.target.value);
+                logoUrl.onChange(event);
                 setLogoUrl(event.target.value || null);
               }}
             />
@@ -154,9 +161,9 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
             <Input
               id="ui-theme-logo-url-dark"
               placeholder="https://example.com/logo-dark.png"
-              value={logoUrlDarkInput}
+              value={logoUrlDark.value}
               onChange={(event) => {
-                setLogoUrlDarkInput(event.target.value);
+                logoUrlDark.onChange(event);
                 setLogoUrlDark(event.target.value || null);
               }}
             />
@@ -169,9 +176,9 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
             <Input
               id="ui-theme-favicon-url"
               placeholder="https://example.com/favicon.ico"
-              value={faviconUrlInput}
+              value={faviconUrl.value}
               onChange={(event) => {
-                setFaviconUrlInput(event.target.value);
+                faviconUrl.onChange(event);
                 setFaviconUrl(event.target.value || null);
               }}
             />
@@ -189,7 +196,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
           </div>
         </CardContent>
       </Card>
-    </div>
+    </PageContent>
   );
 };
 
