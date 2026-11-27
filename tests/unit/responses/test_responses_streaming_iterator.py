@@ -7,8 +7,10 @@ crashed with exit 139 whenever any CustomLogger was registered).
 """
 
 import asyncio
+import gc
 import json
 import time
+import weakref
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from typing import Final, cast
@@ -877,6 +879,27 @@ async def test_a_kept_open_stream_nobody_settles_closes_the_provider_connection_
     await _await_tasks_spawned_since(existing_tasks)
 
     assert upstream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_a_drained_stream_is_freed_without_a_cycle_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, _ = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    existing_tasks: Final = asyncio.all_tasks()
+    gc.collect()
+    gc.disable()
+    try:
+        await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+        upstream.released.set()
+        assert await iterator.settle_after_consumer_left(drain=True) is True
+        await iterator._await_pending_logging()
+        await _await_tasks_spawned_since(existing_tasks)
+        freed: Final = weakref.ref(iterator)
+        del iterator
+        assert freed() is None, "a drained stream that waits for the cycle collector keeps its log record until then"
+    finally:
+        gc.enable()
 
 
 @pytest.mark.asyncio
