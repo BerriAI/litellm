@@ -8,7 +8,6 @@ mod boot;
 mod capacity;
 mod model_info;
 mod precall;
-mod prompt_estimate;
 mod router;
 mod spend_log;
 
