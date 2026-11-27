@@ -1502,7 +1502,7 @@ WANDB_MODELS: Final[set[str]] = set(
     ]
 )
 
-modelscope_models: Final[set] = set(
+modelscope_models: Final[set[str]] = set(
     [
         # Qwen series models
         "Qwen/Qwen3-0.6B",

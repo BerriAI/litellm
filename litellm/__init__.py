@@ -8,7 +8,8 @@ _apply_process_defaults()
 import threading
 import os
 
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Collection, Iterable, Sequence
+from itertools import groupby
 from types import MappingProxyType
 from typing import (
     Any,
@@ -18,6 +19,7 @@ from typing import (
     get_args,
     List,
     Literal,
+    NamedTuple,
     Optional,
     overload,
     Tuple,
@@ -791,359 +793,272 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def _provider_model_set_changes(
-    model_cost_map: Mapping[str, Mapping[str, object]],
-) -> Iterator[tuple[set[str], str, bool]]:  # mutable-ok: live provider sets, edited in place
-    for key, value in tuple(model_cost_map.items()):
-        if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
-            yield open_ai_chat_completion_models, key, True
-        elif value.get("litellm_provider") == "text-completion-openai":
-            yield open_ai_text_completion_models, key, True
-        elif value.get("litellm_provider") == "azure_text":
-            yield azure_text_models, key, True
-        elif value.get("litellm_provider") == "cohere":
-            yield cohere_models, key, True
-        elif value.get("litellm_provider") == "cohere_chat":
-            yield cohere_chat_models, key, True
-        elif value.get("litellm_provider") == "mistral":
-            yield mistral_chat_models, key, True
-        elif value.get("litellm_provider") == "anthropic":
-            yield anthropic_models, key, True
-        elif value.get("litellm_provider") == "empower":
-            yield empower_models, key, True
-        elif value.get("litellm_provider") == "openrouter":
-            yield openrouter_models, key, True
-        elif value.get("litellm_provider") == "vercel_ai_gateway":
-            yield vercel_ai_gateway_models, key, True
-        elif value.get("litellm_provider") == "edenai":
-            yield edenai_models, key, True
-        elif value.get("litellm_provider") == "datarobot":
-            yield datarobot_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-text-models":
-            yield vertex_text_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-code-text-models":
-            yield vertex_code_text_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-language-models":
-            yield vertex_language_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-vision-models":
-            yield vertex_vision_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-chat-models":
-            yield vertex_chat_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
-            yield vertex_code_chat_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-embedding-models":
-            yield vertex_embedding_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-anthropic_models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_anthropic_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-llama_models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_llama3_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-deepseek_models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_deepseek_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-mistral_models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_mistral_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-ai21_models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_ai_ai21_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-image-models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_ai_image_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-video-models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_ai_video_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-openai_models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_openai_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-minimax_models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_minimax_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-moonshot_models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_moonshot_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-zai_models":
-            key = key.replace("vertex_ai/", "")
-            yield vertex_zai_models, key, True
-        elif value.get("litellm_provider") == "vertex_ai-qwen_models":
-            yield vertex_qwen_models, key.removeprefix("vertex_ai/"), True
-        elif value.get("litellm_provider") == "vertex_ai":
-            yield vertex_ai_models, key.removeprefix("vertex_ai/"), True
-        elif value.get("litellm_provider") == "ai21":
-            if value.get("mode") == "chat":
-                yield ai21_chat_models, key, True
-            else:
-                yield ai21_models, key, True
-        elif value.get("litellm_provider") == "nlp_cloud":
-            yield nlp_cloud_models, key, True
-        elif value.get("litellm_provider") == "aleph_alpha":
-            yield aleph_alpha_models, key, True
-        elif value.get("litellm_provider") == "bedrock" and value.get("mode") == "guardrail":
-            pass
-        elif value.get("litellm_provider") == "bedrock" and not is_bedrock_pricing_only_model(key):
-            yield bedrock_models, key, True
-        elif value.get("litellm_provider") == "bedrock_converse" and not is_bedrock_pricing_only_model(key):
-            yield bedrock_converse_models, key, True
-        elif value.get("litellm_provider") == "deepinfra":
-            yield deepinfra_models, key, True
-        elif value.get("litellm_provider") == "clf_ai_gateway":  # pyright: ignore[reportUnknownMemberType]  # raw cost map
-            yield clf_ai_gateway_models, key, True  # pyright: ignore[reportUnknownArgumentType]  # raw cost map key
-        elif value.get("litellm_provider") == "perplexity":
-            yield perplexity_models, key, True
-        elif value.get("litellm_provider") == "watsonx":
-            yield watsonx_models, key, True
-        elif value.get("litellm_provider") == "gemini":
-            yield gemini_models, key, True
-        elif value.get("litellm_provider") == "fireworks_ai":
-            # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
-            if "-to-" not in key and "fireworks-ai-default" not in key:
-                yield fireworks_ai_models, key, True
-        elif value.get("litellm_provider") == "together_ai":
-            if is_hidden_as_retired(value):
-                yield together_ai_models, key, False
-            elif not key.startswith("together-ai-"):
-                yield together_ai_models, key, True
-        elif value.get("litellm_provider") == "baseten":
-            if is_hidden_as_retired(value):
-                yield baseten_models, key, False
-            else:
-                yield baseten_models, key, True
-        elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
-            # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
-            if "-to-" not in key:
-                yield fireworks_ai_embedding_models, key, True
-        elif value.get("litellm_provider") == "text-completion-codestral":
-            yield text_completion_codestral_models, key, True
-        elif value.get("litellm_provider") == "text-completion-inception":
-            yield text_completion_inception_models, key, True
-        elif value.get("litellm_provider") == "xai":
-            yield xai_models, key, True
-        elif value.get("litellm_provider") == "zai":
-            yield zai_models, key, True
-        elif value.get("litellm_provider") == "bigmodel":
-            yield bigmodel_models, key, True
-        elif value.get("litellm_provider") == "fal_ai":
-            yield fal_ai_models, key, True
-        elif value.get("litellm_provider") == "deepseek":
-            yield deepseek_models, key, True
-        elif value.get("litellm_provider") == "tencent":
-            yield tencent_models, key, True
-        elif value.get("litellm_provider") == "runwayml":
-            yield runwayml_models, key, True
-        elif value.get("litellm_provider") == "meta_llama":
-            yield llama_models, key, True
-        elif value.get("litellm_provider") == "nscale":
-            yield nscale_models, key, True
-        elif value.get("litellm_provider") == "azure_ai":
-            yield azure_ai_models, key, True
-        elif value.get("litellm_provider") == "voyage":
-            yield voyage_models, key, True
-        elif value.get("litellm_provider") == "infinity":
-            yield infinity_models, key, True
-        elif value.get("litellm_provider") == "databricks":
-            yield databricks_models, key, True
-        elif value.get("litellm_provider") == "cloudflare":
-            yield cloudflare_models, key, True
-        elif value.get("litellm_provider") == "codestral":
-            yield codestral_models, key, True
-        elif value.get("litellm_provider") == "friendliai":
-            yield friendliai_models, key, True
-        elif value.get("litellm_provider") == "palm":
-            yield palm_models, key, True
-        elif value.get("litellm_provider") == "groq":
-            yield groq_models, key, True
-        elif value.get("litellm_provider") == "azure":
-            yield azure_models, key, True
-        elif value.get("litellm_provider") == "azure_anthropic":
-            yield azure_anthropic_models, key, True
-        elif value.get("litellm_provider") == "anyscale":
-            yield anyscale_models, key, True
-        elif value.get("litellm_provider") == "cerebras":
-            yield cerebras_models, key, True
-        elif value.get("litellm_provider") == "nadir":
-            yield nadir_models, key, True
-        elif value.get("litellm_provider") == "galadriel":
-            yield galadriel_models, key, True
-        elif value.get("litellm_provider") == "nvidia_nim":
-            yield nvidia_nim_models, key, True
-        elif value.get("litellm_provider") == "nvidia_riva":
-            yield nvidia_riva_models, key, True
-        elif value.get("litellm_provider") == "gnani":
-            yield gnani_models, key, True
-        elif value.get("litellm_provider") == "soniox":
-            yield soniox_models, key, True
-        elif value.get("litellm_provider") == "sambanova":
-            yield sambanova_models, key, True
-        elif value.get("litellm_provider") == "scaledown":
-            yield scaledown_models, key, True
-        elif value.get("litellm_provider") == "sambanova-embedding-models":
-            yield sambanova_embedding_models, key, True
-        elif value.get("litellm_provider") == "novita":
-            yield novita_models, key, True
-        elif value.get("litellm_provider") == "nebius-chat-models":
-            yield nebius_models, key, True
-        elif value.get("litellm_provider") == "nebius-embedding-models":
-            yield nebius_embedding_models, key, True
-        elif value.get("litellm_provider") == "aiml":
-            yield aiml_models, key, True
-        elif value.get("litellm_provider") == "assemblyai":
-            yield assemblyai_models, key, True
-        elif value.get("litellm_provider") == "jina_ai":
-            yield jina_ai_models, key, True
-        elif value.get("litellm_provider") == "snowflake":
-            yield snowflake_models, key, True
-        elif value.get("litellm_provider") == "gradient_ai":
-            yield gradient_ai_models, key, True
-        elif value.get("litellm_provider") == "featherless_ai":
-            yield featherless_ai_models, key, True
-        elif value.get("litellm_provider") == "deepgram":
-            yield deepgram_models, key, True
-        elif value.get("litellm_provider") == "elevenlabs":
-            yield elevenlabs_models, key, True
-        elif value.get("litellm_provider") == "gradium":
-            yield gradium_models, key, True
-        elif value.get("litellm_provider") == "heroku":
-            yield heroku_models, key, True
-        elif value.get("litellm_provider") == "dashscope":
-            yield dashscope_models, key, True
-        elif value.get("litellm_provider") == "qwencloud":
-            yield qwencloud_models, key, True
-        elif value.get("litellm_provider") == "qwen_ai_platform":
-            yield qwen_ai_platform_models, key, True
-        elif value.get("litellm_provider") == "modelscope":
-            yield modelscope_models, key, True
-        elif value.get("litellm_provider") == "moonshot":
-            yield moonshot_models, key, True
-        elif value.get("litellm_provider") == "publicai":
-            yield publicai_models, key, True
-        elif value.get("litellm_provider") == "darkbloom":
-            yield darkbloom_models, key, True
-        elif value.get("litellm_provider") == "openinfer":
-            yield openinfer_models, key, True
-        elif value.get("litellm_provider") == "kyma":
-            yield kyma_models, key, True
-        elif value.get("litellm_provider") == "streamlake":
-            yield streamlake_models, key, True
-        elif value.get("litellm_provider") == "resetdata":
-            yield resetdata_models, key, True
-        elif value.get("litellm_provider") == "wally":
-            yield wally_models, key, True
-        elif value.get("litellm_provider") == "huawei_maas":
-            yield huawei_maas_models, key, True
-        elif value.get("litellm_provider") == "zerogpu":
-            yield zerogpu_models, key, True
-        elif value.get("litellm_provider") == "v0":
-            yield v0_models, key, True
-        elif value.get("litellm_provider") == "vispark":
-            yield vispark_models, key, True
-        elif value.get("litellm_provider") == "morph":
-            yield morph_models, key, True
-        elif value.get("litellm_provider") == "opencode_go":
-            yield opencode_go_models, key, True
-        elif value.get("litellm_provider") == "lambda_ai":
-            yield lambda_ai_models, key, True
-        elif value.get("litellm_provider") == "inception":
-            yield inception_models, key, True
-        elif value.get("litellm_provider") == "hyperbolic":
-            yield hyperbolic_models, key, True
-        elif value.get("litellm_provider") == "black_forest_labs":
-            yield black_forest_labs_models, key, True
-        elif value.get("litellm_provider") == "recraft":
-            yield recraft_models, key, True
-        elif value.get("litellm_provider") == "cometapi":
-            yield cometapi_models, key, True
-        elif value.get("litellm_provider") == "oci":
-            yield oci_models, key, True
-        elif value.get("litellm_provider") == "volcengine":
-            yield volcengine_models, key, True
-        elif value.get("litellm_provider") == "wandb":
-            yield wandb_models, key, True
-        elif value.get("litellm_provider") == "ovhcloud":
-            yield ovhcloud_models, key, True
-        elif value.get("litellm_provider") == "ovhcloud-embedding-models":
-            yield ovhcloud_embedding_models, key, True
-        elif value.get("litellm_provider") == "lemonade":
-            yield lemonade_models, key, True
-        elif value.get("litellm_provider") == "docker_model_runner":
-            yield docker_model_runner_models, key, True
-        elif value.get("litellm_provider") == "amazon_nova":
-            yield amazon_nova_models, key, True
-        elif value.get("litellm_provider") == "stability":
-            yield stability_models, key, True
-        elif value.get("litellm_provider") == "github_copilot":
-            yield github_copilot_models, key, True
-        elif value.get("litellm_provider") == "microsoft_365_copilot":
-            yield microsoft_365_copilot_models, key, True
-        elif value.get("litellm_provider") == "chatgpt":
-            yield chatgpt_models, key, True
-        elif value.get("litellm_provider") == "minimax":
-            yield minimax_models, key, True
-        elif value.get("litellm_provider") == "aws_polly":
-            yield aws_polly_models, key, True
-        elif value.get("litellm_provider") == "transcribe":
-            yield transcribe_models, key, True
-        elif value.get("litellm_provider") == "gigachat":
-            yield gigachat_models, key, True
-        elif value.get("litellm_provider") == "llamagate":
-            yield llamagate_models, key, True
-        elif value.get("litellm_provider") == "coralbricks":
-            yield coralbricks_models, key, True
-        elif value.get("litellm_provider") == "perplexity_orchestrator":
-            yield perplexity_orchestrator_models, key, True
-        elif value.get("litellm_provider") == "aiand":
-            if is_hidden_as_retired(value):
-                yield aiand_models, key, False
-            else:
-                yield aiand_models, key, True
-        elif value.get("litellm_provider") == "reducto":
-            yield reducto_models, key, True
-        elif value.get("litellm_provider") == "nace" and value.get("mode") == "ocr":
-            yield nace_models, key, True
-        elif value.get("litellm_provider") == "bedrock_mantle":
-            yield bedrock_mantle_models, key, True
+_AI21_CHAT_MODELS: Final = "ai21/chat"
 
 
-def _provider_model_entries(
-    model_cost_map: Mapping[str, Mapping[str, object]],
-) -> Mapping[tuple[int, str], set[str]]:  # mutable-ok: live provider sets, edited in place
+def _provider_model_sets() -> Mapping[str, set[str]]:  # mutable-ok: live provider sets, edited in place
     return MappingProxyType(
-        {(id(models), name): models for models, name, known in _provider_model_set_changes(model_cost_map) if known}
+        {
+            "openai": open_ai_chat_completion_models,
+            "text-completion-openai": open_ai_text_completion_models,
+            "azure_text": azure_text_models,
+            "cohere": cohere_models,
+            "cohere_chat": cohere_chat_models,
+            "mistral": mistral_chat_models,
+            "anthropic": anthropic_models,
+            "empower": empower_models,
+            "openrouter": openrouter_models,
+            "vercel_ai_gateway": vercel_ai_gateway_models,
+            "edenai": edenai_models,
+            "datarobot": datarobot_models,
+            "vertex_ai-text-models": vertex_text_models,
+            "vertex_ai-code-text-models": vertex_code_text_models,
+            "vertex_ai-language-models": vertex_language_models,
+            "vertex_ai-vision-models": vertex_vision_models,
+            "vertex_ai-chat-models": vertex_chat_models,
+            "vertex_ai-code-chat-models": vertex_code_chat_models,
+            "vertex_ai-embedding-models": vertex_embedding_models,
+            "vertex_ai-anthropic_models": vertex_anthropic_models,
+            "vertex_ai-llama_models": vertex_llama3_models,
+            "vertex_ai-deepseek_models": vertex_deepseek_models,
+            "vertex_ai-mistral_models": vertex_mistral_models,
+            "vertex_ai-ai21_models": vertex_ai_ai21_models,
+            "vertex_ai-image-models": vertex_ai_image_models,
+            "vertex_ai-video-models": vertex_ai_video_models,
+            "vertex_ai-openai_models": vertex_openai_models,
+            "vertex_ai-minimax_models": vertex_minimax_models,
+            "vertex_ai-moonshot_models": vertex_moonshot_models,
+            "vertex_ai-zai_models": vertex_zai_models,
+            "vertex_ai-qwen_models": vertex_qwen_models,
+            "vertex_ai": vertex_ai_models,
+            "ai21": ai21_models,
+            _AI21_CHAT_MODELS: ai21_chat_models,
+            "nlp_cloud": nlp_cloud_models,
+            "aleph_alpha": aleph_alpha_models,
+            "bedrock": bedrock_models,
+            "bedrock_converse": bedrock_converse_models,
+            "deepinfra": deepinfra_models,
+            "clf_ai_gateway": clf_ai_gateway_models,
+            "perplexity": perplexity_models,
+            "watsonx": watsonx_models,
+            "gemini": gemini_models,
+            "fireworks_ai": fireworks_ai_models,
+            "together_ai": together_ai_models,
+            "baseten": baseten_models,
+            "fireworks_ai-embedding-models": fireworks_ai_embedding_models,
+            "text-completion-codestral": text_completion_codestral_models,
+            "text-completion-inception": text_completion_inception_models,
+            "xai": xai_models,
+            "zai": zai_models,
+            "bigmodel": bigmodel_models,
+            "fal_ai": fal_ai_models,
+            "deepseek": deepseek_models,
+            "tencent": tencent_models,
+            "runwayml": runwayml_models,
+            "meta_llama": llama_models,
+            "nscale": nscale_models,
+            "azure_ai": azure_ai_models,
+            "voyage": voyage_models,
+            "infinity": infinity_models,
+            "databricks": databricks_models,
+            "cloudflare": cloudflare_models,
+            "codestral": codestral_models,
+            "friendliai": friendliai_models,
+            "palm": palm_models,
+            "groq": groq_models,
+            "azure": azure_models,
+            "azure_anthropic": azure_anthropic_models,
+            "anyscale": anyscale_models,
+            "cerebras": cerebras_models,
+            "nadir": nadir_models,
+            "galadriel": galadriel_models,
+            "nvidia_nim": nvidia_nim_models,
+            "nvidia_riva": nvidia_riva_models,
+            "gnani": gnani_models,
+            "soniox": soniox_models,
+            "sambanova": sambanova_models,
+            "scaledown": scaledown_models,
+            "sambanova-embedding-models": sambanova_embedding_models,
+            "novita": novita_models,
+            "nebius-chat-models": nebius_models,
+            "nebius-embedding-models": nebius_embedding_models,
+            "aiml": aiml_models,
+            "assemblyai": assemblyai_models,
+            "jina_ai": jina_ai_models,
+            "snowflake": snowflake_models,
+            "gradient_ai": gradient_ai_models,
+            "featherless_ai": featherless_ai_models,
+            "deepgram": deepgram_models,
+            "elevenlabs": elevenlabs_models,
+            "gradium": gradium_models,
+            "heroku": heroku_models,
+            "dashscope": dashscope_models,
+            "qwencloud": qwencloud_models,
+            "qwen_ai_platform": qwen_ai_platform_models,
+            "modelscope": modelscope_models,
+            "moonshot": moonshot_models,
+            "publicai": publicai_models,
+            "darkbloom": darkbloom_models,
+            "openinfer": openinfer_models,
+            "kyma": kyma_models,
+            "streamlake": streamlake_models,
+            "resetdata": resetdata_models,
+            "wally": wally_models,
+            "huawei_maas": huawei_maas_models,
+            "zerogpu": zerogpu_models,
+            "v0": v0_models,
+            "vispark": vispark_models,
+            "morph": morph_models,
+            "opencode_go": opencode_go_models,
+            "lambda_ai": lambda_ai_models,
+            "inception": inception_models,
+            "hyperbolic": hyperbolic_models,
+            "black_forest_labs": black_forest_labs_models,
+            "recraft": recraft_models,
+            "cometapi": cometapi_models,
+            "oci": oci_models,
+            "volcengine": volcengine_models,
+            "wandb": wandb_models,
+            "ovhcloud": ovhcloud_models,
+            "ovhcloud-embedding-models": ovhcloud_embedding_models,
+            "lemonade": lemonade_models,
+            "docker_model_runner": docker_model_runner_models,
+            "amazon_nova": amazon_nova_models,
+            "stability": stability_models,
+            "github_copilot": github_copilot_models,
+            "microsoft_365_copilot": microsoft_365_copilot_models,
+            "chatgpt": chatgpt_models,
+            "minimax": minimax_models,
+            "aws_polly": aws_polly_models,
+            "transcribe": transcribe_models,
+            "gigachat": gigachat_models,
+            "llamagate": llamagate_models,
+            "coralbricks": coralbricks_models,
+            "perplexity_orchestrator": perplexity_orchestrator_models,
+            "aiand": aiand_models,
+            "reducto": reducto_models,
+            "nace": nace_models,
+            "bedrock_mantle": bedrock_mantle_models,
+        }
     )
 
 
-def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
-    for models, name, known in _provider_model_set_changes(model_cost_map):
-        if known:
-            models.add(name)
-        else:
-            models.discard(name)
+_PROVIDER_MODEL_LISTINGS: Final = frozenset(_provider_model_sets())
+
+_PROVIDERS_KEYED_UNDER_VERTEX_AI: Final = frozenset(
+    {
+        "vertex_ai",
+        "vertex_ai-ai21_models",
+        "vertex_ai-anthropic_models",
+        "vertex_ai-deepseek_models",
+        "vertex_ai-image-models",
+        "vertex_ai-llama_models",
+        "vertex_ai-minimax_models",
+        "vertex_ai-mistral_models",
+        "vertex_ai-moonshot_models",
+        "vertex_ai-openai_models",
+        "vertex_ai-qwen_models",
+        "vertex_ai-video-models",
+        "vertex_ai-zai_models",
+    }
+)
 
 
-class _InstalledProviderModels:
-    """The provider set entries that are there only because an installed cost map put them there"""
+class _ProviderModel(NamedTuple):
+    """Where one cost map row puts its model in the provider model sets, `retired` when it takes the name out"""
 
-    owned: Mapping[tuple[int, str], set[str]] = MappingProxyType({})  # mutable-ok: live provider sets, edited in place
+    listing: str
+    name: str
+    retired: bool
+
+
+def _is_a_model_of(listing: str, key: str, value: Mapping[str, object]) -> bool:
+    match listing:
+        case "openai":
+            return not is_openai_finetune_model(key)
+        case "bedrock":
+            return value.get("mode") != "guardrail" and not is_bedrock_pricing_only_model(key)
+        case "bedrock_converse":
+            return not is_bedrock_pricing_only_model(key)
+        # the "-to-" and default keys price requests by model size, they name no model
+        case "fireworks_ai":
+            return "-to-" not in key and "fireworks-ai-default" not in key
+        case "fireworks_ai-embedding-models":
+            return "-to-" not in key
+        case "together_ai":
+            return not key.startswith("together-ai-")
+        case "nace":
+            return value.get("mode") == "ocr"
+        case _:
+            return True
+
+
+def _provider_model(key: str, value: Mapping[str, object]) -> _ProviderModel | None:
+    provider: Final = value.get("litellm_provider")
+    listing: Final = _AI21_CHAT_MODELS if provider == "ai21" and value.get("mode") == "chat" else provider
+    if not isinstance(listing, str) or listing not in _PROVIDER_MODEL_LISTINGS:
+        return None
+    retired: Final = is_hidden_as_retired(value)
+    if not retired and not _is_a_model_of(listing, key, value):
+        return None
+    name: Final = key.removeprefix("vertex_ai/") if listing in _PROVIDERS_KEYED_UNDER_VERTEX_AI else key
+    return _ProviderModel(listing, name, retired)
+
+
+def _names_by_listing(models: Iterable[_ProviderModel]) -> Mapping[str, frozenset[str]]:
+    by_listing: Final = groupby(sorted(models), key=lambda model: model.listing)
+    return MappingProxyType({listing: frozenset(model.name for model in group) for listing, group in by_listing})
+
+
+class _ProviderModelLists(NamedTuple):
+    listed: Mapping[str, frozenset[str]]
+    retired: Mapping[str, frozenset[str]]
+
+
+def _provider_model_lists(model_cost_map: Mapping[str, Mapping[str, object]]) -> _ProviderModelLists:
+    rows: Final = (_provider_model(key, value) for key, value in tuple(model_cost_map.items()))
+    models: Final = tuple(model for model in rows if model is not None)
+    return _ProviderModelLists(
+        listed=_names_by_listing(model for model in models if not model.retired),
+        retired=_names_by_listing(model for model in models if model.retired),
+    )
+
+
+_NO_MODELS: Final[frozenset[str]] = frozenset()
+
+
+def _write_provider_model_sets(lists: _ProviderModelLists) -> None:
+    for listing, models in _provider_model_sets().items():
+        models.difference_update(lists.retired.get(listing, _NO_MODELS))
+        models.update(lists.listed.get(listing, _NO_MODELS))
+
+
+class _ProviderModelSources:
+    """What put the names in the provider model sets. An install takes out only names an earlier install alone listed"""
+
+    installed: Mapping[str, frozenset[str]] = MappingProxyType({})
+    added: Mapping[str, frozenset[str]] = MappingProxyType(
+        {listing: frozenset(models) for listing, models in _provider_model_sets().items()}
+    )
 
 
 def _install_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
-    incoming: Final = _provider_model_entries(model_cost_map)
-    previous: Final = _InstalledProviderModels.owned
-    for entry, models in previous.items():
-        if entry not in incoming:
-            models.discard(entry[1])
-    _InstalledProviderModels.owned = MappingProxyType(
-        {entry: models for entry, models in incoming.items() if entry in previous or entry[1] not in models}
-    )
-    _populate_provider_model_sets(model_cost_map)
+    lists: Final = _provider_model_lists(model_cost_map)
+    added: Final = _ProviderModelSources.added
+    sets: Final = _provider_model_sets()
+    for listing, names in _ProviderModelSources.installed.items():
+        sets[listing].difference_update(names - lists.listed.get(listing, _NO_MODELS) - added.get(listing, _NO_MODELS))
+    _ProviderModelSources.installed = lists.listed
+    _write_provider_model_sets(lists)
 
 
-def _claim_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
-    claimed: Final = _provider_model_entries(model_cost_map)
-    _InstalledProviderModels.owned = MappingProxyType(
-        {entry: models for entry, models in _InstalledProviderModels.owned.items() if entry not in claimed}
+def _add_provider_models(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
+    lists: Final = _provider_model_lists(model_cost_map)
+    added: Final = _ProviderModelSources.added
+    _ProviderModelSources.added = MappingProxyType(
+        {**added, **{listing: added.get(listing, _NO_MODELS) | names for listing, names in lists.listed.items()}}
     )
-    _populate_provider_model_sets(model_cost_map)
+    _write_provider_model_sets(lists)
 
 
 def _refresh_known_model_lists(known_before: frozenset[str], embeddings_before: frozenset[str]) -> None:
@@ -1167,13 +1082,13 @@ def add_known_models(model_cost_map: Optional[Mapping[str, Mapping[str, object]]
     """
     known_before: Final = _known_models()
     embeddings_before: Final = _known_embedding_models()
-    _claim_provider_model_sets(model_cost_map if model_cost_map is not None else model_cost)
+    _add_provider_models(model_cost_map if model_cost_map is not None else model_cost)
     _refresh_known_model_lists(known_before, embeddings_before)
 
 
 def install_known_models(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
-    """Make the per-provider model sets and the lists built from them follow a newly installed cost map: what the
-    previous installed map alone put there and this one lacks is retired, and everything else is kept."""
+    """Make the per-provider model sets and the lists built from them follow a newly installed cost map: a name
+    only the previous install listed is taken out, and everything `add_known_models` added stays."""
     known_before: Final = _known_models()
     embeddings_before: Final = _known_embedding_models()
     _install_provider_model_sets(model_cost_map)

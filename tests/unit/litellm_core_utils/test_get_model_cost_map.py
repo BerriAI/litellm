@@ -14,6 +14,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.constants import BEDROCK_CONVERSE_MODELS
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
     match_routing_generalization,
@@ -271,6 +272,21 @@ def test_a_reload_retires_the_models_only_the_previous_map_served():
     assert "lit-dropped-embedding" not in litellm.all_embedding_models
 
 
+@pytest.mark.usefixtures("own_model_cost")
+def test_a_reload_keeps_a_model_litellm_ships_in_code_when_the_new_map_lacks_its_row():
+    bundled: Final[Mapping[str, Mapping[str, object]]] = json.loads(_BUNDLED)
+    shipped: Final = next(
+        name for name in BEDROCK_CONVERSE_MODELS if bundled.get(name, {}).get("litellm_provider") == "bedrock_converse"
+    )
+    try:
+        install_model_cost_map(json.dumps({key: row for key, row in bundled.items() if key != shipped}).encode())
+
+        assert shipped not in litellm.model_cost
+        assert shipped in litellm.bedrock_converse_models
+    finally:
+        install_model_cost_map(_BUNDLED)
+
+
 @pytest.mark.parametrize("registered_first", [True, False])
 @pytest.mark.usefixtures("own_model_cost")
 def test_a_reload_keeps_a_registered_model_the_new_map_lacks(registered_first: bool):
@@ -280,6 +296,7 @@ def test_a_reload_keeps_a_registered_model_the_new_map_lacks(registered_first: b
     install_model_cost_map(_document_with(**{"lit-registered-chat": row}))
     if not registered_first:
         litellm.register_model({"lit-registered-chat": row})
+    litellm.register_model({"lit-registered-later": row})
 
     install_model_cost_map(_BUNDLED)
 
