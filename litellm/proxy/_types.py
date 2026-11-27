@@ -5199,6 +5199,10 @@ class JWTIssuerConfig(LiteLLMBaseModel):
         default=None,
         description="Issuer-specific claim path used for the virtual key mapping lookup. Falls back to the global field.",
     )
+    disable_global_key_mapping_fallback: bool | None = Field(
+        default=None,
+        description="Override whether this issuer skips global key mappings. Unset inherits the global setting.",
+    )
     unregistered_jwt_client_behavior: UnregisteredJWTClientBehavior | None = Field(
         default=None,
         description="Issuer-specific policy when the virtual key claim has no mapping. Falls back to the global policy.",
@@ -5395,6 +5399,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     virtual_key_mapping_cache_ttl: float = Field(
         default=300,
         description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
+    )
+    disable_global_key_mapping_fallback: bool = Field(
+        default=False,
+        description="Skip global key mappings after a scoped miss for JWTs from configured issuers.",
     )
     unregistered_jwt_client_behavior: UnregisteredJWTClientBehavior = Field(
         default=UnregisteredJWTClientBehavior.FALLBACK_TEAM_MAPPING,

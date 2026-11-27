@@ -139,11 +139,25 @@ class _JWTLifecycleRuntime:
     issuer_b: str
 
 
+@dataclass(frozen=True)
+class _GlobalFallbackRuntime:
+    gateway: Gateway
+    upstream: Wire
+    model: str
+    private_key: rsa.RSAPrivateKey
+    strict_issuer: str
+    permissive_issuer: str
+    auto_register_issuer: str
+
+
 def _proxy_config(
     directory: Path,
     model: str,
     upstream_url: str,
     issuers: tuple[dict[str, JsonValue], ...] = (),
+    *,
+    disable_global_key_mapping_fallback: bool = False,
+    user_id_upsert: bool = False,
 ) -> Path:
     config: Final = directory / "jwt_key_mapping_config.yaml"
     config.write_text(
@@ -169,8 +183,12 @@ def _proxy_config(
                     "enable_jwt_auth": True,
                     "litellm_jwtauth": {
                         "user_id_jwt_field": "sub",
+                        **({"user_id_upsert": True} if user_id_upsert else {}),
                         "virtual_key_claim_field": _CLIENT_CLAIM,
                         "unregistered_jwt_client_behavior": "reject",
+                        **(
+                            {"disable_global_key_mapping_fallback": True} if disable_global_key_mapping_fallback else {}
+                        ),
                         **({"issuers": issuers} if issuers else {}),
                     },
                 },
@@ -589,6 +607,146 @@ def test_creating_a_global_mapping_admits_an_issuer_jwt_refused_before_it_on_bot
         _assert_chat(first, model, token, prompts[2], key_hash)
         _assert_chat(second, model, token, prompts[3], key_hash)
         _assert_upstream_requests(upstream, tuple(_expected_chat_request(model, prompt) for prompt in prompts[2:4]))
+
+
+@pytest.fixture(
+    scope="module",
+    params=(pytest.param(True, id="global-on"), pytest.param(False, id="global-off")),
+)
+def issuer_without_global_fallback(
+    tmp_path_factory: pytest.TempPathFactory,
+    request: pytest.FixtureRequest,
+) -> Iterator[_GlobalFallbackRuntime]:
+    global_disabled: Final = request.param is True
+    directory: Final = tmp_path_factory.mktemp("jwt-without-global-fallback")
+    model: Final = "jwt-without-global-fallback-" + uuid.uuid4().hex
+    strict_issuer: Final = "https://strict-idp.integration.example"
+    permissive_issuer: Final = "https://permissive-idp.integration.example"
+    auto_register_issuer: Final = "https://auto-register-idp.integration.example"
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    with (
+        gateway_from_environment() as base,
+        wire_server(_chat_respond(model)) as upstream,
+        wire_server(_jwks_respond(private_key)) as jwks,
+    ):
+        jwks_url: Final = f"{jwks.url}/jwks"
+        override: Final = "disable_global_key_mapping_fallback"
+        strict_settings: Final[dict[str, JsonValue]] = {} if global_disabled else {override: True}
+        permissive_settings: Final[dict[str, JsonValue]] = {override: False} if global_disabled else {}
+        config: Final = _proxy_config(
+            directory,
+            model,
+            upstream.url,
+            (
+                {**_issuer_config(strict_issuer, jwks_url), **strict_settings},
+                {**_issuer_config(permissive_issuer, jwks_url), **permissive_settings},
+                {
+                    **_issuer_config(auto_register_issuer, jwks_url),
+                    **strict_settings,
+                    "unregistered_jwt_client_behavior": "auto_register",
+                },
+            ),
+            disable_global_key_mapping_fallback=global_disabled,
+            user_id_upsert=True,
+        )
+        with owned_proxy(base, directory / "worker", {}, config=config) as gateway:
+            eventually(lambda: _model_is_available(gateway, model), bool, seconds=30)
+            _assert_upstream_requests(upstream, ())
+            yield _GlobalFallbackRuntime(
+                gateway, upstream, model, private_key, strict_issuer, permissive_issuer, auto_register_issuer
+            )
+
+
+def test_disabling_global_mapping_fallback_rejects_issuer_jwt_with_only_a_global_mapping(
+    issuer_without_global_fallback: _GlobalFallbackRuntime,
+) -> None:
+    runtime: Final = issuer_without_global_fallback
+    gateway: Final = runtime.gateway
+    client_id: Final = "integration-client-" + uuid.uuid4().hex
+    token: Final = _signed_jwt(runtime.private_key, client_id, runtime.strict_issuer)
+
+    with gateway.scenario() as scenario:
+        key: Final = _create_key(gateway, runtime.model)
+        scenario.cleanups.callback(delete_key_if_present, gateway, key)
+        mapping: Final = _create_mapping(gateway, key, client_id)
+        scenario.cleanups.callback(_delete_mapping_if_present, gateway, mapping.id)
+        assert mapping.jwt_issuer is None
+
+        _assert_unmapped(_chat(gateway, runtime.model, token, "issuer without a scoped mapping"), client_id)
+        _assert_upstream_requests(runtime.upstream, ())
+
+
+def test_an_issuer_that_allows_fallback_warms_a_global_key_that_a_strict_issuer_skips(
+    issuer_without_global_fallback: _GlobalFallbackRuntime,
+) -> None:
+    runtime: Final = issuer_without_global_fallback
+    gateway: Final = runtime.gateway
+    client_id: Final = "integration-client-" + uuid.uuid4().hex
+    prompt: Final = "issuer with global fallback"
+    with gateway.scenario() as scenario:
+        key: Final = _create_key(gateway, runtime.model)
+        scenario.cleanups.callback(delete_key_if_present, gateway, key)
+        mapping: Final = _create_mapping(gateway, key, client_id)
+        scenario.cleanups.callback(_delete_mapping_if_present, gateway, mapping.id)
+        permissive: Final = _signed_jwt(runtime.private_key, client_id, runtime.permissive_issuer)
+        key_hash: Final = sha256(key.encode()).hexdigest()
+        _assert_chat(gateway, runtime.model, permissive, prompt, key_hash)
+
+        with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
+            assert cache.get(f"jwt_key_mapping:{_CLIENT_CLAIM}:{client_id}") == json.dumps(key_hash).encode()
+        strict: Final = _signed_jwt(runtime.private_key, client_id, runtime.strict_issuer)
+        _assert_unmapped(_chat(gateway, runtime.model, strict, "strict issuer with a warm global key"), client_id)
+        _assert_upstream_requests(runtime.upstream, (_expected_chat_request(runtime.model, prompt),))
+
+
+def test_a_strict_issuer_skips_the_global_admin_cache_sentinel(
+    issuer_without_global_fallback: _GlobalFallbackRuntime,
+) -> None:
+    runtime: Final = issuer_without_global_fallback
+    client_id: Final = "integration-client-" + uuid.uuid4().hex
+    cache_key: Final = f"jwt_key_mapping:{_CLIENT_CLAIM}:{client_id}"
+    with (
+        Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache,
+        runtime.gateway.scenario() as scenario,
+    ):
+        scenario.cleanups.callback(cache.delete, cache_key)
+        assert cache.set(cache_key, json.dumps("__JWT_PROXY_ADMIN__"), ex=300)
+        token: Final = _signed_jwt(runtime.private_key, client_id, runtime.strict_issuer)
+
+        _assert_unmapped(
+            _chat(runtime.gateway, runtime.model, token, "strict issuer with cached global admin"), client_id
+        )
+        _assert_upstream_requests(runtime.upstream, ())
+
+
+def test_a_strict_issuer_auto_registers_a_scoped_mapping_instead_of_using_the_global_key(
+    issuer_without_global_fallback: _GlobalFallbackRuntime,
+) -> None:
+    runtime: Final = issuer_without_global_fallback
+    gateway: Final = runtime.gateway
+    client_id: Final = "integration-client-" + uuid.uuid4().hex
+    subject: Final = "integration-user-" + uuid.uuid4().hex
+    prompt: Final = "auto-register strict issuer"
+    with gateway.scenario() as scenario:
+        global_key: Final = _create_key(gateway, runtime.model)
+        scenario.cleanups.callback(delete_key_if_present, gateway, global_key)
+        scenario.cleanups.callback(_forget_auto_registered_client, client_id, subject)
+        mapping: Final = _create_mapping(gateway, global_key, client_id)
+        scenario.cleanups.callback(_delete_mapping_if_present, gateway, mapping.id)
+        token: Final = _signed_jwt(runtime.private_key, client_id, runtime.auto_register_issuer, subject=subject)
+
+        response: Final = _chat(gateway, runtime.model, token, prompt)
+        assert response.status_code == 200, response.text
+        rows: Final = read_rows(
+            'SELECT jwt_issuer, token FROM "LiteLLM_JWTKeyMapping" WHERE jwt_claim_name=%s AND jwt_claim_value=%s',
+            (_CLIENT_CLAIM, client_id),
+        )
+        global_hash: Final = sha256(global_key.encode()).hexdigest()
+        assert len(rows) == 2, rows
+        by_issuer: Final = {row["jwt_issuer"]: row["token"] for row in rows}
+        assert by_issuer[""] == global_hash
+        assert by_issuer[runtime.auto_register_issuer] != global_hash
+        _assert_upstream_requests(runtime.upstream, (_expected_chat_request(runtime.model, prompt),))
 
 
 def test_reactivating_a_global_mapping_restores_issuer_jwt_callers_on_both_workers(

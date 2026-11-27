@@ -206,6 +206,7 @@ pub struct JwtIssuerConfig {
     pub customer_member_id_jwt_field: Option<ClaimPath>,
     pub customer_team_id_jwt_field: Option<ClaimPath>,
     pub virtual_key_claim_field: Option<ClaimPath>,
+    pub disable_global_key_mapping_fallback: Option<bool>,
     pub unregistered_jwt_client_behavior: Option<UnregisteredJwtClientBehavior>,
 }
 
@@ -258,6 +259,7 @@ pub struct JwtAuthSettings {
     #[serde(alias = "jwt_client_id_field")]
     pub virtual_key_claim_field: Option<ClaimPath>,
     pub virtual_key_mapping_cache_ttl: f64,
+    pub disable_global_key_mapping_fallback: bool,
     pub unregistered_jwt_client_behavior: UnregisteredJwtClientBehavior,
     pub auto_register_map_existing_key: bool,
     pub routing_overrides: Option<Box<[JwtRoutingOverride]>>,
@@ -334,6 +336,7 @@ impl Default for JwtAuthSettings {
             oidc_userinfo_cache_ttl: 300.0,
             virtual_key_claim_field: None,
             virtual_key_mapping_cache_ttl: 300.0,
+            disable_global_key_mapping_fallback: false,
             unregistered_jwt_client_behavior: UnregisteredJwtClientBehavior::FallbackTeamMapping,
             auto_register_map_existing_key: false,
             routing_overrides: None,
@@ -392,6 +395,14 @@ impl JwtAuthSettings {
             .any(|field| field.map(ClaimPath::as_str) == Some(claim_field))
     }
 
+    pub fn disables_global_key_mapping_fallback(&self, issuer: Option<&str>) -> bool {
+        self.issuer(issuer).is_some_and(|config| {
+            config
+                .disable_global_key_mapping_fallback
+                .unwrap_or(self.disable_global_key_mapping_fallback)
+        })
+    }
+
     pub fn unregistered_jwt_client_behavior(
         &self,
         issuer: Option<&str>,
@@ -399,5 +410,32 @@ impl JwtAuthSettings {
         self.issuer(issuer)
             .and_then(|config| config.unregistered_jwt_client_behavior)
             .unwrap_or(self.unregistered_jwt_client_behavior)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::{Value, json};
+
+    use super::JwtAuthSettings;
+
+    #[rstest]
+    #[case::default_off(json!({"issuers": [{"issuer": "idp"}]}), Some("idp"), false)]
+    #[case::inherits_enabled(json!({"disable_global_key_mapping_fallback": true, "issuers": [{"issuer": "idp"}]}), Some("idp"), true)]
+    #[case::explicit_false(json!({"disable_global_key_mapping_fallback": true, "issuers": [{"issuer": "idp", "disable_global_key_mapping_fallback": false}]}), Some("idp"), false)]
+    #[case::explicit_true(json!({"issuers": [{"issuer": "idp", "disable_global_key_mapping_fallback": true}]}), Some("idp"), true)]
+    #[case::unmatched(json!({"disable_global_key_mapping_fallback": true, "issuers": [{"issuer": "idp"}]}), Some("other"), false)]
+    #[case::issuerless(json!({"disable_global_key_mapping_fallback": true}), None, false)]
+    fn global_key_mapping_fallback_policy(
+        #[case] config: Value,
+        #[case] issuer: Option<&str>,
+        #[case] disabled: bool,
+    ) {
+        let settings: JwtAuthSettings = serde_json::from_value(config).unwrap();
+        assert_eq!(
+            settings.disables_global_key_mapping_fallback(issuer),
+            disabled
+        );
     }
 }

@@ -173,7 +173,7 @@ async fn lookup_hash(
         cache(host, pending.claim(), &mapping, settings).await?;
         return Ok(Some(hash));
     }
-    if issuer.is_none() {
+    if issuer.is_none() || settings.config.disables_global_key_mapping_fallback(issuer) {
         return Ok(None);
     }
     let global_claim = MappedClaim {
@@ -720,6 +720,70 @@ mod tests {
                 "set jwt_key_mapping:client_id:7 300",
                 "key_by_hash global",
             ]
+        );
+    }
+
+    #[rstest]
+    #[case::global_database_row(None)]
+    #[case::cached_global_key(Some(json!("global")))]
+    #[case::global_proxy_admin_sentinel(Some(json!(PROXY_ADMIN_SENTINEL)))]
+    #[tokio::test]
+    async fn strict_issuer_does_not_read_any_global_mapping(#[case] cached: Option<Value>) {
+        let host = ScriptedHost {
+            mappings: HashMap::from([("client_id=7 -".to_owned(), "global".to_owned())]),
+            keys: HashMap::from([("global", mapped("global"))]),
+            json_cache: cached
+                .map(|value| HashMap::from([("jwt_key_mapping:client_id:7".to_owned(), value)]))
+                .unwrap_or_default()
+                .into(),
+            ..ScriptedHost::default()
+        };
+        let mut settings = settings(Behavior::AutoRegister, true);
+        settings.config.disable_global_key_mapping_fallback = true;
+        settings.config.issuers = Some(Box::new([JwtIssuerConfig {
+            issuer: "idp".to_owned(),
+            ..JwtIssuerConfig::default()
+        }]));
+        let claims = claims(json!({"client_id": 7, "_litellm_jwt_issuer": "idp"}));
+        let resolved = resolve(&host, &claims, &settings).await;
+
+        assert_eq!(
+            resolved,
+            Ok(Resolved::Pending(Pending {
+                claim_field: FIELD.to_owned(),
+                claim_value: "7".to_owned(),
+                issuer: Some("idp".to_owned()),
+                behavior: Behavior::AutoRegister,
+            }))
+        );
+        assert_eq!(
+            host.calls(),
+            [
+                "get jwt_key_mapping:idp:client_id:7",
+                "mapping client_id=7 idp"
+            ]
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn strict_issuer_still_uses_its_scoped_mapping() {
+        let host = ScriptedHost {
+            mappings: HashMap::from([("client_id=7 idp".to_owned(), "scoped".to_owned())]),
+            keys: HashMap::from([("scoped", mapped("scoped"))]),
+            ..ScriptedHost::default()
+        };
+        let mut settings = settings(Behavior::Reject, true);
+        settings.config.disable_global_key_mapping_fallback = true;
+        settings.config.issuers = Some(Box::new([JwtIssuerConfig {
+            issuer: "idp".to_owned(),
+            ..JwtIssuerConfig::default()
+        }]));
+        let claims = claims(json!({"client_id": 7, "_litellm_jwt_issuer": "idp"}));
+
+        assert_eq!(
+            resolve(&host, &claims, &settings).await,
+            Ok(Resolved::Key(mapped("scoped")))
         );
     }
 

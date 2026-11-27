@@ -11,10 +11,12 @@ from litellm.proxy._types import (
     ConfigGeneralSettings,
     GenerateKeyRequest,
     GenerateKeyResponse,
+    JWTIssuerConfig,
     KeyRequest,
     LiteLLM_AuditLogs,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    LiteLLM_JWTAuth,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -35,6 +37,35 @@ from litellm.proxy._types import (
     UpdateUserRequestNoUserIDorEmail,
     UserAPIKeyAuth,
 )
+
+
+@pytest.mark.parametrize("global_disabled", (False, True))
+@pytest.mark.parametrize("issuer_disabled", (None, False, True))
+def test_jwt_mapping_fallback_settings_survive_json_projection(
+    global_disabled: bool, issuer_disabled: bool | None
+) -> None:
+    issuer: Final = JWTIssuerConfig(
+        issuer="https://idp.example.com",
+        audience="litellm",
+        disable_global_key_mapping_fallback=issuer_disabled,
+    )
+    settings: Final = LiteLLM_JWTAuth(
+        public_key_url="https://idp.example.com/jwks",
+        audience="litellm",
+        disable_global_key_mapping_fallback=global_disabled,
+        issuers=[issuer],
+    )
+    projected: Final = LiteLLM_JWTAuth.model_validate_json(settings.model_dump_json())
+
+    assert projected.disable_global_key_mapping_fallback is global_disabled
+    assert projected.issuers is not None
+    assert projected.issuers[0].disable_global_key_mapping_fallback is issuer_disabled
+    assert LiteLLM_JWTAuth().disable_global_key_mapping_fallback is False
+    assert (
+        JWTIssuerConfig(issuer="https://idp.example.com", audience="litellm").disable_global_key_mapping_fallback
+        is None
+    )
+
 
 SERVER_ONLY_MARKERS = (
     "requires_fresh_policy",
