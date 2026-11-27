@@ -49,6 +49,27 @@ CREATED_ENTRY: Final = (
     r' "updated_at": "2026-11-19T10:00:00Z", "created_at": "2026-11-19T10:00:00.123000Z",'
     r' "last_refreshed_at": null}'
 )
+DEFAULTS_ROW: Final = (
+    r'{"team_id":"defaults","team_alias":null,"organization_id":"org","admins":[],"members":[],"members_wi'
+    r'th_roles":[],"metadata":{},"max_budget":10.0,"soft_budget":null,"spend":0.0,"models":[],"max_paralle'
+    r'l_requests":null,"tpm_limit":100,"rpm_limit":10,"tpd_limit":null,"budget_duration":"30d","budget_res'
+    r'et_at":"2026-12-01T00:00:00+00:00","blocked":false,"created_at":"2026-11-27T08:00:00+00:00","updated'
+    r'_at":"2026-11-27T08:00:00+00:00","model_spend":{},"model_max_budget":{},"router_settings":{},"team_m'
+    r'ember_permissions":["/key/generate"],"access_group_ids":["wanted"],"policies":[],"default_team_membe'
+    r'r_models":[],"budget_limits":null,"model_id":null,"allow_team_guardrail_config":false,"object_permis'
+    r'sion_id":null,"litellm_model_table":null}'
+)
+DEFAULTS_ENTRY: Final = (
+    r'{"team_alias": null, "team_id": "defaults", "organization_id": "org", "admins": [], "members": [], "'
+    r'members_with_roles": [], "team_member_permissions": ["/key/generate"], "metadata": {}, "tpm_limit": '
+    r'100, "rpm_limit": 10, "tpd_limit": null, "max_budget": 10.0, "soft_budget": null, "budget_duration":'
+    r' "30d", "budget_limits": null, "models": [], "blocked": false, "router_settings": {}, "access_group_'
+    r'ids": ["wanted"], "default_team_member_models": [], "spend": 0.0, "max_parallel_requests": null, "bu'
+    r'dget_reset_at": "2026-12-01T00:00:00Z", "model_id": null, "model_spend": {}, "model_max_budget": {},'
+    r' "policies": [], "allow_team_guardrail_config": false, "litellm_model_table": null, "object_permissi'
+    r'on": null, "object_permission_id": null, "updated_at": "2026-11-27T08:00:00Z", "created_at": "2026-1'
+    r'1-27T08:00:00Z", "last_refreshed_at": null}'
+)
 FULL_ROW: Final = (
     r'{"team_id":"full","team_alias":"Full","organization_id":"org","admins":["admin"],'
     r'"members":["member"],"members_with_roles":[{"role": "admin", "extra": 1,'
@@ -178,8 +199,14 @@ def _unstamped(entry: str) -> str:
 
 _TEAMS: Final = pytest.mark.parametrize(
     ("row", "entry"),
-    [(CREATED_ROW, CREATED_ENTRY), (FULL_ROW, FULL_ENTRY), (NULLS_ROW, NULLS_ENTRY), (TEXT_ROW, TEXT_ENTRY)],
-    ids=["as_created", "every_column_set", "json_nulls", "json_text"],
+    [
+        (CREATED_ROW, CREATED_ENTRY),
+        (FULL_ROW, FULL_ENTRY),
+        (NULLS_ROW, NULLS_ENTRY),
+        (TEXT_ROW, TEXT_ENTRY),
+        (DEFAULTS_ROW, DEFAULTS_ENTRY),
+    ],
+    ids=["as_created", "every_column_set", "json_nulls", "json_text", "upserted_with_defaults"],
 )
 
 
@@ -213,8 +240,15 @@ async def test_the_proxy_caches_a_team_it_read_from_the_database_in_the_bytes_th
 
 @pytest.mark.parametrize(
     "entry",
-    [CREATED_ENTRY, FULL_ENTRY, NULLS_ENTRY, TEXT_ENTRY, STAMPED_ENTRY],
-    ids=["as_created", "every_column_set", "json_nulls", "json_text", "stamped_by_the_host_that_cached_it"],
+    [CREATED_ENTRY, FULL_ENTRY, NULLS_ENTRY, TEXT_ENTRY, STAMPED_ENTRY, DEFAULTS_ENTRY],
+    ids=[
+        "as_created",
+        "every_column_set",
+        "json_nulls",
+        "json_text",
+        "stamped_by_the_host_that_cached_it",
+        "upserted_with_defaults",
+    ],
 )
 @pytest.mark.asyncio
 async def test_python_caches_the_team_it_read_from_the_entry_in_the_same_bytes(entry: str) -> None:
