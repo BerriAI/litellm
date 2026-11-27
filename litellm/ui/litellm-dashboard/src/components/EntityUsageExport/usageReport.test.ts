@@ -2,6 +2,7 @@
 import type { TFunction } from "i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import {
   USAGE_REPORT_MAX_ROWS,
   buildUsageReportHtml,
@@ -41,6 +42,7 @@ const baseInput: ReportInput = {
   dateRange: { from: new Date(2025, 9, 1), to: new Date(2025, 9, 14) },
   selectedFilters: [],
   generatedAt: new Date(2025, 9, 15),
+  language: "en",
   t,
 };
 
@@ -54,6 +56,40 @@ const bodyRows = (doc: Document) =>
   [...doc.querySelectorAll("tbody tr")].map((tr) => [...tr.querySelectorAll("td")].map((cell) => cell.textContent));
 
 describe("buildUsageReportHtml", () => {
+  it("localizes the printed date range and export type", () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    const translate = locale.getFixedT("zh-CN");
+    const input = { ...baseInput, language: "zh-CN", t: translate, exportType: "daily_with_keys" } as const;
+    const html = buildUsageReportHtml(input);
+
+    expect(html).toContain("2025/10/1 - 2025/10/14");
+    expect(html).not.toContain("daily_with_keys");
+    expect(html).toContain(
+      translate("usage.export.type.dailyWithKeys.title", { entityType: translate("usage.entityLabels.inline.team") }),
+    );
+  });
+
+  it("uses the Chinese usage glossary in the printed summary and breakdown", () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    const doc = render({ language: "zh-CN", t: locale.getFixedT("zh-CN") });
+
+    const summaryLabels = [...doc.querySelectorAll('[data-testid="usage-report-summary"] .label')].map(
+      (cell) => cell.textContent,
+    );
+    expect(summaryLabels).toEqual([
+      "总费用",
+      "请求数",
+      "成功请求",
+      "失败请求",
+      "总 Token 数",
+      "提示 Token",
+      "补全 Token",
+    ]);
+    expect(headers(doc)).toEqual(["日期", "团队", "费用", "请求数", "成功", "失败", "提示 Token", "补全 Token"]);
+  });
+
   it.each([
     ["daily", [], "Team A"],
     ["daily_with_keys", ["Key"], "prod-key"],

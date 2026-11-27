@@ -96,7 +96,7 @@ def test_agentops_exporter_mints_the_jwt_once_on_first_export_and_sends_it_with_
     pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
     with respx.mock() as auth, requests_mock.Mocker() as collector:
         token_route = auth.post(_AGENTOPS_AUTH_ENDPOINT).respond(200, json={"token": "jwt-xyz"})
-        collector.post(_AGENTOPS_ENDPOINT, status_code=200)
+        agentops_route: Final = collector.post(_AGENTOPS_ENDPOINT, status_code=200)
         exporter = _agentops_exporter()
         assert token_route.call_count == 0, "building the exporter must not fetch the JWT"
 
@@ -104,7 +104,7 @@ def test_agentops_exporter_mints_the_jwt_once_on_first_export_and_sends_it_with_
 
     assert results == [SpanExportResult.SUCCESS, SpanExportResult.SUCCESS]
     assert [json.loads(call.request.content) for call in token_route.calls] == [{"api_key": "ak"}]
-    assert [request.headers.get("Authorization") for request in collector.request_history] == [
+    assert [request.headers.get("Authorization") for request in agentops_route.request_history] == [
         "Bearer jwt-xyz",
         "Bearer jwt-xyz",
     ]

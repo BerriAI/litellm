@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useProjectDetails } from "@/app/(dashboard)/hooks/projects/useProjectDetails";
 import { useTeam, useTeamMemberCount, useTeamMembersByUserId } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -25,7 +26,7 @@ interface ProjectDetailProps {
 const utilisationTone = (percent: number) => (percent >= 90 ? "over" : percent >= 70 ? "warning" : "default");
 
 export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const { data: project, isLoading } = useProjectDetails(projectId);
   const { data: teamInfo } = useTeam(project?.team_id ?? undefined);
   const { userId } = useAuthorized();
@@ -119,7 +120,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
             <dd className="text-foreground">{project.description || "—"}</dd>
             <dt className="text-muted-foreground">{t("projects.detail.created")}</dt>
             <dd className="flex items-center gap-1 text-foreground">
-              {new Date(project.created_at).toLocaleString()}
+              {displayTimestamp(new Date(project.created_at), locale.language)}
               {project.created_by && (
                 <>
                   <span>{t("projects.detail.by")}</span>
@@ -129,7 +130,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
             </dd>
             <dt className="text-muted-foreground">{t("projects.detail.lastUpdated")}</dt>
             <dd className="flex items-center gap-1 text-foreground">
-              {new Date(project.updated_at).toLocaleString()}
+              {displayTimestamp(new Date(project.updated_at), locale.language)}
               {project.updated_by && (
                 <>
                   <span>{t("projects.detail.by")}</span>
@@ -184,6 +185,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
                 data={modelSpendData}
                 index="model"
                 categories={["spend"]}
+                categoryLabels={{ spend: t("activityMetrics.series.spend") }}
                 colors={["cyan"]}
                 layout="vertical"
                 valueFormatter={(value) => `$${value.toFixed(4)}`}

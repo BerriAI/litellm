@@ -1,7 +1,10 @@
 import type { ColumnFiltersState, PaginationState } from "@tanstack/react-table";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { I18nextProvider } from "react-i18next";
 import { describe, expect, it, vi } from "vitest";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 
 import { AuditLogsTable } from "./AuditLogsTable";
 import type { AuditLogEntry } from "./AuditLogsTableColumns";
@@ -33,7 +36,7 @@ const ROWS: AuditLogEntry[] = [
 
 const FIRST_PAGE: PaginationState = { pageIndex: 0, pageSize: 50 };
 
-function renderTable(overrides: Partial<React.ComponentProps<typeof AuditLogsTable>> = {}) {
+function renderTable(overrides: Partial<React.ComponentProps<typeof AuditLogsTable>> = {}, locale = i18n) {
   const props: React.ComponentProps<typeof AuditLogsTable> = {
     data: ROWS,
     rowCount: ROWS.length,
@@ -47,11 +50,36 @@ function renderTable(overrides: Partial<React.ComponentProps<typeof AuditLogsTab
     onViewLog: vi.fn(),
     ...overrides,
   };
-  render(<AuditLogsTable {...props} />);
+  render(
+    <I18nextProvider i18n={locale}>
+      <AuditLogsTable {...props} />
+    </I18nextProvider>,
+  );
   return props;
 }
 
 describe("AuditLogsTable", () => {
+  it("localizes known action badges without changing raw audit entries or unknown actions", async () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    await locale.changeLanguage("zh-CN");
+    const updated = { ...ROWS[1], action: "updated" };
+    const unknown = { ...ROWS[1], id: "log-3", action: "custom_action", object_id: "custom-object" };
+    const blocked = { ...ROWS[0], id: "log-4", action: "blocked" };
+    const unblocked = { ...ROWS[0], id: "log-5", action: "unblocked" };
+    const data = [ROWS[0], updated, unknown, blocked, unblocked];
+    const props = renderTable({ data, rowCount: data.length }, locale);
+
+    expect(screen.getByText("已创建")).toBeInTheDocument();
+    expect(screen.getAllByText(/7月\d+日 \d{2}:\d{2}:00/)).toHaveLength(data.length);
+    expect(screen.getByText("已更新")).toBeInTheDocument();
+    expect(screen.getByText("custom_action")).toBeInTheDocument();
+    expect(screen.getByText("已封禁")).toBeInTheDocument();
+    expect(screen.getByText("已解除封禁")).toBeInTheDocument();
+    await userEvent.click(screen.getByText(updated.object_id));
+    expect(props.onViewLog).toHaveBeenCalledWith(updated);
+  });
+
   it("renders each audit column with the migrated shared cells", () => {
     renderTable();
 

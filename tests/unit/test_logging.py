@@ -35,6 +35,7 @@ from litellm._logging import (
     _parse_env_flag,
     _plain_log_format,
     _stdout_truncation_marker,
+    drain_rust_log_lines,
     print_startup_message,
     print_startup_warning,
     turn_on_json,
@@ -605,6 +606,15 @@ def test_trace_id_absent_when_not_set():
     trace_id_var.set("")
     lg.info("no trace message")
     assert "trace_id" not in cap.records[0]
+
+
+@pytest.mark.asyncio
+async def test_draining_rust_log_lines_gives_up_at_the_timeout_when_delivery_never_finishes() -> None:
+    never_delivered: Final = asyncio.get_running_loop().create_future()
+
+    await asyncio.wait_for(drain_rust_log_lines(0.01, lambda: never_delivered), timeout=5)
+
+    assert never_delivered.cancelled()
 
 
 @pytest.mark.asyncio

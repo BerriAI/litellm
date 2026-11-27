@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import os
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import nullcontext
@@ -7,7 +6,6 @@ from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import count
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # a future a host coroutine yields is untyped
 
 from fastapi import HTTPException
@@ -84,17 +82,12 @@ if TYPE_CHECKING:
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.rust_bridge._native import NativeModelCapacity, NativeModelCapacityState, NativeRequestRedis
 
-UNLICENSED_PRIORITY_MESSAGE: Final = (
-    "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your "
-    ".env to enable this.\nGet a license: https://docs.litellm.ai/docs/enterprise."
-)
 _METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
 _TRACES: Final = frozenset({"untraced", "attempt", "key"})
 RATE_LIMIT_KIND: Final = "model_capacity_rate_limit"
 RERAISE_KIND: Final = "model_capacity_reraise"
 _TOKENS: Final = count(1)
 MediaModelResolver = Callable[[str, str | None], tuple[str, ...]]
-_LOG_LEVELS: Final = MappingProxyType({"error": logging.ERROR, "warning": logging.WARNING, "info": logging.INFO})
 _TARGETED_HOOKS: Final = frozenset({Hook.pre_call, Hook.post_call_success, Hook.post_call_failure})
 _SETTLING_HOOKS: Final = frozenset({Hook.post_call_failure.value, Hook.attempt_ended.value})
 
@@ -540,20 +533,6 @@ class CapacityHost:
                 )
             except Exception as metrics_error:  # noqa: BLE001  # a failing metrics sink must not change the 429
                 verbose_proxy_logger.warning("Dynamic rate limiter throttle metric failed: %s", metrics_error)
-        return None
-
-    @_host_call_sync
-    def log(self, args: Mapping[str, object]) -> object:
-        from litellm._logging import verbose_proxy_logger
-
-        verbose_proxy_logger.log(_LOG_LEVELS[str(args["level"])], str(args["message"]))
-        return None
-
-    @_host_call_sync
-    def unlicensed_priority(self, _args: Mapping[str, object]) -> object:
-        from litellm._logging import verbose_proxy_logger
-
-        verbose_proxy_logger.error(UNLICENSED_PRIORITY_MESSAGE)
         return None
 
     @_host_call

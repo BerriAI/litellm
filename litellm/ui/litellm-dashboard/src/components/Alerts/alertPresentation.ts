@@ -58,7 +58,7 @@ export const TYPE_LABEL_KEYS = {
 } as const;
 const dateFormat = { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" } as const;
 export const dateLabel = (value: string) =>
-  new Date(value.length === 10 ? `${value}T00:00:00Z` : value).toLocaleDateString(undefined, dateFormat);
+  new Date(value.length === 10 ? `${value}T00:00:00Z` : value).toLocaleDateString(i18n.language, dateFormat);
 export function metricValue(value: number, unit: MetricUnit): string {
   if (unit === "usd") return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(value);
   if (unit === "ratio") return `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;

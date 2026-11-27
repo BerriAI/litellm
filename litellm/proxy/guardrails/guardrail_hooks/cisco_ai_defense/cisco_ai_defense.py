@@ -76,9 +76,7 @@ from .cisco_ai_defense_mcp import (  # noqa: F401  # legacy module exports
 )
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import (
-        GuardrailConfigModel,
-    )
+    from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import CiscoAIDefenseGuardrailConfigModel
 
 
 CISCO_DEFAULT_API_BASE: Final = "https://us.api.inspect.aidefense.security.cisco.com"
@@ -2194,7 +2192,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[CiscoAIDefenseGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
             CiscoAIDefenseGuardrailConfigModel,
         )

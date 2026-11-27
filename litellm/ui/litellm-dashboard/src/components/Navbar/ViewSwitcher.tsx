@@ -34,7 +34,7 @@ function isWorkspaceRoute(pathname: string, workspace: string): boolean {
 function routeWorkspaceLabel(pathname: string): string | undefined {
   if (isWorkspaceRoute(pathname, CHAT)) return i18n.t("shell.viewSwitcher.chat");
   if (isWorkspaceRoute(pathname, MOYAI)) return productNames.moyai;
-  if (isWorkspaceRoute(pathname, LENS)) return i18n.t("shell.nav.items.lens");
+  if (isWorkspaceRoute(pathname, LENS)) return productNames.lens;
   return undefined;
 }
 
@@ -210,7 +210,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
         <div className="flex w-full items-center justify-between gap-6 py-0.5">
           <span className="flex flex-col">
             <span className="font-medium">
-              {t("shell.nav.items.lens")} <BetaBadge />
+              {productNames.lens} <BetaBadge />
             </span>{" "}
             <span className="text-xs leading-snug text-muted-foreground">
               {t("shell.viewSwitcher.lensDescription")}

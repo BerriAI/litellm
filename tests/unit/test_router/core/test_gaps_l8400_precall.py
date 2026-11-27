@@ -210,10 +210,12 @@ class TestResponsesWebsocketTurnAdmission:
 
     @pytest.mark.asyncio
     async def test_usage_based_routing_admits_turns_until_the_deployment_rpm_is_used_up(
-        self, make_core: MakeCore, host: EndpointHost
+        self, make_core: MakeCore, host: EndpointHost, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Opening the socket already counts two requests (its pre-call check and its success), so an
         rpm of 5 leaves room for three turns."""
+        minute: Final = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
+        monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: minute)
         core: Final = make_core(model_list=[deployment("g", "a", rpm=5)], routing_strategy="usage-based-routing-v2")
         admit: Final = await self.open_socket(core, host)
 

@@ -112,7 +112,9 @@ export default function SwitchyardRouterForm({ accessToken, onSuccess, initial }
   const [initialDraft] = useState(() => switchyardEditDefaults(initial));
   const form = useZodForm(switchyardEditSchema, { defaultValues: initialDraft.values });
   const [name, config] = useWatch({ control: form.control, name: ["name", "config"] });
-  const [error, setError] = useState(initialDraft.error);
+  const [error, setError] = useState<string | null>(() =>
+    initialDraft.valid ? null : t("addModel.switchyardRouterForm.invalidStoredConfig"),
+  );
   const [toolError, setToolError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const save = async () => {
@@ -131,7 +133,7 @@ export default function SwitchyardRouterForm({ accessToken, onSuccess, initial }
         switchyard_router_config: payload.litellm_params.switchyard_router_config,
       });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Unable to save Switchyard router");
+      setError(failure instanceof Error ? failure.message : t("addModel.switchyardRouterForm.saveFailed"));
     } finally {
       setSaving(false);
     }

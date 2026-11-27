@@ -78,7 +78,7 @@ export default function ModelInfoView({
   onModelUpdate,
   modelAccessGroups,
 }: ModelInfoViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const activityDateRange = useActivityDateRange();
   const [localModelData, setLocalModelData] = useState<any>(null);
@@ -675,7 +675,7 @@ export default function ModelInfoView({
                 </svg>
                 {t("modelInfoView.audit.createdAt")}{" "}
                 {modelData.model_info.created_at
-                  ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
+                  ? new Date(modelData.model_info.created_at).toLocaleDateString(i18n.language, {
                       month: "short",
                       day: "numeric",
                       year: "numeric",

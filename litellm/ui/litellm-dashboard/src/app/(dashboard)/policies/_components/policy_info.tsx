@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import React, { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Info, Pencil } from "lucide-react";
@@ -51,7 +52,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   isAdmin,
   getPolicy,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [resolvedGuardrails, setResolvedGuardrails] = useState<string[]>([]);
@@ -138,10 +139,10 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
               )}
             </DetailRow>
             <DetailRow label={t("policies.policyInfo.fields.createdAt")}>
-              {policy.created_at ? new Date(policy.created_at).toLocaleString() : "-"}
+              {policy.created_at ? displayTimestamp(new Date(policy.created_at), locale.language) : "-"}
             </DetailRow>
             <DetailRow label={t("policies.policyInfo.fields.updatedAt")}>
-              {policy.updated_at ? new Date(policy.updated_at).toLocaleString() : "-"}
+              {policy.updated_at ? displayTimestamp(new Date(policy.updated_at), locale.language) : "-"}
             </DetailRow>
           </dl>
 

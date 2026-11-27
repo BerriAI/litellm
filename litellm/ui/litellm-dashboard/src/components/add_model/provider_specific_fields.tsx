@@ -381,7 +381,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
             )}
           </label>
           <Select
-            items={availableAuthTypes.map(({ id, labelKey }) => ({ value: id, label: t(labelKey) }))}
+            items={availableAuthTypes.map(({ id, label }) => ({ value: id, label: label(t) }))}
             value={selectedAuthType.id}
             onValueChange={(value) => setSelectedAuthTypeId(value ?? "")}
           >
@@ -391,7 +391,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
             <SelectContent>
               {availableAuthTypes.map((authType) => (
                 <SelectItem key={authType.id} value={authType.id}>
-                  {t(authType.labelKey)}
+                  {authType.label(t)}
                 </SelectItem>
               ))}
             </SelectContent>

@@ -186,16 +186,16 @@ def test_a_responses_stream_the_client_drops_mid_stream_is_freed_without_a_clean
         before: Final = _log_records(gateway)
         for _ in range(_CALLS):
             _drop_mid_stream(gateway)
-        after: Final = eventually(
-            lambda: _log_records(gateway),
-            lambda count: count <= before + _SLACK,
-            seconds=15,
-            return_last_on_timeout=True,
-        )
     finally:
         _HELD_OPEN.set()
+    after: Final = eventually(
+        lambda: _log_records(gateway),
+        lambda count: count <= before + _SLACK,
+        seconds=15,
+        return_last_on_timeout=True,
+    )
     assert after <= before + _SLACK, (
         f"{after - before} of {_CALLS} /v1/responses streams the client dropped mid-stream still hold their log "
-        "record with Python's cycle collector held off, so each one waits for a full cleanup pass "
-        "before its memory comes back"
+        "record after the provider finished them, with Python's cycle collector held off, so each one waits "
+        "for a full cleanup pass before its memory comes back"
     )

@@ -1,6 +1,7 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
+import { modelPrompts } from "@/i18n/untranslated/modelText";
 import VariableTextArea from "../variable_textarea";
 
 interface DeveloperMessageCardProps {
@@ -19,7 +20,7 @@ const DeveloperMessageCard: React.FC<DeveloperMessageCardProps> = ({ value, onCh
           value={value}
           onChange={onChange}
           rows={3}
-          placeholder={t("prompts.developerMessage.placeholder")}
+          placeholder={t("prompts.developerMessage.placeholder", { example: modelPrompts.helpfulAssistant })}
         />
       </CardContent>
     </Card>
