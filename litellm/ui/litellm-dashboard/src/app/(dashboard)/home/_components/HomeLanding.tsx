@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useVisibleMenuGroups } from "@/components/CommandPalette/useVisibleMenuGroups";
 import { flattenNavItems } from "@/components/CommandPalette/utils";
@@ -20,8 +21,9 @@ export default function HomeLanding() {
   const router = useRouter();
   const { isLoading: isAuthLoading } = useAuthorized();
   const { isLoading: isSettingsLoading } = useUISettings();
+  const { isLoading: isTeamsLoading } = useTeams();
   const groups = useVisibleMenuGroups();
-  const isLoading = isAuthLoading || isSettingsLoading;
+  const isLoading = isAuthLoading || isSettingsLoading || isTeamsLoading;
   const redirectRoute = isLoading ? null : routeReplacingHiddenHome(groups);
 
   useEffect(() => {

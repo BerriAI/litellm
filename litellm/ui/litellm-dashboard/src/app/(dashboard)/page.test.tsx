@@ -13,6 +13,9 @@ const { mockReplace, mockUseKeys, mockUiHref, state } = vi.hoisted(() => {
     keys: [] as KeyRow[],
     returnUrl: null as string | null,
     enabledPagesInternalUsers: null as string[] | null,
+    extraUiSettings: {} as Record<string, boolean>,
+    teams: [] as { team_id: string; members_with_roles: { user_id: string; role: string }[] }[],
+    isTeamsLoading: false,
   };
   return {
     state,
@@ -44,10 +47,12 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: () => ({
     isLoading: false,
-    data: { values: { enabled_ui_pages_internal_users: state.enabledPagesInternalUsers } },
+    data: { values: { enabled_ui_pages_internal_users: state.enabledPagesInternalUsers, ...state.extraUiSettings } },
   }),
 }));
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => ({ data: [] }) }));
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => ({ data: state.isTeamsLoading ? undefined : state.teams, isLoading: state.isTeamsLoading }),
+}));
 vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({ default: () => false }));
 vi.mock("@/app/(dashboard)/home/_components/HomePage", () => ({
   default: () => <div data-testid="home-page" />,
@@ -96,6 +101,9 @@ describe("dashboard landing", () => {
     state.keys = [];
     state.returnUrl = null;
     state.enabledPagesInternalUsers = null;
+    state.extraUiSettings = {};
+    state.teams = [];
+    state.isTeamsLoading = false;
     mockReplace.mockClear();
     mockUseKeys.mockClear();
     mockUiHref.mockClear();
@@ -126,6 +134,20 @@ describe("dashboard landing", () => {
     render(<CreateKeyPage />);
     expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/api-keys");
     expect(screen.queryByTestId("home-page")).not.toBeInTheDocument();
+  });
+
+  it("waits for team data before picking the first visible page for a team admin", () => {
+    state.enabledPagesInternalUsers = ["agents", "logs"];
+    state.extraUiSettings = { disable_agents_for_internal_users: true, allow_agents_for_team_admins: true };
+    state.isTeamsLoading = true;
+    const { rerender } = render(<CreateKeyPage />);
+    expect(mockReplace).not.toHaveBeenCalled();
+
+    state.isTeamsLoading = false;
+    state.teams = [{ team_id: "team-1", members_with_roles: [{ user_id: "user-1", role: "admin" }] }];
+    rerender(<CreateKeyPage />);
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/agents");
   });
 
   it("keeps an internal user on Home when the page allowlist includes it", () => {
