@@ -6,16 +6,12 @@ import {
   userGetInfoV2,
   userUpdateUserCall,
 } from "@/components/networking";
+import { grantedAppIds, granteeAppsWrite } from "./internalAccessMapper";
+
+export { grantedAppIds } from "./internalAccessMapper";
 
 export const GRANTEE_KINDS = ["team", "user", "organization"] as const;
 export type GranteeKind = (typeof GRANTEE_KINDS)[number];
-
-interface StoredAccess {
-  object_permission?: { apps?: string[] | null } | null;
-}
-
-export const grantedAppIds = (stored: StoredAccess | null | undefined): string[] =>
-  stored?.object_permission?.apps ?? [];
 
 export const appAccessChanged = (stored: readonly string[], selected: readonly string[]): boolean =>
   [...stored].sort().join("\n") !== [...selected].sort().join("\n");
@@ -32,8 +28,8 @@ export const saveGranteeApps = async (
   apps: string[],
   accessToken: string,
 ): Promise<void> => {
-  const object_permission = { apps };
-  if (kind === "team") await teamUpdateCall(accessToken, { team_id: id, object_permission });
-  else if (kind === "user") await userUpdateUserCall(accessToken, { user_id: id, object_permission }, null);
-  else await apiClient.patch(`/organization/update`, { accessToken, body: { organization_id: id, object_permission } });
+  const write = granteeAppsWrite(kind, id, apps);
+  if (write.kind === "team") await teamUpdateCall(accessToken, write.body);
+  else if (write.kind === "user") await userUpdateUserCall(accessToken, write.body, null);
+  else await apiClient.patch(`/organization/update`, { accessToken, body: write.body });
 };

@@ -1,23 +1,25 @@
 "use client";
 
-import { compactBudgetEditorFields, type Budget } from "../../customers/_components/customerBudgetForm";
-
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
+import { useWatch } from "react-hook-form";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { loadApps, loadOrganizationApp, organizationAppKey } from "./appApi";
 import { appBaseBudget, type App, type AppMember } from "./appForms";
 import { CustomerBudgetEditor } from "../../customers/_components/CustomerLimitsFields";
 import { CustomerBudgetDialog, CustomerBudgetFormDialog } from "../../customers/_components/CustomerBudgetDialog";
-import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
-import { customerBudgetPatch, hasLegacyCustomerBudget } from "../../customers/_components/customerBudgetForm";
+import { useCustomerBudgetSave } from "../../customers/_components/useCustomerBudgetSave";
+import { hasLegacyCustomerBudget, type Budget } from "../../customers/_components/customerBudgetForm";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { AppBudgetRow, AppBudgetTable, type AppUsageContext } from "./AppBudgetCells";
+import { memberAppDraft } from "./memberAppMapper";
+import { createMemberAppSchema } from "./memberAppSchema";
 
 const MEMBER_APPS_TABLE = {
   keyPrefix: "member_apps_",
@@ -211,24 +213,27 @@ function MemberBudgetForm({
 }) {
   const { t } = useTranslation();
   const [original] = useState(loadedOriginal);
-  const form = useCustomerBudgetForm({
-    initial: {
-      ...compactBudgetEditorFields(original),
-      budgetEnabled: Boolean(row.budget) || hasLegacyCustomerBudget(row),
-    },
-    parse: (fields) => {
-      const result = customerBudgetPatch(fields, original, row);
-      return result.ok ? result : { ok: false, error: t(result.error) };
-    },
-    write: async (body) => {
+  const schema = createMemberAppSchema(original, row, t);
+  const form = useZodForm(schema, { defaultValues: { draft: memberAppDraft(row, original) } });
+  const fields = useWatch({ control: form.control, name: "draft" });
+  const { pending, error, setError, run } = useCustomerBudgetSave();
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (pending) return;
+    const result = schema.safeParse({ draft: fields });
+    if (!result.success) return setError(result.error.issues[0].message);
+    await run(async () => {
       await fetchClient.PUT("/management/v1/apps/{app_id}/customer_members/{customer_member_id}", {
         params: { path: { app_id: app.app_id, customer_member_id: row.customer_member_id } },
-        body,
+        body: result.data,
       });
       await onSaved();
-    },
-  });
-  const { fields, setFields, update, pending, error, save } = form;
+    });
+  };
+  const changeSource = (value: string | null) => {
+    form.setValue("draft", { ...form.getValues("draft"), budgetEnabled: value === "custom" });
+    setError(null);
+  };
   return (
     <CustomerBudgetFormDialog
       title={t("apps.editMemberBudget", { alias: app.alias })}
@@ -239,14 +244,14 @@ function MemberBudgetForm({
     >
       <CustomerBudgetEditor
         id={`app-member-${app.app_id}`}
-        budget={{ modelScope: app, fields, disabled: pending, onChange: setFields }}
+        budget={{ modelScope: app, fields, disabled: pending, onChange: (value) => form.setValue("draft", value) }}
         source={{
           profiles: [],
           value: fields.budgetEnabled ? "custom" : "inherit",
           title: t("apps.source"),
           disabled: pending,
           inheritedOption: { label: t("apps.inheritedBudget"), summary: t("apps.inheritMemberHint") },
-          onChange: (value) => update("budgetEnabled", value === "custom"),
+          onChange: changeSource,
         }}
       />
     </CustomerBudgetFormDialog>

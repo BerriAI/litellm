@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useWatch } from "react-hook-form";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,12 +14,15 @@ import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { appDefinitionKey, appResourcesKey, loadAppDefinition, loadAppResources } from "./appApi";
 import { APP_RESOURCE_LABELS, type AppResourceType } from "./appForms";
+import { appDefinitionTypeBody, appDefinitionWithoutAppBody, initialAppDefinitionValues } from "./appDefinitionMapper";
+import { appDefinitionSchema, appResourceTypeSchema } from "./appDefinitionSchema";
 
 export default function AppDefinitionSetting() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const definition = useQuery({ queryKey: appDefinitionKey, queryFn: loadAppDefinition });
-  const [draft, setDraft] = useState<AppResourceType | null>(null);
+  const form = useZodForm(appDefinitionSchema, { defaultValues: initialAppDefinitionValues });
+  const draft = useWatch({ control: form.control, name: "draft" });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selected = draft ?? definition.data?.resource_type ?? null;
@@ -30,8 +35,8 @@ export default function AppDefinitionSetting() {
   const resourcesUnavailable = resources.isPending || resources.isError;
   const saveUnavailable = pending || !selected || unchanged;
   const selectResourceType = (value: string | null) => {
-    const resourceType = (Object.keys(APP_RESOURCE_LABELS) as AppResourceType[]).find((type) => type === value);
-    if (resourceType) setDraft(resourceType);
+    const resourceType = appResourceTypeSchema.safeParse(value);
+    if (resourceType.success) form.setValue("draft", resourceType.data);
     setError(null);
   };
   const save = async () => {
@@ -40,16 +45,13 @@ export default function AppDefinitionSetting() {
     setError(null);
     try {
       const response = await fetchClient.PUT("/management/v1/apps/definition", {
-        body: {
-          resource_type: selected,
-          auto_create_customers_without_app: definition.data?.auto_create_customers_without_app ?? true,
-        },
+        body: appDefinitionTypeBody(selected, definition.data),
       });
       if (!response.data) throw new Error(t("apps.saveFailed"));
       queryClient.setQueryData(appDefinitionKey, response.data);
       await queryClient.invalidateQueries({ queryKey: ["app-resources"] });
       await queryClient.invalidateQueries({ queryKey: ["apps"] });
-      setDraft(null);
+      form.setValue("draft", null);
     } catch (failure) {
       setError(extractProxyErrorMessage(failure));
     } finally {
@@ -61,7 +63,7 @@ export default function AppDefinitionSetting() {
     setError(null);
     try {
       const response = await fetchClient.PUT("/management/v1/apps/definition", {
-        body: { resource_type: definition.data?.resource_type ?? null, auto_create_customers_without_app: allowed },
+        body: appDefinitionWithoutAppBody(allowed, definition.data),
       });
       if (!response.data) throw new Error(t("apps.saveFailed"));
       queryClient.setQueryData(appDefinitionKey, response.data);

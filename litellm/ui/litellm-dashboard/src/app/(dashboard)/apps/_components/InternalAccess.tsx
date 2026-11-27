@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useWatch } from "react-hook-form";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { ShieldCheck } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -18,6 +20,8 @@ import TeamDropdown from "@/components/common_components/team_dropdown";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import AppAccessSelector from "./AppAccessSelector";
 import { appAccessChanged, GRANTEE_KINDS, loadGranteeApps, saveGranteeApps, type GranteeKind } from "./appAccessApi";
+import { initialInternalAccessValues } from "./internalAccessMapper";
+import { internalAccessSchema } from "./internalAccessSchema";
 import { grantedAppsKey, readsEveryApp } from "./useGrantedApps";
 
 interface Grantee {
@@ -30,14 +34,15 @@ function GranteeAppAccess({ grantee, accessToken }: { grantee: Grantee; accessTo
   const queryClient = useQueryClient();
   const queryKey = ["apps", "internal-access", grantee.kind, grantee.id] as const;
   const stored = useQuery({ queryKey, queryFn: () => loadGranteeApps(grantee.kind, grantee.id, accessToken) });
-  const [selected, setSelected] = useState<string[] | null>(null);
+  const form = useZodForm(internalAccessSchema, { defaultValues: initialInternalAccessValues });
+  const selected = useWatch({ control: form.control, name: "draft" });
   const value = selected ?? stored.data ?? [];
   const save = useMutation({
     mutationFn: () => saveGranteeApps(grantee.kind, grantee.id, value, accessToken),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey });
       await queryClient.invalidateQueries({ queryKey: grantedAppsKey });
-      setSelected(null);
+      form.setValue("draft", null);
       toast.success(t("apps.internalAccess.saved"));
     },
   });
@@ -51,7 +56,7 @@ function GranteeAppAccess({ grantee, accessToken }: { grantee: Grantee; accessTo
       <AppAccessSelector
         id="internal-access-apps"
         value={value}
-        onChange={setSelected}
+        onChange={(apps) => form.setValue("draft", apps)}
         placeholder={t("apps.internalAccess.appsPlaceholder")}
       />
       {save.isError && (
