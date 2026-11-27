@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import re
+import sys
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Final
@@ -288,6 +289,17 @@ def watch_the_openai_models(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callabl
     live.update(litellm.open_ai_chat_completion_models)
 
 
+@pytest.fixture
+def forget_the_models_it_adds() -> Iterator[None]:
+    """Forgets the names a test registers once it ends, so they keep no name in the sets through a later test's
+    reload."""
+    added: Final = litellm._ProviderModelSources.added
+    before: Final = {listing: frozenset(names) for listing, names in added.items()}
+    yield
+    for listing, names in before.items():
+        added[listing].intersection_update(names)
+
+
 @pytest.mark.usefixtures("own_model_cost")
 def test_a_reload_retires_the_models_only_the_previous_map_served(
     watch_the_openai_models: Callable[..., _WatchedModels],
@@ -312,7 +324,7 @@ def test_a_reload_retires_the_models_only_the_previous_map_served(
 
 
 @pytest.mark.parametrize("registered_first", [True, False])
-@pytest.mark.usefixtures("own_model_cost")
+@pytest.mark.usefixtures("own_model_cost", "forget_the_models_it_adds")
 def test_a_reload_keeps_a_registered_model_the_new_map_lacks(
     registered_first: bool, watch_the_openai_models: Callable[..., _WatchedModels]
 ):
@@ -332,7 +344,7 @@ def test_a_reload_keeps_a_registered_model_the_new_map_lacks(
     assert _known_as_openai("lit-registered-chat") == (True, True, True, "azure")
 
 
-@pytest.mark.usefixtures("own_model_cost")
+@pytest.mark.usefixtures("own_model_cost", "forget_the_models_it_adds")
 def test_a_reload_keeps_a_model_registered_while_it_takes_that_model_out(
     watch_the_openai_models: Callable[..., _WatchedModels],
 ):
@@ -349,6 +361,55 @@ def test_a_reload_keeps_a_model_registered_while_it_takes_that_model_out(
     install_model_cost_map(_BUNDLED)
 
     assert _known_as_openai("lit-registered-mid-install") == (True, True, True, "azure")
+
+
+@pytest.mark.usefixtures("own_model_cost", "forget_the_models_it_adds")
+def test_a_reload_retires_a_registered_model_the_new_map_marks_as_retired():
+    row: Final = {"litellm_provider": "together_ai", "mode": "chat"}
+    install_model_cost_map(_document_with(**{"lit-registered-then-retired": row}))
+    litellm.register_model({"lit-registered-then-retired": row})
+    try:
+        assert "lit-registered-then-retired" in litellm.together_ai_models
+
+        install_model_cost_map(
+            _document_with(**{"lit-registered-then-retired": {**row, "deprecation_date": "2000-01-01"}})
+        )
+
+        assert "lit-registered-then-retired" not in litellm.together_ai_models
+    finally:
+        install_model_cost_map(_BUNDLED)
+
+
+@pytest.mark.usefixtures("own_model_cost", "forget_the_models_it_adds")
+def test_a_reload_keeps_every_model_registered_from_several_threads_at_once():
+    row: Final = {"litellm_provider": "openai", "mode": "chat"}
+    registering_threads: Final = 8
+    names: Final = tuple(f"lit-registered-at-once-{number}" for number in range(registering_threads * 25))
+    install_model_cost_map(_document_with(**dict.fromkeys(names, row)))
+    start: Final = threading.Barrier(registering_threads)
+
+    def register(mine: tuple[str, ...]) -> None:
+        start.wait()
+        for name in mine:
+            litellm.register_model({name: row})
+
+    threads: Final = tuple(
+        threading.Thread(target=register, args=(names[first::registering_threads],))
+        for first in range(registering_threads)
+    )
+    switch_interval: Final = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        sys.setswitchinterval(switch_interval)
+
+    install_model_cost_map(_BUNDLED)
+
+    assert frozenset(names) - litellm.open_ai_chat_completion_models == frozenset()
 
 
 @pytest.mark.usefixtures("own_model_cost")

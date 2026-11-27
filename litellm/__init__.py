@@ -1037,41 +1037,34 @@ class _ProviderModelSources:
     """What put the names in the provider model sets. An install takes out only names an earlier install alone listed"""
 
     installed: Mapping[str, frozenset[str]] = MappingProxyType({})
-    added: Mapping[str, frozenset[str]] = MappingProxyType(
-        {listing: frozenset(models) for listing, models in _provider_model_sets().items()}
+    added: Final[Mapping[str, set[str]]] = MappingProxyType(  # mutable-ok: grown in place, so no registration is lost
+        {listing: set(models) for listing, models in _provider_model_sets().items()}
     )
-
-
-def _added_to(listing: str) -> frozenset[str]:
-    return _ProviderModelSources.added.get(listing, _NO_MODELS)
 
 
 def _install_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     lists: Final = _provider_model_lists(model_cost_map)
     sets: Final = _provider_model_sets()
-    unlisted: Final = MappingProxyType(
+    added: Final = _ProviderModelSources.added
+    taken_out: Final = MappingProxyType(
         {
-            listing: names - lists.listed.get(listing, _NO_MODELS)
+            listing: names - lists.listed.get(listing, _NO_MODELS) - added[listing]
             for listing, names in _ProviderModelSources.installed.items()
         }
     )
     _ProviderModelSources.installed = lists.listed
-    for listing, names in unlisted.items():
-        sets[listing].difference_update(names - _added_to(listing))
+    for listing, names in taken_out.items():
+        sets[listing].difference_update(names)
     _write_provider_model_sets(lists)
     # a name added on another thread after the read above was still taken out, and its record is visible by now
-    for listing, names in unlisted.items():
-        sets[listing].update(names & _added_to(listing))
+    for listing, names in taken_out.items():
+        sets[listing].update(names & added[listing])
 
 
 def _add_provider_models(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     lists: Final = _provider_model_lists(model_cost_map)
-    _ProviderModelSources.added = MappingProxyType(
-        {
-            **_ProviderModelSources.added,
-            **{listing: _added_to(listing) | names for listing, names in lists.listed.items()},
-        }
-    )
+    for listing, names in lists.listed.items():
+        _ProviderModelSources.added[listing].update(names)
     _write_provider_model_sets(lists)
 
 
