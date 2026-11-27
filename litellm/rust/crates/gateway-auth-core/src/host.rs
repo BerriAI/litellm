@@ -16,7 +16,7 @@ use crate::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
-        key::Owner,
+        key::{KeyTeam, Owner},
     },
 };
 
@@ -54,6 +54,12 @@ pub type ObjectPermissionRow<H> = <<H as AuthHost>::Rows as Rows>::ObjectPermiss
 pub type ProjectRow<H> = <<H as AuthHost>::Rows as Rows>::Project;
 pub type MembershipRow<H> = <<H as AuthHost>::Rows as Rows>::Membership;
 pub type OrgRow<H> = <<H as AuthHost>::Rows as Rows>::Org;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AffiliationRead {
+    Key,
+    Jwt,
+}
 pub type AgentRow<H> = <<H as AuthHost>::Rows as Rows>::Agent;
 
 /// Code the operator wrote, which only a host that embeds their Python can run.
@@ -69,6 +75,7 @@ pub trait OperatorHooks: Send + Sync {
 /// A method that a second host could only answer by re-implementing a rule is a decision, however
 /// it is named, and carries a TODO naming what has to reach Rust first.
 pub trait AuthHost: Send + Sync {
+    const READ_KEY_AFFILIATIONS: bool = true;
     type Rows: Rows;
 
     // Credential: whether the presented credential is genuine and which key or claims it stands for.
@@ -235,7 +242,7 @@ pub trait AuthHost: Send + Sync {
     fn key_team(
         &self,
         team_id: &str,
-    ) -> impl Future<Output = Result<Option<TeamRow<Self>>, Error>> + Send;
+    ) -> impl Future<Output = Result<Option<KeyTeam<TeamRow<Self>>>, Error>> + Send;
 
     /// `get_team_object`, with the team's facts and its pass-through grants beside the row.
     fn team(
@@ -275,6 +282,7 @@ pub trait AuthHost: Send + Sync {
     fn org(
         &self,
         org_id: &str,
+        read: AffiliationRead,
     ) -> impl Future<Output = Result<Option<Org<OrgRow<Self>>>, Error>> + Send;
 
     fn org_by_alias(

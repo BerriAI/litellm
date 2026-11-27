@@ -11,23 +11,25 @@ use std::{
 };
 
 use litellm_auth_store::{
-    AliasMatch, EndUserDatabase, Error, KeyDatabase, ProjectDatabase, TeamDatabase,
-    TeamMembershipDatabase, UserDatabase,
+    AliasMatch, EndUserDatabase, Error, KeyDatabase, OrganizationDatabase, ProjectDatabase,
+    TeamDatabase, TeamMembershipDatabase, UserDatabase,
 };
 use litellm_gateway_auth_core::KeyHash;
 use litellm_redis_store::{
     FromValue, IntoValue,
     auth_cache::{
-        AuthCache, AuthObject, EndUserEntry, KeyEntry, ProjectEntry, RestrictedEndUsers, Settings,
-        TeamEntry, TeamMembershipEntry, TeamMembershipReservation, UserEntry,
+        AuthCache, AuthObject, EndUserEntry, KeyEntry, OrganizationEntry, ProjectEntry,
+        RestrictedEndUsers, Settings, TeamEntry, TeamMembershipEntry, TeamMembershipReservation,
+        UserEntry,
     },
 };
 use litellm_repositories::{
-    Database, EndUserRepository, KeyRepository, ObjectPermissionRepository, ProjectRepository,
-    Side, TeamMembershipRepository, TeamRepository, UserRepository,
+    Database, EndUserRepository, KeyRepository, ObjectPermissionRepository, OrganizationRepository,
+    ProjectRepository, Side, TeamMembershipRepository, TeamRepository, UserRepository,
 };
 use tokio::sync::Mutex;
 
+const ORG_CACHE_TTL: Duration = Duration::from_secs(5);
 /// `END_USER_RESTRICTED_REGISTRY_MAX_SIZE`.
 const RESTRICTED_IDS_MAX: usize = 5000;
 /// `REGISTRY_ERROR_NEGATIVE_CACHE_TTL`.
@@ -40,6 +42,7 @@ pub struct AuthStore {
     cache: Arc<AuthCache>,
     keys: KeyDatabase,
     teams: TeamDatabase,
+    organizations: OrganizationDatabase,
     projects: ProjectDatabase,
     memberships: TeamMembershipDatabase,
     users: UserDatabase,
@@ -73,6 +76,9 @@ impl AuthStore {
                 object_permissions,
             ),
             projects: ProjectDatabase::new(Arc::new(ProjectRepository::new(database.clone()))),
+            organizations: OrganizationDatabase::new(Arc::new(OrganizationRepository::new(
+                database.clone(),
+            ))),
             memberships: TeamMembershipDatabase::new(Arc::new(TeamMembershipRepository::new(
                 database.clone(),
             ))),
@@ -196,6 +202,20 @@ impl AuthStore {
         self.write(&AuthObject::Team(team.team_id.clone()), team.clone(), None)
             .await;
         Ok(found)
+    }
+
+    /// The budget-inclusive organization from the cache or the database, cached only when found.
+    pub async fn org(&self, organization_id: &str) -> Result<Option<OrganizationEntry>, Error> {
+        let object = AuthObject::OrgWithBudget(organization_id.to_owned());
+        if let Some(org) = self.read(&object).await {
+            return Ok(Some(org));
+        }
+        let read = self.organizations.organization(organization_id, true);
+        let org = litellm_db::within(Some(self.lookup_deadline), async { Ok(read.await) }).await??;
+        if let Some(org) = &org {
+            self.write(&object, org.clone(), Some(ORG_CACHE_TTL)).await;
+        }
+        Ok(org)
     }
 
     /// `get_team_membership`: the cached membership, or the cached word that there is none, else

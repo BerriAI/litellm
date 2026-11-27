@@ -149,7 +149,7 @@ mod tests {
             row: "mapped".to_owned(),
         };
         let credential = KeySource::Resolved {
-            key: resolved,
+            key: Box::new(resolved),
             end_user_id: None,
         };
         authenticate(host, &request, settings, credential).await
@@ -330,10 +330,10 @@ mod tests {
         let credential = match credential_end_user {
             None => KeySource::Presented(Some(&token)),
             Some(end_user_id) => KeySource::Resolved {
-                key: Keyed {
+                key: Box::new(Keyed {
                     record: virtual_key(),
                     row: "mapped".to_owned(),
-                },
+                }),
                 end_user_id: Some(end_user_id),
             },
         };
@@ -545,11 +545,20 @@ mod tests {
             db: Some(KeyRecord {
                 user_id: Some("u".to_owned()),
                 team_id: Some("t".to_owned()),
+                org_id: Some("o".to_owned()),
                 project_id: Some("p".to_owned()),
                 ..virtual_key()
             }),
             key_owner: Some(false),
             key_team_found: true,
+            orgs: [(
+                "o",
+                crate::identity::jwt::Org {
+                    organization_id: "o".to_owned(),
+                    row: "organization o".to_owned(),
+                },
+            )]
+            .into(),
             ..ScriptedHost::default()
         };
         assert_eq!(
@@ -562,7 +571,7 @@ mod tests {
                         team: Team::Row("team t".to_owned()),
                         membership: None,
                     },
-                    org: None,
+                    org: Some(Named::Stored("organization o".to_owned())),
                     project: Some(Named::Stored("project p".to_owned())),
                 },
                 end_user: "end-user".to_owned(),
@@ -578,6 +587,7 @@ mod tests {
                 "prefetch db end-user",
                 "key_owner u",
                 "key_team t",
+                "org o",
                 "project p",
                 "temp_budget db",
                 "normalize db+prepared",

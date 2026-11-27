@@ -1,17 +1,22 @@
-//! Reads a caller's team, key owner and project from the auth cache into core records. Each entry
-//! is taken apart by name, so a field added to it does not compile here until it is copied onto the
-//! record, read for nothing or declined. A column that holds a structure no record field has a type
-//! for yet is declined here, naming the field, and [`unserved`], [`unserved_user`] and
-//! [`unserved_project`] name the first copied column the native app does not serve yet.
+//! Reads a caller's team, key owner, organization and project from the auth cache into core
+//! records. Each entry is taken apart by name, so a field added to it does not compile here until
+//! it is copied onto the record, read for nothing or declined. A column that holds a structure no
+//! record field has a type for yet is declined here, naming the field, and [`unserved`],
+//! [`unserved_user`], [`unserved_org`] and [`unserved_project`] name the first copied column the
+//! native app does not serve yet.
 
 use litellm_gateway_auth_core::{
     authz::ModelList,
-    identity::jwt::{Team, User},
-    record::{Budget, MinuteLimits, ProjectRecord, TeamRecord, UserRecord},
+    identity::jwt::{Org, Team, User},
+    record::{
+        Budget, MinuteLimits, OrgRecord, ProjectRecord, TeamRecord, UserRecord,
+    },
     routes::passthrough::PassthroughGrants,
 };
 use litellm_python_compat::Value;
-use litellm_redis_store::auth_cache::{Bag, ProjectEntry, TeamEntry, UserEntry};
+use litellm_redis_store::auth_cache::{
+    Bag, BudgetEntry, OrganizationEntry, ProjectEntry, TeamEntry, UserEntry,
+};
 
 use super::{
     carried::{Carried, carried, newer},
@@ -316,6 +321,156 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
         budget_duration,
         allowed_cache_controls,
         policies,
+    ]
+}
+
+/// The organization's record, or the first field it or its budget row holds that no record field
+/// has a type for yet.
+pub(super) fn org(org: &OrganizationEntry) -> Result<Org<OrgRecord>, &'static str> {
+    let OrganizationEntry {
+        organization_id,
+        organization_alias,
+        budget_id: _,
+        spend,
+        metadata,
+        models,
+        model_spend: _,
+        created_by: _,
+        updated_by: _,
+        users: _,
+        litellm_budget_table,
+        object_permission,
+        object_permission_id,
+        unread,
+    } = org;
+    let unread = &newer(unread);
+    if let Some(field) = carried![object_permission, object_permission_id, metadata, unread] {
+        return Err(field);
+    }
+    let organization_id = organization_id.as_ref().ok_or("organization_id")?;
+    let limits = litellm_budget_table
+        .as_ref()
+        .ok_or("litellm_budget_table")?;
+    let BudgetRow {
+        limits,
+        budget,
+        soft_budget,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration,
+    } = budget_row(limits, *spend)?;
+    Ok(Org {
+        organization_id: organization_id.clone(),
+        row: OrgRecord {
+            organization_id: organization_id.clone(),
+            organization_alias: organization_alias.clone(),
+            models: models.clone(),
+            limits,
+            budget,
+            soft_budget,
+            tpd_limit,
+            max_parallel_requests,
+            budget_duration,
+        },
+    })
+}
+
+/// A budget row's plain values, which the record of whatever the row budgets copies.
+struct BudgetRow {
+    limits: MinuteLimits,
+    budget: Budget,
+    soft_budget: Option<f64>,
+    tpd_limit: Option<i64>,
+    max_parallel_requests: Option<i64>,
+    budget_duration: Option<String>,
+}
+
+/// The budget row's plain values with `spend` spent against it, or the first field it holds that
+/// no record field has a type for yet.
+fn budget_row(entry: &BudgetEntry, spend: f64) -> Result<BudgetRow, &'static str> {
+    let BudgetEntry {
+        budget_id: _,
+        soft_budget,
+        max_budget,
+        rollover_max_budget,
+        max_parallel_requests,
+        tpm_limit,
+        rpm_limit,
+        tpd_limit,
+        model_max_budget,
+        model_tpm_limit,
+        model_rpm_limit,
+        budget_duration,
+        allowed_models,
+        temp_budget_increase,
+        temp_budget_expiry,
+        unread,
+    } = entry;
+    let rollover_max_budget = &rollover_max_budget.0;
+    let model_tpm_limit = &model_tpm_limit
+        .as_ref()
+        .is_some_and(|map| !map.0.is_empty());
+    let model_rpm_limit = &model_rpm_limit
+        .as_ref()
+        .is_some_and(|map| !map.0.is_empty());
+    let unread = &newer(unread);
+    if let Some(field) = carried![
+        rollover_max_budget,
+        model_max_budget,
+        model_tpm_limit,
+        model_rpm_limit,
+        allowed_models,
+        temp_budget_increase,
+        temp_budget_expiry,
+        unread,
+    ] {
+        return Err(field);
+    }
+    Ok(BudgetRow {
+        budget: Budget {
+            max: *max_budget,
+            spend,
+        },
+        soft_budget: *soft_budget,
+        limits: MinuteLimits {
+            rpm: *rpm_limit,
+            tpm: *tpm_limit,
+        },
+        tpd_limit: *tpd_limit,
+        max_parallel_requests: *max_parallel_requests,
+        budget_duration: budget_duration.clone(),
+    })
+}
+
+/// The first column of `org` that holds something nothing in the native app reads yet, which
+/// sends its caller to Python, taken apart by name as [`unserved`] takes a team.
+pub(crate) fn unserved_org(org: &OrgRecord) -> Option<&'static str> {
+    let OrgRecord {
+        organization_id: _,
+        organization_alias: _,
+        models,
+        budget: Budget {
+            max: max_budget,
+            spend: _,
+        },
+        soft_budget,
+        limits: MinuteLimits {
+            rpm: rpm_limit,
+            tpm: tpm_limit,
+        },
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration,
+    } = org;
+    carried![
+        models,
+        max_budget,
+        soft_budget,
+        rpm_limit,
+        tpm_limit,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration
     ]
 }
 

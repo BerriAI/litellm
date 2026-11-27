@@ -32,8 +32,8 @@ pub use error::{
     PremiumRequired, RbacDenial, RequestDenial, Searched, TeamDenial, TokenError, VerifyDenial,
 };
 pub use host::{
-    AgentRow, AuthHost, EndUserRow, KeyRow, MembershipRow, ObjectPermissionRow, OperatorHooks,
-    OrgRow, ProjectRow, Refreshed, Row, Rows, TeamRow, UserRow,
+    AffiliationRead, AgentRow, AuthHost, EndUserRow, KeyRow, MembershipRow, ObjectPermissionRow,
+    OperatorHooks, OrgRow, ProjectRow, Refreshed, Row, Rows, TeamRow, UserRow,
 };
 pub use outcome::{Identity, KeyOutcome, Outcome, Refused};
 pub use public::{ErrorType, PublicDenial};
@@ -117,7 +117,7 @@ pub async fn authenticate_jwt<H: AuthHost>(
         JwtOutcome::Finished(token) => Ok(Outcome::Authenticated(Identity::FinishedJwt(token))),
         JwtOutcome::MappedKey(key, jwt) => {
             let credential = KeySource::Resolved {
-                key,
+                key: Box::new(key),
                 end_user_id: jwt.end_user_id.as_deref(),
             };
             let outcome = pipeline::key::authenticate(

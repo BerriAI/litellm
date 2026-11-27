@@ -1,7 +1,7 @@
 use crate::{
-    Affiliation, AuthHost, Holder, KeyHash, Token,
+    Affiliation, AuthHost, Holder, KeyHash, Named, Team, Token,
     authn::key::Keyed,
-    host::{EndUserRow, KeyRow, Rows},
+    host::{AffiliationRead, EndUserRow, KeyRow, Rows},
     outcome::Refused,
 };
 
@@ -14,6 +14,12 @@ pub struct Owner<U> {
     /// Deactivated through SCIM.
     pub deactivated: bool,
     pub row: U,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyTeam<T> {
+    pub row: T,
+    pub organization_id: Option<String>,
 }
 
 /// A virtual key that passed its checks, with what it belongs to and the request's end user.
@@ -43,7 +49,7 @@ pub enum KeyIdentity<R: Rows> {
     VirtualKey(Box<KeyContext<R>>),
 }
 
-/// Who holds a verified virtual key: its owner, team and project, read before any budget.
+/// Who holds a verified virtual key: its owner, team, organization and project, read before any budget.
 pub(crate) async fn principal<H: AuthHost>(
     host: &H,
     key: Keyed<KeyRow<H>>,
@@ -54,12 +60,31 @@ pub(crate) async fn principal<H: AuthHost>(
         .await
         .map_err(|denial| Refused::new(denial, Some(&key.row)))?;
     let team = team::read(host, &key.record).await?;
+    let org = if H::READ_KEY_AFFILIATIONS {
+        let org_id = key.record.org_id.clone().or_else(|| match &team {
+            Some(team::Read::Stored(team)) => team.organization_id.clone(),
+            _ => None,
+        });
+        match org_id {
+            Some(id) => {
+                let org = Box::pin(host.org(&id, AffiliationRead::Key)).await?;
+                Named::of(Some(id), org.map(|org| org.row))
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    let team = team.map(|team| match team {
+        team::Read::Stored(team) => Team::Row(team.row),
+        team::Read::KeyCopy(copy) => Team::KeyCopy(copy),
+    });
     let project = project::read(host, &key.record).await?;
     Ok(KeyPrincipal {
         key,
         affiliation: Affiliation {
             holder: Holder::new(owner, team.map(|team| (team, None))),
-            org: None,
+            org,
             project,
         },
         end_user,

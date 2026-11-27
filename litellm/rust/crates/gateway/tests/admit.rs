@@ -27,6 +27,7 @@ struct Scenario {
     /// The other rows the database holds, each under its table's name, stored in this order.
     #[serde(default)]
     rows: Vec<BTreeMap<String, serde_json::Value>>,
+    allow_missing_organization: Option<bool>,
     /// The teams the database holds, each id with the columns set on its row.
     #[serde(default)]
     teams: BTreeMap<String, Columns>,
@@ -117,6 +118,11 @@ type Columns = serde_json::Map<String, serde_json::Value>;
 /// it, and each of its other rows.
 async fn listed(scenario: &Scenario) -> keys::Held {
     let held = keys::Held::start().await;
+    if scenario.allow_missing_organization == Some(true) {
+        held.execute(
+            r#"ALTER TABLE "LiteLLM_VerificationToken" DROP CONSTRAINT "LiteLLM_VerificationToken_organization_id_fkey""#,
+        ).await;
+    }
     for (team_id, columns) in &scenario.teams {
         let row = std::iter::once(("team_id".to_owned(), serde_json::json!(team_id)))
             .chain(columns.clone())
@@ -144,12 +150,12 @@ async fn listed(scenario: &Scenario) -> keys::Held {
         held.insert_named("LiteLLM_ProjectTable", &serde_json::Value::Object(row))
             .await;
     }
+    for (table, row) in scenario.rows.iter().flatten() {
+        held.insert_named(table, row).await;
+    }
     for (token, columns) in &scenario.keys {
         held.key(token, serde_json::Value::Object(columns.clone()))
             .await;
-    }
-    for (table, row) in scenario.rows.iter().flatten() {
-        held.insert(table, row).await;
     }
     held
 }
@@ -175,8 +181,25 @@ struct Sent {
     expect: Who,
     reason: Option<String>,
     over: Option<String>,
+    unavailable: Option<AuthTable>,
     /// The client's TCP peer, which the IP allowlist reads.
     peer: Option<SocketAddr>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AuthTable {
+    Organization,
+}
+
+impl AuthTable {
+    fn unavailable(self) -> &'static str {
+        match self {
+            Self::Organization => {
+                r#"ALTER TABLE "LiteLLM_OrganizationTable" RENAME COLUMN "model_spend" TO "unavailable_model_spend""#
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -269,6 +292,7 @@ impl Sent {
 #[case::virtual_key_team("virtual_key_team")]
 #[case::virtual_key_owner("virtual_key_owner")]
 #[case::virtual_key_project("virtual_key_project")]
+#[case::virtual_key_org("virtual_key_org")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
@@ -280,7 +304,8 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
         && scenario.teams.is_empty()
         && scenario.users.is_empty()
         && scenario.projects.is_empty()
-        && scenario.rows.is_empty();
+        && scenario.rows.is_empty()
+        && scenario.allow_missing_organization != Some(true);
     let held = match nothing_held {
         true => None,
         false => Some(listed(&scenario).await),
@@ -311,26 +336,26 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
         stored_config(scenario.stored, scenario.held),
     ));
 
-    let answered = futures_util::future::join_all(scenario.requests.iter().map(|sent| {
-        let admit = admit.clone();
-        async move {
-            let (who, reason, over) = match admit.admit(sent.request()).await {
-                Ok(_) => (Who::Rust, None, None),
-                Err((_, reason)) => (
-                    Who::Python,
-                    Some(<&str>::from(reason.why).to_owned()),
-                    Some(String::from(reason.over)),
-                ),
-            };
-            (
-                sent.name.as_str(),
-                who,
-                reason,
-                over.filter(|_| sent.over.is_some()),
-            )
+    let mut answered = Vec::with_capacity(scenario.requests.len());
+    for sent in &scenario.requests {
+        if let Some(table) = sent.unavailable {
+            held.as_ref().unwrap().execute(table.unavailable()).await;
         }
-    }))
-    .await;
+        let (who, reason, over) = match admit.clone().admit(sent.request()).await {
+            Ok(_) => (Who::Rust, None, None),
+            Err((_, reason)) => (
+                Who::Python,
+                Some(<&str>::from(reason.why).to_owned()),
+                Some(String::from(reason.over)),
+            ),
+        };
+        answered.push((
+            sent.name.as_str(),
+            who,
+            reason,
+            over.filter(|_| sent.over.is_some()),
+        ));
+    }
     state.close().await;
 
     let expected: Vec<_> = scenario
