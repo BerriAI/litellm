@@ -243,6 +243,49 @@ def test_a_reload_adds_the_models_it_serves_to_the_provider_sets():
     assert "lit-reloaded-chat" in litellm.models_by_provider["openai"]
 
 
+def _known_as_openai(model: str) -> tuple[bool, bool, bool, str]:
+    return (
+        model in litellm.open_ai_chat_completion_models,
+        model in litellm.models_by_provider["openai"],
+        model in litellm.model_list_set,
+        litellm.get_llm_provider(f"azure_ai/{model}", api_base="http://127.0.0.1:1")[1],
+    )
+
+
+@pytest.mark.usefixtures("own_model_cost")
+def test_a_reload_retires_the_models_only_the_previous_map_served():
+    serving: Final = _document_with(
+        **{
+            "lit-dropped-chat": {"litellm_provider": "openai", "mode": "chat"},
+            "lit-dropped-embedding": {"litellm_provider": "vertex_ai-embedding-models", "mode": "embedding"},
+        }
+    )
+    install_model_cost_map(serving)
+    install_model_cost_map(serving)
+    assert _known_as_openai("lit-dropped-chat") == (True, True, True, "azure")
+    assert "lit-dropped-embedding" in litellm.all_embedding_models
+
+    install_model_cost_map(_BUNDLED)
+
+    assert _known_as_openai("lit-dropped-chat") == (False, False, False, "azure_ai")
+    assert "lit-dropped-embedding" not in litellm.all_embedding_models
+
+
+@pytest.mark.parametrize("registered_first", [True, False])
+@pytest.mark.usefixtures("own_model_cost")
+def test_a_reload_keeps_a_registered_model_the_new_map_lacks(registered_first: bool):
+    row: Final = {"litellm_provider": "openai", "mode": "chat"}
+    if registered_first:
+        litellm.register_model({"lit-registered-chat": row})
+    install_model_cost_map(_document_with(**{"lit-registered-chat": row}))
+    if not registered_first:
+        litellm.register_model({"lit-registered-chat": row})
+
+    install_model_cost_map(_BUNDLED)
+
+    assert _known_as_openai("lit-registered-chat") == (True, True, True, "azure")
+
+
 @pytest.mark.usefixtures("own_model_cost")
 def test_a_reload_repeats_the_cache_pricing_warning_for_a_registration_no_catalog_row_matches(
     caplog: pytest.LogCaptureFixture,
