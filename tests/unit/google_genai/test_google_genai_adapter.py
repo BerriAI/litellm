@@ -2075,6 +2075,36 @@ def test_native_function_calls_split_across_consecutive_model_contents_share_one
     ]
 
 
+def test_native_interleaved_text_between_function_calls_preserves_fifo_pairing() -> None:
+    contents: Final = [
+        {
+            "role": "model",
+            "parts": [
+                {"functionCall": {"name": "lookup", "args": {"city": "Tokyo"}}},
+                {"text": "Also checking Osaka."},
+                {"functionCall": {"name": "lookup", "args": {"city": "Osaka"}}},
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {"functionResponse": {"name": "lookup", "response": {"city": "Tokyo", "temp": 22}}},
+                {"text": "Both results attached."},
+                {"functionResponse": {"name": "lookup", "response": {"city": "Osaka", "temp": 24}}},
+            ],
+        },
+    ]
+    messages: Final = GoogleGenAIAdapter()._transform_contents_to_messages(contents)
+    assert [msg["role"] for msg in messages] == ["assistant", "user", "tool", "tool"]
+    assert messages[0]["content"] == "Also checking Osaka."
+    assert _assistant_tool_call_ids(messages) == (("call_lookup", "call_lookup_2"),)
+    tool_results: Final = [(msg["tool_call_id"], msg["content"]) for msg in messages if msg["role"] == "tool"]
+    assert tool_results == [
+        ("call_lookup", '{"city": "Tokyo", "temp": 22}'),
+        ("call_lookup_2", '{"city": "Osaka", "temp": 24}'),
+    ]
+
+
 def test_outbound_generate_content_preserves_and_roundtrips_tool_call_ids() -> None:
     adapter: Final = GoogleGenAIAdapter()
     completion_response: Final = ModelResponse(
