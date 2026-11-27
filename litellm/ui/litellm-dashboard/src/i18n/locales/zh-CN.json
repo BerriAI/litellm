@@ -7115,6 +7115,67 @@
       }
     }
   },
+  "secretsVault": {
+    "title": "密钥保管库",
+    "experimental": "实验功能",
+    "intro": "将编码智能体所需的密钥与其已在使用的网关密钥放在一起。密钥在存储时加密，只有你能读取自己的密钥。",
+    "newSecret": "新建密钥",
+    "usage": {
+      "title": "在智能体中读取密钥",
+      "description": "使用你的 LiteLLM 密钥作为 Bearer 令牌发送 <code>GET /vault/secrets/SECRET_NAME</code>。属于你的任意密钥都可以读取你的保管库密钥。"
+    },
+    "empty": {
+      "title": "暂无密钥",
+      "description": "添加密钥后，持有你任一 LiteLLM 密钥的程序都可以读取它。"
+    },
+    "columns": {
+      "name": "名称",
+      "value": "值",
+      "description": "描述",
+      "updated": "更新时间",
+      "lastAccessed": "上次访问",
+      "actions": "操作"
+    },
+    "actions": {
+      "reveal": "显示 {{name}}",
+      "hide": "隐藏 {{name}}",
+      "copy": "复制 {{name}}",
+      "edit": "编辑 {{name}}",
+      "delete": "删除 {{name}}"
+    },
+    "toasts": {
+      "saved": "已保存密钥“{{name}}”",
+      "deleted": "已删除密钥“{{name}}”",
+      "copied": "已将 {{name}} 复制到剪贴板"
+    },
+    "modal": {
+      "createTitle": "新建密钥",
+      "editTitle": "编辑 {{name}}",
+      "labels": {
+        "name": "名称",
+        "value": "值",
+        "newValue": "新值",
+        "description": "描述"
+      },
+      "placeholders": {
+        "name": "GITHUB_TOKEN",
+        "value": "粘贴密钥值",
+        "description": "此密钥的用途"
+      },
+      "errors": {
+        "name": "请使用字母、数字、点、短横线和下划线，并以字母或数字开头",
+        "value": "值为必填项"
+      },
+      "cancel": "取消",
+      "create": "创建密钥",
+      "save": "保存"
+    },
+    "deleteModal": {
+      "title": "删除密钥",
+      "message": "所有从保管库读取此密钥的程序都将停止工作。此操作无法撤销。",
+      "infoTitle": "密钥"
+    }
+  },
   "tagManagement": {
     "page": {
       "title": "标签管理",
@@ -8512,6 +8573,7 @@
         "responseCache": "响应缓存",
         "experimental": "实验功能",
         "prompts": "提示词",
+        "secretsVault": "密钥保管库",
         "tagManagement": "标签管理",
         "settings": "设置",
         "routerSettings": "路由设置",
@@ -8556,6 +8618,7 @@
       "transformRequest": "设置请求转换规则",
       "costTracking": "跟踪和分析 API 成本",
       "uiTheme": "自定义管理后台外观",
+      "secretsVault": "在网关上为编码智能体保存密钥",
       "tagManagement": "通过标签组织资源",
       "prompts": "管理提示词模板及其版本",
       "skills": "在 Skills Hub 中注册和共享可复用的智能体技能",

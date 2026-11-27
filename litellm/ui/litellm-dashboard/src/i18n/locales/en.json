@@ -7359,6 +7359,67 @@
       }
     }
   },
+  "secretsVault": {
+    "title": "Secrets Vault",
+    "experimental": "Experimental",
+    "intro": "Keep the secrets your coding agents need next to the gateway key they already use. Secrets are encrypted at rest and only you can read yours.",
+    "newSecret": "New secret",
+    "usage": {
+      "title": "Read a secret from an agent",
+      "description": "Send <code>GET /vault/secrets/SECRET_NAME</code> with your LiteLLM key as the bearer token. Any key that belongs to you can read your secrets."
+    },
+    "empty": {
+      "title": "No secrets yet",
+      "description": "Add a secret to make it available to anything that holds one of your LiteLLM keys."
+    },
+    "columns": {
+      "name": "Name",
+      "value": "Value",
+      "description": "Description",
+      "updated": "Updated",
+      "lastAccessed": "Last accessed",
+      "actions": "Actions"
+    },
+    "actions": {
+      "reveal": "Reveal {{name}}",
+      "hide": "Hide {{name}}",
+      "copy": "Copy {{name}}",
+      "edit": "Edit {{name}}",
+      "delete": "Delete {{name}}"
+    },
+    "toasts": {
+      "saved": "Saved secret \"{{name}}\"",
+      "deleted": "Deleted secret \"{{name}}\"",
+      "copied": "Copied {{name}} to clipboard"
+    },
+    "modal": {
+      "createTitle": "New secret",
+      "editTitle": "Edit {{name}}",
+      "labels": {
+        "name": "Name",
+        "value": "Value",
+        "newValue": "New value",
+        "description": "Description"
+      },
+      "placeholders": {
+        "name": "GITHUB_TOKEN",
+        "value": "Paste the secret value",
+        "description": "What this secret is for"
+      },
+      "errors": {
+        "name": "Use letters, numbers, dots, dashes and underscores, starting with a letter or number",
+        "value": "A value is required"
+      },
+      "cancel": "Cancel",
+      "create": "Create secret",
+      "save": "Save"
+    },
+    "deleteModal": {
+      "title": "Delete secret",
+      "message": "Anything that reads this secret from the vault will stop working. This cannot be undone.",
+      "infoTitle": "Secret"
+    }
+  },
   "tagManagement": {
     "page": {
       "title": "Tag Management",
@@ -8756,6 +8817,7 @@
         "responseCache": "Response Cache",
         "experimental": "Experimental",
         "prompts": "Prompts",
+        "secretsVault": "Secrets Vault",
         "tagManagement": "Tag Management",
         "settings": "Settings",
         "routerSettings": "Router Settings",
@@ -8800,6 +8862,7 @@
       "transformRequest": "Set up request transformation rules",
       "costTracking": "Track and analyze API costs",
       "uiTheme": "Customize dashboard appearance",
+      "secretsVault": "Store secrets for your coding agents on the gateway",
       "tagManagement": "Organize resources with tags",
       "prompts": "Manage and version prompt templates",
       "skills": "Register and share reusable agent skills in the Skills Hub",

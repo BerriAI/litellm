@@ -26187,6 +26187,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/vault/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Secrets
+         * @description [Experimental] List the calling user's secrets. Values are never returned here.
+         */
+        get: operations["list_secrets_vault_secrets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/vault/secrets/{secret_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reveal Secret
+         * @description [Experimental] Return the decrypted value of one of the calling user's secrets.
+         */
+        get: operations["reveal_secret_vault_secrets__secret_name__get"];
+        /**
+         * Put Secret
+         * @description [Experimental] Create the calling user's secret, or replace its value and description.
+         */
+        put: operations["put_secret_vault_secrets__secret_name__put"];
+        post?: never;
+        /**
+         * Delete Secret
+         * @description [Experimental] Delete one of the calling user's secrets. Idempotent.
+         */
+        delete: operations["delete_secret_vault_secrets__secret_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/vector_store/delete": {
         parameters: {
             query?: never;
@@ -56021,6 +56069,65 @@ export interface components {
              * @description Configuration status
              */
             status?: string | null;
+        };
+        /** VaultSecretDeleteResponse */
+        VaultSecretDeleteResponse: {
+            /** Deleted */
+            deleted: boolean;
+            /** Secret Name */
+            secret_name: string;
+        };
+        /** VaultSecretListResponse */
+        VaultSecretListResponse: {
+            /** Secrets */
+            secrets: components["schemas"]["VaultSecretMetadata"][];
+        };
+        /** VaultSecretMetadata */
+        VaultSecretMetadata: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Description */
+            description?: string | null;
+            /** Last Accessed At */
+            last_accessed_at?: string | null;
+            /** Secret Name */
+            secret_name: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** VaultSecretRevealed */
+        VaultSecretRevealed: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Description */
+            description?: string | null;
+            /** Last Accessed At */
+            last_accessed_at?: string | null;
+            /** Secret Name */
+            secret_name: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Value */
+            value: string;
+        };
+        /** VaultSecretWrite */
+        VaultSecretWrite: {
+            /** Description */
+            description?: string | null;
+            /** Value */
+            value: string;
         };
         /** VectorStoreDeleteRequest */
         VectorStoreDeleteRequest: {
@@ -95263,6 +95370,126 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VantageInitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_secrets_vault_secrets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultSecretListResponse"];
+                };
+            };
+        };
+    };
+    reveal_secret_vault_secrets__secret_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of the secret */
+                secret_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultSecretRevealed"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_secret_vault_secrets__secret_name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of the secret */
+                secret_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VaultSecretWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultSecretMetadata"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_secret_vault_secrets__secret_name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of the secret */
+                secret_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultSecretDeleteResponse"];
                 };
             };
             /** @description Validation Error */

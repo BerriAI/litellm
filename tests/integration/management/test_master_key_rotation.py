@@ -165,6 +165,12 @@ def test_master_key_rotation_keeps_stored_secrets_readable(
                 database_url=database_url,
             )
             write_rows(
+                'INSERT INTO "LiteLLM_VaultSecrets" (id, user_id, secret_name, value_b64, updated_at) '
+                "VALUES ('vault-secret', 'user', 'GITHUB_TOKEN', %s, now())",
+                (encrypted,),
+                database_url=database_url,
+            )
+            write_rows(
                 'INSERT INTO "LiteLLM_MCPServerTable" (server_id, static_headers, env) VALUES (%s, %s::jsonb, %s::jsonb)',
                 ("mcp", json.dumps(encrypted_headers), json.dumps(encrypted_env)),
                 database_url=database_url,
@@ -225,6 +231,11 @@ def test_master_key_rotation_keeps_stored_secrets_readable(
             ("connection",),
             database_url=database_url,
         )
+        vault_row: Final = read_rows(
+            'SELECT value_b64 FROM "LiteLLM_VaultSecrets" WHERE id = %s',
+            ("vault-secret",),
+            database_url=database_url,
+        )
         mcp_row: Final = read_rows(
             'SELECT static_headers, env FROM "LiteLLM_MCPServerTable" WHERE server_id = %s',
             ("mcp",),
@@ -247,8 +258,9 @@ def test_master_key_rotation_keeps_stored_secrets_readable(
             string_value(stored_cache["password"]),
             string_value(object_value(billing_row[0]["param_value"])["integration_token"]),
             string_value(provider_row[0]["credential_b64"]),
+            string_value(vault_row[0]["value_b64"]),
         )
-        assert tuple(decrypt_if_encrypted_with(value, expected_key) for value in ciphertexts) == (secret,) * 4
+        assert tuple(decrypt_if_encrypted_with(value, expected_key) for value in ciphertexts) == (secret,) * 5
         stored_mcp: Final = (mcp_row[0]["static_headers"], mcp_row[0]["env"])
         stored_legacy_mcp: Final = (legacy_mcp_row[0]["static_headers"], legacy_mcp_row[0]["env"])
         stored_legacy_credential: Final = string_value(legacy_credential_row[0]["credential_b64"])
@@ -259,12 +271,12 @@ def test_master_key_rotation_keeps_stored_secrets_readable(
         )
         assert stored_cache["port"] == cache_settings["port"]
         if expected_key == old_encryption_key:
-            assert ciphertexts == (encrypted,) * 4
+            assert ciphertexts == (encrypted,) * 5
             assert stored_mcp == (encrypted_headers, encrypted_env)
             assert stored_legacy_mcp == (header_map, json.dumps(env_map))
             assert stored_legacy_credential == legacy_credential
         else:
-            assert tuple(decrypt_if_encrypted_with(value, old_encryption_key) for value in ciphertexts) == (None,) * 4
+            assert tuple(decrypt_if_encrypted_with(value, old_encryption_key) for value in ciphertexts) == (None,) * 5
             assert tuple(decrypt_if_encrypted_with(value, old_encryption_key) for value in mcp_ciphertexts) == (
                 None,
                 None,

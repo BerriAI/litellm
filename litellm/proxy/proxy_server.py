@@ -1132,6 +1132,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     run_off_loop_if_fips,
     update_spend,
 )
+from litellm.proxy.vault_endpoints.endpoints import router as vault_router
 from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -23404,6 +23405,7 @@ app.include_router(tracing_endpoints.router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
+app.include_router(vault_router)
 app.include_router(openai_passthrough_router)
 app.include_router(batches_router)
 app.include_router(openai_files_router)

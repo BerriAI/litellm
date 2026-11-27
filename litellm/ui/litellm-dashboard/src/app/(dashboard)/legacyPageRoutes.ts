@@ -16,6 +16,7 @@ const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
     "mcp-servers": "mcp-servers",
     "search-tools": "search-tools",
     "tag-management": "tag-management",
+    "secrets-vault": "secrets-vault",
     "vector-stores": "vector-stores",
     memory: "memory",
     policies: "policies",

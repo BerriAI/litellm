@@ -679,6 +679,7 @@ jobs:
               tests/unit/proxy/vector_store_endpoints
               tests/unit/proxy/a2a
               tests/unit/proxy/credential_endpoints
+              tests/unit/proxy/vault_endpoints
               tests/unit/proxy/discovery_endpoints
               tests/unit/proxy/shutdown
               tests/unit/proxy/rust_forward

@@ -49,6 +49,7 @@ import {
   HeartPulse,
   House,
   KeyRound,
+  Vault,
   LayoutGrid,
   Layers,
   Network,
@@ -97,7 +98,10 @@ import { useGrantedApps } from "@/app/(dashboard)/apps/_components/useGrantedApp
 import BetaBadge from "./BetaBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
+import type { MenuGroup, MenuItem } from "./leftNavTypes";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
+
+export type { MenuGroup, MenuItem } from "./leftNavTypes";
 
 const ICON = { strokeWidth: 1.75 } as const;
 
@@ -107,24 +111,6 @@ interface SidebarProps {
   allowAgentsForTeamAdmins?: boolean;
   disableVectorStoresForInternalUsers?: boolean;
   allowVectorStoresForTeamAdmins?: boolean;
-}
-
-export interface MenuItem {
-  key: string;
-  page: string;
-  route?: string;
-  label: React.ReactNode;
-  untranslatedLabel?: string;
-  roles?: string[];
-  children?: MenuItem[];
-  icon?: React.ReactNode;
-  external_url?: string;
-}
-
-export interface MenuGroup {
-  groupLabel: string;
-  items: MenuItem[];
-  roles?: string[];
 }
 
 export interface MenuVisibilityContext {
@@ -481,6 +467,13 @@ const menuGroups: MenuGroup[] = [
             label: null,
             untranslatedLabel: productNames.apiPlayground,
             icon: <Terminal {...ICON} />,
+            roles: [...all_admin_roles, ...internalUserRoles],
+          },
+          {
+            key: "secrets-vault",
+            page: "secrets-vault",
+            label: "shell.nav.items.secretsVault",
+            icon: <Vault {...ICON} />,
             roles: [...all_admin_roles, ...internalUserRoles],
           },
           {

@@ -99,6 +99,10 @@ _SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
     ("DELETE", "/v1/mcp/server/{server_id}/user-credential"),
     ("POST", "/v1/mcp/server/{server_id}/user-env-vars"),
     ("DELETE", "/v1/mcp/server/{server_id}/user-env-vars"),
+    ("GET", "/vault/secrets"),
+    ("GET", "/vault/secrets/{secret_name}"),
+    ("PUT", "/vault/secrets/{secret_name}"),
+    ("DELETE", "/vault/secrets/{secret_name}"),
 )
 
 

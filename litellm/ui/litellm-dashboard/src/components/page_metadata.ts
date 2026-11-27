@@ -39,6 +39,7 @@ export const pageDescriptions: Record<string, ParseKeys> = {
   "cost-tracking": "shell.pageDescriptions.costTracking",
   "ui-theme": "shell.pageDescriptions.uiTheme",
   "tag-management": "shell.pageDescriptions.tagManagement",
+  "secrets-vault": "shell.pageDescriptions.secretsVault",
   prompts: "shell.pageDescriptions.prompts",
   skills: "shell.pageDescriptions.skills",
   "router-settings": "shell.pageDescriptions.routerSettings",

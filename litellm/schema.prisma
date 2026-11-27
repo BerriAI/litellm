@@ -674,6 +674,20 @@ model LiteLLM_UserProviderCredentials {
   @@index([credential_name])
 }
 
+// Experimental: per-user secrets vault. value_b64 is always stored encrypted.
+model LiteLLM_VaultSecrets {
+  id               String    @id @default(uuid())
+  user_id          String
+  secret_name      String
+  description      String?
+  value_b64        String
+  last_accessed_at DateTime?
+  created_at       DateTime  @default(now()) @map("created_at")
+  updated_at       DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([user_id, secret_name])
+}
+
 // Per-user environment variable values for MCP servers.
 // values_b64 is an encrypted JSON object: {VAR_NAME: "value", ...}.
 model LiteLLM_MCPUserEnvVars {
