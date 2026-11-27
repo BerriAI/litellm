@@ -420,7 +420,7 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-sonnet-5-5",
-        "id": "msg_011CfjayBjr8GfdBPi3hbif2",
+        "id": "msg_011ChTdps7g6BG6uR8xB7b3F",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -436,7 +436,8 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
             "output_tokens": 6,
             "output_tokens_details": {"thinking_tokens": 0},
             "service_tier": "standard",
-            "inference_geo": "not_available",
+            "inference_geo": "global",
+            "speed": "standard",
         },
         "diagnostics": None,
     },
