@@ -1708,7 +1708,7 @@ def test_retrieve__model_that_is_not_a_string_skips_provider_config_lookup(seams
 
 
 def test_create__openrouter_dispatch(seams):
-    result = bm.create_batch(**CREATE_KW, custom_llm_provider="openrouter")
+    result = bm.create_batch(**CREATE_KW, custom_llm_provider="openrouter", api_key="openrouter-test-key")
 
     assert result is seams.openai.create_batch.return_value
     _assert_only(seams.openai.create_batch, seams, "create_batch")
