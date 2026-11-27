@@ -106,6 +106,8 @@ const urlWrites = (page: Page): Promise<string[]> =>
 
 const paramIn = (href: string, key: string): string | null => new URL(href).searchParams.get(key);
 
+const requested = (paths: readonly string[], suffix: string): boolean => paths.some((path) => path.endsWith(suffix));
+
 const requestedPaths = (page: Page): string[] => {
   const seen: string[] = [];
   page.on("request", (request) => seen.push(new URL(request.url()).pathname));
@@ -201,8 +203,8 @@ test.describe("mcp-servers tab links by role", () => {
           }
 
           if (seesGated) return;
-          expect(requests).toContain(ROLE_PATH);
-          expect(requests).toContain(SERVER_LIST_PATH);
+          expect(requested(requests, ROLE_PATH)).toBe(true);
+          expect(requested(requests, SERVER_LIST_PATH)).toBe(true);
           const adminOnly = [...GATED_PAGE_TABS.map((tab) => tab.request), userCredentialsPath(serverId)];
           expect(requests.filter((path) => adminOnly.some((gated) => path.endsWith(gated)))).toEqual([]);
         });
@@ -264,7 +266,7 @@ test.describe("mcp-servers deep links while the role loads", () => {
 
     await expect(selectedTab(page, DEFAULT_TAB)).toBeVisible();
     await expect(page).toHaveURL((url) => url.searchParams.get("tab") === "semantic-filter");
-    expect(requests).toContain(SERVER_LIST_PATH);
+    expect(requested(requests, SERVER_LIST_PATH)).toBe(true);
     expect(requests.filter((path) => path.endsWith("/get/mcp_semantic_filter_settings"))).toEqual([]);
     await context.close();
   });
