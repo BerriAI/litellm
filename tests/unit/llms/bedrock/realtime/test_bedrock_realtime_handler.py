@@ -11,6 +11,7 @@ from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from botocore.credentials import Credentials
 from fastapi import HTTPException
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, Unpack
@@ -626,6 +627,19 @@ def stub_aws_sdk_client(monkeypatch):
         monkeypatch.delenv(env_var, raising=False)
 
     return captured
+
+
+class _StaticKeyBoto3Session:
+    def __init__(self, *, aws_access_key_id: str, aws_secret_access_key: str, region_name: str | None) -> None:
+        self._credentials = Credentials(aws_access_key_id, aws_secret_access_key)
+
+    def get_credentials(self) -> Credentials:
+        return self._credentials
+
+
+@pytest.fixture
+def static_key_boto3_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("boto3.Session", _StaticKeyBoto3Session)
 
 
 @pytest.fixture
@@ -2359,7 +2373,7 @@ class TestBedrockRealtimeGuardrails:
 
     @pytest.mark.asyncio
     async def test_proxy_request_guardrails_and_key_reach_the_bedrock_session(
-        self, stub_aws_sdk_client: dict[str, object], monkeypatch: pytest.MonkeyPatch
+        self, stub_aws_sdk_client: dict[str, object], static_key_boto3_session: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class ProxyLogging(FakeLogging):
             def update_from_kwargs(self, **kwargs: object) -> None:
@@ -2392,18 +2406,12 @@ class TestBedrockRealtimeGuardrails:
 
     @pytest.mark.asyncio
     async def test_a_key_that_opted_out_of_global_guardrails_is_not_screened(
-        self, stub_aws_sdk_client: dict[str, object], monkeypatch: pytest.MonkeyPatch
+        self, stub_aws_sdk_client: dict[str, object], static_key_boto3_session: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class ProxyLogging(FakeLogging):
             def update_from_kwargs(self, **kwargs: object) -> None:
                 pass
 
-        frozen_credentials: Final = SimpleNamespace(access_key="k", secret_key="s", token=None)
-        credentials: Final = SimpleNamespace(get_frozen_credentials=lambda: frozen_credentials)
-        monkeypatch.setattr(
-            "litellm.llms.bedrock.realtime.handler.run_aws_signing",
-            AsyncMock(side_effect=[credentials, frozen_credentials]),
-        )
         guardrail: Final = self._guardrail()
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
         stream: Final = ScriptedBedrockStream([], receiver_type=DrainedThenOpenBedrockReceiver)
