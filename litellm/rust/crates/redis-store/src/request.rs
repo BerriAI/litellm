@@ -152,21 +152,20 @@ impl RequestRedis {
     /// into memory, on the request's runtime, from any thread. `flush_post` waits for it, so the
     /// shutdown drain does not drop a fallback write still in flight.
     pub fn spawn(&self, task: impl Future<Output = ()> + std::marker::Send + 'static) {
-        let follow_up = self
-            .0
-            .runtime
-            .spawn(self.logged(within(current_tag(), task)));
+        let follow_up = litellm_call_scope::spawn_in_call_on(
+            &self.0.runtime,
+            self.logged(within(current_tag(), task)),
+        );
         self.0.follow_ups.lock().push(follow_up);
     }
 
     /// Runs `task` on the request's runtime without `flush_post` waiting for it, for work that
     /// settles with the pre-call batch whoever awaits it.
     pub(crate) fn detach(&self, task: impl Future<Output = ()> + std::marker::Send + 'static) {
-        drop(
-            self.0
-                .runtime
-                .spawn(self.logged(within(current_tag(), task))),
-        );
+        drop(litellm_call_scope::spawn_in_call_on(
+            &self.0.runtime,
+            self.logged(within(current_tag(), task)),
+        ));
     }
 
     /// `spawn` for the follow-up of post-call writes a later reader in this request waits on, such
@@ -258,7 +257,7 @@ impl RequestRedis {
         *deadline = Some(disarm);
         self.0.drain.open(&self.0);
         let request = self.clone();
-        self.0.runtime.spawn(self.logged(async move {
+        litellm_call_scope::spawn_in_call_on(&self.0.runtime, self.logged(async move {
             tokio::select! {
                 () = tokio::time::sleep(request.0.post_call_deadline) => within(tag, request.flush_post()).await,
                 _ = disarmed => {}

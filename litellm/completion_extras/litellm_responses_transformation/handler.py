@@ -13,6 +13,7 @@ from typing import (
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.call_kwargs import optional_str
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
 from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED
@@ -113,11 +114,11 @@ class ResponsesToCompletionBridgeHandler:
             raise ValueError("Stream completed response is invalid")
         return response
 
-    def validate_input_kwargs(self, kwargs: dict) -> ResponsesToCompletionBridgeHandlerInputKwargs:
+    def validate_input_kwargs(self, kwargs: Mapping[str, object]) -> ResponsesToCompletionBridgeHandlerInputKwargs:
         from litellm import LiteLLMLoggingObj
         from litellm.types.utils import ModelResponse
 
-        typed_kwargs: Final[dict[str, object]] = kwargs
+        typed_kwargs: Final = kwargs
 
         model: Final = typed_kwargs.get("model")
         if model is None or not isinstance(model, str):
@@ -164,7 +165,7 @@ class ResponsesToCompletionBridgeHandler:
         )
 
     def completion(
-        self, *args: object, **kwargs
+        self, *args: object, **kwargs: object
     ) -> Union[
         Coroutine[None, None, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
@@ -226,7 +227,7 @@ class ResponsesToCompletionBridgeHandler:
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 encoding=validated_kwargs["encoding"],
-                api_key=kwargs.get("api_key"),
+                api_key=optional_str(kwargs.get("api_key")),
                 json_mode=json_mode,
             )
             if not stream:
@@ -260,7 +261,7 @@ class ResponsesToCompletionBridgeHandler:
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 encoding=validated_kwargs["encoding"],
-                api_key=kwargs.get("api_key"),
+                api_key=optional_str(kwargs.get("api_key")),
                 json_mode=json_mode,
             )
         else:
@@ -286,7 +287,7 @@ class ResponsesToCompletionBridgeHandler:
             )
             return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
-    async def acompletion(self, *args: object, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
+    async def acompletion(self, *args: object, **kwargs: object) -> Union["ModelResponse", "CustomStreamWrapper"]:
         from litellm import aresponses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
@@ -347,7 +348,7 @@ class ResponsesToCompletionBridgeHandler:
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 encoding=validated_kwargs["encoding"],
-                api_key=kwargs.get("api_key"),
+                api_key=optional_str(kwargs.get("api_key")),
                 json_mode=json_mode,
             )
             if not stream:
@@ -381,7 +382,7 @@ class ResponsesToCompletionBridgeHandler:
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 encoding=validated_kwargs["encoding"],
-                api_key=kwargs.get("api_key"),
+                api_key=optional_str(kwargs.get("api_key")),
                 json_mode=json_mode,
             )
         else:

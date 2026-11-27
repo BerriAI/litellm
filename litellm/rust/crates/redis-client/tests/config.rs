@@ -42,7 +42,7 @@ enum ClientKey {
 
 async fn tls_server(require_client_certificate: bool) -> litellm_redis_testing::RedisTlsServer {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     }
     litellm_redis_testing::RedisTlsServer::start(require_client_certificate)
         .await

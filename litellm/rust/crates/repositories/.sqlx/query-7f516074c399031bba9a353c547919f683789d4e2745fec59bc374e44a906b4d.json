@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_BudgetTable\" (\n    budget_id,\n    max_budget,\n    allowed_models,\n    created_by,\n    updated_by,\n    created_at,\n    updated_at\n)\nSELECT $1::text,\n       $2::float8,\n       COALESCE($3::text[], '{}'),\n       $4::text,\n       $5::text,\n       NOW() AT TIME ZONE 'UTC',\n       NOW() AT TIME ZONE 'UTC'\nWHERE NOT EXISTS (\n    SELECT 1\n    FROM \"LiteLLM_TeamMembership\"\n    WHERE user_id = $6\n      AND team_id = $7\n)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8",
+        "TextArray",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7f516074c399031bba9a353c547919f683789d4e2745fec59bc374e44a906b4d"
+}

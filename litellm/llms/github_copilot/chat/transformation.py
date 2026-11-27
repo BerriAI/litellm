@@ -142,7 +142,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         return validated_headers
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get supported OpenAI parameters for GitHub Copilot.
 
@@ -224,7 +224,7 @@ class GithubCopilotConfig(OpenAIConfig):
         return text_content, tool_calls, thinking_blocks
 
     @staticmethod
-    def _normalize_anthropic_usage(usage: dict) -> dict:
+    def _normalize_anthropic_usage(usage: dict) -> dict[str, object]:
         normalized: Final = dict(usage)
         if "input_tokens" in usage and "prompt_tokens" not in usage:
             normalized["prompt_tokens"] = usage["input_tokens"]

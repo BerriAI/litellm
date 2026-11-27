@@ -103,7 +103,7 @@ class BasePassthroughLoggingHandler(ABC):
         start_time: datetime,
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Create the standard logging object for Generic LLM passthrough
 

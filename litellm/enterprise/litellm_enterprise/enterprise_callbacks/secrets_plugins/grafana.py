@@ -15,7 +15,7 @@ class GrafanaDetector(RegexBasedDetector):
         return "Grafana Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Grafana API key or Grafana Cloud API key
             re.compile(

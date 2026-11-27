@@ -453,7 +453,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
         response = ModelResponse.model_validate(
-            normalize_reasoning_blocks(raw_response.json()["final_result"], "message")
+            normalize_reasoning_blocks(_DECODED_JSON.validate_python(raw_response.json()["final_result"]), "message")
         )
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models

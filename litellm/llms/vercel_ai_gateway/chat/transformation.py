@@ -35,7 +35,7 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
     def custom_llm_provider(self) -> str | None:
         return "vercel_ai_gateway"
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_params: Final = super().get_supported_openai_params(model)
         if "extra_body" not in base_params:
             base_params.append("extra_body")

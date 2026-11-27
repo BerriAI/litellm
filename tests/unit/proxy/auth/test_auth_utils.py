@@ -3,6 +3,7 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 """
 
 import base64
+import traceback
 import logging
 import time
 from collections.abc import Callable, Mapping
@@ -23,6 +24,8 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import common_checks
 from litellm.proxy.auth.auth_utils import (
+    is_authentication_failure,
+    refusals_fail_authentication,
     _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
@@ -874,6 +877,30 @@ def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_cr
         request_kwargs={"api_base": "https://caller.example/v1", "api_key": "sk-caller"},
     )
     assert (out["api_base"], out["api_key"]) == ("https://caller.example/v1", "sk-caller")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("api_key", "test-key"), ("api_base", "https://alternate.example/v1"), ("base_url", "https://alternate.example/v1")),
+)
+def test_named_provider_oauth_deployment_rejects_client_side_overrides(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: str
+) -> None:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.models.credentials import CredentialItem
+
+    credential: Final = CredentialItem(
+        credential_name="provider-oauth",
+        credential_values={"oauth_client_credentials": True},
+        credential_info={},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+    with pytest.raises(BadRequestError, match="OAuth client credentials deployments"):
+        get_dynamic_litellm_params(
+            litellm_params={"model": "custom_openai/gpt-6-luna", "litellm_credential_name": credential.credential_name},
+            request_kwargs={field: value},
+        )
 
 
 def test_test_connection_may_name_a_credential_holding_an_oidc_api_key(oidc_api_key_credential):
@@ -3166,6 +3193,14 @@ class TestGetEndUserIdDropsMalformedBodyValues:
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
             result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
+
+        assert result is None
+
+    def test_metadata_user_dot_id_is_only_a_span_label(self) -> None:
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result: Final = get_end_user_id_from_request_body(
+                request_body={"metadata": {"user.id": "label"}}, request_headers={}
+            )
 
         assert result is None
 
@@ -7008,3 +7043,15 @@ def test_chatgpt_model_configuration_reaches_role_authorization(
                 model="",
                 route=inference_route,
             )
+
+
+def test_a_refusal_before_authentication_is_marked_and_raised_as_it_was() -> None:
+    refusal: Final = HTTPException(status_code=403, detail="Access forbidden: IP address 203.0.113.9 not allowed.")
+    with pytest.raises(HTTPException) as raised:
+        with refusals_fail_authentication():
+            raise refusal
+    assert raised.value is refusal
+    assert is_authentication_failure(refusal)
+    assert [frame.name for frame in traceback.extract_tb(refusal.__traceback__)] == [
+        "test_a_refusal_before_authentication_is_marked_and_raised_as_it_was"
+    ]

@@ -8,6 +8,7 @@ from litellm.proxy._types import (
     ROLES_WITHIN_ORG,
     BudgetNewRequest,
     ChangePasswordRequest,
+    ConfigGeneralSettings,
     GenerateKeyRequest,
     GenerateKeyResponse,
     KeyRequest,
@@ -760,3 +761,11 @@ def test_a_customer_request_with_only_known_fields_is_accepted(
     request_type: type[BaseModel], body: dict[str, object]
 ) -> None:
     assert request_type.model_validate(body).model_dump(exclude_unset=True) == body
+
+
+def test_require_key_mcp_access_defined_is_a_validated_bool_setting() -> None:
+    assert ConfigGeneralSettings().require_key_mcp_access_defined is None
+    parsed: Final = ConfigGeneralSettings.model_validate({"require_key_mcp_access_defined": True})
+    assert parsed.require_key_mcp_access_defined is True
+    with pytest.raises(ValidationError):
+        ConfigGeneralSettings.model_validate({"require_key_mcp_access_defined": "not-a-bool"})

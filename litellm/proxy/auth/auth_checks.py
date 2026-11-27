@@ -200,6 +200,7 @@ from .auth_utils import (
     get_model_from_request,
     get_request_route,
     get_request_route_template,
+    mark_authentication_failure,
     request_dispatched_to_pass_through_endpoint,
     request_fallback_model_names,
 )
@@ -3703,14 +3704,7 @@ class _TeamNotFoundDetail(TypedDict):
 
 
 class TeamNotFoundError(HTTPException):
-    """The team row is provably absent, as opposed to merely unreadable.
-
-    ``get_team_object`` reports every failure as a 404, so a deleted team and a
-    database that would not answer are indistinguishable to its callers. Callers
-    that must not treat a degraded read as a definitive answer, such as the
-    authorization fallback in ``user_api_key_auth``, key on this subclass. It
-    stays a 404 carrying the same detail, so every other caller is unaffected.
-    """
+    """The team row is provably absent, as opposed to merely unreadable."""
 
     def __init__(self, team_id: str) -> None:
         detail: Final[_TeamNotFoundDetail] = {
@@ -3968,8 +3962,8 @@ async def get_team_object(
     )
     if isinstance(read, TeamReadFailed):
         raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."},
+            status_code=503,
+            detail="Team policy is unavailable",
         ) from read.error
     return read
 
@@ -4402,7 +4396,11 @@ class ExperimentalUIJWTToken:
         try:
             return UserAPIKeyAuth.model_validate(json.loads(decrypted_token))
         except Exception as e:
-            raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
+            undecodable: Final = Exception(
+                f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}"
+            )
+            mark_authentication_failure(undecodable)
+            raise undecodable
 
 
 async def load_key_object(

@@ -320,7 +320,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         hook: str,
         key_alias: str | None,
         user_email: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         call_id: Final = data.get("litellm_call_id")
         headers: Final = self._build_cato_headers(
             hook=hook,
@@ -364,7 +364,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         )
         raise HTTPException(status_code=400, detail=detection_message)
 
-    def _anonymize_request(self, res: _CatoAnalyzeResponse, data: dict) -> dict:
+    def _anonymize_request(self, res: _CatoAnalyzeResponse, data: dict) -> dict[str, object]:
         verbose_proxy_logger.info("Cato: anonymize action")
         redacted_chat: Final = res.get("redacted_chat")
         if not redacted_chat:

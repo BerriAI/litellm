@@ -44,7 +44,7 @@ class LimitedSizeOrderedDict(OrderedDict):
         super().__init__(*args, **kwargs)
         self.max_size = max_size
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: object, value: object):
         # If inserting a new key exceeds max size, remove the oldest item
         if len(self) >= self.max_size:
             self.popitem(last=False)
@@ -178,21 +178,23 @@ class DualCache(BaseCache):
         # Try to fetch from in-memory cache first
         try:
             result = None
+            accept_entry: Final = kwargs.get("_accept_entry")
             if self.in_memory_cache is not None:
                 in_memory_result: Final = self.in_memory_cache.get_cache(key, **kwargs)
 
-                if in_memory_result is not None:
+                if in_memory_result is not None and (not callable(accept_entry) or accept_entry(in_memory_result)):
                     result = in_memory_result
 
             if result is None and self.redis_cache is not None and local_only is False:
                 # If not found in in-memory cache, try fetching from Redis
                 redis_result: Final = self.redis_cache.get_cache(key, parent_otel_span=parent_otel_span)
 
-                if redis_result is not None:
+                if redis_result is not None and (not callable(accept_entry) or accept_entry(redis_result)):
                     # Update in-memory cache with the value from Redis
-                    self.in_memory_cache.set_cache(
-                        key, _BACKFILL_VALUE.validate_python(redis_result), **self._backfill_kwargs(kwargs)
+                    backfill: Final = self._backfill_kwargs(
+                        {**kwargs, "preserve_newer_response": True} if callable(accept_entry) else kwargs
                     )
+                    self.in_memory_cache.set_cache(key, _BACKFILL_VALUE.validate_python(redis_result), **backfill)
 
                 result = redis_result
 
@@ -257,21 +259,25 @@ class DualCache(BaseCache):
         try:
             print_verbose("async get cache: cache key: %s; local_only: %s", key, local_only)
             result = None
+            accept_entry: Final = kwargs.get("_accept_entry")
             if self.in_memory_cache is not None:
                 in_memory_result: Final = await self.in_memory_cache.async_get_cache(key, **kwargs)
 
                 print_verbose("in_memory_result: %s", in_memory_result)
-                if in_memory_result is not None:
+                if in_memory_result is not None and (not callable(accept_entry) or accept_entry(in_memory_result)):
                     result = in_memory_result
 
             if result is None and self.redis_cache is not None and local_only is False:
                 # If not found in in-memory cache, try fetching from Redis
                 redis_result: Final = await self.redis_cache.async_get_cache(key, parent_otel_span=parent_otel_span)
 
-                if redis_result is not None:
+                if redis_result is not None and (not callable(accept_entry) or accept_entry(redis_result)):
                     # Update in-memory cache with the value from Redis
+                    backfill: Final = self._backfill_kwargs(
+                        {**kwargs, "preserve_newer_response": True} if callable(accept_entry) else kwargs
+                    )
                     await self.in_memory_cache.async_set_cache(
-                        key, _BACKFILL_VALUE.validate_python(redis_result), **self._backfill_kwargs(kwargs)
+                        key, _BACKFILL_VALUE.validate_python(redis_result), **backfill
                     )
 
                 result = redis_result

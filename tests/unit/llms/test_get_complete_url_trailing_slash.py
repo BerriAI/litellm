@@ -78,6 +78,9 @@ INPUTS_BY_BUILDER: Final[Mapping[str, BuilderInputs]] = MappingProxyType(
         "black_forest_labs.image_generation.transformation.BlackForestLabsImageGenerationConfig": BuilderInputs(
             call={"model": "flux-pro-1.1"}
         ),
+        "elevenlabs.realtime.transformation.ElevenLabsRealtimeConfig": BuilderInputs(
+            call={"model": "scribe_v2_realtime"}
+        ),
         "elevenlabs.text_to_speech.transformation.ElevenLabsTextToSpeechConfig": BuilderInputs(
             call={"litellm_params": {ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY: "voice-id"}}
         ),

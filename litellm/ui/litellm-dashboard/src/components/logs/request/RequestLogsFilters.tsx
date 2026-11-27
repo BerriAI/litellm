@@ -23,7 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import type { Team } from "../../key_team_helpers/key_list";
-import { CREDENTIAL_LABELS, ERROR_CODE_OPTIONS } from "../constants";
+import { CREDENTIAL_LABELS, ERROR_CODE_OPTIONS, requestSpanTypeItems } from "../constants";
 import { LOG_FILTER_IDS, type LogsWindow } from "./useLogFilterLogic";
 
 const ALL_VALUE = "all";
@@ -50,13 +50,6 @@ const CREDENTIAL_FILTER_ITEMS: readonly FilterItem[] = [
   ...Object.entries(CREDENTIAL_LABELS).map(([value, labelKey]) => ({ value, labelKey })),
 ];
 
-const SPAN_TYPE_FILTER_ITEMS: readonly FilterItem[] = [
-  { value: ALL_VALUE, labelKey: "logs.request.filters.allTypes" },
-  { value: "llm", labelKey: "logs.common.spanTypes.llm" },
-  { value: "agent", labelKey: "logs.common.spanTypes.agent" },
-  { value: "mcp", labelKey: "logs.common.spanTypes.mcp" },
-  { value: "batch", labelKey: "logs.common.spanTypes.batch" },
-];
 const PAGE_SIZE = 50;
 
 const SEARCH_INPUT_REASONS: ReadonlySet<string> = new Set(["input-change", "input-clear", "clear-press"]);
@@ -358,7 +351,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
   const valueOf = (id: string): string => asString(get(id));
   const setter = (id: string) => (next: string | undefined) => set(id, next);
   const withLabel = ({ value, labelKey }: FilterItem) => ({ value, label: t(labelKey) });
-  const spanTypeItems = SPAN_TYPE_FILTER_ITEMS.map(withLabel);
+  const spanTypeItems = [{ value: ALL_VALUE, label: t("logs.request.filters.allTypes") }, ...requestSpanTypeItems(t)];
   const statusItems = STATUS_FILTER_ITEMS.map(withLabel);
   const cacheItems = CACHE_FILTER_ITEMS.map(withLabel);
   const credentialItems = CREDENTIAL_FILTER_ITEMS.map(withLabel);

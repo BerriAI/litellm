@@ -31,12 +31,12 @@ class ScalewayRerankConfig(JinaAIRerankConfig):
 
     def validate_environment(
         self,
-        headers: Mapping[str, str],
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict[str, str]:  # mutable-ok: BaseRerankConfig contract
+    ) -> dict[str, object]:  # mutable-ok: BaseRerankConfig contract
         key: Final = api_key or get_secret_str("SCW_SECRET_KEY")
         if not key:
             raise ValueError(

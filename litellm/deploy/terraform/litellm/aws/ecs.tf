@@ -140,7 +140,7 @@ locals {
 
   shared_secrets = concat(
     [
-      { name = "LITELLM_MASTER_KEY", valueFrom = aws_secretsmanager_secret.master_key.arn },
+      { name = "LITELLM_MASTER_KEY", valueFrom = local.master_key_secret_arn },
     ],
     var.litellm_license == "" ? [] : [
       { name = "LITELLM_LICENSE", valueFrom = aws_secretsmanager_secret.license[0].arn },
@@ -153,8 +153,8 @@ locals {
 
   # Backend-only managed secrets. UI_PASSWORD is consumed by the management
   # API (UI login flow) and has no use on the gateway data plane.
-  backend_managed_secrets = var.ui_password == "" ? [] : [
-    { name = "UI_PASSWORD", valueFrom = aws_secretsmanager_secret.ui_password[0].arn },
+  backend_managed_secrets = var.ui_password_secret_arn == null && var.ui_password == "" ? [] : [
+    { name = "UI_PASSWORD", valueFrom = local.ui_password_secret_arn },
   ]
 
   gateway_extra_env_list = [
@@ -180,7 +180,10 @@ locals {
   # downloads it to /tmp/litellm-config.yaml via boto3 before exec'ing
   # uvicorn. The S3 object's etag is embedded in the task definition so a
   # config edit forces a new task-def revision and a rolling redeploy.
-  proxy_config_enabled = length(keys(var.proxy_config)) > 0
+  proxy_config = merge(var.proxy_config, var.turn_off_message_logging ? {
+    litellm_settings = merge(try(var.proxy_config.litellm_settings, null), { turn_off_message_logging = true })
+  } : {})
+  proxy_config_enabled = length(keys(local.proxy_config)) > 0
   proxy_config_path    = "/tmp/litellm-config.yaml"
 
   proxy_config_env = local.proxy_config_enabled ? [

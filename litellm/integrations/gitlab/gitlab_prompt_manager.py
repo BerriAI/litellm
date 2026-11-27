@@ -45,6 +45,10 @@ class _SupportsGet(Protocol):
     def get(self, key: str, default: object = None, /) -> object: ...
 
 
+class _SupportsStrip(Protocol):
+    def strip(self, chars: str, /) -> str: ...
+
+
 def _input_schema(metadata: Mapping[str, object]) -> object:
     return require_attributes(metadata.get("input", {}), _SupportsGet, "get").get("schema", {})
 
@@ -97,7 +101,7 @@ class GitLabTemplateManager:
 
     def __init__(
         self,
-        gitlab_config: Mapping[str, Any],
+        gitlab_config: Mapping[str, object],
         prompt_id: str | None = None,
         ref: str | None = None,
         gitlab_client: GitLabClient | None = None,
@@ -111,8 +115,8 @@ class GitLabTemplateManager:
             self.gitlab_client.set_ref(ref)
 
         # Folder inside repo to look for prompts (e.g., "prompts" or "prompts/chat")
-        self.prompts_path: str = (
-            self.gitlab_config.get("prompts_path") or self.gitlab_config.get("folder") or ""
+        self.prompts_path: str = require_attributes(
+            self.gitlab_config.get("prompts_path") or self.gitlab_config.get("folder") or "", _SupportsStrip, "strip"
         ).strip("/")
 
         # Templates fetched from a GitLab repo are not trustworthy:
@@ -589,7 +593,7 @@ class GitLabPromptManager(CustomPromptManagement):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         return PromptManagementBase.get_chat_completion_prompt(
             self,
             model,
@@ -618,7 +622,7 @@ class GitLabPromptManager(CustomPromptManagement):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Async version - delegates to PromptManagementBase async implementation.
         """

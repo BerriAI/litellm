@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(access_group_ids, '{}') AS \"access_group_ids!\"\nFROM \"LiteLLM_TeamTable\"\nWHERE team_id = $1\nFOR UPDATE\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "access_group_ids!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c302ce124569f01139feb78323b6035da970bdcb73d0f8d919c74d92a7bd9910"
+}

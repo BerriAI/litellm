@@ -62,7 +62,7 @@ class YouComSearchConfig(BaseSearchConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Set headers for the You.com Search API.
 

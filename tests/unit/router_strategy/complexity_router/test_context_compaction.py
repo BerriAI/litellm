@@ -12,6 +12,7 @@ import respx
 import litellm
 from litellm.llms import compaction as native
 from litellm.router_api import RoutingContext
+from litellm.router_rust.steps.precall import STAND_IN_OVERCOUNT_MARGIN, stand_in_tokenizer
 from litellm.router_strategy.complexity_router.config import ContextCompactionConfig
 from litellm.router_strategy.complexity_router.context_compaction import (
     CompactionState,
@@ -412,6 +413,28 @@ async def test_client_managed_overflow_keeps_context_window_admission(
         assert compactor.call_count == 1
         assert "compaction" not in json.loads(compactor.calls[0].request.content)
     assert answer.call_count == 0
+
+
+async def test_client_managed_admission_leaves_an_estimated_overflow_within_the_margin_to_the_provider(
+    wire: tuple[respx.Route, respx.Route],
+) -> None:
+    payload: Final = history("chat")
+    estimate: Final = litellm.token_counter(
+        custom_tokenizer=stand_in_tokenizer(), messages=payload["messages"], tools=payload["tools"]
+    )
+    window: Final = min(estimate, make_router()._count_pre_call_check_tokens(payload["messages"], None, payload)) - 1
+    assert estimate <= window * STAND_IN_OVERCOUNT_MARGIN
+    router: Final = make_router(window=window)
+    deployment: Final = router.get_deployment(model_id="pinned-answer")
+    assert deployment is not None
+    request: Final = {**payload, "model": "small", "max_tokens": 64, "_context_compaction_state": CompactionState()}
+    await arm_compaction(request, ContextCompactionConfig(), ("large",))
+    managed: Final = {**request, "context_management": {"edits": []}}
+
+    admitted: Final = await compact_to_fit(RoutingContext(router), deployment.model_dump(), managed, "chat")
+
+    assert admitted is managed
+    assert all(route.call_count == 0 for route in wire)
 
 
 @pytest.mark.parametrize("case", ["conflicting_defaults", "small_window", "capability_false", "capability_missing"])

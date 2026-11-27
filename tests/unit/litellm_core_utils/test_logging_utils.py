@@ -29,11 +29,18 @@ from litellm import(
     TextChoices,
     TextCompletionResponse,
 )
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.llms.anthropic import (
+    AnthropicContentParamSource,
+    AnthropicMessagesDocumentParam,
+    AnthropicMessagesImageParam,
+    AnthropicMessagesTextParam,
+    AnthropicMessagesUserMessageParam,
+)
 from litellm.types.llms.openai import AllMessageValues
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from typing import Final
+from typing import Final, Literal
 
 
 class TestSetDurationInModelCallDetails:
@@ -213,6 +220,64 @@ class TestTruncateBase64InMessages:
         result = truncate_base64_in_messages(messages)
         assert result[0]["content"][0]["image_url"]["url"] == f"data:image/png;base64,{short}"
 
+    @pytest.mark.parametrize(
+        ("block_type", "media_type"), [("image", "image/png"), ("document", "application/pdf")]
+    )
+    def test_anthropic_base64_source_data_is_replaced_by_a_size_placeholder(
+        self, block_type: Literal["image", "document"], media_type: str
+    ):
+        payload: Final = "M" * 4_000
+        messages: Final = _anthropic_source_messages(payload, block_type, media_type)
+
+        result: Final = truncate_base64_in_messages(messages)
+
+        assert result[0]["content"][1] == {
+            "type": block_type,
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": f"[base64_data truncated: {format_base64_size(len(payload))}]",
+            },
+        }
+        assert messages[0]["content"][1]["source"]["data"] == payload
+
+    def test_short_anthropic_base64_source_data_is_kept(self):
+        messages: Final = _anthropic_source_messages("AAAA", "image", "image/png")
+
+        assert truncate_base64_in_messages(messages) == messages
+
+    def test_data_outside_a_base64_source_is_kept(self):
+        messages: Final = [{"role": "user", "content": [{"type": "json", "data": "N" * 4_000}]}]
+
+        assert truncate_base64_in_messages(messages) == messages
+
+    def test_data_uri_string_directly_inside_a_list_is_truncated(self):
+        payload: Final = "Q" * 4_000
+        messages: Final = [{"role": "user", "content": ["describe", f"data:image/png;base64,{payload}"]}]
+
+        result: Final = truncate_base64_in_messages(messages)
+
+        assert result[0]["content"] == [
+            "describe",
+            f"data:image/png;base64,[base64_data truncated: {format_base64_size(len(payload))}]",
+        ]
+
+
+def _anthropic_source_messages(
+    payload: str, block_type: Literal["image", "document"], media_type: str
+) -> list[AnthropicMessagesUserMessageParam]:
+    source: Final = AnthropicContentParamSource(type="base64", media_type=media_type, data=payload)
+    block: Final = (
+        AnthropicMessagesImageParam(type="image", source=source)
+        if block_type == "image"
+        else AnthropicMessagesDocumentParam(type="document", source=source)
+    )
+    return [
+        AnthropicMessagesUserMessageParam(
+            role="user", content=[AnthropicMessagesTextParam(type="text", text="describe"), block]
+        )
+    ]
+
 
 # ---------------------------------------------------------------------------
 # truncate_base64_in_messages_async
@@ -359,6 +424,17 @@ class TestTruncateBase64InMessagesAsync:
         assert result == messages
         assert result is not messages
         assert scan_threads == []
+
+    def test_large_anthropic_base64_source_is_truncated_on_the_inline_copy(self):
+        payload: Final = "O" * BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS
+        messages: Final = _anthropic_source_messages(payload, "image", "image/png")
+
+        result: Final = _run_without_yielding(truncate_base64_in_messages_async(messages))
+
+        assert result == truncate_base64_in_messages(messages)
+        assert result[0]["content"][1]["source"]["data"] == (
+            f"[base64_data truncated: {format_base64_size(len(payload))}]"
+        )
 
     @pytest.mark.asyncio
     async def test_long_plain_text_history_is_copied_off_the_event_loop(

@@ -20,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
+import { modelPrompts } from "@/i18n/untranslated/modelText";
 import CodeBlock from "@/components/CodeBlock";
 import { toast } from "@/lib/toast";
 import {
@@ -608,7 +609,7 @@ export default function AgentBuilderView({
                           <Textarea
                             value={draftSystemPrompt}
                             onChange={(e) => setDraftSystemPrompt(e.target.value)}
-                            placeholder={t("playground.chatUi.agentBuilderView.systemPromptPlaceholder")}
+                            placeholder={modelPrompts.helpfulAssistant}
                             rows={6}
                             className="field-sizing-fixed"
                           />

@@ -63,7 +63,7 @@ class GetAnthropicBetaHeadersConfig:
     """
 
     @staticmethod
-    def load_local_beta_headers_config() -> dict:
+    def load_local_beta_headers_config() -> dict[str, object]:
         """Load the local backup beta headers config bundled with the package."""
         try:
             content: Final = json.loads(
@@ -138,7 +138,7 @@ class GetAnthropicBetaHeadersConfig:
         return _DECODED_JSON.validate_python(response.json())
 
 
-def get_beta_headers_config(url: str) -> dict:
+def get_beta_headers_config(url: str) -> dict[str, object]:
     """
     Public entry point — returns the beta headers config dict.
 
@@ -233,7 +233,7 @@ def _bundled_beta_headers_config() -> BetaHeadersConfig:
     return _BETA_HEADERS_CONFIG_ADAPTER.validate_python(GetAnthropicBetaHeadersConfig.load_local_beta_headers_config())
 
 
-def reload_beta_headers_config() -> dict:
+def reload_beta_headers_config() -> dict[str, object]:
     """
     Force reload the beta headers configuration from source (remote or local).
     Clears the cache and fetches fresh configuration.

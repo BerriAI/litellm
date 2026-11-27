@@ -4,9 +4,10 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 
 import copy
 import json
-from collections.abc import Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Coroutine, Iterable, Iterator, Mapping, Sequence
 from typing import Final, Literal, cast, overload
 
+from litellm.constants import VLLM_STREAM_PROMPT_FIELDS
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
@@ -26,9 +27,13 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoUrlObject,
     OpenAIMessageContentListBlock,
 )
+from litellm.types.utils import ModelResponse
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 
 _THINKING_KEYS: Final = frozenset({"thinking_blocks"})
 _THINKING_AND_REASONING_KEYS: Final = frozenset({"thinking_blocks", "reasoning_content"})
@@ -148,6 +153,19 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             converted_tools.append({"type": "function", "function": function_definition})
 
         return converted_tools
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> OpenAIChatCompletionStreamingHandler:
+        return OpenAIChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+            passthrough_top_level_fields=VLLM_STREAM_PROMPT_FIELDS,
+        )
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         params: Final = super().get_supported_openai_params(model)

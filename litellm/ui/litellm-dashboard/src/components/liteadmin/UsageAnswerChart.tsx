@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { BarChart } from "@/components/shared/charts/bar_chart";
 import { LineChart } from "@/components/shared/charts/line_chart";
 import { STACKED_USAGE_PALETTE } from "@/components/shared/charts/StackedUsageChart";
-import { formatUsageChartValue, type UsageChart } from "./usageChart";
+import { formatUsageChartContext, formatUsageChartValue, type UsageChart } from "./usageChart";
 
 const CHART_TITLES: Record<string, ParseKeys> = {
   "Daily spend": "aria.chart.titles.dailySpend",
@@ -12,13 +12,6 @@ const CHART_TITLES: Record<string, ParseKeys> = {
   "Spend by model": "aria.chart.titles.spendByModel",
   "Spend by provider": "aria.chart.titles.spendByProvider",
   "Token breakdown": "aria.chart.titles.tokenBreakdown",
-};
-
-const CHART_SCOPES: Record<string, ParseKeys> = {
-  "Gateway usage": "aria.chart.scopes.gateway",
-  "All teams": "aria.chart.scopes.allTeams",
-  "All tags": "aria.chart.scopes.allTags",
-  "Your usage": "aria.chart.scopes.yours",
 };
 
 const CHART_LABELS: Record<string, ParseKeys> = {
@@ -39,6 +32,9 @@ export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
   const { t } = useTranslation();
   const display = (keys: Record<string, ParseKeys>, text: string) => (Object.hasOwn(keys, text) ? t(keys[text]) : text);
   const title = display(CHART_TITLES, chart.title);
+  const { scope, period } = formatUsageChartContext(chart, t);
+  const unitLabel = t(`aria.chart.units.${chart.unit}`);
+  const categoryLabels = { [chart.unit]: unitLabel };
   const formatValue = (value: number) => formatUsageChartValue(value, chart.unit);
   const unavailable = chart.data
     .filter((point) => point.value == null)
@@ -52,12 +48,12 @@ export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
           <p className="text-xl font-semibold tracking-tight tabular-nums">
             {formatUsageChartValue(chart.total, chart.unit)}
             {chart.unit !== "usd" && (
-              <span className="ml-1.5 text-sm font-normal text-muted-foreground">{chart.unit}</span>
+              <span className="ml-1.5 text-sm font-normal text-muted-foreground">{unitLabel}</span>
             )}
           </p>
         </div>
         <p className="text-xs text-muted-foreground">
-          {display(CHART_SCOPES, chart.scope)} · {chart.period}
+          {scope} · {period}
         </p>
       </figcaption>
       {chart.kind === "bar" ? (
@@ -65,6 +61,7 @@ export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
           data={data}
           index="label"
           categories={[chart.unit]}
+          categoryLabels={categoryLabels}
           colors={STACKED_USAGE_PALETTE}
           colorByDatum
           layout="vertical"
@@ -80,6 +77,7 @@ export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
           data={data}
           index="label"
           categories={[chart.unit]}
+          categoryLabels={categoryLabels}
           colors={STACKED_USAGE_PALETTE}
           showDots
           showLegend={false}
@@ -92,7 +90,7 @@ export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
         <thead>
           <tr>
             <th scope="col">{t("aria.chart.category")}</th>
-            <th scope="col">{chart.unit}</th>
+            <th scope="col">{unitLabel}</th>
           </tr>
         </thead>
         <tbody>

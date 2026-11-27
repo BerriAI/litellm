@@ -357,6 +357,55 @@ class TestManagedWebSocketHandlerIntegration:
         ]
 
     @pytest.mark.asyncio
+    async def test_managed_socket_reports_a_turn_s_client_error_with_its_openai_type_code_and_param(self, monkeypatch):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        not_found: Final = litellm.BadRequestError(
+            message="Previous response with id 'resp_gone' not found.",
+            model="anthropic/claude-sonnet-4-5",
+            llm_provider="anthropic",
+            body={
+                "message": "Previous response with id 'resp_gone' not found.",
+                "type": "invalid_request_error",
+                "param": "previous_response_id",
+                "code": "previous_response_not_found",
+            },
+        )
+        monkeypatch.setattr(litellm, "aresponses", AsyncMock(side_effect=not_found))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+        )
+
+        await handler._process_response_create(
+            json.dumps({"type": "response.create", "input": "hi", "previous_response_id": "resp_gone"})
+        )
+
+        error_event: Final = json.loads(websocket.send_text.await_args_list[-1].args[0])
+        assert error_event["status"] == 400
+        assert {key: error_event["error"][key] for key in ("type", "code", "param")} == {
+            "type": "invalid_request_error",
+            "code": "previous_response_not_found",
+            "param": "previous_response_id",
+        }
+
+    @pytest.mark.asyncio
     async def test_managed_socket_unmasks_the_reply_with_the_frame_guard_s_pii_tokens(self, monkeypatch):
         import json
         from unittest.mock import AsyncMock, MagicMock
@@ -1702,12 +1751,20 @@ class TestWebSocketErrorHandling:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("provider_answer", "expected_status"),
+        ("provider_answer", "expected_status", "expected_type"),
         [
-            (httpx.Response(400, json={"error": {"message": "bad input", "type": "invalid_request_error"}}), 400),
-            (httpx.Response(429, json={"error": {"message": "slow down", "type": "rate_limit_error"}}), 429),
-            (httpx.Response(503, json={"error": {"message": "overloaded", "type": "server_error"}}), 503),
-            (httpx.ConnectError("connection refused"), 500),
+            (
+                httpx.Response(400, json={"error": {"message": "bad input", "type": "invalid_request_error"}}),
+                400,
+                "invalid_request_error",
+            ),
+            (
+                httpx.Response(429, json={"error": {"message": "slow down", "type": "rate_limit_error"}}),
+                429,
+                "rate_limit_exceeded",
+            ),
+            (httpx.Response(503, json={"error": {"message": "overloaded", "type": "server_error"}}), 503, "server_error"),
+            (httpx.ConnectError("connection refused"), 500, "server_error"),
         ],
         ids=["400", "429", "503", "transport-error"],
     )
@@ -1717,6 +1774,7 @@ class TestWebSocketErrorHandling:
         respx_mock: respx.MockRouter,
         provider_answer: httpx.Response | httpx.ConnectError,
         expected_status: int,
+        expected_type: str,
     ) -> None:
         """Codex ignores error frames without a top-level status and hangs until its idle timeout."""
         import litellm
@@ -1752,7 +1810,7 @@ class TestWebSocketErrorHandling:
         assert (error_event["type"], error_event["status"], error_event["error"]["type"]) == (
             "error",
             expected_status,
-            "server_error",
+            expected_type,
         )
 
     @pytest.mark.asyncio

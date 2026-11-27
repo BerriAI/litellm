@@ -207,14 +207,14 @@ class BaseLLMAIOHTTPHandler:
         sync_httpx_client: HTTPHandler,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],  # mutable-ok: dict-typed callees take it
         data: dict[str, object],
         timeout: float | httpx.Timeout | None,
         litellm_params: dict,
         stream: bool = False,
         files: dict | None = None,
         content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
-        params: dict | None = None,
+        params: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> httpx.Response:
         max_retry_on_unprocessable_entity_error: Final = provider_config.max_retry_on_unprocessable_entity_error
 
@@ -341,7 +341,7 @@ class BaseLLMAIOHTTPHandler:
             stream=stream,
         )
 
-        data: Final = provider_config.transform_request(
+        data: Final[dict[str, object]] = provider_config.transform_request(  # mutable-ok: the callee's own dict
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -442,7 +442,7 @@ class BaseLLMAIOHTTPHandler:
         timeout: float | httpx.Timeout,
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
-    ) -> tuple[object, dict]:
+    ) -> tuple[object, dict[str, object]]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = get_httpx_client()
         else:

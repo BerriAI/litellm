@@ -23,6 +23,7 @@ from litellm.constants import (
     REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+    REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY,
 )
 from litellm.exceptions import RateLimitError, ServiceUnavailableError
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -35,7 +36,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.realtime_turn_limits import TURN_LIMIT_CHECK_FAILED_MESSAGE
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
+from litellm.llms.elevenlabs.common_utils import ElevenLabsException
+from litellm.llms.elevenlabs.realtime.transformation import ElevenLabsRealtimeConfig
+from litellm.types.llms.elevenlabs import ElevenLabsRealtimeOptions
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 
@@ -3741,6 +3745,29 @@ async def test_deferred_setup_sends_the_held_session_update_when_more_audio_arri
 
 
 @pytest.mark.asyncio
+async def test_deferred_transcription_update_configures_backend_after_early_audio():
+    client_ws: Final = MagicMock()
+    audio: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"})
+    update: Final = json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}})
+    client_ws.receive_text = AsyncMock(side_effect=[audio, update, ConnectionClosed(None, None)])
+    backend_ws: Final = MagicMock(spec=RealtimeBackend)
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=ElevenLabsRealtimeConfig(),
+        model="scribe_v2_realtime",
+    )
+
+    await streaming.client_ack_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert len(sent) == 1
+    assert sent[0]["kind"] == "configure"
+
+
+@pytest.mark.asyncio
 async def test_deferred_setup_flush_buffers_audio_received_during_flush():
     import asyncio
 
@@ -3922,6 +3949,7 @@ async def test_deferred_setup_caps_non_audio_buffered_bytes(monkeypatch):
 
     client_ws = MagicMock()
     client_ws.receive_text = AsyncMock(side_effect=[audio_msg, big_non_audio, ConnectionClosed(None, None)])
+    client_ws.send_text = AsyncMock()
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
     logging_obj: Final = _mock_logging()
@@ -5202,6 +5230,54 @@ async def test_a_session_the_provider_refused_in_band_logs_a_failure_even_after_
 
 
 @pytest.mark.asyncio
+async def test_an_elevenlabs_error_before_session_started_logs_a_failure_and_no_success():
+    provider_config: Final = ElevenLabsRealtimeConfig()
+    provider_config.transform_realtime_request(
+        json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}}),
+        "scribe_v2_realtime",
+    )
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(),
+        _backend_ws_closing_with(
+            json.dumps({"message_type": "auth_error", "error": "Invalid API key"}).encode(),
+            ConnectionClosed(Close(1000, ""), None),
+        ),
+        provider_config,
+    )
+
+    await session.run()
+
+    (failure,) = session.logging.logged_failures
+    assert isinstance(failure, ElevenLabsException)
+    assert (failure.status_code, failure.message) == (401, "ElevenLabs realtime transcription failed: auth_error")
+    assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_an_elevenlabs_keyterm_session_records_its_priced_addon_for_cost_tracking():
+    provider_config: Final = ElevenLabsRealtimeConfig(options=ElevenLabsRealtimeOptions(keyterms=("LiteLLM",)))
+    provider_config.transform_realtime_request(
+        json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}}),
+        "scribe_v2_realtime",
+    )
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(),
+        _backend_ws_closing_with(
+            json.dumps({"message_type": "session_started", "session_id": "el_sess_1"}).encode(),
+            ConnectionClosed(Close(1000, ""), None),
+        ),
+        provider_config,
+    )
+
+    await session.run()
+
+    addons: Final = session.logging.model_call_details[REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY]
+    assert len(session.logging.logged_sessions) == 1
+    assert isinstance(addons, tuple) and len(addons) == 1
+    assert (litellm.get_model_info(addons[0])["input_cost_per_second"] or 0) > 0
+
+
+@pytest.mark.asyncio
 async def test_a_provider_session_without_a_refusal_logs_a_success_after_a_normal_close():
     session: Final = _relay_session(
         _client_ws_that_never_sends(),
@@ -5517,6 +5593,44 @@ async def test_transformed_transcription_completion_never_sends_response_create(
 
     assert json.loads(client_ws.send_text.await_args.args[0]) == completed_event
     backend_ws.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_client_disconnect_before_the_completed_event_still_logs_its_usage():
+    usage: Final = {"type": "duration", "seconds": 90.0}
+    batch: Final = [
+        {"type": "conversation.item.input_audio_transcription.delta", "item_id": "turn_1", "delta": "Hello"},
+        {"type": "input_audio_buffer.speech_stopped", "item_id": "turn_1"},
+        {"type": "conversation.item.input_audio_transcription.completed", "item_id": "turn_1", "transcript": "Hello.", "usage": usage},
+    ]
+    provider_config: Final = MagicMock()
+    provider_config.requires_session_configuration.return_value = True
+    provider_config.transform_realtime_response.return_value = {
+        "response": batch,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_delta_chunks": None,
+        "current_conversation_id": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+        "session_configuration_request": None,
+    }
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock(side_effect=asyncio.CancelledError)
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        MagicMock(),
+        MagicMock(),
+        provider_config=provider_config,
+        model="scribe_v2_realtime",
+        force_transcription_model="scribe_v2_realtime",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await streaming._handle_provider_config_message("{}")
+
+    logged: Final = [dict(message) for message in streaming.messages]
+    assert {"type": "conversation.item.input_audio_transcription.completed", "usage": usage} in logged
 
 
 @pytest.mark.asyncio
@@ -7590,6 +7704,81 @@ async def test_frames_buffered_when_the_session_ends_are_counted_and_never_reach
         "conversation.item.input_audio_transcription.completed",
         "error",
     ]
+
+
+class _BatchRealtimeConfig(_PassthroughRealtimeConfig):
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        passthrough: Final = super().transform_realtime_response(
+            message, model, logging_obj, realtime_response_transform_input
+        )
+        return {**passthrough, "response": json.loads(message)}
+
+
+def _billed_transcriptions(streaming: RealTimeStreaming) -> tuple[object, ...]:
+    return tuple(
+        message
+        for message in streaming.messages
+        if isinstance(message, dict)
+        and message.get("type") == "conversation.item.input_audio_transcription.completed"
+        and "usage" in message
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_drops_mid_batch_still_has_the_batch_transcription_billed() -> None:
+    usage: Final = {"type": "duration", "seconds": 90.0}
+    batch: Final = json.dumps(
+        [
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "item_1", "audio_end_ms": 0},
+            json.loads(_transcription_completed(usage)),
+        ]
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.send_text = AsyncMock(side_effect=RuntimeError("client went away"))
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(side_effect=[batch, ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, _mock_logging(), provider_config=_BatchRealtimeConfig(), model="scribe_v2_realtime"
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert [message["usage"] for message in _billed_transcriptions(streaming)] == [usage]
+
+
+@pytest.mark.asyncio
+async def test_a_batch_that_crosses_the_limit_bills_each_transcription_once() -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    batch: Final = json.dumps(
+        [json.loads(_transcription_completed(_TRANSCRIPTION_TOKEN_USAGE)) for _ in range(2)]
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.close = AsyncMock()
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(side_effect=[batch, ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=_BatchRealtimeConfig(),
+        model="gpt-4o-transcribe",
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        turn_limiters=lambda: (limiter,),
+        force_transcription_model="gpt-4o-transcribe",
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert [charge[1] for charge in limiter.charges] == [120, 120]
+    assert len(_billed_transcriptions(streaming)) == 2
 
 
 @pytest.mark.asyncio

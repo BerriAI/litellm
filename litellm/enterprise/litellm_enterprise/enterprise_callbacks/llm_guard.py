@@ -164,7 +164,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
 
         return await self._moderate_request(data=data)
 
-    async def _moderate_request(self, data: dict) -> dict:
+    async def _moderate_request(self, data: dict) -> dict[str, object]:
         """
         Sanitizes the request in place using the prompt returned by LLM Guard so
         the provider-bound request carries the redacted content, then returns it.
@@ -203,7 +203,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             }
         return message
 
-    async def _moderate_content_part(self, part: dict) -> dict:
+    async def _moderate_content_part(self, part: dict) -> dict[str, object]:
         if part.get("type") == "text" and isinstance(part.get("text"), str):
             return {**part, "text": await self.moderation_check(text=part["text"])}
         return part

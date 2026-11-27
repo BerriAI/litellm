@@ -15,7 +15,7 @@ class SendinBlueApiTokenDetector(RegexBasedDetector):
         return "SendinBlue API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             re.compile(
                 r"""(?i)\b(xkeysib-[a-f0-9]{64}-[a-z0-9]{16})(?:['|\"|\n|\r|\s|\x60|;]|$)"""
