@@ -92,6 +92,8 @@ describe("zh-CN locale", () => {
       "Test Client 将获得所有已开启服务器的访问权限。请关闭不应使用的服务器，按需登录，然后点击“完成连接”。",
     );
     expect(instance.t("customerPortal.list.columns.customer")).toBe("客户组织");
+    expect(instance.t("customerPortal.list.description")).toBe("管理客户组织并查看其用量。");
+    expect(instance.t("apps.groups.title")).toBe("应用组");
     expect(instance.t("customerPortal.createDialog.submit")).toBe("创建客户");
   });
 });

@@ -572,8 +572,8 @@ describe("usage charts", () => {
       const expectedChart = {
         kind: "bar",
         title: "Spend by model",
-        period: `${dates.start_date} to ${dates.end_date} (UTC)`,
-        scope: scope === "global" ? "Gateway usage" : "Your usage",
+        period: { start: dates.start_date, end: dates.end_date },
+        scope: scope === "global" ? "gateway" : "yours",
         unit: "usd",
         total: 15,
         data: [
@@ -590,7 +590,11 @@ describe("usage charts", () => {
       expect(query.get("user_id")).toBe(scope === "user" ? "signed-in-user" : null);
       expect(JSON.parse(String(model.requests[2].messages.at(-1)?.content))).toMatchObject({
         success: true,
-        chart: { total: 15 },
+        chart: {
+          total: 15,
+          period: `${dates.start_date} to ${dates.end_date} (UTC)`,
+          scope: scope === "global" ? "Gateway usage" : "Your usage",
+        },
       });
     },
   );

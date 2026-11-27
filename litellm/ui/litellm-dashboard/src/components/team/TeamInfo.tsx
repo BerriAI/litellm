@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { LensControls, LensTabTrigger } from "@/components/lens/LensControls";
 import { readLensPolicy, type LensPolicy } from "@/components/lens/lensPolicy";
 import { lensEntityHref } from "@/components/lens/entityLinks";
@@ -653,7 +654,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   onUpdate,
   framed = false,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const rootClassName = framed ? undefined : "p-4";
   const teamUpdateSchema = useMemo(
     () =>
@@ -2702,7 +2703,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               </div>
               <div>
                 <p className="font-medium">{t("teams.teamInfo.settingsView.createdAt")}</p>
-                <div>{new Date(info.created_at).toLocaleString()}</div>
+                <div>{displayTimestamp(new Date(info.created_at), locale.language)}</div>
               </div>
               <div>
                 <h4 className="font-medium">{t("teams.teamInfo.editForm.metadata")}</h4>

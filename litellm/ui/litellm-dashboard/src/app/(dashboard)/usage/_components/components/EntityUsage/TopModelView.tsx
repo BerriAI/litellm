@@ -113,6 +113,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
             data={processedTopModels}
             index="key"
             categories={["spend"]}
+            categoryLabels={{ spend: t("activityMetrics.series.spend") }}
             colors={[BAR_COLOR]}
             valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
             layout="vertical"
