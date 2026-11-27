@@ -389,6 +389,7 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_logged = False
         self._reading_on_after_consumer_left = False
         self._ended_in_a_failed_response = False
+        self._success_handed_to_logging = False
         self._completed_response_cache_hit: bool | None = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
@@ -644,6 +645,7 @@ class BaseResponsesAPIStreamingIterator:
                 start_time=self.start_time,
                 end_time=end_time,
             )
+        self._success_handed_to_logging = True
         self._run_post_success_hooks(end_time=end_time)
 
     def _restore_provider_response_headers(self, logging_response: object) -> None:
@@ -1076,7 +1078,12 @@ class BaseResponsesAPIStreamingIterator:
         return self.completed_response is not None and not self._failed_while_read_on()
 
     def _failed_while_read_on(self) -> bool:
-        return self._reading_on_after_consumer_left and self._ended_in_a_failed_response
+        """The terminal event read after the consumer left reached no log: the provider failed it, or logging it raised."""
+        if not self._reading_on_after_consumer_left:
+            return False
+        return self._ended_in_a_failed_response or (
+            self._completed_response_logged and not self._success_handed_to_logging
+        )
 
     def _usage_of_the_response_failed_while_read_on(self) -> ResponseAPIUsage | None:
         if not self._failed_while_read_on():
@@ -1208,7 +1215,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             self._unclaimed_close.cancel()
         if not drain or not self._can_be_read_on():
             await self._close_upstream()
-            return drain and self._completed_response_logged
+            return drain and self._success_handed_to_logging
         self._reading_on_after_consumer_left = True
         with anyio.move_on_after(RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS):
             try:
@@ -1217,7 +1224,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             except (StopAsyncIteration, Exception) as e:  # noqa: BLE001  # the cleanup bills what was relayed, as for any cut stream
                 verbose_logger.debug("Responses API stream ended while draining after a client disconnect: %r", e)
         await self._close_upstream()
-        return self._completed_response_logged
+        return self._success_handed_to_logging
 
     def _can_be_read_on(self) -> bool:
         if not self._outlives_its_consumer or self._reached_its_end():

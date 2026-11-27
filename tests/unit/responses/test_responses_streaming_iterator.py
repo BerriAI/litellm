@@ -396,6 +396,31 @@ async def test_a_stream_cut_before_any_output_bills_the_usage_the_provider_repor
     assert iterator.partial_response_on_disconnect() is None, "a drained stream must not be billed a second time"
 
 
+@pytest.mark.asyncio
+async def test_a_drained_response_whose_success_logging_raises_stays_billable_with_the_usage_the_provider_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+
+    def success_logging_that_raises(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("logging backend unavailable")
+
+    monkeypatch.setattr(iterator.logging_obj, "dispatch_success_handlers", success_logging_that_raises)
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    upstream.released.set()
+    drained: Final = await iterator.settle_after_consumer_left(drain=True)
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+
+    assert drained is False, "True has the proxy skip the bill and the slot release for a success event that never ran"
+    assert recorder.success_payloads == ()
+    assert incomplete_event is not None
+    billed: Final = incomplete_event.response.usage
+    assert (billed.input_tokens, billed.output_tokens, billed.total_tokens) == (1200, 900, 2100)
+
+
 @pytest.mark.parametrize("loop_turns_before_the_cancel", range(6))
 @pytest.mark.asyncio
 async def test_a_consumer_cancelled_just_as_the_terminal_event_arrives_still_bills_the_usage_the_provider_reports(
