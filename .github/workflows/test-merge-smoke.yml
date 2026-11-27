@@ -74,28 +74,12 @@ jobs:
         with:
           version: "0.10.9"
           rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
+          cache-suffix: smoke-core-checks
 
       - name: Download the Rust bridge
         uses: ./.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
-
-      - name: Install one environment per interpreter
-        run: |
-          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
-          install_core() {
-            UV_PROJECT_ENVIRONMENT=".venv-$1" .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python "$1" --no-install-project &&
-            uv pip install --no-deps --python ".venv-$1/bin/python" rust-bridge-dist/litellm-*.whl
-          }
-          install_all_extras() {
-            UV_PROJECT_ENVIRONMENT=".venv-all-extras-$1" .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python "$1" --no-install-project --no-install-package litellm-proxy &&
-            uv pip install --no-deps --python ".venv-all-extras-$1/bin/python" rust-bridge-dist/*.whl
-          }
-          export -f install_core install_all_extras
-          {
-            printf 'install_core %s\n' ${CORE_VERSIONS}
-            printf 'install_all_extras %s\n' ${ALL_EXTRAS_VERSIONS}
-          } | python3 .github/scripts/ci/run_parallel_checks.py --jobs 8
 
       - name: Create the loopback-only network namespace
         run: |
@@ -109,8 +93,17 @@ jobs:
           chmod +x "${RUNNER_TEMP}/in-netns"
           echo "IN_NETNS=${RUNNER_TEMP}/in-netns" >> "${GITHUB_ENV}"
 
-      - name: Run the smoke checks on every interpreter
+      - name: Install and check every interpreter
         run: |
+          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
+          install_core() {
+            UV_PROJECT_ENVIRONMENT=".venv-$1" .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python "$1" --no-install-project &&
+            uv pip install --no-deps --python ".venv-$1/bin/python" rust-bridge-dist/litellm-*.whl
+          }
+          install_all_extras() {
+            UV_PROJECT_ENVIRONMENT=".venv-all-extras-$1" .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python "$1" --no-install-project --no-install-package litellm-proxy &&
+            uv pip install --no-deps --python ".venv-all-extras-$1/bin/python" rust-bridge-dist/*.whl
+          }
           smoke_core() {
             local python=".venv-$1/bin/python"
             $IN_NETNS "$python" .github/scripts/run_merge_smoke.py verify-isolation &&
@@ -122,11 +115,11 @@ jobs:
           import_all_extras() {
             ".venv-all-extras-$1/bin/python" -c "import litellm, litellm.proxy.proxy_server, litellm_enterprise"
           }
-          export -f smoke_core import_all_extras
+          export -f install_core install_all_extras smoke_core import_all_extras
           {
-            printf 'smoke_core %s\n' ${CORE_VERSIONS}
-            printf 'import_all_extras %s\n' ${ALL_EXTRAS_VERSIONS}
-          } | python3 .github/scripts/ci/run_parallel_checks.py --jobs 4
+            for version in ${CORE_VERSIONS}; do echo "install_core ${version} && smoke_core ${version}"; done
+            for version in ${ALL_EXTRAS_VERSIONS}; do echo "install_all_extras ${version} && import_all_extras ${version}"; done
+          } | python3 .github/scripts/ci/run_parallel_checks.py --jobs 8
 
       - name: Upload smoke diagnostics
         if: always()
