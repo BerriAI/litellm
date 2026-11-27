@@ -232,3 +232,76 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
         assert peer_info.json() == {"detail": {"error": "Organization not found"}}, peer_info.text
         alive: Final = gateway.request("GET", "/organization/info", params={"organization_id": other_organization_id})
         assert alive.status_code == 200, alive.text
+
+
+def _team_member_ids(team_id: str) -> list[JsonValue]:
+    rows: Final = read_rows('SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team_id,))
+    members: Final = rows[0]["members_with_roles"]
+    assert isinstance(members, list)
+    return [object_value(member)["user_id"] for member in members]
+
+
+def _user_teams(user_id: str) -> list[JsonValue]:
+    teams: Final = read_rows('SELECT teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (user_id,))[0]["teams"]
+    assert isinstance(teams, list)
+    return teams
+
+
+def _team_membership_rows(user_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT team_id FROM "LiteLLM_TeamMembership" WHERE user_id = %s ORDER BY team_id', (user_id,))
+
+
+def test_member_delete_takes_the_user_off_the_organization_teams_on_gateway_and_peer(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        organization_id: Final = scenario.organization()
+        member: Final = scenario.org_member(organization_id, role="internal_user")
+        organization_team: Final = scenario.team(organization_id=organization_id)
+        outside_team: Final = scenario.team()
+        for team_id in (organization_team, outside_team):
+            added: Final = gateway.request(
+                "POST",
+                "/team/member_add",
+                {"team_id": team_id, "member": {"role": "user", "user_id": member}, "max_budget_in_team": 10},
+            )
+            assert added.status_code == 200, added.text
+        organization_team_key: Final = _new_key(gateway, user_id=member, team_id=organization_team)
+        outside_team_key: Final = _new_key(gateway, user_id=member, team_id=outside_team)
+        personal_key: Final = _new_key(gateway, user_id=member)
+        for proxy in (gateway, peer):
+            for key in (organization_team_key, outside_team_key, personal_key):
+                warmed: Final = _chat(proxy, model, key, f"warm {uuid.uuid4().hex}")
+                assert warmed.status_code == 200, warmed.text
+        upstream.delete("/__observations").raise_for_status()
+
+        removed: Final = gateway.request(
+            "DELETE", "/organization/member_delete", {"organization_id": organization_id, "user_id": member}
+        )
+        assert removed.status_code == 200, removed.text
+
+        assert _membership_rows(organization_id) == []
+        assert member not in _team_member_ids(organization_team)
+        assert member in _team_member_ids(outside_team)
+        assert _user_teams(member) == [outside_team]
+        assert _team_membership_rows(member) == [{"team_id": outside_team}]
+        assert _key_rows(sha256(organization_team_key.encode()).hexdigest()) == []
+        for proxy in (gateway, peer):
+            refused: Final = eventually(
+                lambda p=proxy: _chat(p, model, organization_team_key, f"refused {uuid.uuid4().hex}"),
+                lambda response: response.status_code == 401,
+                seconds=10,
+            )
+            assert refused.json() == _token_not_found_error(), refused.text
+        assert _observed(upstream) == []
+        for proxy in (gateway, peer):
+            for key in (outside_team_key, personal_key):
+                text: Final = f"served {uuid.uuid4().hex}"
+                served: Final = _chat(proxy, model, key, text)
+                assert served.status_code == 200, served.text
+                assert _observed(upstream) == [_observation(text)]
+                upstream.delete("/__observations").raise_for_status()

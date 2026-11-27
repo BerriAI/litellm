@@ -1725,7 +1725,9 @@ async def _remove_user_from_organization_teams(
     cache eviction). Teams outside the organization and the user's personal keys are left alone."""
     from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
 
-    organization_teams: Final = await TeamRepository(prisma_client).find_by_organization_id(organization_id)
+    organization_teams: Final = await TeamRepository(prisma_client, use_writer=True).find_by_organization_id(
+        organization_id
+    )
     member_team_ids: Final = tuple(
         team.team_id
         for team in organization_teams

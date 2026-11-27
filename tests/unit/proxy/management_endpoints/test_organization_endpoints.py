@@ -1953,10 +1953,14 @@ class _OrgMemberDeletePrisma:
             litellm_auditlog=_AppendOnlyRows(),
             litellm_organizationmembership=_OrgMembershipRows(org_memberships),
         )
+        self.writer_db = self.db
+
+    def lag_replica_teams(self, teams: Sequence[Mapping[str, object]]) -> None:
+        self.db = SimpleNamespace(**{**vars(self.writer_db), "litellm_teamtable": _TeamRows(teams)})
 
     @asynccontextmanager
     async def tx(self, timeout: object = None) -> AsyncIterator[_OrgMemberDeleteTx]:
-        yield _OrgMemberDeleteTx(self.db)
+        yield _OrgMemberDeleteTx(self.writer_db)
 
 
 @pytest.mark.asyncio
@@ -1997,6 +2001,9 @@ async def test_organization_member_delete_removes_the_user_from_every_team_of_th
         keys=(org_team_key, other_org_team_key, personal_key),
         org_memberships=(("dev", "org-eng"), ("lead", "org-eng"), ("dev", "org-ext")),
     )
+    prisma.lag_replica_teams(
+        ({"team_id": "team-eng", "organization_id": "org-eng", "members_with_roles": [lead]},),
+    )
     cache: Final = UserApiKeyCache()
     for cache_key in (
         AuthObject.team("team-eng"),
@@ -2015,15 +2022,21 @@ async def test_organization_member_delete_removes_the_user_from_every_team_of_th
     )
 
     assert (removed.user_id, removed.organization_id) == ("dev", "org-eng")
-    assert prisma.db.litellm_organizationmembership.rows == {("lead", "org-eng"), ("dev", "org-ext")}
-    assert prisma.db.litellm_teamtable.rows["team-eng"]["members_with_roles"] == [lead]
-    assert prisma.db.litellm_teamtable.rows["team-eng-2"]["members_with_roles"] == [lead]
-    assert prisma.db.litellm_teamtable.rows["team-ext"]["members_with_roles"] == [dev]
-    assert prisma.db.litellm_usertable.rows["dev"]["teams"] == ["team-ext"]
-    assert prisma.db.litellm_usertable.rows["lead"]["teams"] == ["team-eng", "team-eng-2"]
-    assert prisma.db.litellm_teammembership.rows == {("team-eng", "lead"), ("team-eng-2", "lead"), ("team-ext", "dev")}
-    assert set(prisma.db.litellm_verificationtoken.rows) == {other_org_team_key.token, personal_key.token}
-    assert [record["token"] for record in prisma.db.litellm_deletedverificationtoken.records] == [org_team_key.token]
+    assert prisma.writer_db.litellm_organizationmembership.rows == {("lead", "org-eng"), ("dev", "org-ext")}
+    assert prisma.writer_db.litellm_teamtable.rows["team-eng"]["members_with_roles"] == [lead]
+    assert prisma.writer_db.litellm_teamtable.rows["team-eng-2"]["members_with_roles"] == [lead]
+    assert prisma.writer_db.litellm_teamtable.rows["team-ext"]["members_with_roles"] == [dev]
+    assert prisma.writer_db.litellm_usertable.rows["dev"]["teams"] == ["team-ext"]
+    assert prisma.writer_db.litellm_usertable.rows["lead"]["teams"] == ["team-eng", "team-eng-2"]
+    assert prisma.writer_db.litellm_teammembership.rows == {
+        ("team-eng", "lead"),
+        ("team-eng-2", "lead"),
+        ("team-ext", "dev"),
+    }
+    assert set(prisma.writer_db.litellm_verificationtoken.rows) == {other_org_team_key.token, personal_key.token}
+    assert [record["token"] for record in prisma.writer_db.litellm_deletedverificationtoken.records] == [
+        org_team_key.token
+    ]
     assert cache.get_cache(key=AuthObject.team("team-eng")) is None
     assert cache.get_cache(key=AuthObject.virtual_key(org_team_key.token)) is None
     assert cache.get_cache(key=AuthObject.team("team-ext")) == {"cached": True}
