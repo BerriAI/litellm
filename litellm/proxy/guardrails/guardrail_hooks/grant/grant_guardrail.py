@@ -436,7 +436,7 @@ def _iter_tool_calls_from_chunks(
         if event_type == "content_block_start":
             block_data = _as_dict(data.get("content_block"))
             if str(block_data.get("type") or "").casefold() == "tool_use":
-                index = str(data.get("index") or block_data.get("id") or "0")
+                index = str(data["index"] if data.get("index") is not None else block_data.get("id") or "0")
                 anthropic[index] = {
                     "id": str(block_data.get("id") or ""),
                     "name": str(block_data.get("name") or ""),
@@ -445,7 +445,7 @@ def _iter_tool_calls_from_chunks(
         elif event_type == "content_block_delta":
             delta = _as_dict(data.get("delta"))
             if str(delta.get("type") or "").casefold() == "input_json_delta":
-                index = str(data.get("index") or "0")
+                index = str(data["index"] if data.get("index") is not None else "0")
                 entry = anthropic.setdefault(index, {"id": "", "name": "", "arguments": ""})
                 if delta.get("partial_json") is not None:
                     entry["arguments"] = _append_arguments(entry["arguments"], delta["partial_json"])

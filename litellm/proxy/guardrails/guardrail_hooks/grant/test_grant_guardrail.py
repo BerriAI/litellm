@@ -142,6 +142,28 @@ STREAM_CHUNKS = [
         ]
     },
 ]
+ANTHROPIC_INDEX_ZERO_STREAM_CHUNKS = [
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "send_email",
+            "input": {},
+        },
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": '{"to":"pri'},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": 'vate@example.test"}'},
+    },
+]
 MULTI_CHOICE_STREAM_CHUNKS = [
     {
         "choices": [
@@ -516,6 +538,47 @@ def test_allow_streaming_yields_chunks_only_after_approval() -> None:
 
     asyncio.run(run())
     assert seen == ["/v1/approvals"]
+
+
+def test_anthropic_index_zero_stream_hashes_reconstructed_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GRANT_LOCAL_HMAC_SECRET", "index-zero-secret")
+    monkeypatch.delenv("GRANT_API_KEY", raising=False)
+    arguments = {"to": "private@example.test"}
+    canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    expected = hmac.new(
+        b"index-zero-secret", canonical.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    empty_expected = hmac.new(b"index-zero-secret", b"{}", hashlib.sha256).hexdigest()
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(201, json=APPROVED)
+
+    async def run() -> None:
+        async with _client(handler) as client:
+            guard = GrantGuardrail(client=client, allow_streaming=True)
+            yielded = [
+                chunk
+                async for chunk in guard.async_post_call_streaming_iterator_hook(
+                    response=_chunks(ANTHROPIC_INDEX_ZERO_STREAM_CHUNKS),
+                    request_data={"stream": True},
+                )
+            ]
+            assert yielded == ANTHROPIC_INDEX_ZERO_STREAM_CHUNKS
+
+    asyncio.run(run())
+    assert len(seen) == 1
+    assert seen[0]["tool_name"] == "send_email"
+    scope = seen[0]["scope"]
+    assert set(scope) == SCOPE_KEYS
+    assert scope["tool_call_id"] == "toolu_1"
+    assert scope["argument_key_count"] == 1
+    assert scope["arguments_hmac_sha256"] == expected
+    assert scope["arguments_hmac_sha256"] != empty_expected
+    assert "private@example.test" not in json.dumps(seen)
 
 
 def test_multi_choice_streaming_never_merges_identical_tool_names() -> None:
