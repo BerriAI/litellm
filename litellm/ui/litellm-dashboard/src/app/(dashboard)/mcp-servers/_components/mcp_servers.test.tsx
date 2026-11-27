@@ -951,6 +951,17 @@ describe("MCPServers URL state", () => {
     expect(onUrlUpdate.mock.calls.some(([update]) => !update.searchParams.has("tab"))).toBe(false);
   });
 
+  it("shows All Servers to an org admin who opens a live connections link and keeps the link", async () => {
+    const onUrlUpdate = renderPage("?tab=connections", { userRole: "org_admin" }, { keepMountWrites: true });
+
+    expect(await screen.findByText("Alpha")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "All Servers" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Submitted MCPs" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Live Connections" })).not.toBeInTheDocument();
+    expect(networking.fetchMCPGatewaySessions).not.toHaveBeenCalled();
+    expect(onUrlUpdate.mock.calls.some(([update]) => !update.searchParams.has("tab"))).toBe(false);
+  });
+
   it("orders the cards by the sort in the URL", async () => {
     renderPage("?sort=name_asc");
 
