@@ -848,6 +848,23 @@ async def test_scope_middleware_preserves_non_http_requests():
     assert returned.content[0].text == "tools/call"
 
 
+@pytest.mark.parametrize(
+    ("server_name", "path", "resource"),
+    [
+        pytest.param("alpha", "/mcp/alpha,beta", "", id="several-servers-share-the-gateway-resource"),
+        pytest.param("a,b", "/mcp/a,b", "/mcp/a,b", id="one-server-named-with-a-comma-keeps-its-own"),
+    ],
+)
+def test_managed_reauth_metadata_follows_the_route_the_client_addressed(server_name, path, resource):
+    error = MCPUpstreamAuthError(401, None, server_name, managed_reauth=True)
+
+    response = error.to_http_exception("https://gateway.test", path)
+
+    assert response.headers["www-authenticate"] == (
+        f'Bearer resource_metadata="https://gateway.test/.well-known/oauth-protected-resource{resource}"'
+    )
+
+
 @pytest.mark.parametrize("path", ["/mcp", "/toolset/demo/mcp"])
 def test_managed_step_up_metadata_matches_the_sdk_configured_resource(path):
     from urllib.parse import urlsplit
