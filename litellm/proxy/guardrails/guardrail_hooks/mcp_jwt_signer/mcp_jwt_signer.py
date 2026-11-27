@@ -248,6 +248,10 @@ class MCPJWTSigner(CustomGuardrail):
       FR-13: Claim operations (add_claims, set_claims, remove_claims)
       FR-14: Two-token model (channel_token_audience, channel_token_ttl)
       FR-15: Incoming claim validation (required_claims, optional_claims)
+
+    With ignore_client_mcp_auth_headers, the signed token always reaches a server
+    whose only credential it is, even when the client sends that server an
+    Authorization of its own through x-mcp-{alias}-authorization or x-mcp-auth.
     """
 
     ALGORITHM = "RS256"
@@ -286,6 +290,7 @@ class MCPJWTSigner(CustomGuardrail):
         debug_headers: bool = False,
         # FR-10: Configurable scopes
         allowed_scopes: list[str] | None = None,
+        ignore_client_mcp_auth_headers: bool = False,
         **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         options: Final[_CustomGuardrailOptions] = {
@@ -358,6 +363,8 @@ class MCPJWTSigner(CustomGuardrail):
         # --- FR-10: Configurable scopes ---
         self.allowed_scopes: list[str] | None = allowed_scopes
 
+        self.ignore_client_mcp_auth_headers: bool = ignore_client_mcp_auth_headers
+
         # Register singleton for JWKS/OIDC discovery endpoints.
         global _mcp_jwt_signer_instance
         if _mcp_jwt_signer_instance is not None:
@@ -369,7 +376,8 @@ class MCPJWTSigner(CustomGuardrail):
         _mcp_jwt_signer_instance = self
 
         verbose_proxy_logger.info(
-            "MCPJWTSigner initialized: issuer=%s audience=%s ttl=%ds kid=%s verify=%s channel_token=%s debug=%s",
+            "MCPJWTSigner initialized: issuer=%s audience=%s ttl=%ds kid=%s verify=%s channel_token=%s debug=%s "
+            "ignore_client_mcp_auth_headers=%s",
             self.issuer,
             self.audience,
             self.ttl_seconds,
@@ -377,6 +385,7 @@ class MCPJWTSigner(CustomGuardrail):
             bool(self.access_token_discovery_uri),
             bool(self.channel_token_audience),
             self.debug_headers,
+            self.ignore_client_mcp_auth_headers,
         )
 
     # ------------------------------------------------------------------
