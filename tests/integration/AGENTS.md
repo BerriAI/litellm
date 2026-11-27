@@ -41,7 +41,7 @@ every workflow alone, and tell the user it first runs on main. `GITHUB_FILES` is
 needs what GitHub Actions groups cannot give it, like the images `image-scan.yml` builds. `test_roi_observed.py` previously needed a dedicated plain pytest
 job and now has no CI owner. It is listed explicitly in the coverage allowlist. Add a file to `GITHUB_FILES` only when needed,
 together with its dedicated job, and list a new dedicated GitHub workflow with the directory it owns in
-`DEDICATED_INTEGRATION_WORKFLOWS` in `.github/scripts/assert_ci_coverage.py`. The `ci-coverage` check
+`DEDICATED_INTEGRATION_WORKFLOWS` in `.github/scripts/assert_ci_coverage.py`. The coverage check in `code-quality`
 fails a file here that another workflow selects unless that workflow owns its path in
 `DEDICATED_INTEGRATION_WORKFLOWS` (#46780).
 

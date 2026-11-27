@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { messageRoleLabels, modelPrompts } from "@/i18n/untranslated/modelText";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 
@@ -1863,7 +1864,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                               <div className="mr-1 flex h-6 w-6 items-center justify-center rounded-full bg-muted">
                                 <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
                               </div>
-                              <strong className="text-sm capitalize">{t("playground.chatUi.chatUi.assistant")}</strong>
+                              <strong className="text-sm capitalize">{messageRoleLabels.assistant}</strong>
                             </div>
                             <MCPEventsDisplay events={mcpEvents} />
                           </div>
@@ -2071,11 +2072,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       </div>
                       {!isLoading && (
                         <div className="flex flex-wrap gap-2">
-                          {[
-                            t("playground.chatUi.chatUi.codeInterpreterPrompts.salesChart"),
-                            t("playground.chatUi.chatUi.codeInterpreterPrompts.gatewayChart"),
-                            t("playground.chatUi.chatUi.codeInterpreterPrompts.pricingChart"),
-                          ].map((prompt, idx) => (
+                          {modelPrompts.codeInterpreter.map((prompt, idx) => (
                             <button
                               key={idx}
                               type="button"
@@ -2100,19 +2097,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     isLoading={isLoading}
                     submitDisabled={sendDisabled}
                     showSuggestions={chatHistory.length === 0 && !isLoading && endpointType !== EndpointType.MCP}
-                    suggestions={
-                      endpointType === EndpointType.A2A_AGENTS
-                        ? [
-                            t("playground.chatUi.chatUi.suggestions.a2aHelp"),
-                            t("playground.chatUi.chatUi.suggestions.a2aAbout"),
-                            t("playground.chatUi.chatUi.suggestions.a2aTasks"),
-                          ]
-                        : [
-                            t("playground.chatUi.chatUi.suggestions.poem"),
-                            t("playground.chatUi.chatUi.suggestions.quantum"),
-                            t("playground.chatUi.chatUi.suggestions.email"),
-                          ]
-                    }
+                    suggestions={endpointType === EndpointType.A2A_AGENTS ? modelPrompts.agent : modelPrompts.chat}
                     onSuggestionSelect={setInputMessage}
                     tools={
                       <>

@@ -312,3 +312,39 @@ async def test_a_fallback_that_fails_after_a_cut_leaves_no_breakdown_from_the_fi
             pass
 
     assert shared_logging.cost_breakdown is None
+
+
+class _StreamThatOutlivesItsConsumer:
+    def __init__(self) -> None:
+        self.kept_open = False
+        self.settled_with_drain: tuple[bool, ...] = ()
+
+    def outlive_consumer_until_settled(self) -> None:
+        self.kept_open = True
+
+    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+        self.settled_with_drain = (*self.settled_with_drain, drain)
+        return drain
+
+
+@pytest.mark.asyncio
+async def test_a_cut_stream_served_by_its_primary_deployment_is_drained_to_the_provider_usage():
+    source: Final = _StreamThatOutlivesItsConsumer()
+    wrapper: Final = FallbackResponsesStreamWrapper(async_generator=Mock(), attempt=Mock(), source_iterator=source)
+
+    wrapper.outlive_consumer_until_settled()
+    drained: Final = await wrapper.settle_after_consumer_left(drain=True)
+
+    assert source.kept_open is True
+    assert (drained, source.settled_with_drain) == (True, (True,))
+
+
+@pytest.mark.asyncio
+async def test_a_cut_stream_that_fell_back_is_closed_so_both_deployments_keep_their_partial_bill():
+    source: Final = _StreamThatOutlivesItsConsumer()
+    wrapper: Final = FallbackResponsesStreamWrapper(async_generator=Mock(), attempt=Mock(), source_iterator=source)
+    wrapper.adopt_fallback_headers(_cut_stream("resp_fallback", 30, 20, 0.000004))
+
+    drained: Final = await wrapper.settle_after_consumer_left(drain=True)
+
+    assert (drained, source.settled_with_drain) == (False, (False,))

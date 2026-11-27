@@ -17,7 +17,7 @@ interface ChatComposerProps {
   submitDisabled?: boolean;
   tools?: React.ReactNode;
   body?: React.ReactNode;
-  suggestions?: string[];
+  suggestions?: readonly string[];
   showSuggestions?: boolean;
   onSuggestionSelect?: (suggestion: string) => void;
   className?: string;

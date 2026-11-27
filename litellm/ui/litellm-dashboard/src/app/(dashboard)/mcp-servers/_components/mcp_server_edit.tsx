@@ -27,7 +27,7 @@ import {
   MCPServerCostInfo,
   TRANSPORT,
   TRANSPORT_ITEMS,
-  AUTH_TYPE_ITEMS,
+  mcpAuthTypeItems,
   getMcpOAuthMode,
   oauth2FlowToFormValue,
 } from "@/components/mcp_tools/types";
@@ -110,6 +110,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   stdioEnabled = true,
 }) => {
   const { t } = useTranslation();
+  const authTypeItems = mcpAuthTypeItems(t);
   const initialStaticHeaders = React.useMemo(() => {
     if (!mcpServer.static_headers) {
       return [];
@@ -1015,17 +1016,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       }}
                     >
                       {(control) => (
-                        <Select
-                          {...selectControl<string>(control)}
-                          items={AUTH_TYPE_ITEMS.map((item) => ({ ...item, label: t(item.label) }))}
-                        >
+                        <Select {...selectControl<string>(control)} items={authTypeItems}>
                           <SelectTrigger {...selectTriggerControl(control)} className="w-full">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {AUTH_TYPE_ITEMS.map((item) => (
+                            {authTypeItems.map((item) => (
                               <SelectItem key={item.value} value={item.value}>
-                                {t(item.label)}
+                                {item.label}
                               </SelectItem>
                             ))}
                           </SelectContent>

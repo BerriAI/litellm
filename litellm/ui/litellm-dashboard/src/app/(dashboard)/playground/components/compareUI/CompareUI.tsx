@@ -1,6 +1,6 @@
 "use client";
 
-import type { ParseKeys } from "i18next";
+import { modelPrompts } from "@/i18n/untranslated/modelText";
 import { toast } from "@/lib/toast";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { Eraser, FileText, Plus, Trash2 } from "lucide-react";
@@ -52,16 +52,6 @@ interface CompareUIProps {
   accessToken: string | null;
   disabledPersonalKeyCreation: boolean;
 }
-const GENERIC_FOLLOW_UPS: ParseKeys[] = [
-  "playground.compare.followUps.summarize",
-  "playground.compare.followUps.assumptions",
-  "playground.compare.followUps.nextSteps",
-];
-const SUGGESTED_PROMPTS: ParseKeys[] = [
-  "playground.compare.suggestions.poem",
-  "playground.compare.suggestions.quantum",
-  "playground.compare.suggestions.email",
-];
 const DEFAULT_ENDPOINT = EndpointId.CHAT_COMPLETIONS;
 export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: CompareUIProps) {
   const { t } = useTranslation();
@@ -798,27 +788,27 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                   <span className="text-sm text-muted-foreground">{t("playground.compare.attachment.ready")}</span>
                 ) : showSuggestedPrompts ? (
                   <div className="flex items-center gap-2 overflow-x-auto">
-                    {SUGGESTED_PROMPTS.map((prompt) => (
+                    {modelPrompts.chat.map((prompt) => (
                       <button
                         key={prompt}
                         type="button"
-                        onClick={() => handleFollowUpSelect(t(prompt))}
+                        onClick={() => handleFollowUpSelect(prompt)}
                         className="shrink-0 rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent cursor-pointer"
                       >
-                        {t(prompt)}
+                        {prompt}
                       </button>
                     ))}
                   </div>
                 ) : haveAllResponses && !hasAttachment ? (
                   <div className="flex items-center gap-2 overflow-x-auto">
-                    {GENERIC_FOLLOW_UPS.map((question) => (
+                    {modelPrompts.compareFollowUps.map((question) => (
                       <button
                         key={question}
                         type="button"
-                        onClick={() => handleFollowUpSelect(t(question))}
+                        onClick={() => handleFollowUpSelect(question)}
                         className="shrink-0 rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent cursor-pointer"
                       >
-                        {t(question)}
+                        {question}
                       </button>
                     ))}
                   </div>

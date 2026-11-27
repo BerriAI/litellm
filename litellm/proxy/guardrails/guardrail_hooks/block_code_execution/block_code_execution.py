@@ -20,7 +20,6 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
     CodeBlockActionTaken,
     CodeBlockDetection,
@@ -33,6 +32,9 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
+        BlockCodeExecutionGuardrailConfigModel,
+    )
 
 # Language tag aliases (normalize to canonical for comparison)
 LANGUAGE_ALIASES: Final[dict[str, str]] = {
@@ -365,7 +367,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         self.detect_execution_intent = detect_execution_intent
 
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel] | None:
+    def get_config_model() -> "type[BlockCodeExecutionGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
             BlockCodeExecutionGuardrailConfigModel,
         )
