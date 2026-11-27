@@ -89,12 +89,17 @@ def _convert_security_scheme_to_v03(scheme: Mapping[str, object]) -> JsonDict:
     return flat
 
 
-def _extract_v1_scopes(raw_entry: object) -> tuple[object, ...]:
+def _extract_v1_scopes(raw_entry: object) -> tuple[object, ...] | None:
     entry: Final = as_str_mapping(raw_entry)
     if entry is None:
+        return None
+    if not entry:
+        # Protobuf JSON omits empty repeated fields, so an empty StringList serializes as {}.
         return ()
+    if len(entry) != 1 or "list" not in entry:
+        return None
     raw_list: Final = as_object_list(entry.get("list"))
-    return tuple(raw_list) if raw_list is not None else ()
+    return tuple(raw_list) if raw_list is not None else None
 
 
 def _convert_security_requirement_to_v1(item: object) -> object:
@@ -103,10 +108,12 @@ def _convert_security_requirement_to_v1(item: object) -> object:
         return item
     if len(req) == 1 and as_str_mapping(req.get("schemes")) is not None:
         return dict(req)
-    schemes: Final[JsonDict] = {
-        scheme_name: {"list": list(scopes) if (scopes := as_object_list(raw_scopes)) is not None else []}
-        for scheme_name, raw_scopes in req.items()
-    }
+    schemes: Final[JsonDict] = {}
+    for scheme_name, raw_scopes in req.items():
+        scopes = as_object_list(raw_scopes)
+        if scopes is None:
+            return dict(req)
+        schemes[scheme_name] = {"list": list(scopes)}
     return {"schemes": schemes}
 
 
@@ -117,7 +124,13 @@ def _convert_security_requirement_to_v03(item: object) -> object:
     raw_schemes: Final = as_str_mapping(req.get("schemes"))
     if len(req) != 1 or raw_schemes is None:
         return dict(req)
-    return {scheme_name: list(_extract_v1_scopes(raw_entry)) for scheme_name, raw_entry in raw_schemes.items()}
+    converted: Final[JsonDict] = {}
+    for scheme_name, raw_entry in raw_schemes.items():
+        scopes = _extract_v1_scopes(raw_entry)
+        if scopes is None:
+            return dict(req)
+        converted[scheme_name] = list(scopes)
+    return converted
 
 
 def _is_v03_security_scheme(scheme: object) -> bool:
@@ -159,8 +172,21 @@ def _normalize_security_container(
 ) -> JsonDict:
     normalized: Final[JsonDict] = {k: v for k, v in container.items() if k != source_key}
     raw_reqs: Final = as_object_list(container.get(source_key))
-    if target_key not in normalized and raw_reqs is not None:
-        normalized[target_key] = [convert_req(item) for item in raw_reqs]
+    if raw_reqs is None:
+        return normalized
+    converted_reqs: Final = [convert_req(item) for item in raw_reqs]
+    existing_raw: Final = normalized.get(target_key)
+    if target_key not in normalized or existing_raw is None:
+        normalized[target_key] = converted_reqs
+        return normalized
+    existing_reqs: Final = as_object_list(existing_raw)
+    if existing_reqs is None:
+        return normalized
+    merged: Final[list[object]] = list(existing_reqs)
+    for item in converted_reqs:
+        if item not in merged:
+            merged.append(item)
+    normalized[target_key] = merged
     return normalized
 
 

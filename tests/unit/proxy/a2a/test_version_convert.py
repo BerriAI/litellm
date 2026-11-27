@@ -555,3 +555,140 @@ def test_agent_card_0_3_with_supported_interfaces_and_flat_security_schemes_lowe
         }
     }
     assert out["security"] == [{"LiteLLMKey": []}]
+
+
+def test_agent_card_security_merges_and_deduplicates_mixed_requirements():
+    mixed_v1_card = {
+        "protocolVersion": "1.0",
+        "name": "Mixed 1.0 Agent",
+        "description": "Has both securityRequirements and legacy security.",
+        "version": "1.0.0",
+        "supportedInterfaces": [
+            {
+                "url": "https://proxy.example.com/a2a/mixed",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+            }
+        ],
+        "securitySchemes": {
+            "LiteLLMKey": {"httpAuthSecurityScheme": {"scheme": "bearer"}},
+            "PartnerOAuth": {"type": "oauth2", "flows": {}},
+        },
+        "securityRequirements": [
+            {"schemes": {"LiteLLMKey": {"list": []}}},
+        ],
+        "security": [
+            {"LiteLLMKey": []},
+            {"PartnerOAuth": ["read"]},
+        ],
+        "skills": [
+            {
+                "id": "s1",
+                "name": "Skill One",
+                "description": "Desc",
+                "tags": ["tag"],
+                "securityRequirements": [{"schemes": {"LiteLLMKey": {"list": []}}}],
+                "security": [{"LiteLLMKey": []}, {"PartnerOAuth": ["write"]}],
+            }
+        ],
+    }
+
+    out_v1 = normalize_agent_card(mixed_v1_card, "1.0")
+    assert "security" not in out_v1
+    assert out_v1["securityRequirements"] == [
+        {"schemes": {"LiteLLMKey": {"list": []}}},
+        {"schemes": {"PartnerOAuth": {"list": ["read"]}}},
+    ]
+    assert "security" not in out_v1["skills"][0]
+    assert out_v1["skills"][0]["securityRequirements"] == [
+        {"schemes": {"LiteLLMKey": {"list": []}}},
+        {"schemes": {"PartnerOAuth": {"list": ["write"]}}},
+    ]
+
+    mixed_v03_card = {
+        "protocolVersion": "0.3",
+        "name": "Mixed 0.3 Agent",
+        "description": "Has both security and 1.0 securityRequirements.",
+        "version": "1.0.0",
+        "url": "https://proxy.example.com/a2a/mixed-03",
+        "securitySchemes": {
+            "LiteLLMKey": {"type": "http", "scheme": "bearer"},
+            "PartnerOAuth": {"oauth2SecurityScheme": {"flows": {}}},
+        },
+        "security": [{"LiteLLMKey": []}],
+        "securityRequirements": [
+            {"schemes": {"LiteLLMKey": {"list": []}}},
+            {"schemes": {"PartnerOAuth": {"list": ["read"]}}},
+        ],
+        "skills": [
+            {
+                "id": "s1",
+                "name": "Skill One",
+                "description": "Desc",
+                "tags": ["tag"],
+                "security": [{"LiteLLMKey": []}],
+                "securityRequirements": [
+                    {"schemes": {"LiteLLMKey": {"list": []}}},
+                    {"schemes": {"PartnerOAuth": {"list": ["write"]}}},
+                ],
+            }
+        ],
+    }
+
+    out_v03 = normalize_agent_card(mixed_v03_card, "0.3")
+    assert "securityRequirements" not in out_v03
+    assert out_v03["security"] == [
+        {"LiteLLMKey": []},
+        {"PartnerOAuth": ["read"]},
+    ]
+    assert "securityRequirements" not in out_v03["skills"][0]
+    assert out_v03["skills"][0]["security"] == [
+        {"LiteLLMKey": []},
+        {"PartnerOAuth": ["write"]},
+    ]
+
+
+def test_agent_card_security_preserves_malformed_non_list_scopes():
+    card_v1 = {
+        "protocolVersion": "1.0",
+        "name": "Malformed Scope 1.0",
+        "description": "Non-list scopes must not coerce to empty.",
+        "version": "1.0.0",
+        "supportedInterfaces": [
+            {
+                "url": "https://proxy.example.com/a2a/bad-scopes",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+            }
+        ],
+        "security": [
+            {"OAuth": {"scope": "read"}},
+            {"LiteLLMKey": []},
+        ],
+    }
+
+    out_v1 = normalize_agent_card(card_v1, "1.0")
+    assert "security" not in out_v1
+    assert out_v1["securityRequirements"] == [
+        {"OAuth": {"scope": "read"}},
+        {"schemes": {"LiteLLMKey": {"list": []}}},
+    ]
+
+    card_v03 = {
+        "protocolVersion": "0.3",
+        "name": "Malformed Scope 0.3",
+        "description": "Non-list 1.0 StringList must not coerce to empty while proto3 {} lowers to [].",
+        "version": "1.0.0",
+        "url": "https://proxy.example.com/a2a/bad-scopes-03",
+        "securityRequirements": [
+            {"schemes": {"OAuth": {"list": "read"}}},
+            {"schemes": {"ProtoEmpty": {}}},
+        ],
+    }
+
+    out_v03 = normalize_agent_card(card_v03, "0.3")
+    assert "securityRequirements" not in out_v03
+    assert out_v03["security"] == [
+        {"schemes": {"OAuth": {"list": "read"}}},
+        {"ProtoEmpty": []},
+    ]
