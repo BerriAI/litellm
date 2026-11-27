@@ -1719,10 +1719,8 @@ async def _remove_user_from_organization_teams(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
 ) -> None:
-    """Membership in an organization's teams is granted through the organization, so leaving the
-    organization has to take the user off every one of its teams, through the same per-team path as
-    /team/member_delete (advisory lock, roster rewrite, LiteLLM_TeamMembership and team-key cleanup,
-    cache eviction). Teams outside the organization and the user's personal keys are left alone."""
+    """Membership in an organization's teams is granted through the organization, so leaving it takes the user off
+    every one of its teams."""
     from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
 
     organization_teams: Final = await TeamRepository(prisma_client, use_writer=True).find_by_organization_id(

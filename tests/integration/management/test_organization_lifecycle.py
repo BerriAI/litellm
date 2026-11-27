@@ -297,6 +297,10 @@ def test_member_delete_takes_the_user_off_the_organization_teams_on_gateway_and_
                 seconds=10,
             )
             assert refused.json() == _token_not_found_error(), refused.text
+        upstream.delete("/__observations").raise_for_status()
+        for proxy in (gateway, peer):
+            refused_again: Final = _chat(proxy, model, organization_team_key, f"refused {uuid.uuid4().hex}")
+            assert refused_again.status_code == 401, refused_again.text
         assert _observed(upstream) == []
         for proxy in (gateway, peer):
             for key in (outside_team_key, personal_key):
