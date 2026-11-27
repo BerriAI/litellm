@@ -4,6 +4,8 @@ import pytest
 
 from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
+    AuthorizationCodeTokenSuccess,
+    AuthorizationCodeTokenUnreachable,
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
@@ -45,7 +47,9 @@ def _endpoint(body, sink=None):
     async def post(url, form, headers):
         if sink is not None:
             sink.append((url, form, headers))
-        return body
+        if body is None:
+            return AuthorizationCodeTokenUnreachable(detail="test transport failure")
+        return AuthorizationCodeTokenSuccess(body=body)
 
     return post
 
@@ -365,7 +369,7 @@ async def test_saved_cimd_identity_refreshes_without_discovery(monkeypatch):
         assert form["client_id"] == identity
         assert "client_secret" not in form
         assert "Authorization" not in headers
-        return {"access_token": "new", "refresh_token": "rotated"}
+        return AuthorizationCodeTokenSuccess(body={"access_token": "new", "refresh_token": "rotated"})
 
     server = MCPServer(
         server_id="srv",
