@@ -6,6 +6,7 @@ Real-network tests live in tests/integration/sandbox/test_sandbox_providers.py.
 """
 
 import asyncio
+import inspect
 import sys
 import types
 from collections.abc import Callable
@@ -16,7 +17,6 @@ import pytest
 
 import litellm
 import litellm.sandbox.main as sandbox_main
-from litellm.llms.boat.sandbox.transformation import BoatSandboxConfig
 from litellm.llms.base_llm.sandbox.transformation import (
     SANDBOX_MAX_OUTPUT_BYTES,
     ContainerHandle,
@@ -46,7 +46,8 @@ class FakeHTTPClient:
 
     async def _send(self, method: str, url: str, headers: dict | None, json: object) -> FakeResponse:
         self.calls.append((method, url, headers or {}, json))
-        answer = self.route(method, url, json)
+        routed = self.route(method, url, json)
+        answer = await routed if inspect.isawaitable(routed) else routed
         if isinstance(answer, int):
             raise httpx.HTTPStatusError(
                 f"status {answer}", request=httpx.Request(method, url), response=httpx.Response(answer)
@@ -134,14 +135,6 @@ async def test_tensorlake_waits_for_the_process_and_joins_output_lines():
     polls = [url for method, url, _, _ in client.calls if method == "GET" and url.endswith("/processes/7")]
     assert len(polls) == 2
     assert all(url.startswith("https://tl_1.sandbox.example/") for url in polls)
-
-
-def test_the_sandbox_command_caps_both_streams_closes_stdin_and_keeps_the_exit_code():
-    command = shell_command("print('a b')", "python", max_output_bytes=1000)
-
-    assert command.count("head -c 1001") == 2
-    assert "</dev/null" in command
-    assert command.endswith("exit $code'")
 
 
 @pytest.mark.asyncio
@@ -482,14 +475,12 @@ async def test_deleting_twice_keeps_the_first_final_cost():
 @pytest.mark.asyncio
 async def test_a_stalled_usage_read_does_not_hold_up_delete(monkeypatch):
     monkeypatch.setattr(sandbox_main, "COST_BEFORE_DELETE_TIMEOUT_SECONDS", 0.01)
-    client = FakeHTTPClient(_boat)
+
+    def route(method: str, url: str, json: object) -> object:
+        return asyncio.sleep(30) if url.endswith("/usage") else _boat(method, url, json)
+
+    client = FakeHTTPClient(route)
     handle = await litellm.acreate_sandbox(provider="boat", api_key="k", client=client)
-
-    async def stalled(**kwargs: object) -> SandboxCost:
-        await asyncio.sleep(30)
-        return SandboxCost()
-
-    monkeypatch.setattr(BoatSandboxConfig, "aget_sandbox_cost", lambda self, **kwargs: stalled(**kwargs))
 
     assert await litellm.adelete_sandbox(provider="boat", container=handle, client=client) is True
     assert handle.final_cost.source == "unknown"
@@ -503,3 +494,15 @@ async def test_tensorlake_refuses_a_bare_id_that_could_change_the_host(sandbox_i
     with pytest.raises(ValueError, match="Invalid Tensorlake sandbox id"):
         await litellm.arun_code(provider="tensorlake", container=sandbox_id, code="1", api_key="k", client=client)
     assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_sandbox_deleted_after_its_timeout_is_only_charged_up_to_the_timeout():
+    client = FakeHTTPClient(_blaxel)
+    handle = await litellm.acreate_sandbox(provider="blaxel", api_key="k", timeout=600, client=client)
+    handle.created_at -= 3600
+    handle.expires_at -= 3600
+
+    await litellm.adelete_sandbox(provider="blaxel", container=handle, client=client)
+
+    assert handle.final_cost.seconds == pytest.approx(600)

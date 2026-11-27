@@ -83,8 +83,8 @@ def estimate_sandbox_cost(container: ContainerHandle | str, now: float | None = 
     if not isinstance(container, ContainerHandle) or container.created_at is None:
         return SandboxCost()
     current: Final = time.time() if now is None else now
-    running_until: Final = current if container.expires_at is None else min(current, container.expires_at)
-    end: Final = container.ended_at if container.ended_at is not None else running_until
+    stopped: Final = container.ended_at if container.ended_at is not None else current
+    end: Final = stopped if container.expires_at is None else min(stopped, container.expires_at)
     seconds: Final = max(end - container.created_at, 0.0)
     price: Final = get_sandbox_prices().get(container.provider)
     if price is None or container.memory_gib is None or container.vcpus is None:

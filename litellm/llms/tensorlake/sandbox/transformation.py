@@ -133,9 +133,8 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
         )
         process = _Process.model_validate(started.json())  # rebind-ok: polled until the process exits
         expires_at: Final = container.expires_at if isinstance(container, ContainerHandle) else None
-        deadline: Final = expires_at if expires_at is not None else time.time() + DEFAULT_SANDBOX_TIMEOUT
         while process.status == "running":
-            if time.time() > deadline:
+            if expires_at is not None and time.time() > expires_at:
                 raise TimeoutError(f"Tensorlake process {process.pid} was still running when its sandbox timed out.")
             await asyncio.sleep(PROCESS_POLL_SECONDS)
             process = _Process.model_validate(
