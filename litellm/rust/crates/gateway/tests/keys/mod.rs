@@ -12,12 +12,11 @@ use std::{
     },
 };
 
-use litellm_auth_store::KeyDatabase;
 use litellm_db::{Endpoint, Observer, PoolLimits, Pools, QueryEvent, SslMode};
 use litellm_db_testing::MigratedPostgres;
 use litellm_gateway_auth_core::Token;
 use litellm_redis_store::auth_cache::{AuthCache, Settings};
-use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository};
+use litellm_repositories::Database;
 use litellm_secret_value::SecretValue;
 use serde_json::{Value, json};
 use sqlx::postgres::PgConnectOptions;
@@ -103,17 +102,12 @@ impl Held {
         self.postgres.url()
     }
 
-    /// What a repository runs its queries on this database with.
-    pub fn repositories(&self) -> Database {
+    /// What the gateway's auth store and its repositories run their queries on this database with.
+    pub fn database(&self) -> Database {
         connected(self.postgres.url(), self.reads.clone())
     }
 
-    /// The key read the gateway makes behind its auth cache.
-    pub fn database(&self) -> KeyDatabase {
-        key_database(self.repositories())
-    }
-
-    /// How many times the key view was read through [`Self::repositories`].
+    /// How many times the key view was read through [`Self::database`].
     pub fn key_reads(&self) -> usize {
         self.reads.0.load(Ordering::SeqCst)
     }
@@ -125,17 +119,10 @@ pub fn memory_cache() -> Arc<AuthCache> {
 }
 
 /// A database nothing listens on, whose every read fails.
-pub fn unreachable() -> KeyDatabase {
-    key_database(connected(
+pub fn unreachable() -> Database {
+    connected(
         "postgres://postgres:postgres@127.0.0.1:1/postgres",
         Arc::<KeyReads>::default(),
-    ))
-}
-
-fn key_database(database: Database) -> KeyDatabase {
-    KeyDatabase::new(
-        Arc::new(KeyRepository::new(database.clone())),
-        Arc::new(ObjectPermissionRepository::new(database)),
     )
 }
 

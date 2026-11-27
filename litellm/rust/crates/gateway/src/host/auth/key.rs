@@ -5,91 +5,20 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
-use litellm_config::LitellmRole;
 use litellm_gateway_auth_core::{
     KeyHash, StoredKey,
     authn::key::{KeyRecord, Keyed},
     authz::ModelList,
 };
-use litellm_python_compat::{Value, datetime::IsoDateTime, json};
-use litellm_redis_store::auth_cache::{Bag, KeyEntry, Lists, ModelRegion, ObjectPermissionEntry};
+use litellm_python_compat::{Value, json};
+use litellm_redis_store::auth_cache::{Bag, KeyEntry};
 use serde::Deserialize;
 
+use super::carried::{Carried, carried, newer};
 use crate::callbacks::parallel_request_limiter::{KeyLimits, ModelLimits};
-
-/// The name of the first of `fields` that holds something.
-macro_rules! carried {
-    ($($field:ident),+ $(,)?) => {
-        [$((stringify!($field), Carried::is_carried($field)),)+]
-            .into_iter()
-            .find(|(_, carried)| *carried)
-            .map(|(field, _)| field)
-    };
-}
 
 /// The key type the proxy gives a key generated without one, which reaches every route.
 const DEFAULT_KEY_TYPE: &str = "default";
-
-pub(super) trait Carried {
-    fn is_carried(&self) -> bool;
-}
-
-impl Carried for bool {
-    fn is_carried(&self) -> bool {
-        *self
-    }
-}
-
-/// A value the key holds, whatever it is: a limit of zero and an empty owner are still set.
-macro_rules! carried_when_held {
-    ($($held:ty),+) => {
-        $(impl Carried for $held {
-            fn is_carried(&self) -> bool {
-                true
-            }
-        })+
-    };
-}
-
-carried_when_held!(
-    String,
-    i64,
-    f64,
-    IsoDateTime,
-    LitellmRole,
-    ModelRegion,
-    ObjectPermissionEntry
-);
-
-impl<T> Carried for Vec<T> {
-    fn is_carried(&self) -> bool {
-        !self.is_empty()
-    }
-}
-
-impl Carried for Bag {
-    fn is_carried(&self) -> bool {
-        !self.is_empty()
-    }
-}
-
-impl Carried for Lists {
-    fn is_carried(&self) -> bool {
-        !self.0.is_empty()
-    }
-}
-
-impl Carried for Value {
-    fn is_carried(&self) -> bool {
-        !matches!(self, Self::None)
-    }
-}
-
-impl<T: Carried> Carried for Option<T> {
-    fn is_carried(&self) -> bool {
-        self.as_ref().is_some_and(Carried::is_carried)
-    }
-}
 
 /// The team the core reads no team row for, so no step declines a key in it.
 const UI_TEAM: &str = "litellm-dashboard";
@@ -290,7 +219,7 @@ fn held(key: &KeyEntry) -> Held {
         .is_some_and(|key_type| key_type != DEFAULT_KEY_TYPE);
     let unread_models = ModelList::read(models) == ModelList::Unread;
     let ui_team = team_id.as_deref() == Some(UI_TEAM);
-    let unread = &unread.iter().any(|(_, value)| value.is_carried());
+    let unread = &newer(unread);
     Held {
         unasked: other_key_type
             .then_some("key_type")
