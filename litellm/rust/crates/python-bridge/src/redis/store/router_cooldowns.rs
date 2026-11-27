@@ -179,4 +179,8 @@ impl NativeRouterCooldowns {
             .map(|(key, cooldown)| (key, PyData(cooldown)))
             .collect())
     }
+
+    fn flush_local(&self) -> PyResult<()> {
+        self.0.flush_local().map_err(kind_error)
+    }
 }

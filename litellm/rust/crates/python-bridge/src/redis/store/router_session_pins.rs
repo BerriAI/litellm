@@ -213,6 +213,10 @@ impl NativeRouterSessionPins {
             .map(PyValue)
             .map_err(kind_error)
     }
+
+    fn flush_local(&self) -> PyResult<()> {
+        self.0.flush_local().map_err(kind_error)
+    }
 }
 
 fn eligible(values: Option<Vec<PyValue>>, preserve_legacy_model_ids: bool) -> Eligible {

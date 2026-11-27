@@ -335,6 +335,11 @@ impl RateLimits {
     fn batch(&self, send: Send<'_>) -> Option<RedisBatch> {
         self.cache.redis().batch(send)
     }
+
+    /// Drops everything this process holds in memory and leaves Redis alone.
+    pub fn flush_local(&self) -> Result<(), Error> {
+        Ok(self.cache.memory().flush()?)
+    }
 }
 
 fn pipeline(increments: &[Increment]) -> Vec<PipelineIncrement> {
