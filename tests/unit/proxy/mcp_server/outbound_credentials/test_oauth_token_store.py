@@ -477,3 +477,127 @@ async def test_loser_rereads_the_fresh_token_a_successful_winner_persisted():
     token = await store.fetch("u", "s")
     assert token is not None and token.access_token == "winner-fresh"
     assert src.refresh_calls == 0
+
+
+async def test_peek_reads_the_current_token_without_consuming_a_refresh():
+    pair: Final = _RefreshablePair(OAuthToken(access_token="old", expires_at=900.0))
+    store: Final = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+
+    token: Final = await store.peek("u", "s")
+
+    assert token is not None and token.access_token == "old"
+    assert pair.refresh_calls == 0
+
+
+async def test_refresh_now_refreshes_the_exact_rejected_token_once():
+    pair: Final = _RefreshablePair(OAuthToken(access_token="old", expires_at=9999.0))
+    store: Final = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+
+    outcome: Final = await store.refresh_now("u", "s", "old")
+
+    assert isinstance(outcome, Ok)
+    assert outcome.ok.access_token == "refreshed"
+    assert pair.refresh_calls == 1
+
+
+async def test_refresh_now_uses_a_replacement_grant_without_a_second_refresh():
+    pair: Final = _RefreshablePair(OAuthToken(access_token="replacement", expires_at=9999.0))
+    refreshing: Final = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+    store: Final = CachedOAuthTokenStore(refreshing, default_ttl_seconds=60, clock=_Clock(1000.0))
+
+    outcome: Final = await store.refresh_now("u", "s", "old")
+
+    assert isinstance(outcome, Ok)
+    assert outcome.ok.access_token == "replacement"
+    assert pair.refresh_calls == 0
+
+
+async def test_refresh_now_refreshes_an_expired_replacement_grant_for_every_coalesced_caller() -> None:
+    pair: Final = _RefreshablePair(OAuthToken(access_token="replacement", expires_at=900.0))
+    store: Final = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+
+    reactive, expiry = await asyncio.gather(store.refresh_now("u", "s", "old"), store.fetch_result("u", "s"))
+
+    assert isinstance(reactive, Ok) and isinstance(expiry, Ok)
+    assert (reactive.ok.access_token, expiry.ok.access_token) == ("refreshed", "refreshed")
+    assert pair.refresh_calls == 1
+
+
+async def test_refresh_now_rechecks_shared_outcome_when_concurrent_caller_rejected_that_token() -> None:
+    fetch_started: Final = asyncio.Event()
+    release_first_fetch: Final = asyncio.Event()
+
+    class _CoalescedPair:
+        def __init__(self) -> None:
+            self.token: OAuthToken = OAuthToken(access_token="token-b", expires_at=9999.0)
+            self.refresh_calls: int = 0
+            self._first_fetch_blocked: bool = True
+
+        async def fetch(self, user_id: str, server_id: str) -> OAuthToken:
+            if self._first_fetch_blocked:
+                self._first_fetch_blocked = False
+                fetch_started.set()
+                await release_first_fetch.wait()
+            return self.token
+
+        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Ok[OAuthToken]:
+            self.refresh_calls += 1
+            self.token = OAuthToken(access_token="token-c", expires_at=9999.0)
+            return Ok(self.token)
+
+    pair: Final = _CoalescedPair()
+    store: Final = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+
+    caller_a: Final = asyncio.create_task(store.refresh_now("u", "s", "token-a"))
+    await fetch_started.wait()
+    caller_b: Final = asyncio.create_task(store.refresh_now("u", "s", "token-b"))
+    await asyncio.sleep(0)
+    release_first_fetch.set()
+
+    outcome_a, outcome_b = await asyncio.gather(caller_a, caller_b)
+    assert isinstance(outcome_a, Ok) and outcome_a.ok.access_token == "token-b"
+    assert isinstance(outcome_b, Ok) and outcome_b.ok.access_token == "token-c"
+    assert pair.refresh_calls == 1
+
+
+async def test_cached_refresh_now_still_invalidates_after_caller_cancellation_and_blocks_stale_recache() -> None:
+    refresh_started: Final = asyncio.Event()
+    finish_refresh: Final = asyncio.Event()
+    fetch_started: Final = asyncio.Event()
+    release_stale_fetch: Final = asyncio.Event()
+
+    class _SlowPair:
+        def __init__(self) -> None:
+            self.token: OAuthToken = OAuthToken(access_token="stale", expires_at=9999.0)
+
+        async def fetch(self, user_id: str, server_id: str) -> OAuthToken:
+            if not fetch_started.is_set():
+                fetch_started.set()
+                await release_stale_fetch.wait()
+            return self.token
+
+        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Ok[OAuthToken]:
+            refresh_started.set()
+            await finish_refresh.wait()
+            self.token = OAuthToken(access_token="fresh", expires_at=9999.0)
+            return Ok(self.token)
+
+    pair: Final = _SlowPair()
+    refreshing: Final = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+    store: Final = CachedOAuthTokenStore(refreshing, default_ttl_seconds=60, clock=_Clock(1000.0))
+
+    stale_fetch: Final = asyncio.create_task(store.fetch_result("u", "s"))
+    await fetch_started.wait()
+
+    refresh_task: Final = asyncio.create_task(store.refresh_now("u", "s", "stale"))
+    await refresh_started.wait()
+    refresh_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await refresh_task
+
+    finish_refresh.set()
+    await asyncio.gather(*list(store._background_cleanups))
+    release_stale_fetch.set()
+    await stale_fetch
+
+    assert (await store.peek("u", "s")) == OAuthToken(access_token="fresh", expires_at=9999.0)
