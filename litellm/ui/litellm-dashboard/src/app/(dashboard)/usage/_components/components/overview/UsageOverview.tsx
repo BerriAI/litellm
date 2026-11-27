@@ -7,6 +7,7 @@ import { KeyRound, Users } from "lucide-react";
 import type { OverviewTotals } from "./overviewData";
 import { Panel } from "./Primitives";
 import UsageStatStrip from "./UsageStatStrip";
+import type { SpendBudget } from "./spendBudget";
 import UsageBreakdownChart from "./UsageBreakdownChart";
 import SpendDisplayCurrency from "./SpendDisplayCurrency";
 
@@ -15,7 +16,8 @@ interface UsageOverviewProps {
   totals: OverviewTotals;
   loading: boolean;
   requestCountsPending: boolean;
-  budget: number | null;
+  budget: SpendBudget | null;
+  showBudgetHint: boolean;
   subscriptionCosts: ReactNode;
   topKeys: ReactNode;
   topUsers: ReactNode;
@@ -36,6 +38,7 @@ export default function UsageOverview({
   topAgents,
   providerBreakdown,
   budget,
+  showBudgetHint,
 }: UsageOverviewProps) {
   const { t } = useTranslation();
   return (
@@ -46,6 +49,7 @@ export default function UsageOverview({
         loading={loading}
         requestCountsPending={requestCountsPending}
         budget={budget}
+        showBudgetHint={showBudgetHint}
         spendDetails={<SpendDisplayCurrency usdSpend={totals.spend} loading={loading} />}
       />
 

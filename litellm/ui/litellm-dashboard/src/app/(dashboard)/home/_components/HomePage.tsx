@@ -59,6 +59,7 @@ export default function HomePage() {
             loading={usage.loading}
             requestCountsPending={usage.requestCountsPending}
             budget={usage.budget}
+            showBudgetHint={usage.showBudgetHint}
           />
         )}
       </section>

@@ -6,8 +6,10 @@ import { Trans, useTranslation } from "react-i18next";
 import type { DailyData } from "@/components/UsagePage/types";
 import { cn } from "@/lib/cva.config";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
 import { dailyTotals, type OverviewTotals } from "./overviewData";
 import { PANEL_INSET_X, Sparkline, Stat } from "./Primitives";
+import { spendBudgetHint, type SpendBudget } from "./spendBudget";
 
 const BRAND = "#2b3fd6";
 const ONE_DECIMAL = { minimumFractionDigits: 1, maximumFractionDigits: 1 } as const;
@@ -20,7 +22,7 @@ interface UsageStatStripProps {
   totals: OverviewTotals;
   loading: boolean;
   requestCountsPending: boolean;
-  budget: number | null;
+  budget: SpendBudget | null;
   showBudgetHint?: boolean;
   spendDetails?: React.ReactNode;
 }
@@ -37,19 +39,29 @@ export default function UsageStatStrip({
 }: UsageStatStripProps) {
   const { t } = useTranslation();
   const daily = useMemo(() => dailyTotals(results), [results]);
-  const budgetHint = budget
-    ? t("usage.statStrip.budgetHint", { budget: t("format.usd", { val: budget }) })
-    : t("usage.statStrip.noBudget");
+  const periodBudget = showBudgetHint && budget?.budgetDuration ? budget : null;
   return (
     <div className="grid grid-cols-1 overflow-hidden rounded-xl border bg-card sm:grid-cols-2 lg:grid-cols-4 lg:divide-x">
       <StatCell
         trend={daily.length > 1 ? <Sparkline data={daily} dataKey="spend" color={BRAND} className="h-14" /> : undefined}
       >
         <Stat
-          label={t("usage.statStrip.spend")}
+          label={
+            <>
+              {t("usage.statStrip.spend")}
+              {periodBudget && (
+                <BudgetPeriodTooltip
+                  spend={periodBudget.periodSpend}
+                  maxBudget={periodBudget.maxBudget}
+                  budgetDuration={periodBudget.budgetDuration}
+                  budgetResetAt={periodBudget.budgetResetAt}
+                />
+              )}
+            </>
+          }
           value={t("format.usd", { val: totals.spend })}
           pending={loading}
-          hint={showBudgetHint ? budgetHint : undefined}
+          hint={showBudgetHint ? spendBudgetHint(budget, t) : undefined}
         />
         {spendDetails}
       </StatCell>

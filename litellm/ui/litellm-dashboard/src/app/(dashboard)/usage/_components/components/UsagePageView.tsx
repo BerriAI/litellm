@@ -108,6 +108,7 @@ import SubscriptionCosts from "./SubscriptionCost/SubscriptionCosts";
 import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
 import { Panel } from "./overview/Primitives";
 import UsageOverview from "./overview/UsageOverview";
+import { spendBudgetFromUser } from "./overview/spendBudget";
 
 const GATEWAY_ENDPOINT_COLORS = ["#2b3fd6", "#ef4444"];
 
@@ -561,7 +562,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                       totals={totals}
                       loading={loading}
                       requestCountsPending={requestCountsPending}
-                      budget={currentUser?.max_budget ?? null}
+                      budget={spendBudgetFromUser(currentUser)}
+                      showBudgetHint={effectiveUserId !== null && effectiveUserId === userID}
                       subscriptionCosts={
                         <SubscriptionCosts
                           accessToken={accessToken}

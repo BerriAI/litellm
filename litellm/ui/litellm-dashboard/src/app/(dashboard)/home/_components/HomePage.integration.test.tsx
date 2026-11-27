@@ -105,6 +105,14 @@ const activity: DailyActivityAggregatedResponse = {
   },
 };
 
+const dailyBudgetUser = {
+  user_id: "u1",
+  spend: 12.4,
+  max_budget: 100,
+  budget_duration: "24h",
+  budget_reset_at: "2026-11-27T00:00:00Z",
+};
+
 const renderHome = () =>
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -118,7 +126,7 @@ describe("HomePage", () => {
     auth.userRole = all_admin_roles[0]!;
     network.aggregated.mockReset().mockResolvedValue(activity);
     network.gateway.mockReset().mockResolvedValue({ total_successful_requests: 0, total_failed_requests: 0 });
-    network.userInfo.mockReset().mockResolvedValue({ user_info: { max_budget: null } });
+    network.userInfo.mockReset().mockResolvedValue({ max_budget: null });
     blogPosts.posts = [post("Post one", "2026-10-09"), post("mid", "2026-10-06", ["day 0 support"])];
     vi.stubGlobal("fetch", vi.fn(fakeFetch));
   });
@@ -137,6 +145,24 @@ describe("HomePage", () => {
       expect.stringMatching(/\/api-keys\?create=true$/),
     );
     expect(network.aggregated).toHaveBeenCalledWith("user", expect.objectContaining({ accessToken: "sk-test" }));
+  });
+
+  it("compares a user's daily budget with today's spend, not with the seven-day total", async () => {
+    auth.userRole = "internal_user";
+    network.userInfo.mockResolvedValue(dailyBudgetUser);
+    renderHome();
+    expect(await screen.findByText("$501.74")).toBeInTheDocument();
+    expect(await screen.findByText("$12.40 of $100.00 this period (daily)")).toBeInTheDocument();
+    expect(screen.queryByText("of $100.00 budget")).not.toBeInTheDocument();
+  });
+
+  it("shows no personal budget next to an admin's deployment-wide total", async () => {
+    network.userInfo.mockResolvedValue(dailyBudgetUser);
+    renderHome();
+    expect(await screen.findByText("$501.74")).toBeInTheDocument();
+    expect(screen.queryByText(/this period/)).not.toBeInTheDocument();
+    expect(screen.queryByText("of $100.00 budget")).not.toBeInTheDocument();
+    expect(screen.queryByText("No budget set")).not.toBeInTheDocument();
   });
 
   it("hides Create New Virtual Key from view-only users", () => {

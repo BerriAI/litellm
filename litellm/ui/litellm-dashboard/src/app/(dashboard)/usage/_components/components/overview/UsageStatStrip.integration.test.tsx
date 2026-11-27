@@ -69,6 +69,21 @@ describe("UsageStatStrip token breakdown", () => {
   });
 });
 
+describe("UsageStatStrip budget hint", () => {
+  it("shows the current period's spend under a periodic budget while the headline keeps the range total", () => {
+    render(
+      <UsageStatStrip
+        {...defaultProps}
+        budget={{ periodSpend: 12.4, maxBudget: 100, budgetDuration: "24h", budgetResetAt: "2026-11-27T00:00:00Z" }}
+      />,
+    );
+
+    expect(screen.getByText("$42.50")).toBeInTheDocument();
+    expect(screen.getByText("$12.40 of $100.00 this period (daily)")).toBeInTheDocument();
+    expect(screen.queryByText("of $100.00 budget")).not.toBeInTheDocument();
+  });
+});
+
 describe("UsageStatStrip in another UI language", () => {
   afterEach(async () => {
     await i18n.changeLanguage("en");
@@ -89,7 +104,12 @@ describe("UsageStatStrip in another UI language", () => {
     const oneDecimal = new Intl.NumberFormat("de", { minimumFractionDigits: 1 });
     const milliseconds = new Intl.NumberFormat("de", { style: "unit", unit: "millisecond", unitDisplay: "narrow" });
 
-    render(<UsageStatStrip {...defaultProps} budget={1500} />);
+    render(
+      <UsageStatStrip
+        {...defaultProps}
+        budget={{ periodSpend: 0, maxBudget: 1500, budgetDuration: null, budgetResetAt: null }}
+      />,
+    );
 
     expect(screen.getByText(asRendered(dollars.format(42.5)))).toBeInTheDocument();
     expect(screen.getByText(asRendered(`of ${dollars.format(1500)} budget`))).toBeInTheDocument();
