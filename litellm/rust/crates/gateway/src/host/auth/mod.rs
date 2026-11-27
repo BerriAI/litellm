@@ -40,18 +40,18 @@ use litellm_gateway_auth_core::{
 use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
-pub(crate) use affiliation::unserved;
+pub(crate) use affiliation::{unserved, unserved_user};
 pub(crate) use end_user::end_user;
 pub use key::Key;
 pub(crate) use models::{allowed_models, layers};
 pub use store::AuthStore;
 
 /// The rows the native host hands the core: a key's, and a core record for each thing a caller
-/// belongs to. A key's team is read, and a caller that holds a team still goes to Python at
-/// admit. The steps that read the other records decline. `Infallible` is a row this host has no
-/// record for, so no identity that needs one exists. The end user's record is empty for a request
-/// that names none, and names the end user alone for one whose row holds nothing the native app
-/// would have to apply.
+/// belongs to. A key's team and owner are read, and a caller that holds either still goes to
+/// Python at admit. The steps that read the other records decline. `Infallible` is a row this
+/// host has no record for, so no identity that needs one exists. The end user's record is empty
+/// for a request that names none, and names the end user alone for one whose row holds nothing
+/// the native app would have to apply.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeRows;
 
@@ -291,8 +291,21 @@ impl AuthHost for NativeAuthHost {
         declined("delegated_agent_team")
     }
 
-    async fn key_owner(&self, _: &str) -> Result<Option<Owner<UserRecord>>, Error> {
-        declined("key_owner")
+    /// A user id with no row is no owner, like the key path's `get_user_object`, which swallows
+    /// `UserNotFoundError`.
+    async fn key_owner(&self, user_id: &str) -> Result<Option<Owner<UserRecord>>, Error> {
+        let read = self.store("key_owner")?.user(user_id).await;
+        let Some(user) = unless_failed(read, "key_owner")? else {
+            return Ok(None);
+        };
+        affiliation::user(&user)
+            .map(|user| {
+                Some(Owner {
+                    deactivated: user.deactivated,
+                    row: user.row,
+                })
+            })
+            .or_else(declined)
     }
 
     async fn user(&self, _: &UserLookup<'_>) -> Result<UserRead<UserRecord>, Error> {
@@ -424,9 +437,13 @@ impl AuthHost for NativeAuthHost {
         declined("team_model_access")
     }
 
-    /// A key this host read has no owner, so no membership budgets it.
-    async fn team_member_budget(&self, _: &Key, _: Option<&UserRecord>) -> Result<(), Error> {
-        Ok(())
+    /// Only an owner in the key's team has a membership that budgets it, which this host does not
+    /// read.
+    async fn team_member_budget(&self, key: &Key, owner: Option<&UserRecord>) -> Result<(), Error> {
+        match (&key.record.team_id, owner) {
+            (Some(_), Some(_)) => declined("team_member_budget"),
+            (None, _) | (_, None) => Ok(()),
+        }
     }
 
     /// A key's own budget is enforced by `BudgetCheck` at read time, so it is served while the
@@ -495,7 +512,7 @@ mod tests {
     use jiff::Timestamp;
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
     use litellm_gateway_auth_core::{
-        Credential, Holder, Team,
+        Credential, Holder, Named, Team,
         authz::{Layer, ModelList},
     };
     use litellm_redis_store::{
@@ -765,8 +782,6 @@ mod tests {
     #[case::aliases(json!({"aliases": {"a": "b"}}))]
     #[case::config(json!({"config": {"a": 1}}))]
     #[case::router_settings(json!({"router_settings": {"a": 1}}))]
-    #[case::user_id(json!({"user_id": "user"}))]
-    #[case::an_empty_user_id(json!({"user_id": ""}))]
     #[case::a_team_with_no_row(json!({"team_id": "gone"}))]
     #[case::the_ui_team(json!({"team_id": "litellm-dashboard"}))]
     #[case::agent_id(json!({"agent_id": "agent"}))]
@@ -1010,6 +1025,81 @@ mod tests {
         assert_eq!(unserved(team), Some(column));
     }
 
+    /// The database holding [`VIRTUAL_KEY`], owned by a user whose row has `owner` set on it.
+    async fn owned_by(owner: Columns) -> Held {
+        let held = Held::start().await;
+        held.execute(PARENTS).await;
+        held.key(VIRTUAL_KEY, json!({"user_id": "ada"})).await;
+        held.insert_named(
+            "LiteLLM_UserTable",
+            &merged(json!({"user_id": "ada"}), owner),
+        )
+        .await;
+        held
+    }
+
+    #[rstest]
+    #[case::team_id(json!({"team_id": "squad"}), "team_id")]
+    #[case::organization_id(json!({"organization_id": "org"}), "organization_id")]
+    #[case::models(json!({"models": ["claude"]}), "models")]
+    #[case::tpm_limit(json!({"tpm_limit": 100}), "tpm_limit")]
+    #[case::rpm_limit(json!({"rpm_limit": 10}), "rpm_limit")]
+    #[case::a_limit_of_zero(json!({"rpm_limit": 0}), "rpm_limit")]
+    #[case::max_parallel_requests(json!({"max_parallel_requests": 1}), "max_parallel_requests")]
+    #[case::max_budget(json!({"max_budget": 5.0}), "max_budget")]
+    #[case::rollover_max_budget(json!({"rollover_max_budget": 5.0}), "rollover_max_budget")]
+    #[case::rollover_credit(json!({"rollover_credit": 1.5}), "rollover_credit")]
+    #[case::budget_duration(json!({"budget_duration": "30d"}), "budget_duration")]
+    #[case::allowed_cache_controls(
+        json!({"allowed_cache_controls": ["no-cache"]}),
+        "allowed_cache_controls"
+    )]
+    #[case::policies(json!({"policies": ["policy"]}), "policies")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_copies_each_plain_column_its_owner_holds_and_names_it_unserved(
+        #[case] owner: Columns,
+        #[case] column: &str,
+    ) {
+        let held = owned_by(owner).await;
+
+        let caller = presenting(held.database(), VIRTUAL_KEY).await.unwrap();
+
+        let Some(Named::Stored(owner)) = caller.affiliation.holder.user() else {
+            panic!("the key holds no owner row");
+        };
+        assert_eq!(unserved_user(owner), Some(column));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owners_email_role_and_teams_are_copied_and_keep_no_caller_with_python() {
+        let described = json!({
+            "user_email": "ada@example.com",
+            "user_role": "internal_user",
+            "teams": ["squad"],
+        });
+        let held = owned_by(described).await;
+
+        let caller = presenting(held.database(), VIRTUAL_KEY).await.unwrap();
+
+        let Some(Named::Stored(owner)) = caller.affiliation.holder.user() else {
+            panic!("the key holds no owner row");
+        };
+        assert_eq!(
+            (
+                owner.user_email.as_deref(),
+                owner.user_role.as_deref(),
+                owner.teams.as_slice(),
+                unserved_user(owner),
+            ),
+            (
+                Some("ada@example.com"),
+                Some("internal_user"),
+                &["squad".to_owned()][..],
+                None,
+            )
+        );
+    }
+
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_team_is_read_from_the_database_again_only_once_it_is_evicted() {
@@ -1200,7 +1290,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::with_an_owner(json!({"user_id": "user"}))]
+    #[case::with_a_project(json!({"project_id": "project"}))]
     #[case::with_a_budget(json!({"max_budget": 5.0}))]
     #[case::blocked(json!({"blocked": true}))]
     #[tokio::test(flavor = "multi_thread")]

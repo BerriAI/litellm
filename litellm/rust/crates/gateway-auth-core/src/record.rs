@@ -1,8 +1,9 @@
 //! The rows a caller belongs to, as the core reads them: one record per entity, holding its id and
 //! what its stored row says, and nothing a request or another row adds. A host builds a record
 //! from the row it read and decides nothing while it does. A record grows a field with the first
-//! rule that reads it, except a team's, which copies each column of its row that a plain value
-//! holds, read or not. The host refuses a caller whose team holds one nothing reads yet.
+//! rule that reads it, except a team's and a user's, which copy each column of their row that a
+//! plain value holds, read or not. The host refuses a caller whose team or user holds one nothing
+//! reads yet.
 
 use std::collections::BTreeMap;
 
@@ -14,8 +15,20 @@ use crate::authz::ModelList;
 pub struct UserRecord {
     pub user_id: String,
     pub user_alias: Option<String>,
+    pub user_email: Option<String>,
+    pub user_role: Option<String>,
+    pub teams: Vec<String>,
+    pub team_id: Option<String>,
+    pub organization_id: Option<String>,
+    pub models: Vec<String>,
     pub limits: MinuteLimits,
+    pub max_parallel_requests: Option<i64>,
     pub budget: Budget,
+    pub rollover_max_budget: Option<f64>,
+    pub rollover_credit: Option<f64>,
+    pub budget_duration: Option<String>,
+    pub allowed_cache_controls: Vec<String>,
+    pub policies: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
