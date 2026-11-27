@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chun
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     changed_server_tool_call_arguments,
+    is_raw_server_tool_use_input,
     raw_server_tool_use_calls,
     write_anthropic_hosted_web_call_arguments,
     write_anthropic_server_tool_calls,
@@ -257,6 +258,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     )
                 )
             else:
+                if len(guardrailed_tool_calls) == len(tool_calls_with_server_calls):
+                    _require_appliable_raw_server_tool_use_inputs(
+                        guardrailed_tool_calls[
+                            len(tool_calls_to_check) + len(server_tool_call_tasks) : len(tool_calls_to_check)
+                            + len(server_tool_call_tasks)
+                            + len(raw_server_tool_use_tasks)
+                        ],
+                        guardrail=guardrail_to_apply,
+                    )
                 # Step 3: Map guardrail responses back to original message structure
                 if guardrailed_texts and texts_to_check:
                     if len(guardrailed_texts) != len(text_task_mappings):
@@ -1649,6 +1659,16 @@ def _write_raw_server_tool_use_inputs(
             messages[msg_idx],
             _message_block_arguments(arguments_by_task, msg_idx),
         )
+
+
+def _require_appliable_raw_server_tool_use_inputs(
+    guardrailed_tool_calls: Sequence[object], *, guardrail: "CustomGuardrail"
+) -> None:
+    """A raw server_tool_use/mcp_tool_use `input` must stay a JSON object; keeping the original instead
+    would forward the block the guardrail asked to rewrite, so an unparseable rewrite rejects the request."""
+    arguments: Final = (_guardrailed_tool_call_arguments(guardrailed) for guardrailed in guardrailed_tool_calls)
+    if not all(argument is None or is_raw_server_tool_use_input(argument) for argument in arguments):
+        raise unappliable_request_rewrite(guardrail.guardrail_name)
 
 
 def _message_block_arguments(arguments_by_task: Mapping[tuple[int, int], str], msg_idx: int) -> Mapping[int, str]:

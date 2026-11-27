@@ -2766,6 +2766,15 @@ def write_raw_server_tool_use_inputs(message: object, arguments_by_block: Mappin
     ]
 
 
+def is_raw_server_tool_use_input(arguments: str) -> bool:
+    """Whether a guardrail's rewritten arguments can replace a raw server_tool_use block's `input` object."""
+    try:
+        _JSON_OBJECT.validate_json(arguments)
+    except ValidationError:
+        return False
+    return True
+
+
 def _with_raw_server_tool_use_input(block: object, arguments: str | None) -> object:
     if arguments is None or not isinstance(block, dict):
         return block

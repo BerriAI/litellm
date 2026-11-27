@@ -201,6 +201,25 @@ class QueryRedactingGuardrail(CustomGuardrail):
         )
 
 
+class WholeArgumentRedactingGuardrail(CustomGuardrail):
+    """Replaces the whole ``arguments`` string of every tool call with a non-object redaction marker."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(
+            texts=inputs.get("texts", []),
+            tool_calls=[
+                {**tool_call, "function": {**tool_call["function"], "arguments": "[REDACTED]"}}
+                for tool_call in inputs.get("tool_calls", [])
+            ],
+        )
+
+
 class TestOpenAIChatCompletionsHandlerToolsInput:
     """Test input processing with tools (function definitions)"""
 
@@ -1039,6 +1058,30 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         assert _tool_call_ids_names_and_arguments(assistant["tool_calls"]) == [
             ("toolu_01Weather", "get_weather", '{"city": "Paris"}')
         ]
+
+    @pytest.mark.parametrize("block_type", ["server_tool_use", "mcp_tool_use"])
+    @pytest.mark.asyncio
+    async def test_input_guardrail_rewrite_a_raw_tool_use_input_cannot_take_is_rejected(self, block_type):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+        handler: Final = OpenAIChatCompletionsHandler()
+        original_messages: Final = [
+            {"role": "user", "content": "look up jane"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Checking."},
+                    {"type": block_type, "id": "srvtoolu_01Raw", "name": "web_fetch", "input": _FETCH_INPUT},
+                ],
+            },
+        ]
+        data: Final = {"messages": json.loads(json.dumps(original_messages))}
+
+        with pytest.raises(UnappliableRequestRewrite) as excinfo:
+            await handler.process_input_messages(data, WholeArgumentRedactingGuardrail(guardrail_name="whole-redact"))
+
+        assert excinfo.value.guardrail_name == "whole-redact"
+        assert data["messages"] == original_messages, "a rejected rewrite must leave the request untouched"
 
     @pytest.mark.asyncio
     async def test_input_guardrail_rewrite_of_a_replayed_server_web_call_reaches_its_hosted_copy(self):
