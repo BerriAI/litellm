@@ -17,7 +17,7 @@ import re
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from itertools import chain, filterfalse, groupby, pairwise
+from itertools import accumulate, chain, filterfalse, groupby, pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias
 
@@ -312,11 +312,16 @@ def _content_part_slots(content: object, scope: _PartScope) -> tuple[_TextSlot, 
     return tuple(chain.from_iterable(_part_slots(parts, index, scope) for index in range(len(parts))))
 
 
-def _request_contents(data: Mapping[str, object]) -> tuple[object, ...]:
-    system_instructions: Final = chain.from_iterable(
-        _present_fields(container, _SYSTEM_INSTRUCTION_KEYS) for container in (data, data.get("config"))
+def _system_instruction_contents(data: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(
+        chain.from_iterable(
+            _present_fields(container, _SYSTEM_INSTRUCTION_KEYS) for container in (data, data.get("config"))
+        )
     )
-    return (*system_instructions, *_repeated_field(data.get("contents")))
+
+
+def _request_contents(data: Mapping[str, object]) -> tuple[object, ...]:
+    return (*_system_instruction_contents(data), *_repeated_field(data.get("contents")))
 
 
 def _request_part_scope(guardrail: "CustomGuardrail") -> _PartScope:
@@ -374,12 +379,6 @@ def _content_function_calls(content: object) -> tuple[object, ...]:
     return tuple(call for call in calls if call is not None)
 
 
-def _request_function_calls(data: Mapping[str, object]) -> tuple[object, ...]:
-    return tuple(
-        chain.from_iterable(_content_function_calls(content) for content in _repeated_field(data.get("contents")))
-    )
-
-
 def _function_calls_in_response(response: object) -> tuple[object, ...]:
     return tuple(chain.from_iterable(_content_function_calls(content) for content in _candidate_contents(response)))
 
@@ -392,13 +391,44 @@ def _starts_function_call(function_call: object) -> bool:
     return bool(_field(function_call, "name")) or bool(as_str_mapping(_field(function_call, "args")))
 
 
-def _function_call_groups(function_calls: Sequence[object]) -> tuple[tuple[object, ...], ...]:
-    starts: Final = tuple(
+def _content_part_entries(content: object, scope: _PartScope) -> tuple[tuple[int, object | None], ...]:
+    parts: Final = _repeated_field(_field(content, "parts"))
+    return tuple(
+        (len(_part_slots(parts, index, scope)), _function_call_in_part(parts[index])) for index in range(len(parts))
+    )
+
+
+def _function_call_group_starts(function_calls: Sequence[object]) -> tuple[int, ...]:
+    return tuple(
         index
         for index in range(len(function_calls))
         if index == 0 or not _continues(function_calls[index - 1]) or _starts_function_call(function_calls[index])
     )
+
+
+def _function_call_groups(function_calls: Sequence[object]) -> tuple[tuple[object, ...], ...]:
+    starts: Final = _function_call_group_starts(function_calls)
     return tuple(tuple(function_calls[start:end]) for start, end in pairwise((*starts, len(function_calls))))
+
+
+def _request_function_call_groups(
+    data: Mapping[str, object], scope: _PartScope
+) -> tuple[tuple[tuple[object, ...], ...], tuple[int, ...]]:
+    system_text_count: Final = sum(
+        len(_content_part_slots(content, scope)) for content in _system_instruction_contents(data)
+    )
+    part_entries: Final = tuple(
+        chain.from_iterable(_content_part_entries(content, scope) for content in _repeated_field(data.get("contents")))
+    )
+    texts_through_part: Final = tuple(accumulate((count for count, _ in part_entries), initial=system_text_count))[1:]
+    positioned_calls: Final = tuple(
+        (call, offset) for (_, call), offset in zip(part_entries, texts_through_part, strict=True) if call is not None
+    )
+    calls: Final = tuple(call for call, _ in positioned_calls)
+    starts: Final = _function_call_group_starts(calls)
+    groups: Final = tuple(tuple(calls[start:end]) for start, end in pairwise((*starts, len(calls))))
+    offsets: Final = tuple(positioned_calls[start][1] for start in starts)
+    return groups, offsets
 
 
 def _partial_args(function_call: object) -> Sequence[object]:
@@ -642,10 +672,19 @@ def _accumulated_stream_function_calls(responses_so_far: Sequence[object]) -> tu
 
 
 def _guardrail_inputs(
-    texts: Sequence[str], tool_calls: Sequence[ChatCompletionToolCallChunk], model: object
+    texts: Sequence[str],
+    tool_calls: Sequence[ChatCompletionToolCallChunk],
+    model: object,
+    tool_call_text_offsets: Sequence[int] = (),
 ) -> GenericGuardrailAPIInputs:
     model_fields: Final[GenericGuardrailAPIInputs] = {"model": model} if isinstance(model, str) else {}
-    tool_call_fields: Final[GenericGuardrailAPIInputs] = {"tool_calls": list(tool_calls)} if tool_calls else {}
+    tool_call_fields: Final[GenericGuardrailAPIInputs] = (
+        {"tool_calls": list(tool_calls), "tool_call_text_offsets": tuple(tool_call_text_offsets)}
+        if tool_calls and tool_call_text_offsets
+        else {"tool_calls": list(tool_calls)}
+        if tool_calls
+        else {}
+    )
     return {"texts": _texts_payload(texts), **model_fields, **tool_call_fields}
 
 
@@ -950,12 +989,14 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         request: Final[Mapping[str, object]] = as_str_mapping(data) or _EMPTY_REQUEST_DATA
         scope: Final = _request_part_scope(guardrail_to_apply)
         text_slots: Final = _request_text_slots(request, scope)
-        call_groups: Final = _function_call_groups(_request_function_calls(request)) if scope.tool_calls else ()
+        call_groups, call_offsets = _request_function_call_groups(request, scope) if scope.tool_calls else ((), ())
         if not text_slots and not call_groups:
             verbose_proxy_logger.debug("Google GenAI guardrail: no request text found, skipping")
             return data
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-            inputs=_guardrail_inputs(_slot_texts(text_slots), _tool_calls_payload(call_groups), request.get("model")),
+            inputs=_guardrail_inputs(
+                _slot_texts(text_slots), _tool_calls_payload(call_groups), request.get("model"), call_offsets
+            ),
             request_data=data,
             input_type="request",
             logging_obj=litellm_logging_obj,

@@ -11,7 +11,8 @@ released unchanged after moderation passes.
 """
 
 import json
-from typing import Any, AsyncGenerator, List, Literal, Optional
+from collections.abc import AsyncGenerator, Mapping
+from typing import Any, Final, List, Literal, Optional
 
 import pytest
 
@@ -578,7 +579,9 @@ async def _drain_into(collected: List[Any], stream: AsyncGenerator[Any, None]) -
 @pytest.mark.parametrize(
     ("sampling_rate", "after_message_stop"), [(2, False), (1, True)], ids=["mid-stream", "after-message-stop"]
 )
-async def test_windowed_buffer_refuses_an_undecodable_text_event_after_a_clean_scan(sampling_rate: int, after_message_stop: bool):
+async def test_windowed_buffer_refuses_an_undecodable_text_event_after_a_clean_scan(
+    sampling_rate: int, after_message_stop: bool
+):
     guardrail = _CountingPassingGuardrail(guardrail_name="windowed-undecodable", event_hook="post_call")
     guardrail.streaming_buffer_until_moderated = True
     guardrail.streaming_buffer_release_on_scan = True
@@ -657,3 +660,145 @@ def test_pipeline_live_streaming_resolves_the_flag_like_the_flat_streaming_path(
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     assert _pipelines_stream_live(_detect_only_pipeline(guardrail)) is streams_live
+
+
+class _RewritingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],  # mutable-ok: CustomGuardrail.apply_guardrail base signature
+        input_type: Literal["request", "response"],
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        rewritten_tools: Final[GenericGuardrailAPIInputs] = (
+            {
+                "tool_calls": [
+                    tool_call.model_copy(
+                        update={
+                            "function": tool_call.function.model_copy(
+                                update={
+                                    "arguments": (tool_call.function.arguments or "").replace(
+                                        TOOL_ARGUMENTS_MARKER, "safe-arg"
+                                    )
+                                }
+                            )
+                        }
+                    )
+                    for tool_call in inputs["tool_calls"]
+                ]
+            }
+            if inputs.get("tool_calls")
+            else {}
+        )
+        return {
+            **inputs,
+            "texts": [text.replace(ORIGINAL_MARKER, "SAFE") for text in inputs.get("texts") or ()],
+            **rewritten_tools,
+        }
+
+
+@pytest.mark.asyncio
+async def test_buffered_mode_delivers_rewritten_anthropic_tool_use_and_text_chunks() -> None:
+    guardrail: Final = _RewritingGuardrail(guardrail_name="buffered-rewriter", event_hook="post_call")
+    guardrail.streaming_buffer_until_moderated = True
+
+    async def anthropic_stream() -> AsyncGenerator[bytes, None]:
+        yield _sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {"id": "msg_1", "type": "message", "role": "assistant", "content": [], "usage": {}},
+            },
+        )
+        yield _sse_event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        )
+        yield _sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": f"See {ORIGINAL_MARKER}"},
+            },
+        )
+        yield _sse_event("content_block_stop", {"type": "content_block_stop", "index": 0})
+        yield _sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+            },
+        )
+        yield _sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": f'{{"secret": "{TOOL_ARGUMENTS_MARKER[:6]}'},
+            },
+        )
+        yield _sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": f'{TOOL_ARGUMENTS_MARKER[6:]}"}}'},
+            },
+        )
+        yield _sse_event("content_block_stop", {"type": "content_block_stop", "index": 1})
+        yield _sse_event(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {}},
+        )
+        yield _sse_event("message_stop", {"type": "message_stop"})
+
+    collected: Final = [
+        chunk
+        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/messages"),
+            response=anthropic_stream(),
+            request_data={
+                "messages": [{"role": "user", "content": "hi"}],
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": [guardrail.guardrail_name]},
+            },
+        )
+    ]
+
+    wire: Final = _decode(collected)
+    assert ORIGINAL_MARKER not in wire
+    assert TOOL_ARGUMENTS_MARKER not in wire
+    assert "See SAFE" in wire
+    assert json.loads(
+        "".join(
+            json.loads(line[6:])["delta"]["partial_json"]
+            for line in wire.splitlines()
+            if line.startswith("data: ") and json.loads(line[6:]).get("delta", {}).get("type") == "input_json_delta"
+        )
+    ) == {"secret": "safe-arg"}
+
+
+@pytest.mark.asyncio
+async def test_buffered_mode_falls_back_to_original_chunks_when_rewrite_is_undeliverable() -> None:
+    guardrail: Final = _RewritingGuardrail(guardrail_name="buffered-undeliverable", event_hook="post_call")
+    guardrail.streaming_buffer_until_moderated = True
+
+    async def unplaceable_responses_stream() -> AsyncGenerator[Mapping[str, object], None]:
+        yield {"type": "response.output_text.delta", "delta": f"raw {ORIGINAL_MARKER}"}
+
+    collected: Final = [
+        chunk
+        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/responses"),
+            response=unplaceable_responses_stream(),
+            request_data={
+                "input": "hi",
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": [guardrail.guardrail_name]},
+            },
+        )
+    ]
+
+    assert collected == [{"type": "response.output_text.delta", "delta": f"raw {ORIGINAL_MARKER}"}]

@@ -1147,6 +1147,37 @@ class UnifiedLLMGuardrails(CustomLogger):
         return self.optional_params.get(name, config_value)
 
     @staticmethod
+    async def _scan_ended_stream_delivering_rewrites(
+        *,
+        endpoint_translation: _EndpointTranslation,
+        ended_responses: list[object],  # mutable-ok: translation writes rewrites back into the buffered stream
+        guardrail_to_apply: CustomGuardrail,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: _RequestData,
+        buffered_count: int,
+    ) -> tuple[object, ...]:
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        originals: Final = tuple(copy.deepcopy(ended_responses[:buffered_count]))
+        try:
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=ended_responses,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                deliver_ended_stream_rewrites=True,
+            )
+        except UndeliverableStreamRewrite as undeliverable:
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: discarding undeliverable stream rewrite for %s: %s",
+                guardrail_to_apply.guardrail_name,
+                undeliverable.reason,
+            )
+            return originals
+        return tuple(ended_responses[:buffered_count])
+
+    @staticmethod
     async def _scan_released_stream_after_disconnect(
         *,
         endpoint_translation: _EndpointTranslation,
@@ -1592,21 +1623,42 @@ class UnifiedLLMGuardrails(CustomLogger):
                         yield pending_item
                     return
 
-                try:
+                deliver_rewrites: Final = (
+                    bool(buffer_until_moderated)
+                    and not chunks_yielded
+                    and not release_on_scan
+                    and type(endpoint_translation).delivers_ended_stream_rewrites
+                )
+
+                async def run_ended_scan() -> tuple[object, ...] | None:
                     with anyio.CancelScope(shield=chunks_yielded):
                         if pending_scan is not None:
                             pending_scan.result()  # a failed background scan raises into the handlers below
-                        await endpoint_translation.process_output_streaming_response(
+                        if deliver_rewrites:
+                            return await self._scan_ended_stream_delivering_rewrites(
+                                endpoint_translation=endpoint_translation,
+                                ended_responses=ended_responses,
+                                guardrail_to_apply=guardrail_to_apply,
+                                user_api_key_dict=user_api_key_dict,
+                                request_data=typed_request_data,
+                                buffered_count=len(withheld_items),
+                            )
+                        await _as_endpoint_translation(endpoint_translation).process_output_streaming_response(
                             responses_so_far=ended_responses,
                             guardrail_to_apply=guardrail_to_apply,
-                            litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                            litellm_logging_obj=typed_request_data.get("litellm_logging_obj"),
                             user_api_key_dict=user_api_key_dict,
-                            request_data=request_data,
+                            request_data=typed_request_data,
                         )
-                    # Moderation passed: release the withheld original chunks.
-                    if buffered_items is not None:
-                        for buffered_item in buffered_items:
-                            yield buffered_item
+                        return buffered_items
+                    return None
+
+                try:
+                    released_items: Final = await run_ended_scan()
+                    # Moderation passed: release the withheld chunks (with delivered rewrites when opted in).
+                    if released_items is not None:
+                        for released_item in released_items:
+                            yield released_item
                     for pending_item in pending_end_of_stream_items:
                         responses_yielded.append(pending_item)
                         yield pending_item
