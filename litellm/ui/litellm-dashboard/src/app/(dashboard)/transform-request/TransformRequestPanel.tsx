@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { productNames } from "@/i18n/untranslated/productNames";
 import { Trans, useTranslation } from "react-i18next";
 import { ArrowRight, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -128,7 +129,7 @@ ${formattedBody}
 
   return (
     <div className="p-2">
-      <h1 className="text-lg font-medium text-foreground">{t("transformRequest.transformRequestPanel.title")}</h1>
+      <h1 className="text-lg font-medium text-foreground">{productNames.playground}</h1>
       <p className="text-sm text-muted-foreground">{t("transformRequest.transformRequestPanel.description")}</p>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Original Request Panel */}

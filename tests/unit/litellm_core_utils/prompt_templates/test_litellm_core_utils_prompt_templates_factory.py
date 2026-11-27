@@ -11068,3 +11068,28 @@ def test_anthropic_messages_pt_copies_results_only_into_the_turn_that_split():
     assert {block["tool_use_id"] for block in split_results["content"]} == {
         block["id"] for block in split_assistant["content"] if block["type"] == "tool_use"
     }
+
+
+@pytest.mark.parametrize("tool_call_id", [5, ["srvtoolu_"]], ids=["int", "list"])
+@pytest.mark.parametrize("rewrites_tool_use_ids", [True, False], ids=["renamed", "callers"])
+def test_a_tool_message_whose_tool_call_id_is_not_a_string_is_refused_whether_or_not_ids_are_renamed(
+    tool_call_id: object, rewrites_tool_use_ids: bool
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "toolu_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": tool_call_id, "content": "sunny"},
+    ]
+    with pytest.raises(TypeError):
+        anthropic_messages_pt(
+            messages=messages,  # pyright: ignore[reportArgumentType]  # the malformed id a caller can send
+            model="claude-sonnet-4-5",
+            llm_provider="anthropic",
+            rewrites_tool_use_ids=rewrites_tool_use_ids,
+        )

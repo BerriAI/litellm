@@ -215,7 +215,12 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     run_hook_subscribers,
 )
 from litellm.responses.mcp.parked_stream_dispatch import in_flight_round_biller, parked_success
-from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
+from litellm.responses.streaming_iterator import (
+    OutlivesItsConsumer,
+    partial_responses_incomplete_event_on_disconnect,
+    settle_responses_stream_after_consumer_left,
+    spawn_logging_task,
+)
 from litellm.router import Router
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
@@ -3910,6 +3915,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,
         skip_pre_call_logic: bool = False,
+        read_stream_on_after_disconnect: bool = True,
         sse_framing: SseFraming = OPENAI_SSE_FRAMING,
         on_passthrough_block: Callable[[ModifyResponseException], Awaitable[Response]] | None = None,
     ) -> object:
@@ -3957,6 +3963,7 @@ class ProxyBaseLLMRequestProcessing:
                     is_streaming_request=is_streaming_request,
                     contents=contents,
                     skip_pre_call_logic=skip_pre_call_logic,
+                    read_stream_on_after_disconnect=read_stream_on_after_disconnect,
                     first_chunk_framing=sse_framing.first_chunk,
                 ),
             ),
@@ -4037,6 +4044,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,  # Add contents parameter
         skip_pre_call_logic: bool = False,
+        read_stream_on_after_disconnect: bool = True,
         first_chunk_framing: FirstChunkSseFraming = OPENAI_FIRST_CHUNK_FRAMING,
     ) -> object:
         """
@@ -4140,6 +4148,9 @@ class ProxyBaseLLMRequestProcessing:
             del tasks
 
         response = responses[1]
+        reads_on: Final = read_stream_on_after_disconnect and general_settings.get("cancel_on_disconnect") is not True
+        if reads_on and isinstance(responses[1], OutlivesItsConsumer):
+            responses[1].outlive_consumer_until_settled()
 
         _exception_raised = False
         try:
@@ -5628,6 +5639,9 @@ class ProxyBaseLLMRequestProcessing:
                     request_data,
                     client_disconnected,
                 )
+            drained_to_provider_usage: Final = await settle_responses_stream_after_consumer_left(
+                response, drain=recorded_client_disconnect
+            )
             if recorded_client_disconnect:
                 await _bill_in_flight_round_on_disconnect(_REQUEST_FIELDS.validate_python(request_data))
                 deferred_stream_logging_armed: Final = _deferred_stream_logging_is_armed(request_data)
@@ -5636,8 +5650,8 @@ class ProxyBaseLLMRequestProcessing:
                 # above, or the partial-spend billing below) releases the
                 # request's max_parallel_requests slot through the limiter's
                 # own success callback. Release explicitly when no event fires.
-                success_event_owns_slot_release = deferred_stream_logging_armed
-                if not deferred_stream_logging_armed:
+                success_event_owns_slot_release = deferred_stream_logging_armed or drained_to_provider_usage
+                if not success_event_owns_slot_release:
                     success_event_owns_slot_release = await _bill_partial_streamed_spend_on_disconnect(
                         request_data, response
                     )
