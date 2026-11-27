@@ -314,6 +314,9 @@ async def test_proxy_shutdown_without_a_database_drains_audit_callbacks_before_t
     monkeypatch.setattr(
         ps, "drain_post_call_redis_batches", AsyncMock(side_effect=lambda: calls.append("redis")), raising=False
     )
+    monkeypatch.setattr(
+        ps, "drain_rust_log_lines", AsyncMock(side_effect=lambda _timeout: calls.append("logs")), raising=False
+    )
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
@@ -332,7 +335,7 @@ async def test_proxy_shutdown_without_a_database_drains_audit_callbacks_before_t
     track_audit_task(asyncio.create_task(_audit_callback_still_sending()))
     await asyncio.wait_for(proxy_shutdown_event(), timeout=2.0)
 
-    assert calls == ["audit", "redis"]
+    assert calls == ["audit", "redis", "logs"]
 
 
 @pytest.mark.asyncio

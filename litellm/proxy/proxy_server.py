@@ -354,7 +354,9 @@ import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import (
+    RUST_LOG_DRAIN_TIMEOUT_SECONDS,
     STARTUP_OUTPUT_SETTINGS,
+    drain_rust_log_lines,
     print_startup_message,
     redact_internal_details_from_client_message,
     redact_string,
@@ -1576,6 +1578,8 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
                 )
         except Exception as e:  # noqa: BLE001  # shutdown must continue even if the flush fails
             verbose_proxy_logger.exception("Error flushing Langfuse export channels on shutdown: %s", e)
+
+    await drain_rust_log_lines(GracefulShutdownManager.remaining(RUST_LOG_DRAIN_TIMEOUT_SECONDS))
 
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
@@ -3281,12 +3285,12 @@ if docs_url != "/" and root_redirect_url is not None:
         return RedirectResponse(url=root_redirect_url)
 
 
-user_api_base = None
+user_api_base: str | None = None
 user_model = None
 user_debug = False
-user_max_tokens = None
-user_request_timeout = None
-user_temperature = None
+user_max_tokens: int | None = None
+user_request_timeout: float | None = None
+user_temperature: float | None = None
 user_config: Final = None
 user_headers = None
 user_config_file_path: str | None = None

@@ -86,6 +86,23 @@ pub struct NewUserDefaults {
     pub model_max_budget: Option<Value>,
 }
 
+/// Whether resolving a sign-in stored its SSO id on the user it found. `Linked` is written by the time the
+/// resolve returns, `Pending` is written in the background after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SsoLink {
+    Unchanged,
+    Linked,
+    Pending,
+}
+
+/// The user a sign-in resolved to, as read before any link, except that an email match linked in line carries
+/// its new SSO id, and how its SSO id was linked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Resolution {
+    pub user: User,
+    pub sso_link: SsoLink,
+}
+
 /// Reads, links and provisions `LiteLLM_UserTable` rows.
 pub struct UserRepository {
     database: Database,
@@ -113,6 +130,30 @@ impl UserRepository {
             self.set_sso_user_id_later(user_id, sso_user_id);
         }
         Ok(resolved.user)
+    }
+
+    /// [`Self::resolve`], with whether it linked the sign-in's SSO id to the user it found. A link under
+    /// `links_any_user` is `Pending`, made in the background after this returns.
+    pub async fn resolve_sign_in(
+        &self,
+        sign_in: &SignIn,
+        side: Side,
+    ) -> Result<Option<Resolution>, litellm_db::Error> {
+        let resolved = self
+            .database
+            .run(GET_USER_OBJECT, || async {
+                resolve_once(&mut &self.database, sign_in, side).await
+            })
+            .await?;
+        let sso_link = match (&resolved.link_later, resolved.linked) {
+            (Some(_), _) => SsoLink::Pending,
+            (None, true) => SsoLink::Linked,
+            (None, false) => SsoLink::Unchanged,
+        };
+        if let Some((user_id, sso_user_id)) = resolved.link_later {
+            self.set_sso_user_id_later(user_id, sso_user_id);
+        }
+        Ok(resolved.user.map(|user| Resolution { user, sso_link }))
     }
 
     /// Whether a user other than `user_id` holds `user_email`, ignoring case.
@@ -148,6 +189,21 @@ impl UserRepository {
                     links_any_user,
                 )
                 .await
+            })
+            .await
+    }
+
+    /// [`Self::backfill_email`], returning the row as stored rather than its email, or `None` when another user
+    /// holds the email or the row is gone.
+    pub async fn backfill_email_returning(
+        &self,
+        user_id: &str,
+        user_email: &str,
+        links_any_user: bool,
+    ) -> Result<Option<User>, litellm_db::Error> {
+        self.database
+            .run(UPDATE_MANY_USERS, || async {
+                backfill_once(&mut &self.database, user_id, user_email, links_any_user).await
             })
             .await
     }
@@ -202,6 +258,29 @@ impl UserRepository {
     }
 }
 
+/// The fill, then, when it filled nothing, the stored row in a statement of its own, since a fill that waited on a
+/// concurrent one cannot see the email that one committed.
+pub(super) async fn backfill_once(
+    connections: &mut impl Connections,
+    user_id: &str,
+    user_email: &str,
+    links_any_user: bool,
+) -> Result<Option<User>, litellm_db::Error> {
+    let filled = connections
+        .with(Side::Writer, async |db| {
+            queries::fill_missing_user_email(db, user_id, user_email, links_any_user).await
+        })
+        .await?;
+    if filled.is_some() {
+        return Ok(filled);
+    }
+    connections
+        .with(Side::Writer, async |db| {
+            queries::find_user_with_stored_email(db, user_id, user_email, links_any_user).await
+        })
+        .await
+}
+
 /// The insert, then on a conflict the read a later sign-in would make, in a statement of its own because the
 /// insert cannot see a row committed after it began.
 pub(super) async fn insert_once(
@@ -236,9 +315,11 @@ pub(super) async fn insert_once(
         .map(Inserted::Conflict)
 }
 
-/// What a resolve found, and the SSO id link it leaves for the background under `links_any_user`.
+/// What a resolve found, whether it linked the sign-in's SSO id in line, and the link it leaves for the
+/// background under `links_any_user`.
 pub(super) struct Resolved {
     pub user: Option<User>,
+    pub linked: bool,
     pub link_later: Option<(String, String)>,
 }
 
@@ -246,6 +327,7 @@ impl From<Option<User>> for Resolved {
     fn from(user: Option<User>) -> Self {
         Self {
             user,
+            linked: false,
             link_later: None,
         }
     }
@@ -269,11 +351,15 @@ pub(super) async fn resolve_once(
                 && sign_in.sso_user_id.as_deref() == Some(user.user_id.as_str())
                 && !sign_in.links_any_user
             {
-                connections
+                let linked = connections
                     .with(Side::Writer, async |db| {
                         queries::link_null_sso_user_id(db, &user.user_id, &user.user_id).await
                     })
                     .await?;
+                return Ok(Resolved {
+                    linked,
+                    ..Some(user).into()
+                });
             }
             Ok(Some(user).into())
         }
@@ -309,6 +395,7 @@ async fn resolve_by_email(
             .map(|user| (user.user_id.clone(), sso_user_id.clone()));
         return Ok(Resolved {
             user: by_email,
+            linked: false,
             link_later,
         });
     }
@@ -320,7 +407,10 @@ async fn resolve_by_email(
             .await?;
         if linked {
             user.sso_user_id = Some(sso_user_id.clone());
-            return Ok(Some(user).into());
+            return Ok(Resolved {
+                linked,
+                ..Some(user).into()
+            });
         }
     }
     connections

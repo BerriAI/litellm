@@ -1,5 +1,6 @@
 "use client";
 
+import { displayTimestamp } from "@/i18n/displayDate";
 import React from "react";
 import { useTranslation } from "react-i18next";
 
@@ -19,7 +20,7 @@ function formatTimestamp(ts?: string): string {
   if (!ts) return "—";
   try {
     const d = new Date(ts);
-    return d.toLocaleString();
+    return displayTimestamp(d);
   } catch {
     return ts;
   }

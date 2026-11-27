@@ -166,7 +166,7 @@ impl Admit {
         let model = fields.get("model")?.as_str()?;
         let allowed = match &self.inference {
             Some(inference) => routing::allows(inference, caller, model),
-            None => host::layers(caller).all(|layer| layer.list() == ModelList::Every),
+            None => host::auth::layers(caller).all(|layer| layer.list() == ModelList::Every),
         };
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }

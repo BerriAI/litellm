@@ -953,7 +953,7 @@ export default function ComplianceUI({
                       }}
                       className={`flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-sm transition-colors ${showCsvUpload ? "bg-info/10 text-info" : "text-muted-foreground hover:bg-accent"}`}
                     >
-                      <Upload className="w-3 h-3" /> {t("playground.compliance.library.csv")}
+                      <Upload className="w-3 h-3" /> CSV
                     </button>
                   </div>
                 </div>

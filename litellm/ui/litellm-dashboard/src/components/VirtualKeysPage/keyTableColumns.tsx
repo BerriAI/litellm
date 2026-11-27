@@ -1,5 +1,6 @@
 "use client";
 
+import { displayTimestamp } from "@/i18n/displayDate";
 import type { ReactNode } from "react";
 import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
@@ -62,7 +63,7 @@ const getKeyStatus = (key: KeyResponse, t: TFunction): KeyStatus => {
       tone: "neutral",
       label: t("apiKeys.keyTableColumns.status.deleted"),
       tooltip: t("apiKeys.keyTableColumns.status.deletedTooltip", {
-        date: new Date(key.deleted_at).toLocaleString(),
+        date: displayTimestamp(new Date(key.deleted_at)),
         deletedBy: key.deleted_by ? t("apiKeys.keyTableColumns.status.deletedBy", { user: key.deleted_by }) : "",
       }),
     };

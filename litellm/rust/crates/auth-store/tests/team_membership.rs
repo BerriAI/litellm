@@ -8,9 +8,12 @@ mod support;
 
 use std::sync::Arc;
 
-use litellm_auth_store::{Error, TeamMembershipDatabase};
+use litellm_auth_store::{Error, MemberAdded, MemberRemoved, TeamMembershipDatabase};
 use litellm_db_testing::MigratedPostgres;
-use litellm_repositories::{Side, TeamMembershipRepository};
+use litellm_repositories::{
+    JoinBudget, MappedClaim, MemberBudget, NewCappedMemberBudget, RosterRole, Side,
+    TeamMembershipRepository,
+};
 use rstest::{fixture, rstest};
 use sqlx::PgPool;
 
@@ -182,5 +185,295 @@ async fn a_budget_the_model_refuses_fails_the_read_under_the_field_it_sits_in(
         ),
         "{:?}",
         read.err()
+    );
+}
+
+/// `roster` lists `other` and then `leaver`, whose row lists `roster` and `elsewhere` among its
+/// teams and who holds a key in each, the one in `roster` mapped to a JWT claim. `stale` lists
+/// `roster` among its teams with no roster entry, and `joiner` is in no team.
+async fn insert_roster(pool: &PgPool) {
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_TeamTable" (team_id, members_with_roles, created_at, updated_at)
+           VALUES ('roster', '[{"user_id": "other", "user_email": null, "role": "admin"},
+                               {"user_id": "leaver", "user_email": "leaver@example.com", "role": "user"}]',
+                   '2026-11-01 00:00:00', '2026-11-01 00:00:00'),
+                  ('elsewhere', '[]', '2026-11-01 00:00:00', '2026-11-01 00:00:00')"#,
+    )
+    .await;
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_TeamTable" (team_id, members_with_roles, default_team_member_models, created_at, updated_at)
+           VALUES ('dt-capped', '[]', ARRAY['claude'], '2026-11-01 00:00:00', '2026-11-01 00:00:00'),
+                  ('dt-plain', '[]', ARRAY[]::text[], '2026-11-01 00:00:00', '2026-11-01 00:00:00')"#,
+    )
+    .await;
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_UserTable" (user_id, user_email, teams, created_at, updated_at)
+           VALUES ('leaver', 'leaver@example.com', ARRAY['roster', 'elsewhere'], '2026-11-01 00:00:00', '2026-11-01 00:00:00'),
+                  ('stale', NULL, ARRAY['roster'], '2026-11-01 00:00:00', '2026-11-01 00:00:00'),
+                  ('joiner', 'joiner@example.com', ARRAY[]::text[], '2026-11-01 00:00:00', '2026-11-01 00:00:00')"#,
+    )
+    .await;
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id) VALUES ('leaver', 'roster'), ('leaver', 'elsewhere')"#,
+    )
+    .await;
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_VerificationToken"
+               (token, user_id, team_id, key_alias, spend, allowed_cache_controls, allowed_routes, policies, access_group_ids)
+           VALUES ('leaver-roster-key', 'leaver', 'roster', 'kept alias', 1.5, NULL, NULL, NULL, NULL),
+                  ('leaver-elsewhere-key', 'leaver', 'elsewhere', NULL, 0, '{}', '{}', '{}', '{}')"#,
+    )
+    .await;
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_JWTKeyMapping" (id, jwt_claim_name, jwt_claim_value, token, jwt_issuer)
+           VALUES ('mapping', 'sub', 'leaver-sub', 'leaver-roster-key', 'https://issuer.example.com')"#,
+    )
+    .await;
+}
+
+#[fixture]
+async fn rosters(#[future(awt)] memberships: Memberships) -> Memberships {
+    insert_roster(memberships.postgres.pool()).await;
+    memberships
+}
+
+fn user_ids(roster: &[litellm_redis_store::auth_cache::MemberEntry]) -> Vec<Option<&str>> {
+    roster
+        .iter()
+        .map(|member| member.user_id.as_deref())
+        .collect()
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_member_add_returns_the_roster_as_stored_with_the_new_member_last(
+    #[future(awt)] rosters: Memberships,
+) {
+    let added = rosters
+        .database
+        .add_member("joiner", "roster", MemberBudget::None)
+        .await
+        .unwrap();
+    let membership = rosters
+        .database
+        .team_membership("joiner", "roster", Side::Writer)
+        .await
+        .unwrap();
+
+    let MemberAdded::Added { roster } = added else {
+        panic!("the user was added: {added:?}");
+    };
+    assert_eq!(
+        (
+            dumped(roster.last().cloned().unwrap()).as_str(),
+            user_ids(&roster),
+            membership.map(|membership| membership.team_id)
+        ),
+        (
+            r#"{"user_id": "joiner", "user_email": "joiner@example.com", "role": "user"}"#,
+            vec![Some("other"), Some("leaver"), Some("joiner")],
+            Some("roster".to_owned())
+        )
+    );
+}
+
+#[rstest]
+#[case::already_on_the_roster("leaver", "roster", MemberAdded::AlreadyMember)]
+#[case::a_team_no_row_has("joiner", "gone", MemberAdded::TeamMissing)]
+#[case::a_user_no_row_has("gone", "roster", MemberAdded::UserMissing)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_member_add_that_writes_nothing_says_why(
+    #[future(awt)] rosters: Memberships,
+    #[case] user_id: &str,
+    #[case] team_id: &str,
+    #[case] expected: MemberAdded,
+) {
+    let added = rosters
+        .database
+        .add_member(user_id, team_id, MemberBudget::None)
+        .await
+        .unwrap();
+
+    assert_eq!(added, expected);
+}
+
+/// A removal returns what the host evicts and audits: the rosters before and after as `Member`
+/// dumps them, the hashes of the member's deleted keys and the JWT claims mapped to them.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_member_removal_takes_the_user_off_the_team_with_its_keys_in_the_team(
+    #[future(awt)] rosters: Memberships,
+) {
+    let removed = rosters
+        .database
+        .remove_member("leaver", "roster")
+        .await
+        .unwrap();
+
+    let MemberRemoved::Removed {
+        roster_before,
+        roster_after,
+        deleted_tokens,
+        mapped_claims,
+    } = removed
+    else {
+        panic!("the user was removed: {removed:?}");
+    };
+    assert_eq!(
+        (
+            user_ids(&roster_before),
+            user_ids(&roster_after),
+            deleted_tokens,
+            mapped_claims,
+        ),
+        (
+            vec![Some("other"), Some("leaver")],
+            vec![Some("other")],
+            vec!["leaver-roster-key".to_owned()],
+            vec![MappedClaim {
+                jwt_issuer: "https://issuer.example.com".to_owned(),
+                jwt_claim_name: "sub".to_owned(),
+                jwt_claim_value: "leaver-sub".to_owned(),
+            }],
+        )
+    );
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_member_removal_of_a_team_only_the_users_row_lists_leaves_the_roster_as_it_was(
+    #[future(awt)] rosters: Memberships,
+) {
+    let removed = rosters
+        .database
+        .remove_member("stale", "roster")
+        .await
+        .unwrap();
+
+    let MemberRemoved::Removed {
+        roster_before,
+        roster_after,
+        ..
+    } = removed
+    else {
+        panic!("the stale team was cleared: {removed:?}");
+    };
+    assert_eq!(
+        (user_ids(&roster_after), roster_before == roster_after),
+        (vec![Some("other"), Some("leaver")], true)
+    );
+}
+
+#[rstest]
+#[case::a_user_the_team_does_not_list("joiner", "roster", MemberRemoved::NotMember)]
+#[case::a_team_no_row_has("leaver", "gone", MemberRemoved::TeamMissing)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_member_removal_that_writes_nothing_says_why(
+    #[future(awt)] rosters: Memberships,
+    #[case] user_id: &str,
+    #[case] team_id: &str,
+    #[case] expected: MemberRemoved,
+) {
+    let removed = rosters
+        .database
+        .remove_member(user_id, team_id)
+        .await
+        .unwrap();
+
+    assert_eq!(removed, expected);
+}
+
+/// A default team join returns the roster with the entry's role, as `Member` dumps it.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_default_team_join_returns_the_roster_with_the_role_it_gave(
+    #[future(awt)] rosters: Memberships,
+) {
+    let capped = NewCappedMemberBudget {
+        budget_id: "joiner-capped".to_owned(),
+        max_budget: 3.0,
+        allowed_models: Some(vec!["claude".to_owned()]),
+        created_by: "default_user_id".to_owned(),
+        updated_by: "default_user_id".to_owned(),
+    };
+
+    let added = rosters
+        .database
+        .add_member_as(
+            "joiner",
+            "dt-capped",
+            RosterRole::Admin,
+            JoinBudget::Capped(&capped),
+        )
+        .await
+        .unwrap();
+
+    let MemberAdded::Added { roster } = added else {
+        panic!("the user was added: {added:?}");
+    };
+    assert_eq!(
+        roster.into_iter().map(dumped).collect::<Vec<_>>(),
+        vec![
+            r#"{"user_id": "joiner", "user_email": "joiner@example.com", "role": "admin"}"#
+                .to_owned()
+        ]
+    );
+}
+
+/// `broken` lists `leaver` with no role, which `Member` refuses, and `leaver` holds a key in it.
+async fn insert_broken_roster(pool: &PgPool) {
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_TeamTable" (team_id, members_with_roles, created_at, updated_at)
+           VALUES ('broken', '[{"user_id": "leaver"}]', '2026-11-01 00:00:00', '2026-11-01 00:00:00')"#,
+    )
+    .await;
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_VerificationToken" (token, user_id, team_id) VALUES ('leaver-broken-key', 'leaver', 'broken')"#,
+    )
+    .await;
+}
+
+#[rstest]
+#[case::an_add("joiner", true)]
+#[case::a_removal("leaver", false)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_roster_the_model_refuses_fails_the_write_as_the_column_it_refuses(
+    #[future(awt)] rosters: Memberships,
+    #[case] user_id: &str,
+    #[case] adding: bool,
+) {
+    let pool = rosters.postgres.pool();
+    insert_broken_roster(pool).await;
+
+    let refused = match adding {
+        true => rosters
+            .database
+            .add_member(user_id, "broken", MemberBudget::None)
+            .await
+            .err(),
+        false => rosters
+            .database
+            .remove_member(user_id, "broken")
+            .await
+            .err(),
+    };
+
+    assert!(
+        matches!(
+            &refused,
+            Some(Error::Row {
+                column: "role",
+                within: Some("members_with_roles")
+            })
+        ),
+        "{refused:?}"
     );
 }

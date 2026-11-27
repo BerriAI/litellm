@@ -11,7 +11,7 @@ use litellm_redis_store::{
     FromValue, IntoValue,
     auth_cache::{AuthCache, AuthObject, KeyEntry, Settings},
 };
-use litellm_repositories::Side;
+use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository, Side};
 
 pub struct AuthStore {
     cache: Arc<AuthCache>,
@@ -19,7 +19,12 @@ pub struct AuthStore {
 }
 
 impl AuthStore {
-    pub fn new(cache: Arc<AuthCache>, keys: KeyDatabase) -> Self {
+    /// The store over `database`, read as the Python proxy reads it.
+    pub fn new(cache: Arc<AuthCache>, database: Database) -> Self {
+        let keys = KeyDatabase::new(
+            Arc::new(KeyRepository::new(database.clone())),
+            Arc::new(ObjectPermissionRepository::new(database)),
+        );
         Self { cache, keys }
     }
 

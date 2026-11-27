@@ -15,7 +15,11 @@ from websockets.http11 import Response
 
 import litellm
 from litellm import Router
-from litellm.constants import REALTIME_SESSION_SUCCESS_LOGGED_KEY, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.constants import (
+    OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+    REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+)
 from litellm.cost_calculator import handle_realtime_stream_cost_calculation
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.openai.live import handler as live_handler
@@ -755,7 +759,7 @@ async def test_async_live_session_bounds_total_time_when_upstream_keeps_streamin
             api_base="https://api.openai.com/",
             api_key="live-test-key",
         ),
-        timeout=1,
+        timeout=OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS / 2,
     )
 
     assert worker.coroutine is not None

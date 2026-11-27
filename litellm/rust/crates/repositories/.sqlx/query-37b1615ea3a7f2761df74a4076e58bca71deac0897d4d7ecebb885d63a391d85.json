@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_UserTable\"\nSET teams = array_remove(teams, $2),\n    updated_at = NOW() AT TIME ZONE 'UTC'\nWHERE user_id = $1\n  AND $2 = ANY (teams)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "37b1615ea3a7f2761df74a4076e58bca71deac0897d4d7ecebb885d63a391d85"
+}
