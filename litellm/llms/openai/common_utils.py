@@ -705,6 +705,12 @@ def get_openai_credentials(
 
         resolved_api_base: Final = api_base or litellm.api_base or OpenRouterModelInfo.get_api_base()
         resolved_api_key: Final = api_key or OpenRouterModelInfo.get_api_key()
+        if not resolved_api_key:
+            raise litellm.AuthenticationError(
+                message="OpenRouter API key is required. Set OPENROUTER_API_KEY or pass api_key.",
+                llm_provider="openrouter",
+                model=None,
+            )
         return OpenAICredentials(
             api_base=resolved_api_base,
             api_key=resolved_api_key,

@@ -496,3 +496,25 @@ def test_create_file__openrouter_default_base_and_key(monkeypatch: pytest.Monkey
     req = upload_route.calls.last.request
     assert req.headers["authorization"] == "Bearer sk-or-v1-files-test"
     assert result.id == "file-abc123"
+
+
+@pytest.mark.parametrize("operation", ["file", "batch"])
+@pytest.mark.parametrize("credential_source", ["environment", "global"])
+def test_openrouter_missing_key_never_sends_openai_credentials(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, operation: str, credential_source: str
+):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openrouter_key", None)
+    monkeypatch.setattr(litellm, "openai_key", "openai-only-secret" if credential_source == "global" else None)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OR_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-only-secret" if credential_source == "environment" else "")
+    with pytest.raises(litellm.AuthenticationError, match="OpenRouter API key is required"):
+        if operation == "file":
+            litellm.create_file(file=("batch.jsonl", b"{}\n"), purpose="batch", custom_llm_provider="openrouter")
+        else:
+            litellm.create_batch(
+                input_file_id="file-test", endpoint="/v1/chat/completions",
+                completion_window="24h", custom_llm_provider="openrouter",
+            )
+    assert len(respx_mock.calls) == 0
