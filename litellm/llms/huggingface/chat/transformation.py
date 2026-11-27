@@ -1,5 +1,6 @@
 import logging
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -50,14 +51,14 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         default_headers: Final = {
             "content-type": "application/json",
         }
@@ -88,8 +89,8 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -130,9 +131,9 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         lacks_explicit_api_base: Final = not litellm_params.get("api_base")
         if not lacks_explicit_api_base or _api_base_from_env():
             endpoint_messages: Final = (

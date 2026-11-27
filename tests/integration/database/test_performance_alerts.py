@@ -103,6 +103,7 @@ class Fixture:
 
     async def sweep(self) -> None:
         for _ in range(20):
+            write_rows('UPDATE "LiteLLM_PerformanceAlertState" SET next_run_at = now()', ())
             await run_performance_alerts(self.repository, interval=timedelta(0), now=lambda: NOW)
             state = read_rows(
                 'SELECT completed_at IS NOT NULL AS completed FROM "LiteLLM_PerformanceAlertState" WHERE id = 1', ()
@@ -321,6 +322,7 @@ async def test_opt_out_is_shared_and_config_false_cannot_be_overridden(fixture: 
         "alerts_used": 0,
         "alert_limit": None if os.environ.get("LITELLM_LICENSE") else FREE_ALERT_LIMIT,
         "disabled_by_config": False,
+        "thresholds": DEFAULT_THRESHOLDS.model_dump(mode="json"),
     }
     claim: Final = await fixture.repository.claim(timedelta(0))
     assert claim is not None

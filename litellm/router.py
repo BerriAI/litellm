@@ -67,12 +67,12 @@ def _router_init(
     ## CACHING ##
     redis_url: str | None = None,
     redis_host: str | None = None,
-    redis_port: int | None = None,
+    redis_port: int | str | None = None,
     redis_password: str | None = None,
     redis_db: int | None = None,
     cache_responses: bool | None = False,
-    cache_kwargs: dict = {},  # additional kwargs to pass to RedisCache (see caching.py)
-    caching_groups: list[tuple] | None = None,  # if you want to cache across model groups
+    cache_kwargs: Mapping[str, object] = {},  # additional kwargs to pass to RedisCache (see caching.py)
+    caching_groups: Sequence[tuple[object, ...]] | None = None,  # if you want to cache across model groups
     client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
     ## SCHEDULER ##
     polling_interval: float | None = None,
@@ -83,14 +83,14 @@ def _router_init(
     max_fallbacks: int | None = None,  # max fallbacks to try before exiting the call. Defaults to 5.
     timeout: float | None = None,
     stream_timeout: float | None = None,
-    default_litellm_params: dict | None = None,  # default params for Router.chat.completion.create
+    default_litellm_params: Mapping[str, object] | None = None,  # default params for Router.chat.completion.create
     default_max_parallel_requests: int | None = None,
     set_verbose: bool = False,
     debug_level: Literal["DEBUG", "INFO"] = "INFO",
     default_fallbacks: list[str] | None = None,  # generic fallbacks, works across all deployments
-    fallbacks: list = [],
-    context_window_fallbacks: list = [],
-    content_policy_fallbacks: list = [],
+    fallbacks: Sequence[object] = [],
+    context_window_fallbacks: Sequence[object] = [],
+    content_policy_fallbacks: Sequence[object] = [],
     model_group_alias: dict[str, str | RouterModelGroupAliasItem] | None = {},
     enable_pre_call_checks: bool = False,
     enable_tag_filtering: bool = False,
@@ -98,7 +98,7 @@ def _router_init(
     tag_routing_prefix: str = "",
     plugins: list[RoutingPlugin] | None = None,
     retry_after: int = 0,  # min time to wait before retrying a failed request
-    retry_policy: RetryPolicy | dict | None = None,  # set custom retries for different exceptions
+    retry_policy: RetryPolicy | Mapping[str, object] | None = None,  # set custom retries for different exceptions
     model_group_retry_policy: dict[str, RetryPolicy] = {},  # set custom retry policies based on model group
     allowed_fails: int | None = None,  # Number of times a deployment can failbefore being added to cooldown
     allowed_fails_policy: AllowedFailsPolicy | None = None,  # set custom allowed fails policy
@@ -107,8 +107,8 @@ def _router_init(
     fallback_on_unsupported_params: bool = True,
     routing_strategy: RoutingStrategyName = "simple-shuffle",
     optional_pre_call_checks: OptionalPreCallChecks | None = None,
-    routing_strategy_args: dict = {},  # just for latency-based
-    routing_groups: list[RoutingGroup | dict] | None = None,
+    routing_strategy_args: Mapping[str, object] = {},  # just for latency-based
+    routing_groups: Sequence[RoutingGroup | Mapping[str, object]] | None = None,
     provider_budget_config: GenericBudgetConfigType | None = None,
     alerting_config: AlertingConfig | None = None,
     router_general_settings: RouterGeneralSettings | None = RouterGeneralSettings(),
@@ -126,7 +126,6 @@ def _router_init(
     fallback_rate_limit_check: FallbackRateLimitCheck | None = None,
     auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     session_affinity_repin_on_failover: bool = False,
-    _host: PythonHost = python_host,
     enable_cross_model_group_collision_check: bool | None = None,
 ) -> None:
     """
@@ -136,7 +135,7 @@ def _router_init(
         model_list (Optional[list]): List of models to be used. Defaults to None.
         redis_url (Optional[str]): URL of the Redis server. Defaults to None.
         redis_host (Optional[str]): Hostname of the Redis server. Defaults to None.
-        redis_port (Optional[int]): Port of the Redis server. Defaults to None.
+        redis_port (int | str | None): Port of the Redis server. Defaults to None.
         redis_password (Optional[str]): Password of the Redis server. Defaults to None.
         cache_responses (Optional[bool]): Flag to enable caching of responses. Defaults to False.
         cache_kwargs (dict): Additional kwargs to pass to RedisCache. Defaults to {}.
@@ -263,7 +262,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, LiteLLMFineTuningJob, ModelResponse
     from litellm.types.vector_stores import VectorStoreCreateResponse
 
-    _P: Final = ParamSpec("_P")
+    _P = ParamSpec("_P")
 
     def _takes_parameters_of(source: Callable[_P, None]) -> Callable[[Callable[..., None]], Callable[_P, None]]: ...
 
@@ -490,9 +489,7 @@ else:
             core: Final = self.__dict__.get("_core")
             return sorted({*super().__dir__(), *(dir(core) if core is not None else ())})
 
-    Router.__init__.__signature__ = _CORE_SIGNATURE.replace(  # pyright: ignore[reportFunctionMemberAccess]  # inspect reads it
-        parameters=[parameter for parameter in _CORE_SIGNATURE.parameters.values() if parameter.name != "_host"]
-    )
+    Router.__init__.__signature__ = _CORE_SIGNATURE  # pyright: ignore[reportFunctionMemberAccess]  # inspect reads it
     Router.__init__.__doc__ = _router_init.__doc__
 
 

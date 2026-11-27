@@ -10,12 +10,15 @@ from typing import Final
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.constants import USAGE_ONLY_SETTLEMENT_KEY
+from litellm.interactions.background_cost_polling import rebuild_logging_obj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import CallTypes, EmbeddingResponse, ModelResponse, TextCompletionResponse, Usage
 
 FROZEN_INSTANT: Final = datetime(2026, 1, 31, 23, 59, 30)
@@ -421,6 +424,144 @@ async def test_websocket_turn_callbacks_keep_the_sockets_slot_until_the_disconne
     await handler.async_release_max_parallel_requests_on_disconnect(UserAPIKeyAuth(api_key=api_key))
     after_disconnect = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
     assert after_disconnect["current_requests"] == 0, after_disconnect
+
+
+@pytest.mark.asyncio
+async def test_a_background_usage_settlement_counts_its_tokens_without_freeing_another_requests_slot():
+    api_key = hash_token("sk-background-creator")
+    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock)
+    bucket = f"{api_key}::{FROZEN_INSTANT.strftime('%Y-%m-%d-%H-%M')}::request_count"
+    await handler.internal_usage_cache.async_set_cache(
+        key=bucket,
+        value={"current_requests": 1, "current_tpm": 0, "current_rpm": 2},
+        litellm_parent_otel_span=None,
+    )
+    settlement = rebuild_logging_obj(
+        model="gpt-5.4-mini",
+        custom_llm_provider="openai",
+        call_type="pass_through_endpoint",
+        litellm_call_id="background-create",
+        function_id="background-create",
+        litellm_trace_id="background-trace",
+        start_time=FROZEN_INSTANT,
+        litellm_params={"metadata": {"user_api_key": api_key, "user_api_key_model_max_budget": {}}},
+    )
+
+    await handler.async_log_success_event(
+        kwargs={**settlement.model_call_details, USAGE_ONLY_SETTLEMENT_KEY: True},
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=8, completion_tokens=4, total_tokens=12)),
+        start_time=FROZEN_INSTANT,
+        end_time=FROZEN_INSTANT,
+    )
+
+    after_settlement = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+    assert after_settlement == {"current_requests": 1, "current_tpm": 12, "current_rpm": 2}, after_settlement
+
+
+@pytest.mark.asyncio
+async def test_a_background_usage_settlement_in_an_uncounted_minute_leaves_the_creator_free_to_send_its_next_request():
+    api_key: Final = hash_token("sk-background-creator-new-minute")
+    minute: Final = FROZEN_INSTANT.strftime("%Y-%m-%d-%H-%M")
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
+    )
+    settlement: Final = rebuild_logging_obj(
+        model="gpt-5.4-mini",
+        custom_llm_provider="openai",
+        call_type="pass_through_endpoint",
+        litellm_call_id="background-create",
+        function_id="background-create",
+        litellm_trace_id="background-trace",
+        start_time=FROZEN_INSTANT,
+        litellm_params={
+            "metadata": {
+                "user_api_key": api_key,
+                "user_api_key_user_id": "creator-user",
+                "user_api_key_team_id": "creator-team",
+                "user_api_key_model_max_budget": {},
+                "model_group": "gpt-5.4-mini",
+            }
+        },
+    )
+
+    await handler.async_log_success_event(
+        kwargs={**settlement.model_call_details, USAGE_ONLY_SETTLEMENT_KEY: True, "user": "creator-end-user"},
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=8, completion_tokens=4, total_tokens=12)),
+        start_time=FROZEN_INSTANT,
+        end_time=FROZEN_INSTANT,
+    )
+
+    bucket_keys: Final = (
+        f"{api_key}::{minute}::request_count",
+        f"{api_key}::gpt-5.4-mini::{minute}::request_count",
+        f"creator-user::{minute}::request_count",
+        f"creator-team::{minute}::request_count",
+        f"creator-end-user::{minute}::request_count",
+    )
+    buckets: Final = tuple(
+        [await handler.internal_usage_cache.async_get_cache(key=key, litellm_parent_otel_span=None) for key in bucket_keys]
+    )
+    assert buckets == ({"current_requests": 0, "current_tpm": 12, "current_rpm": 0},) * 5, buckets
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1),
+        cache=DualCache(),
+        data={"model": "gpt-5.4-mini"},
+        call_type="completion",
+    )
+
+
+@pytest.mark.parametrize(
+    "call_type,response_obj",
+    [
+        (
+            CallTypes.aresponses.value,
+            ResponsesAPIResponse(
+                id="resp_uncounted",
+                created_at=0,
+                output=[],
+                status="completed",
+                usage=ResponseAPIUsage(input_tokens=1407, output_tokens=10, total_tokens=1417),
+            ),
+        ),
+        (
+            CallTypes.anthropic_messages.value,
+            {"type": "message", "usage": {"input_tokens": 1407, "output_tokens": 10}},
+        ),
+    ],
+    ids=["responses", "messages"],
+)
+@pytest.mark.asyncio
+async def test_a_response_the_legacy_limiter_does_not_count_stays_uncounted_when_its_row_carries_combined_usage(
+    call_type: str, response_obj: object
+):
+    api_key: Final = hash_token("sk-uncounted-route")
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
+    )
+    key: Final = UserAPIKeyAuth(api_key=api_key, tpm_limit=1000)
+
+    async def call() -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=DualCache(), data={"model": "gpt-5.4-mini"}, call_type=call_type
+        )
+
+    await call()
+    await handler.async_log_success_event(
+        kwargs={
+            "call_type": call_type,
+            "litellm_params": {"metadata": {"user_api_key": api_key, "user_api_key_model_max_budget": {}}},
+            "combined_usage_object": Usage(prompt_tokens=1407, completion_tokens=10, total_tokens=1417),
+        },
+        response_obj=response_obj,
+        start_time=FROZEN_INSTANT,
+        end_time=FROZEN_INSTANT,
+    )
+    await call()
+
+    counted: Final = await handler.internal_usage_cache.async_get_cache(
+        key=f"{api_key}::{FROZEN_INSTANT.strftime('%Y-%m-%d-%H-%M')}::request_count", litellm_parent_otel_span=None
+    )
+    assert counted == {"current_requests": 1, "current_tpm": 0, "current_rpm": 2}, counted
 
 
 @pytest.mark.asyncio

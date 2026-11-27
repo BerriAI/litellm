@@ -74,6 +74,43 @@ def test_health_routes_need_no_credentials() -> None:
     assert client.get("/readyz").json() == {"status": "ok"}
 
 
+@pytest.mark.parametrize(
+    ("root_path", "api_prefix"),
+    (("", "/api/v1"), ("/gateway", "/fleet/v1"), ("", "/scalar"), ("", "/swagger")),
+)
+def test_control_plane_viewers_use_local_assets_and_their_own_schema(root_path: str, api_prefix: str) -> None:
+    app: Final = create_app(build_container(_settings(api_prefix=api_prefix)), Licensed())
+    client: Final = TestClient(app, root_path=root_path)
+    api_url: Final = f"{root_path}{api_prefix}"
+    schema_url: Final = f"{api_url}/openapi.json"
+    scalar_bundle: Final = f"{root_path}/scalar/scalar-1.81.0.js"
+    swagger_bundle: Final = f"{root_path}/swagger/swagger-ui-bundle.js"
+
+    scalar: Final = client.get(f"{api_url}/docs")
+    assert scalar.status_code == 200
+    assert f'src="{scalar_bundle}"' in scalar.text
+    assert f'src="{root_path}/scalar/reference.js"' in scalar.text
+    assert f'data-openapi-url="{schema_url}"' in scalar.text
+    assert f'data-server-url="{root_path or "/"}"' in scalar.text
+    assert client.get(scalar_bundle).status_code == 200
+    assert client.get(f"{root_path}/scalar/reference.js").status_code == 200
+
+    swagger: Final = client.get(f"{api_url}/swagger")
+    assert swagger.status_code == 200
+    assert f'src="{swagger_bundle}"' in swagger.text
+    assert f"url: '{schema_url}'" in swagger.text
+    assert "/lazy/warm/" not in swagger.text
+    assert client.get(swagger_bundle).status_code == 200
+    assert client.get(f"{root_path}/docs/oauth2-redirect").status_code == 200
+
+    schema: Final = client.get(schema_url)
+    assert schema.status_code == 200
+    operation: Final = schema.json()["paths"][f"{api_prefix}/auth/me"]["get"]
+    assert operation["security"] == [{"ControlPlaneBearer": []}]
+    assert client.get(f"{api_url}/auth/me").status_code == 401
+    assert client.get(f"{root_path}/redoc").status_code == 404
+
+
 def test_unknown_path_returns_an_rfc9457_not_found_body() -> None:
     response: Final = _client().get("/api/v1/not-a-route")
     assert response.status_code == 404

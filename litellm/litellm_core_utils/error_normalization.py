@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 
+import httpx
+
 from litellm.exceptions import (
     APIConnectionError,
     AuthenticationError,
@@ -155,6 +157,7 @@ _CLASS_CODE_TABLE: Final[tuple[tuple[tuple[type[BaseException], ...], str], ...]
     ((Timeout,), UPSTREAM_TIMEOUT),
     ((MidStreamFallbackError,), ROUTER_FALLBACK_FAILURE),
     ((APIConnectionError,), PROVIDER_CONNECTION_ERROR),
+    ((httpx.NetworkError, httpx.RemoteProtocolError), PROVIDER_CONNECTION_ERROR),
     ((ServiceUnavailableError,), PROVIDER_OVERLOADED),
     ((InternalServerError, BadGatewayError), PROVIDER_INTERNAL_ERROR),
     ((BadRequestError, UnprocessableEntityError), INVALID_REQUEST),

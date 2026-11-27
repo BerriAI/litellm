@@ -205,6 +205,7 @@ mod tests {
             optional_params: json!({"max_tokens": 8, "stream": false}),
             secret_fields: Vec::new(),
             api_key: None,
+            host_transport: false,
         }
     }
 

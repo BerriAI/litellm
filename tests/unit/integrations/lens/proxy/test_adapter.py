@@ -309,6 +309,20 @@ async def test_missing_connection_keeps_setup_readable_and_rejects_lens_requests
 
 
 @pytest.mark.asyncio
+async def test_service_setup_uses_the_same_explicit_lens_store_as_export_startup(
+    monkeypatch: pytest.MonkeyPatch, identity: Identity
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.delenv("LITELLM_LENS_URL", raising=False)
+    monkeypatch.delenv("LENS_GATEWAY_SECRET", raising=False)
+    monkeypatch.setitem(proxy_server.general_settings, "tracing", {"store": {"type": "lens"}})
+    result: Final = await service_connection(identity)
+    assert result.configured is True
+    assert result.connected is False
+
+
+@pytest.mark.asyncio
 async def test_forwarding_requires_a_user_or_authenticated_key(connection: Connection, identity: Identity) -> None:
     anonymous: Final = identity.model_copy(update={"user_id": None, "token": None})
     request: Final = Request({"type": "http", "method": "GET", "headers": []})

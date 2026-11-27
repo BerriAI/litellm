@@ -1496,6 +1496,33 @@ def test_gemini_manual_vad_wraps_each_audio_turn_in_activity_start_and_end(turn_
     assert turns == [[["activityStart", "audio"], ["audio"], ["activityEnd"], []]] * 2
 
 
+@pytest.mark.parametrize("turn_end", ["input_audio_buffer.commit", "input_audio_buffer.end", "response.create"])
+def test_gemini_reports_a_manual_turn_end_as_starting_a_response_only_while_its_activity_is_open(turn_end):
+    config = GeminiRealtimeConfig()
+    end = {"type": turn_end}
+
+    before_audio = config.client_event_starts_response(end)
+    _realtime_input_keys(config, _APPEND, _MANUAL_VAD_SETUP)
+    during_activity = config.client_event_starts_response(end)
+    _realtime_input_keys(config, json.dumps(end), _MANUAL_VAD_SETUP)
+
+    assert (before_audio, during_activity, config.client_event_starts_response(end)) == (False, True, False)
+
+
+@pytest.mark.parametrize(
+    ("item", "starts_response"),
+    [
+        ({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}, True),
+        ({"type": "function_call_output", "call_id": "call_1", "output": "{}"}, False),
+    ],
+    ids=["user_text", "tool_output"],
+)
+def test_gemini_starts_a_response_on_a_user_item_but_not_on_a_tool_output(item, starts_response):
+    config = GeminiRealtimeConfig()
+
+    assert config.client_event_starts_response({"type": "conversation.item.create", "item": item}) is starts_response
+
+
 def test_gemini_manual_vad_activity_markers_are_empty_messages():
     config = GeminiRealtimeConfig()
     commit = json.dumps({"type": "input_audio_buffer.commit"})

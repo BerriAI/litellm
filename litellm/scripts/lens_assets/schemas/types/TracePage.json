@@ -1,130 +1,139 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TracePage",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TraceSummary"
+      }
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "data",
+    "next_cursor"
+  ],
   "$defs": {
-    "RunSource": {
-      "description": "The conversation that started the run, from the `agent.source.*` span attributes.",
+    "TraceSummary": {
+      "type": "object",
       "properties": {
-        "title": {
+        "resolution_limited": {
+          "type": "boolean",
+          "x-python-optional": true
+        },
+        "trace_id": {
           "type": "string"
         },
-        "type": {
-          "$ref": "#/$defs/RunSourceType"
-        },
-        "url": {
-          "type": "string"
-        },
-        "user": {
-          "description": "Who started the conversation, e.g. the Slack user's email.",
+        "trace_ref": {
           "type": "string",
           "x-python-optional": true
-        }
-      },
-      "required": [
-        "type",
-        "url",
-        "title"
-      ],
-      "type": "object"
-    },
-    "RunSourceType": {
-      "enum": [
-        "slack",
-        "teams",
-        "discord",
-        "linear",
-        "github",
-        "jira",
-        "custom"
-      ],
-      "type": "string"
-    },
-    "SpanStatus": {
-      "enum": [
-        "ok",
-        "error",
-        "unset"
-      ],
-      "type": "string"
-    },
-    "TraceSummary": {
-      "properties": {
-        "agent_count": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
         },
-        "agent_invocations": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
+        "name": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
         },
         "agent_names": {
+          "type": "array",
           "items": {
             "type": "string"
           },
-          "type": "array",
           "x-python-optional": true
         },
-        "duration_ms": {
-          "format": "double",
-          "type": "number"
-        },
-        "error_count": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
         "frameworks": {
+          "type": "array",
           "items": {
             "type": "string"
           },
-          "type": "array",
           "x-python-optional": true
         },
         "input_preview": {
           "type": "string"
         },
-        "input_tokens": {
+        "start_time": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "status": {
+          "$ref": "#/$defs/SpanStatus"
+        },
+        "span_count": {
+          "type": "integer",
           "format": "uint64",
-          "maximum": 18446744073709551615,
           "minimum": 0,
-          "type": "integer"
+          "maximum": 18446744073709551615
+        },
+        "agent_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "agent_invocations": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
         },
         "llm_calls": {
+          "type": "integer",
           "format": "uint64",
-          "maximum": 18446744073709551615,
           "minimum": 0,
-          "type": "integer"
+          "maximum": 18446744073709551615
         },
-        "models": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+        "tool_calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
         },
-        "name": {
-          "type": "string"
+        "error_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 18446744073709551615
         },
         "output_tokens": {
+          "type": "integer",
           "format": "uint64",
-          "maximum": 18446744073709551615,
           "minimum": 0,
-          "type": "integer"
+          "maximum": 18446744073709551615
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "spend": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
         },
         "priced_calls": {
+          "type": "integer",
           "format": "uint64",
-          "maximum": 18446744073709551615,
           "minimum": 0,
-          "type": "integer"
-        },
-        "resolution_limited": {
-          "type": "boolean",
-          "x-python-optional": true
-        },
-        "service": {
-          "type": "string"
+          "maximum": 18446744073709551615
         },
         "source": {
           "anyOf": [
@@ -135,38 +144,6 @@
               "type": "null"
             }
           ],
-          "x-python-optional": true
-        },
-        "span_count": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "spend": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "start_time": {
-          "type": "string"
-        },
-        "status": {
-          "$ref": "#/$defs/SpanStatus"
-        },
-        "tool_calls": {
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "trace_id": {
-          "type": "string"
-        },
-        "trace_ref": {
-          "type": "string",
           "x-python-optional": true
         }
       },
@@ -193,29 +170,52 @@
         "models",
         "spend",
         "priced_calls"
-      ],
-      "type": "object"
-    }
-  },
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "properties": {
-    "data": {
-      "items": {
-        "$ref": "#/$defs/TraceSummary"
-      },
-      "type": "array"
+      ]
     },
-    "next_cursor": {
-      "type": [
-        "string",
-        "null"
+    "SpanStatus": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "error",
+        "unset"
+      ]
+    },
+    "RunSource": {
+      "description": "The conversation that started the run, from the `agent.source.*` span attributes.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/RunSourceType"
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "user": {
+          "description": "Who started the conversation, e.g. the Slack user's email.",
+          "type": "string",
+          "x-python-optional": true
+        }
+      },
+      "required": [
+        "type",
+        "url",
+        "title"
+      ]
+    },
+    "RunSourceType": {
+      "type": "string",
+      "enum": [
+        "slack",
+        "teams",
+        "discord",
+        "linear",
+        "github",
+        "jira",
+        "custom"
       ]
     }
-  },
-  "required": [
-    "data",
-    "next_cursor"
-  ],
-  "title": "TracePage",
-  "type": "object"
+  }
 }

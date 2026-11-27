@@ -1,5 +1,6 @@
 use litellm_host::interceptors::RetriedRequest;
 
+use crate::anthropic::messages::handler::shape_anthropic_messages_request;
 use crate::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::context::{
@@ -255,7 +256,7 @@ pub(crate) fn should_retry_anthropic_messages_without_native_output(
         } else {
             ""
         };
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Bedrock rejected native structured output for model={model}, so litellm sent the request again without it.{opt_out_advice}"
         );
     }
@@ -332,7 +333,7 @@ impl MessagesDialect for BedrockInvokeMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn clamp_requested_effort(

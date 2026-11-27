@@ -132,7 +132,7 @@ def decrypt_env_var() -> Mapping[str, str | bool]:
     # setup client class
     aws_kms: Final = AWSKeyManagementService_V2()
     # iterate through env - for `aws_kms/`
-    new_values: Final = {}
+    new_values: Final[dict[str, str | bool]] = {}
     for k, v in os.environ.items():
         if (k is not None and isinstance(k, str) and k.lower().startswith("litellm_secret_aws_kms")) or (
             v is not None and isinstance(v, str) and v.startswith("aws_kms/")

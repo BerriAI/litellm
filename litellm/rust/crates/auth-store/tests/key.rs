@@ -2,17 +2,18 @@
 //! ones `tests/unit/redis/stores/test_auth_cache_key.py` runs Python's own models and key writer
 //! on, so this crate and Python are pinned to the same bytes. Change both together.
 
-use std::{str::FromStr, sync::Arc};
+mod support;
+
+use std::sync::Arc;
 
 use litellm_auth_store::KeyDatabase;
-use litellm_db::{Endpoint, Observer, PoolLimits, Pools, QueryEvent, SslMode};
 use litellm_db_testing::MigratedPostgres;
 use litellm_gateway_auth_core::KeyHash;
-use litellm_redis_store::IntoValue;
-use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository, Side};
-use litellm_secret_value::SecretValue;
+use litellm_repositories::{KeyRepository, ObjectPermissionRepository, Side};
 use rstest::rstest;
-use sqlx::{PgPool, postgres::PgConnectOptions};
+use sqlx::PgPool;
+
+use support::{database, dumped, execute};
 
 const BARE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TEAM_KEY: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -247,56 +248,11 @@ const FULL_PERMISSION_ENTRY: &str = concat!(
     r#" "apps": null}"#,
 );
 
-struct NoEvents;
-
-impl Observer for NoEvents {
-    fn record(&self, _event: QueryEvent) {}
-}
-
-fn database(postgres: &MigratedPostgres) -> Database {
-    let options = PgConnectOptions::from_str(postgres.url()).unwrap();
-    let endpoint = Endpoint {
-        host: options.get_host().to_owned(),
-        port: options.get_port(),
-        socket: None,
-        username: "postgres".to_owned(),
-        password: Some(SecretValue::new("postgres")),
-        database: "postgres".to_owned(),
-        ssl_mode: SslMode::Disable,
-        ssl_root_cert: None,
-        ssl_client: None,
-        application_name: None,
-        options: Vec::new(),
-        statement_cache_capacity: 100,
-        pool: PoolLimits {
-            max_connections: 2,
-            acquire_timeout_seconds: Some(10.0),
-            idle_timeout_seconds: None,
-            socket_timeout_seconds: None,
-        },
-    };
-    Database::new(
-        Pools::new(&endpoint, None).unwrap(),
-        Arc::new(NoEvents),
-        None,
-        endpoint.names_statements(),
-    )
-}
-
 fn key_database(postgres: &MigratedPostgres) -> KeyDatabase {
     KeyDatabase::new(
         Arc::new(KeyRepository::new(database(postgres))),
         Arc::new(ObjectPermissionRepository::new(database(postgres))),
     )
-}
-
-async fn execute(pool: &PgPool, sql: &'static str) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "Fixture statements are outside the compile-checked query set"
-    )]
-    let statement = sqlx::query(sql);
-    statement.execute(pool).await.unwrap();
 }
 
 /// A key as `/key/generate` stores it when asked for nothing.
@@ -444,10 +400,6 @@ fn stamped(json: &str) -> String {
         .find([',', '}'])
         .map_or(json.len(), |end| value + end);
     format!("{}{STAMP}{}", &json[..value], &json[end..])
-}
-
-fn dumped(value: impl IntoValue) -> String {
-    litellm_python_compat::json::dumps(&value.into_value()).unwrap()
 }
 
 #[rstest]
@@ -627,7 +579,8 @@ async fn a_writer_read_fails_on_an_object_permission_the_model_refuses() {
         matches!(
             read,
             Err(litellm_auth_store::Error::Row {
-                column: "mcp_tool_permissions"
+                column: "mcp_tool_permissions",
+                within: Some("object_permission"),
             })
         ),
         "{:?}",
@@ -637,30 +590,40 @@ async fn a_writer_read_fails_on_an_object_permission_the_model_refuses() {
 
 #[rstest]
 #[case::metadata_that_is_a_list(
+    BARE,
     r#"UPDATE "LiteLLM_VerificationToken" SET metadata = '[]'"#,
-    "metadata"
+    ("metadata", None)
 )]
 #[case::fallbacks_that_are_not_lists(
+    BARE,
     r#"UPDATE "LiteLLM_VerificationToken" SET budget_fallbacks = '{"m": "n"}'"#,
-    "budget_fallbacks"
+    ("budget_fallbacks", None)
 )]
 #[case::budget_limits_that_are_no_list(
+    BARE,
     r#"UPDATE "LiteLLM_VerificationToken" SET budget_limits = '{"m": 1}'"#,
-    "budget_limits"
+    ("budget_limits", None)
+)]
+#[case::a_team_member_role_the_model_does_not_take(
+    TEAM_KEY,
+    r#"UPDATE "LiteLLM_TeamTable" SET members_with_roles = '[{"user_id": "kv-user", "role": "owner"}]'"#,
+    ("role", Some("team_member"))
 )]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_key_row_the_model_refuses_fails_the_read(
+    #[case] token: &str,
     #[case] corrupt: &'static str,
-    #[case] column: &str,
+    #[case] refused: (&str, Option<&str>),
 ) {
     let postgres = MigratedPostgres::start().await.unwrap();
     insert_bare_key(postgres.pool()).await;
+    insert_team_key(postgres.pool()).await;
     execute(postgres.pool(), corrupt).await;
 
-    let read = key_database(&postgres).read(&hash(BARE), Side::Read).await;
+    let read = key_database(&postgres).read(&hash(token), Side::Read).await;
 
     assert!(
-        matches!(&read, Err(litellm_auth_store::Error::Row { column: refused }) if *refused == column),
+        matches!(&read, Err(litellm_auth_store::Error::Row { column, within }) if (*column, *within) == refused),
         "{:?}",
         read.err()
     );

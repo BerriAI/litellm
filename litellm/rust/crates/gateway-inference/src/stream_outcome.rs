@@ -20,7 +20,6 @@ use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
     AttemptError, Deployment, FailureKind, FailureReport, Router, RouterCache, SuccessReport,
 };
-use serde_json::Value;
 
 use crate::{
     Gateway, routing,
@@ -133,15 +132,9 @@ async fn record_failure<C: RouterCache>(
     deployment: &Deployment,
     failure: &AttemptError,
 ) {
-    let cooldown_time = deployment.model_info.cooldown_time.or_else(|| {
-        deployment
-            .raw_params
-            .get("cooldown_time")
-            .and_then(Value::as_f64)
-    });
     let report = FailureReport {
         deployment_cooldown: true,
-        cooldown_time,
+        cooldown_time: deployment.cooldown_time(),
         ..FailureReport::default()
     };
     if let Err(error) = router

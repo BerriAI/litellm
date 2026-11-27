@@ -15,7 +15,7 @@ class MattermostAccessTokenDetector(RegexBasedDetector):
         return "Mattermost Access Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Mattermost Access Token
             re.compile(

@@ -30,7 +30,7 @@ def _has_input_rate(entry: object) -> bool:
 
 # Extract the number of billion parameters from the model name
 # only used for together_computer LLMs
-def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
+def get_model_params_and_category(model_name: str, call_type: CallTypes) -> str:
     """
     Helper function for calculating together ai pricing.
 
@@ -68,7 +68,7 @@ def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
     return model_name
 
 
-def get_model_params_and_category_embeddings(model_name) -> str:
+def get_model_params_and_category_embeddings(model_name: str) -> str:
     """
     Helper function for calculating together ai embedding pricing.
 

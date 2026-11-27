@@ -9,7 +9,7 @@ import useAuthorized from "../../hooks/useAuthorized";
 import { useOrganizations } from "../../hooks/organizations/useOrganizations";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { ErrorState } from "@/components/shared/ErrorState";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -95,13 +95,13 @@ export default function InternalAccess() {
   const [kind, setKind] = useState<GranteeKind>("team");
   const [id, setId] = useState<string | null>(null);
   if (!accessToken || !readsEveryApp(userRole, isViewOnly))
-    return <AdminOnlyNotice pageTitle={t("apps.internalAccess.title")} />;
+    return <AdminOnlyNotice framed pageTitle={t("apps.internalAccess.title")} />;
   const pickKind = (next: GranteeKind) => {
     setKind(next);
     setId(null);
   };
   return (
-    <Page>
+    <>
       <PageHeader>
         <PageHeaderTitle>
           <ShieldCheck />
@@ -132,6 +132,6 @@ export default function InternalAccess() {
         </div>
         {id && <GranteeAppAccess key={`${kind}:${id}`} grantee={{ kind, id }} accessToken={accessToken} />}
       </PageContent>
-    </Page>
+    </>
   );
 }

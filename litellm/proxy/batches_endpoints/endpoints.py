@@ -47,6 +47,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.proxy.common_utils.openai_error_payload import with_notice_when_the_create_may_exist
 from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     BATCH_CREATE_HIDDEN_PARAM,
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -54,6 +55,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     apply_team_provider_credentials,
     authorize_model_for_key,
     batch_cost_poller_is_active,
+    created_batch_endpoint,
     decode_model_from_file_id,
     encode_batch_response_ids,
     encode_file_id_with_model,
@@ -569,7 +571,7 @@ async def create_batch(
         )
         litellm_call_id: Final = request_litellm_call_id(data)
         log_llm_api_exception(e, litellm_call_id)
-        raise handle_exception_on_proxy(e, litellm_call_id)
+        raise with_notice_when_the_create_may_exist(handle_exception_on_proxy(e, litellm_call_id), e, "batch")
 
 
 @router.get(
@@ -671,6 +673,7 @@ async def retrieve_batch(
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_dict=user_api_key_dict,
         )
+        stored_batch: Final = response
 
         if executed_batch and response is None:
             raise batch_error(404, f"No batch found with id '{batch_id}'.")
@@ -807,6 +810,8 @@ async def retrieve_batch(
                 custom_llm_provider=custom_llm_provider,
                 **data,
             )
+
+        response.endpoint = created_batch_endpoint(response, stored_batch)
 
         # FIX: Update the database with the latest state from provider
         await update_batch_in_database(
@@ -1250,6 +1255,14 @@ async def cancel_batch(
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         from litellm.proxy.proxy_server import prisma_client
 
+        db_batch_object, stored_batch = await get_batch_from_database(
+            batch_id=batch_id,
+            unified_batch_id=unified_batch_id,
+            managed_files_obj=managed_files_obj,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=verbose_proxy_logger,
+        )
+        response.endpoint = created_batch_endpoint(response, stored_batch)
         await update_batch_in_database(
             batch_id=batch_id,
             unified_batch_id=unified_batch_id,
@@ -1257,6 +1270,7 @@ async def cancel_batch(
             managed_files_obj=managed_files_obj,
             prisma_client=prisma_client,
             verbose_proxy_logger=verbose_proxy_logger,
+            db_batch_object=db_batch_object,
             operation="cancel",
             user_api_key_dict=user_api_key_dict,
         )

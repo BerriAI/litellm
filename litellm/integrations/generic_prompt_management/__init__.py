@@ -1,5 +1,6 @@
 """Generic prompt management integration for LiteLLM."""
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import TypedDict
@@ -24,7 +25,7 @@ class _GenericPromptManagerFields(TypedDict, total=False, extra_items=object):
 global_generic_prompt_config: Final[dict | None] = None
 
 
-def set_global_generic_prompt_config(config: dict) -> None:
+def set_global_generic_prompt_config(config: Mapping[str, object]) -> None:
     """
     Set the global generic prompt configuration.
 

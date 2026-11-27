@@ -1,3 +1,7 @@
+import { LensControls } from "@/components/lens/LensControls";
+import { readLensPolicy, type LensPolicy } from "@/components/lens/lensPolicy";
+import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { lensEntityHref } from "@/components/lens/entityLinks";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -7,6 +11,7 @@ import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatBudgetResetTime } from "@/utils/budgetUtils";
+import { localTimestampParts } from "@/i18n/formats";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { canModifyKey as canModifyVirtualKey } from "@/utils/keyPermissions";
@@ -113,12 +118,12 @@ export default function KeyInfoView({
   backButtonText = i18n.t("keyDetail.keyInfoView.backToKeys"),
   tabParam = "detail_tab",
 }: KeyInfoViewProps) {
-  const { t } = useTranslation();
-  const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const { t, i18n: locale } = useTranslation();
+  const { accessToken, userId: userID, userRole, premiumUser, isViewOnly } = useAuthorized();
   const accessGroupNames = useModelAccessGroupNames();
   const activityDateRange = useActivityDateRange();
   const [activeTab, setActiveTab] = useUrlTab(
-    ["overview", "activity", "savings", "auto-router-usage", "settings"],
+    ["overview", "activity", "lens", "savings", "auto-router-usage", "settings"],
     "overview",
     tabParam,
   );
@@ -140,6 +145,7 @@ export default function KeyInfoView({
   const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
+  const lensTeam = useTeam(activeTab === "lens" ? currentKeyData?.team_id ?? undefined : undefined);
   const memberBudgetUserIds = useMemo(
     (): Record<string, string[]> =>
       currentKeyData?.team_id && currentKeyData.user_id ? { [currentKeyData.team_id]: [currentKeyData.user_id] } : {},
@@ -516,23 +522,22 @@ export default function KeyInfoView({
     }
   };
 
-  // Update the formatTimestamp function to use the desired date format
-  const formatTimestamp = (timestamp: string | Date) => {
-    const date = new Date(timestamp);
-    const dateStr = date.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-    const timeStr = date.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-    return t("keyDetail.keyInfoView.timestamp", { date: dateStr, time: timeStr });
-  };
+  const formatTimestamp = (timestamp: string | Date) =>
+    t("keyDetail.keyInfoView.timestamp", localTimestampParts(timestamp, locale.language));
 
   const canModifyKey = canModifyVirtualKey(currentKeyData, teamsData, userID, userRole);
+  const canEditLens = canModifyKey && !isViewOnly && !editingMemberKeyAsTeamAdmin;
+  const lensTeamStatus = currentKeyData.team_id && lensTeam.isPending ? "loading" : "ready";
+  const inheritedLensStatus = lensTeam.isError ? "error" : lensTeamStatus;
+
+  const updateLensPolicy = async (policy: LensPolicy): Promise<void> => {
+    if (!accessToken || !canEditLens) return;
+    const metadata = { ...currentKeyData.metadata, lens_enabled: policy };
+    await keyUpdateCall(accessToken, { key: currentKeyData.token, lens_enabled: policy });
+    setCurrentKeyData((current) => (current ? { ...current, metadata } : current));
+    onKeyDataUpdate?.({ metadata });
+    void queryClient.invalidateQueries({ queryKey: keyKeys.all });
+  };
 
   const isKeyAdmin =
     isProxyAdminRole(userRole || "") ||
@@ -613,7 +618,7 @@ export default function KeyInfoView({
     currentKeyData.key_alias || t("shared.appliedBudgets.thisKey"),
     inheritedBudgetGates(parentTeam, parentOrg, ownerUser, memberGate),
   );
-  const budgetResetTime = formatBudgetResetTime(currentKeyData.budget_reset_at);
+  const budgetResetTime = formatBudgetResetTime(currentKeyData.budget_reset_at, t, locale.language);
 
   const keyStatus = keyStatusOf({
     blocked: isBlocked,
@@ -827,6 +832,22 @@ export default function KeyInfoView({
 
             <TabsContent value="activity">
               <ResourceActivity scope="key" id={currentKeyData.token} activity={activityDateRange} />
+            </TabsContent>
+
+            <TabsContent value="lens">
+              <LensControls
+                kind="key"
+                policy={readLensPolicy(currentKeyData.metadata)}
+                teamPolicy={readLensPolicy(lensTeam.data?.metadata)}
+                teamPolicyStatus={inheritedLensStatus}
+                canEdit={canEditLens}
+                href={lensEntityHref({
+                  kind: "key",
+                  teamId: currentKeyData.team_id,
+                  keyHash: currentKeyData.token_id || currentKeyData.token,
+                })}
+                onPolicyChange={updateLensPolicy}
+              />
             </TabsContent>
 
             {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and staying mounted

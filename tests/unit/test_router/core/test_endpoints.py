@@ -365,8 +365,10 @@ async def test_usage_based_routing_registers_its_logger_on_the_host(make_core: M
 
 
 async def test_a_successful_call_uses_up_the_deployment_rpm_for_the_next_selection(
-    make_core: MakeCore, host: ScriptedHost
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
 ):
+    minute: Final = datetime.datetime(2026, 1, 1, 12, 0, 30, tzinfo=datetime.timezone.utc)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: minute)
     core: Final = make_core(model_list=[deployment("g", "d1", rpm=1)], routing_strategy="usage-based-routing-v2")
     await core.acompletion(model="g", messages=MESSAGES)
     with pytest.raises(litellm.RateLimitError, match="No deployments available"):

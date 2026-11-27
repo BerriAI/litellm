@@ -41,6 +41,7 @@ RESPONSE_TYPES: Final[
 }
 _ENDPOINTS_DOCUMENT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _ENDPOINT_RESULT: Final = TypeAdapter(object)
+_ENDPOINT_KWARGS: Final = TypeAdapter(Mapping[str, object])
 
 
 class _ContainerResponseFields(TypedDict, total=False, extra_items=object):
@@ -54,7 +55,7 @@ def _load_endpoints_config() -> dict:
         return _ENDPOINTS_DOCUMENT.validate_python(json.load(f))
 
 
-def create_sync_endpoint_function(endpoint_config: EndpointConfig) -> Callable:
+def create_sync_endpoint_function(endpoint_config: EndpointConfig) -> Callable[..., object]:
     """
     Create a sync SDK function from endpoint config.
 
@@ -114,11 +115,13 @@ def create_sync_endpoint_function(endpoint_config: EndpointConfig) -> Callable:
                 raise ValueError(f"Container provider config not found for: {resolved_custom_llm_provider}")
 
             # Build optional params for logging
-            optional_params: Final = {k: kwargs.get(k) for k in path_params if k in kwargs}
+            optional_params: Final[dict[str, object]] = {  # mutable-ok: kept as the logging object's own dict
+                k: kwargs.get(k) for k in path_params if k in kwargs
+            }
 
             # Pre-call logging
             litellm_logging_obj.update_from_kwargs(
-                kwargs=kwargs,
+                kwargs=_ENDPOINT_KWARGS.validate_python(kwargs),
                 model="",
                 optional_params=optional_params,
                 litellm_params={"litellm_call_id": litellm_call_id},
@@ -151,9 +154,9 @@ def create_sync_endpoint_function(endpoint_config: EndpointConfig) -> Callable:
 
 
 def create_async_endpoint_function(
-    sync_func: Callable,
-    endpoint_config: dict,
-) -> Callable:
+    sync_func: Callable[..., object],
+    endpoint_config: Mapping[str, object],
+) -> Callable[..., object]:
     """Create an async SDK function that wraps the sync function."""
 
     @client
@@ -163,7 +166,7 @@ def create_async_endpoint_function(
         extra_headers: dict[str, object] | None = None,
         extra_query: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         local_vars: Final = locals()
         try:
@@ -202,14 +205,14 @@ def create_async_endpoint_function(
     return async_endpoint_func
 
 
-def generate_container_endpoints() -> dict[str, Callable]:
+def generate_container_endpoints() -> dict[str, Callable[..., object]]:
     """
     Generate all container endpoint functions from the JSON config.
 
     Returns a dict mapping function names to their implementations.
     """
     config: Final = _load_endpoints_config()
-    endpoints: Final = {}
+    endpoints: Final[dict[str, Callable[..., object]]] = {}
 
     for endpoint_config in config["endpoints"]:
         # Create sync function
@@ -226,7 +229,7 @@ def generate_container_endpoints() -> dict[str, Callable]:
 def get_all_endpoint_names() -> list[str]:
     """Get all endpoint names (sync and async) from config."""
     config: Final = _load_endpoints_config()
-    names: Final = []
+    names: Final[list[str]] = []
     for endpoint in config["endpoints"]:
         names.append(endpoint["name"])
         names.append(endpoint["async_name"])

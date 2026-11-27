@@ -2,6 +2,7 @@
 
 import { useTranslation } from "react-i18next";
 
+import { LensTabTrigger } from "@/components/lens/LensControls";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const TRIGGER_CLASS =
@@ -20,6 +21,7 @@ export function KeyTabsList({ showAutoRouter }: { showAutoRouter: boolean }) {
       <TabsTrigger value="activity" className={TRIGGER_CLASS}>
         {t("shared.resourceActivity.title")}
       </TabsTrigger>
+      <LensTabTrigger />
       <TabsTrigger value="savings" className={TRIGGER_CLASS}>
         {t("keyDetail.keyInfoView.tabs.savings")}
       </TabsTrigger>

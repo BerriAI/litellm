@@ -6,19 +6,29 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Invoke
 
 import base64
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.aws_event_stream import EventStreamTally
+from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import (
+    BedrockError,
+    BedrockEventStreamResponseDict,
+    bedrock_event_stream_header,
+    bedrock_event_stream_response,
+    build_bedrock_stream_error,
+    get_bedrock_agent_response_stream_shape,
+)
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS
 from litellm.types.llms.bedrock_invoke_agents import (
     InvokeAgentChunkPayload,
@@ -38,6 +48,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse
 
 if TYPE_CHECKING:
+    from botocore.eventstream import EventStreamMessage
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
@@ -46,8 +58,37 @@ else:
     LiteLLMLoggingObj = Any
 
 
+_UNMODELED_ERROR_FRAME_STATUS: Final = 500
+
+
+def _unmodeled_error_frame_message(response_dict: BedrockEventStreamResponseDict) -> str:
+    parts: Final = (
+        bedrock_event_stream_header(response_dict["headers"], ":error-code"),
+        bedrock_event_stream_header(response_dict["headers"], ":error-message"),
+        response_dict["body"].decode(errors="replace"),
+    )
+    return " ".join(part for part in parts if part)
+
+
+def _exception_event_error(
+    event: "EventStreamMessage", request_id_headers: httpx.Headers | None
+) -> BedrockError | None:
+    response_dict: Final = bedrock_event_stream_response(event)
+    if response_dict["status_code"] == 200:
+        return None
+    if bedrock_event_stream_header(response_dict["headers"], ":exception-type") is None:
+        return BedrockError(
+            status_code=_UNMODELED_ERROR_FRAME_STATUS,
+            message=_unmodeled_error_frame_message(response_dict),
+            headers=request_id_headers,
+        )
+    return build_bedrock_stream_error(
+        response_dict, get_bedrock_agent_response_stream_shape(), headers=request_id_headers
+    )
+
+
 class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
@@ -63,11 +104,11 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         This is a base invoke agent model mapping. For Invoke Agent - define a bedrock provider specific config that extends this class.
         """
@@ -79,7 +120,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -109,15 +150,15 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, object], bytes | None]:
         return self._sign_request(
             service_name="bedrock",
             headers=headers,
@@ -151,10 +192,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         # use the last message content as the query
         query: Final[str] = convert_content_list_to_str(messages[-1])
         return {
@@ -163,26 +204,27 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             **{key: value for key, value in optional_params.items() if key not in AWS_AUTH_PARAM_KEYS},
         }
 
-    def _parse_aws_event_stream(self, raw_content: bytes) -> InvokeAgentEventList:
+    def _parse_aws_event_stream(
+        self, raw_content: bytes, response_headers: Mapping[str, str] | None = None
+    ) -> InvokeAgentEventList:
         """
         Parse AWS event stream format using boto3/botocore's built-in parser.
         This is the same approach used in the existing AWSEventStreamDecoder.
         """
         try:
-            from botocore.eventstream import EventStreamBuffer
             from botocore.parsers import EventStreamJSONParser
         except ImportError:
             raise ImportError("boto3/botocore is required for AWS event stream parsing")
 
         events: Final[InvokeAgentEventList] = []
         parser: Final = EventStreamJSONParser()
-        event_stream_buffer: Final = EventStreamBuffer()
+        tally: Final = EventStreamTally("Bedrock Agents")
+        request_id_headers: Final = provider_request_id_headers(response_headers)
 
-        # Add the entire response to the buffer
-        event_stream_buffer.add_data(raw_content)
-
-        # Process all events in the buffer
-        for event in event_stream_buffer:
+        for event in tally.decode((raw_content,)):
+            tally.add_event(event)
+            if (exception_event := _exception_event_error(event, request_id_headers)) is not None:
+                raise exception_event
             try:
                 headers = self._extract_headers_from_event(event)
 
@@ -223,6 +265,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                 verbose_logger.error("Error processing event: %s", e)
                 continue
 
+        undecoded: Final = tally.undecoded_stream(response_headers)
+        if undecoded is not None:
+            raise BedrockError(status_code=undecoded.status_code, message=undecoded.message, headers=undecoded.headers)
         return events
 
     def _parse_message_from_event(self, event, parser) -> str | None:
@@ -234,21 +279,6 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             # Use the same response shape parsing as the existing decoder
             parsed_response: Final = parser.parse(response_dict, self._get_response_stream_shape())
             verbose_logger.debug("Parsed response: %s", parsed_response)
-
-            if response_dict["status_code"] != 200:
-                decoded_body: Final = response_dict["body"].decode()
-                if isinstance(decoded_body, dict):
-                    error_message = decoded_body.get("message")
-                elif isinstance(decoded_body, str):
-                    error_message = decoded_body
-                else:
-                    error_message = ""
-                exception_status: Final = response_dict["headers"].get(":exception-type")
-                error_message = exception_status + " " + error_message
-                raise BedrockError(
-                    status_code=response_dict["status_code"],
-                    message=(json.dumps(error_message) if isinstance(error_message, dict) else error_message),
-                )
 
             if "chunk" in parsed_response:
                 chunk = parsed_response.get("chunk")
@@ -288,7 +318,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def _extract_response_content(self, events: InvokeAgentEventList) -> str:
         """Extract the final response content from parsed events."""
-        response_parts: Final = []
+        response_parts: Final[list[str]] = []
 
         for event in events:
             headers = event.get("headers", {})
@@ -376,7 +406,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         if not metadata:
             return
 
-        usage: Final[InvokeAgentUsage | dict | None] = metadata.get("usage", {})
+        usage: Final[InvokeAgentUsage | dict[str, int] | None] = metadata.get("usage", {})
         if not usage:
             return
 
@@ -435,10 +465,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -449,7 +479,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             verbose_logger.debug("Processing %s bytes of AWS event stream data", len(raw_content))
 
             # Parse the AWS event stream format
-            events: Final = self._parse_aws_event_stream(raw_content)
+            events: Final = self._parse_aws_event_stream(raw_content, raw_response.headers)
             verbose_logger.debug("Parsed %s events from stream", len(events))
 
             # Extract response content from chunk events
@@ -466,6 +496,8 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
                 model_response=model_response,
             )
 
+        except BedrockError:
+            raise
         except Exception as e:
             verbose_logger.error("Error processing Bedrock Invoke Agent response: %s", e)
             raise BedrockError(
@@ -476,17 +508,19 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def should_fake_stream(

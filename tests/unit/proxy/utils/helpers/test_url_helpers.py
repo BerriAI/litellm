@@ -3,7 +3,6 @@ import pytest
 from litellm.proxy.utils import (
     get_docs_url,
     get_openapi_url,
-    get_redoc_url,
     get_custom_url,
     get_proxy_base_url,
     get_server_root_path,
@@ -18,8 +17,6 @@ def normalize(value):
 
 def _clear_url_env(monkeypatch):
     for var in (
-        "REDOC_URL",
-        "NO_REDOC",
         "DOCS_URL",
         "NO_DOCS",
         "OPENAPI_URL",
@@ -28,41 +25,6 @@ def _clear_url_env(monkeypatch):
         "SERVER_ROOT_PATH",
     ):
         monkeypatch.delenv(var, raising=False)
-
-
-def test_get_redoc_url_default(monkeypatch):
-    _clear_url_env(monkeypatch)
-    summary = {
-        "result": get_redoc_url(),
-        "redoc_url_env": None,
-        "no_redoc_env": None,
-    }
-    assert summary == {
-        "result": "/redoc",
-        "redoc_url_env": None,
-        "no_redoc_env": None,
-    }
-
-
-def test_get_redoc_url_custom_env(monkeypatch):
-    _clear_url_env(monkeypatch)
-    monkeypatch.setenv("REDOC_URL", "/custom-redoc")
-    summary = {
-        "result": get_redoc_url(),
-        "redoc_url_env": "/custom-redoc",
-        "default_overridden": True,
-    }
-    assert summary == {
-        "result": "/custom-redoc",
-        "redoc_url_env": "/custom-redoc",
-        "default_overridden": True,
-    }
-
-
-def test_get_redoc_url_disabled_returns_none_error_path(monkeypatch):
-    _clear_url_env(monkeypatch)
-    monkeypatch.setenv("NO_REDOC", "True")
-    assert get_redoc_url() is None
 
 
 def test_get_docs_url_default(monkeypatch):

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ui_settings AS \"ui_settings: RawJson\"\nFROM \"LiteLLM_UISettings\"\nWHERE id = 'ui_settings'\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ui_settings: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_UISettings\"",
+            "name": "ui_settings"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0aab9b6974928f49da7d247bb08ad6d9e84e9416573ad2e10aa254946a861252"
+}

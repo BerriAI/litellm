@@ -15,6 +15,7 @@ import SkillSelector from "@/components/skills/SkillSelector";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { SemanticCacheJsonControls } from "@/components/shared/SemanticCacheControls";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -417,13 +418,23 @@ export function UserEditView({
 
           <FormField control={form.control} name="metadata" label={t("users.editView.fields.metadata")}>
             {({ ref, value, ...control }) => (
-              <Textarea
-                {...control}
-                ref={ref}
-                value={value ?? ""}
-                rows={4}
-                placeholder={t("users.editView.fields.metadataPlaceholder")}
-              />
+              <>
+                <Textarea
+                  {...control}
+                  ref={ref}
+                  value={value ?? ""}
+                  rows={4}
+                  placeholder={t("users.editView.fields.metadataPlaceholder")}
+                />
+                {!isBulkEdit && (
+                  <SemanticCacheJsonControls
+                    value={value}
+                    onChange={(metadata) =>
+                      control.onChange(metadata === "{}" ? JSON.stringify({ cache_params: null }, null, 2) : metadata)
+                    }
+                  />
+                )}
+              </>
             )}
           </FormField>
 

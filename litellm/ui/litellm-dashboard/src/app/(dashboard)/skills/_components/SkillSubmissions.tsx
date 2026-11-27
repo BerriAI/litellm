@@ -1,5 +1,7 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useState } from "react";
 import { useQuery, type QueryKey } from "@tanstack/react-query";
+import { Controller } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import {
@@ -15,6 +17,9 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable/useUrlTableState";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toSkillReviewPayload } from "./skill-review/mapper";
+import { skillReviewSchema } from "./skill-review/schema";
 import SkillScanPanel from "./SkillScanPanel";
 import { toast } from "@/lib/toast";
 import AddPluginForm from "./add_plugin_form";
@@ -79,7 +84,7 @@ function SubmissionSummary({
   submission: SkillSubmission;
   scope: Pick<SubmissionReviewProps, "accessToken" | "userRole" | "isViewOnly">;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const users = useUserIdentityLookup([submission.submitted_by, submission.reviewed_by], scope);
   const reviewed = submission.status === "approved" || submission.status === "rejected";
   return (
@@ -103,7 +108,7 @@ function SubmissionSummary({
         <p className="text-sm text-muted-foreground" title={submission.reviewed_by ?? undefined}>
           {t(submission.status === "approved" ? "skills.submissions.approvedBy" : "skills.submissions.rejectedBy", {
             name: userIdentityLabel(submission.reviewed_by, users),
-            date: new Date(submission.reviewed_at).toLocaleString(),
+            date: displayTimestamp(new Date(submission.reviewed_at), locale.language),
           })}
         </p>
       )}
@@ -198,7 +203,7 @@ function SubmissionReview({
   onChanged,
 }: SubmissionReviewProps) {
   const { t } = useTranslation();
-  const [reason, setReason] = useState("");
+  const { control, getValues } = useZodForm(skillReviewSchema, { defaultValues: { reason: "" } });
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -219,10 +224,12 @@ function SubmissionReview({
     setBusy(true);
     setError(null);
     try {
-      await reviewSkillSubmission(accessToken, id, action, {
-        expected_revision: submission.revision ?? 0,
-        ...(action === "reject" ? { reason: reason.trim() || null } : {}),
-      });
+      await reviewSkillSubmission(
+        accessToken,
+        id,
+        action,
+        toSkillReviewPayload(skillReviewSchema.parse(getValues()), action, submission.revision),
+      );
       onClose();
       await onChanged();
       toast.success(t(action === "approve" ? "skills.submissions.approved" : "skills.submissions.rejected"));
@@ -311,12 +318,18 @@ function SubmissionReview({
                   <label htmlFor="skill-rejection-reason" className="text-sm font-medium">
                     {t("skills.submissions.reasonLabel")}
                   </label>
-                  <Textarea
-                    id="skill-rejection-reason"
-                    value={reason}
-                    maxLength={2000}
-                    onChange={(event) => setReason(event.target.value)}
-                    disabled={busy}
+                  <Controller
+                    control={control}
+                    name="reason"
+                    render={({ field }) => (
+                      <Textarea
+                        id="skill-rejection-reason"
+                        value={field.value}
+                        maxLength={2000}
+                        onChange={(event) => field.onChange(event.target.value)}
+                        disabled={busy}
+                      />
+                    )}
                   />
                   <div className="flex justify-end gap-2">
                     <Button variant="destructive" onClick={() => void review("reject")} disabled={actionsDisabled}>
@@ -393,7 +406,7 @@ export default function SkillSubmissions({
   adminView,
   onChanged,
 }: SkillSubmissionsProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { pagination, onPaginationChange } = useUrlTableState(SUBMISSION_TABLE_STATE);
   const { pageIndex, pageSize } = pagination;
@@ -443,7 +456,7 @@ export default function SkillSubmissions({
               <p className="text-sm text-muted-foreground">{submission.proposal.description}</p>
               <p className="text-xs text-muted-foreground" title={submission.submitted_by}>
                 {t("skills.submissions.submittedBy", { name: userIdentityLabel(submission.submitted_by, users) })} ·{" "}
-                {new Date(submission.created_at).toLocaleString()}
+                {displayTimestamp(new Date(submission.created_at), locale.language)}
               </p>
               {submission.rejection_reason && (
                 <p className="text-sm text-destructive">

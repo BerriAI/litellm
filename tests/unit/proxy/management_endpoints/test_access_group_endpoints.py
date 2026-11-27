@@ -149,9 +149,24 @@ def client_and_mocks(monkeypatch: pytest.MonkeyPatch) -> Iterator[_ClientAndMock
     mock_vector_store_table = MagicMock()
     mock_vector_store_table.find_many = AsyncMock(return_value=[])
 
+    async def read_transaction_rows(query: str, value: object, *args: Sequence[str]) -> Sequence[Mapping[str, object]]:
+        if "AS assigned_key_ids" in query:
+            record: Final = await mock_access_group_table.find_unique(where={"access_group_id": value})
+            return [record.dict()] if record else []
+        if "owner.access_group_name" in query:
+            return []
+        teams: Final = mock_team_table.find_many.return_value
+        if "AS attached" in query:
+            return [
+                {"team_id": team.team_id, "attached": team.team_id in args[0] or value in team.access_group_ids}
+                for team in teams
+            ]
+        return [{"team_id": team.team_id} for team in teams]
+
     @asynccontextmanager
     async def mock_tx():
         tx = types.SimpleNamespace(
+            query_raw=AsyncMock(side_effect=read_transaction_rows),
             litellm_accessgrouptable=mock_access_group_table,
             litellm_teamtable=mock_team_table,
             litellm_verificationtoken=mock_key_table,
@@ -1388,12 +1403,10 @@ def test_delete_access_group_handles_out_of_sync_assigned_teams(client_and_mocks
     )
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
-    # hasSome query finds nothing (team's own access_group_ids is out of sync)
-    mock_team_table.find_many = AsyncMock(return_value=[])
-
     out_of_sync_team = MagicMock()
     out_of_sync_team.team_id = "team-out-of-sync"
     out_of_sync_team.access_group_ids = []  # already clean, no update needed
+    mock_team_table.find_many = AsyncMock(return_value=[out_of_sync_team])
     mock_team_table.find_unique = AsyncMock(return_value=out_of_sync_team)
 
     resp = client.delete("/v1/access_group/ag-to-delete")

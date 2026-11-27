@@ -1,4 +1,4 @@
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -21,6 +21,11 @@ BASELINE_TEAM_MEMBER_PERMISSIONS: Final = [
 ]
 
 DEFAULT_TEAM_MEMBER_PERMISSIONS: Final = BASELINE_TEAM_MEMBER_PERMISSIONS
+
+
+class _TeamAssignedKey(Protocol):
+    @property
+    def team_id(self) -> str | None: ...
 
 
 class TeamMemberPermissionChecks:
@@ -211,7 +216,7 @@ class TeamMemberPermissionChecks:
     @staticmethod
     async def user_belongs_to_keys_team(
         user_api_key_dict: UserAPIKeyAuth,
-        existing_key_row: LiteLLM_VerificationToken,
+        existing_key_row: _TeamAssignedKey,
     ) -> bool:
         """
         Returns True if the user belongs to the team that the key is assigned to

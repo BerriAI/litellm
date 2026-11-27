@@ -37,7 +37,7 @@ class ResponsesApiDeploymentCheck(CustomLogger):
         messages: list[AllMessageValues] | None,
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         request_kwargs = request_kwargs or {}
         previous_response_id: Final = request_kwargs.get("previous_response_id", None)
         if previous_response_id is None:

@@ -1,6 +1,12 @@
 mod support;
 
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use litellm_python_compat::Value;
 use litellm_redis_client::commands;
@@ -130,6 +136,56 @@ fn store(client: Option<RedisClient>) -> AuthCache {
 
 fn team_id(id: &str) -> AuthObject {
     AuthObject::Team(id.to_owned())
+}
+
+#[rstest]
+#[tokio::test]
+async fn local_team_spend_preserves_the_roster_and_deadline_without_recreating_a_miss() {
+    let now = Arc::new(AtomicU64::new(0));
+    let cache = AuthCache::with_clock(None, settings(Some(60)), {
+        let now = now.clone();
+        Arc::new(move || Duration::from_secs(now.load(Ordering::Relaxed)))
+    });
+    let key = team_id("t");
+    let member = dict([
+        ("user_id", Value::from("a")),
+        ("role", Value::from("admin")),
+    ]);
+    let peer = dict([("user_id", Value::from("b")), ("role", Value::from("user"))]);
+    let row = |members: Vec<Value>, spend| {
+        dict([
+            ("team_id", Value::from("t")),
+            ("members_with_roles", Value::List(members)),
+            ("spend", Value::Float(spend)),
+        ])
+    };
+    assert!(!cache.add_local_team_spend(&key, 0.5).unwrap());
+    cache
+        .set_local(&key, row(vec![member.clone(), peer.clone()], 2.0), None)
+        .unwrap();
+    now.store(59, Ordering::Relaxed);
+    assert!(cache.add_local_team_spend(&key, 0.5).unwrap());
+    assert_eq!(
+        cache.get_local(&key).unwrap(),
+        Some(row(vec![member.clone(), peer], 2.5))
+    );
+    let Some(Value::Dict(compact)) = cache
+        .team_fields(None, &key, None, Some("a"))
+        .await
+        .unwrap()
+    else {
+        panic!("expected a projected team");
+    };
+    assert!(compact.contains(&(Value::from("members_with_roles"), Value::List(vec![member]))));
+    assert!(compact.contains(&(Value::from("spend"), Value::Float(2.5))));
+    now.store(60, Ordering::Relaxed);
+    assert!(!cache.add_local_team_spend(&key, 0.5).unwrap());
+    assert_eq!(
+        cache
+            .local_team_fields(&key, Some(&["spend".into()]), None)
+            .unwrap(),
+        None
+    );
 }
 
 fn user(id: &str) -> AuthObject {
@@ -616,7 +672,22 @@ async fn an_eviction_broadcast_drops_only_this_pods_copy_and_the_next_read_refil
         this_pod.get(None, &team_id("t1")).await.unwrap(),
         Some(team("old"))
     );
+    assert!(this_pod.add_local_team_spend(&team_id("t1"), 1.0).unwrap());
+    assert_eq!(
+        this_pod
+            .local_team_fields(&team_id("t1"), Some(&["spend".into()]), None)
+            .unwrap(),
+        Some(dict([("spend", Value::Float(1.0))]))
+    );
     this_pod.delete_local("team_id:t1").unwrap();
+    assert!(!this_pod.add_local_team_spend(&team_id("t1"), 1.0).unwrap());
+    assert_eq!(
+        this_pod
+            .team_fields(None, &team_id("t1"), None, None)
+            .await
+            .unwrap(),
+        Some(team("new"))
+    );
 
     assert_eq!(
         this_pod.get(None, &team_id("t1")).await.unwrap(),

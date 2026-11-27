@@ -551,8 +551,8 @@ def pytest_sessionfinish(session, exitstatus):
 # ---------------------------------------------------------------------------
 # Session-scoped compat model registration.
 #
-# The compat cells probe hardcoded virtual names like ``claude-sonnet-4-5``
-# and ``claude-sonnet-4-5-bedrock-invoke``. On stage those live in the
+# The compat cells probe hardcoded virtual names like ``claude-sonnet-5-5``
+# and ``claude-sonnet-5-5-bedrock-invoke``. On stage those live in the
 # gateway's model_list at deploy time; locally the docker-config.yaml
 # under tests/e2e/ only declares one of them, so every non-haiku cell
 # 400s with ``Invalid model name``. The fixture here reconciles the two:
@@ -625,7 +625,7 @@ def _compat_models_registered() -> Any:
     ``LITELLM_PROXY_URL``/``LITELLM_MASTER_KEY``) so unit-test runs
     stay hermetic.
 
-    Design note: we always attempt to register all 15 deployments,
+    Design note: we always attempt to register every deployment,
     regardless of what credentials are exported in the test-runner's
     shell. The credentials live in the proxy container's environment
     (via docker-compose ``env_file``), not the shell running pytest -

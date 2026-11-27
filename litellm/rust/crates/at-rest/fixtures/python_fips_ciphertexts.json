@@ -1,0 +1,95 @@
+{
+  "produced_by": "scripts/generate_python_fips_fixtures.py, LiteLLM's Python with fips_mode on, its KBKDF and AES-256-GCM run by OpenSSL's default provider instead of the FIPS provider, and every KBKDF output checked against cryptography's KBKDFHMAC",
+  "salt_key": "sk-at-rest-fips-fixture-salt-key",
+  "kbkdf": [
+    {
+      "name": "at_rest_key",
+      "key": "c2stYXQtcmVzdC1maXBzLWZpeHR1cmUtc2FsdC1rZXk=",
+      "label": "bGl0ZWxsbS1hdC1yZXN0OmFlcy0yNTYtZ2NtOg==",
+      "context": "",
+      "derived": "+t5a7zfJdlasOrSEyXY9+Dr+nMW+GhOzClrRIIjED3M="
+    },
+    {
+      "name": "with_context",
+      "key": "c2stZm91cnRlZW4tYnk=",
+      "label": "YS1sYWJlbA==",
+      "context": "YS1jb250ZXh0",
+      "derived": "Zj8+jvdGwtpO8UEQWCBHpgrracm62qIt4gdWyB9JsKs="
+    },
+    {
+      "name": "key_longer_than_a_hmac_block",
+      "key": "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2traw==",
+      "label": "bGl0ZWxsbS1hdC1yZXN0OmFlcy0yNTYtZ2NtOg==",
+      "context": "AAEC",
+      "derived": "koAnm9dFPqcMRkszrvsZc0Z2vMv9h9LCieW4hHpr2No="
+    }
+  ],
+  "cases": [
+    {
+      "name": "fips_api_key",
+      "stored": "v2:gcm:vCImvPbIVAQ25vEioPWEwwIX5DAE7_1nfXfCRuLR6j1tiHBEWPuHj0wkucHX2IRHMlwl6w==",
+      "decrypted": "sk-proj-credential-value",
+      "or_original": "sk-proj-credential-value"
+    },
+    {
+      "name": "fips_empty",
+      "stored": "v2:gcm:HB-oYY9YSBgqQEigKR5tBmrLKdHo2yMSdSC4mg==",
+      "decrypted": "",
+      "or_original": ""
+    },
+    {
+      "name": "fips_unicode",
+      "stored": "v2:gcm:s4yJl25HVpbPho-rdpsRhCDuPULcI7-HgkEnqP__TutVwdZ6xFyEEkYJK5aSrOhguw==",
+      "decrypted": "clé secrète ✓ 鍵",
+      "or_original": "clé secrète ✓ 鍵"
+    },
+    {
+      "name": "fips_long",
+      "stored": "v2:gcm:zBcs6WwxA1VtHDsRxWsV9NAHgwKZu7E43hkk_J9_uNUnXVECgHpJS5mPwHbI7n-24WEMUgBOhN2huj9-egA3xmoKFNOPCICLQ9Oc6MneCZvchuXtft5iHZo2i-llAG0FBmI8dRM0FdrBcU3bBVmaCVpCAy3GET8D7894L5snKij-DJwwMzSMoKQNKNTTR56xFh0YjiYOd0ziq-SrV9gV36V1uKdNqU87uksuVAj8O304hkrUVEFfTtJfPVfmk4jE9-gRG6131-U-QcKSFH9yj-USCioAzdV06c-Q2LmrRLy5pj5tNm7XigUE-g0NPA7amsUWlx9zOCM2epxQGrxhmEo2Yoj720LXh_gtgXeEiPzwPFTfBcqQyhnXI9t0M-WrkuxLO0kydTF2FKz8JRHo4Qzz6Go2PFEW-me1IxWORRw-NZAD1Ee4pu5udmV_3A5JugjxXBZdwEdiHN-D1JrI-0aqM9adss5mGxpXfNnJklZugxnYDajXO6Kg6hA2Ex_1awVtrGs=",
+      "decrypted": "https://example-resource.openai.azure.com/openai/deployments/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "or_original": "https://example-resource.openai.azure.com/openai/deployments/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "fips_wrong_key",
+      "stored": "v2:gcm:ug7hReltGArqmPPxo32uSHx6r-5pQht4jTAZjBqEPRJciZVho0TVUPVsXe8zrNFGqdEjew==",
+      "decrypted": null,
+      "or_original": "v2:gcm:ug7hReltGArqmPPxo32uSHx6r-5pQht4jTAZjBqEPRJciZVho0TVUPVsXe8zrNFGqdEjew=="
+    },
+    {
+      "name": "fips_tampered",
+      "stored": "v2:gcm:lvnHIZ2RXWDiFd5TcYgScsezruLfpN9t5fdZOXjn1mnRPZMaZudPk8OryE4bOzaZJc6Gqg==",
+      "decrypted": null,
+      "or_original": "v2:gcm:lvnHIZ2RXWDiFd5TcYgScsezruLfpN9t5fdZOXjn1mnRPZMaZudPk8OryE4bOzaZJc6Gqg=="
+    },
+    {
+      "name": "standard_gcm",
+      "stored": "v2:gcm:9v_sSDNr03wAkSMDdE6CgYxrJZ9v5i1gO7f8qCn5NwsAwrGoefFKuW3L5HRg9HmB1eIFDg==",
+      "decrypted": null,
+      "or_original": "v2:gcm:9v_sSDNr03wAkSMDdE6CgYxrJZ9v5i1gO7f8qCn5NwsAwrGoefFKuW3L5HRg9HmB1eIFDg=="
+    },
+    {
+      "name": "legacy_api_key",
+      "stored": "3Oa9cP_ux4QNnSEBRVR5sUSSiJU74kLPBas63pGp6_O461Bnp08QuX7akfqPmqsnXPEOzdkQE5HNFQW2RpWvZA==",
+      "decrypted": null,
+      "or_original": "3Oa9cP_ux4QNnSEBRVR5sUSSiJU74kLPBas63pGp6_O461Bnp08QuX7akfqPmqsnXPEOzdkQE5HNFQW2RpWvZA=="
+    },
+    {
+      "name": "plain_model_name",
+      "stored": "azure/gpt-4o",
+      "decrypted": null,
+      "or_original": "azure/gpt-4o"
+    },
+    {
+      "name": "plain_base64_alphabet",
+      "stored": "abcd",
+      "decrypted": null,
+      "or_original": "abcd"
+    },
+    {
+      "name": "plain_empty",
+      "stored": "",
+      "decrypted": null,
+      "or_original": ""
+    }
+  ]
+}

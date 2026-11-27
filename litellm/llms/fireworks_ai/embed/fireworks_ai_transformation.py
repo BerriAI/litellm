@@ -3,13 +3,14 @@ This is OpenAI compatible - no transformation is applied
 
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
 
 
 class FireworksAIEmbeddingConfig:
-    def get_supported_openai_params(self, model: str):
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         dimensions Only supported in nomic-ai/nomic-embed-text-v1.5 and later models.
 
@@ -19,7 +20,9 @@ class FireworksAIEmbeddingConfig:
             return ["dimensions"]
         return []
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict, model: str):
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], model: str
+    ):
         """
         No transformation is applied - fireworks ai is openai compatible
         """
@@ -29,7 +32,7 @@ class FireworksAIEmbeddingConfig:
                 optional_params[param] = value
         return optional_params
 
-    def is_fireworks_embedding_model(self, model: str):
+    def is_fireworks_embedding_model(self, model: str) -> bool:
         """
         helper to check if a model is a fireworks embedding model
 

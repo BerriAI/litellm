@@ -3129,10 +3129,15 @@ async def test_the_drop_warning_prints_the_retry_age_as_python_does(
     bucket.reply("_elem-1.json", (400, "<Error><Code>EntityTooLarge</Code></Error>"))
     await _log_all(logger, [_payload(f"elem-{i}") for i in range(2)])
 
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        await logger.flush_queue()
-
-    assert (
+    dropped: Final = (
         "s3 logging: 1 uploads dropped this flush: 1 rejected as terminal by S3, "
         f"0 retrying longer than s3_max_retry_age_seconds={shown}"
-    ) in _warnings(caplog)
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        await logger.flush_queue()
+        for _ in range(500):
+            if dropped in _warnings(caplog):
+                break
+            await asyncio.sleep(0.01)
+
+    assert dropped in _warnings(caplog)

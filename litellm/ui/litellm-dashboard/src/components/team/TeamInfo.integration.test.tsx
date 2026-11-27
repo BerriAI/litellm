@@ -221,7 +221,6 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
     userIds: [],
   }),
   fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
-  fetchAllOrganizations: vi.fn().mockResolvedValue([]),
 }));
 
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
@@ -986,6 +985,27 @@ describe("TeamInfoView - team settings", () => {
     const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
     expect(payload).toMatchObject({ team_id: "123", max_budget: 100 });
     expect(payload).not.toHaveProperty("models");
+  });
+
+  it("submits a semantic cache threshold in team metadata", async () => {
+    const user = userEvent.setup({ delay: null });
+    mockUseUISettings.mockReturnValue({
+      data: { values: {}, supports_similarity_threshold: true },
+      isLoading: false,
+    } as unknown as ReturnType<typeof useUISettings>);
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ metadata: { region: "us" } }));
+    renderWithProviders(<TeamInfoView {...props} userModels={[]} />);
+
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.change(await screen.findByLabelText("Similarity threshold"), { target: { value: "0" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].metadata).toMatchObject({
+      region: "us",
+      cache_params: { similarity_threshold: 0 },
+    });
   });
 
   it("discards a cancelled model clear but saves an intentional clear of unrestricted access", async () => {

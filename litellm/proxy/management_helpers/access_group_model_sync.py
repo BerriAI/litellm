@@ -37,24 +37,31 @@ _BACKING_DEPLOYMENTS_SQL: Final = (
     'SELECT COUNT(*)::int AS deployment_count FROM "LiteLLM_ProxyModelTable" WHERE "model_name" = $1'
 )
 
+# Same group lock order as access_group_team_sync.
+_LOCK_GROUPS_WITH_MODEL: Final = (
+    'WITH locked AS (SELECT "access_group_id" FROM "LiteLLM_AccessGroupTable" WHERE $1 = ANY("access_model_names") '
+    'ORDER BY "access_group_id" COLLATE "C" FOR UPDATE) '
+)
+
 _REPLACE_MODEL_NAME_SQL: Final = (
-    'UPDATE "LiteLLM_AccessGroupTable" '
+    _LOCK_GROUPS_WITH_MODEL + 'UPDATE "LiteLLM_AccessGroupTable" '
     'SET "access_model_names" = array_replace(array_remove("access_model_names", $2), $1, $2) '
-    'WHERE $1 = ANY("access_model_names") '
+    'WHERE $1 = ANY("access_model_names") AND "access_group_id" IN (SELECT "access_group_id" FROM locked) '
     'RETURNING "access_group_id"'
 )
 
 _APPEND_MODEL_NAME_SQL: Final = (
-    'UPDATE "LiteLLM_AccessGroupTable" '
+    _LOCK_GROUPS_WITH_MODEL + 'UPDATE "LiteLLM_AccessGroupTable" '
     'SET "access_model_names" = array_append("access_model_names", $2) '
     'WHERE $1 = ANY("access_model_names") AND NOT ($2 = ANY("access_model_names")) '
+    'AND "access_group_id" IN (SELECT "access_group_id" FROM locked) '
     'RETURNING "access_group_id"'
 )
 
 _REMOVE_MODEL_NAME_SQL: Final = (
-    'UPDATE "LiteLLM_AccessGroupTable" '
+    _LOCK_GROUPS_WITH_MODEL + 'UPDATE "LiteLLM_AccessGroupTable" '
     'SET "access_model_names" = array_remove("access_model_names", $1) '
-    'WHERE $1 = ANY("access_model_names") '
+    'WHERE $1 = ANY("access_model_names") AND "access_group_id" IN (SELECT "access_group_id" FROM locked) '
     'RETURNING "access_group_id"'
 )
 

@@ -1096,7 +1096,7 @@ async def delete_organization(
     team_ids_in_deleted_orgs: Final = tuple(team.team_id for team in teams_in_deleted_orgs)
     raise_if_teams_hold_ptu_shares(team_ids_in_deleted_orgs, llm_router)
 
-    deleted_orgs: Final = []
+    deleted_orgs: Final[list[PrismaOrganizationTable]] = []
     for organization_id in data.organization_ids:
         async with prisma_client.tx() as transaction:
             _ = await transaction.query_raw(_LOCK_ORG_TEAMS_SQL, organization_id)

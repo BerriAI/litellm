@@ -113,6 +113,13 @@ class ManagedFileIdWriter(Protocol):
     ) -> None: ...
 
 
+@runtime_checkable
+class ManagedFileIdForgetter(Protocol):
+    """Removes a recorded upload's ownership row and its cached copy."""
+
+    async def forget_unified_file_id(self, file_id: str, litellm_parent_otel_span: object) -> None: ...
+
+
 class ManagedListResponse(TypedDict):
     """OpenAI-style paginated list body served from the managed-resource tables."""
 

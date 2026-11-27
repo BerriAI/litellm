@@ -143,6 +143,10 @@ resource "litellm_mcp_server" "crm" {
   transport   = "http"
   auth_type   = "oauth2"
 
+  oauth2_flow = "client_credentials"
+  token_url   = "https://id.example.com/oauth/token"
+  scopes      = ["crm.read"]
+
   client_id                = var.crm_client_id
   client_secret_wo         = var.crm_client_secret
   client_secret_wo_version = 1
@@ -163,6 +167,33 @@ The following arguments are supported:
 
 ### Optional Arguments
 
+* `issuer` - (Optional) OAuth issuer URL.
+* `authorization_url` - (Optional) OAuth authorization endpoint URL.
+* `token_url` - (Optional) OAuth token endpoint URL.
+* `registration_url` - (Optional) OAuth dynamic client registration endpoint URL.
+* `oauth2_flow` - (Optional) OAuth flow, either `client_credentials` or `authorization_code`. Optional and computed because the proxy assigns a flow when omitted.
+* `token_exchange_endpoint` - (Optional) RFC 8693 token exchange endpoint URL.
+* `audience` - (Optional) Target audience for token exchange.
+* `subject_token_type` - (Optional) Subject token type for token exchange.
+* `token_exchange_profile` - (Optional) Token exchange profile.
+* `scopes` - (Optional) List of OAuth scopes. Returned by the proxy and tracked for drift.
+* `token_endpoint_auth_method` - (Optional) Token endpoint authentication method, either `client_secret_basic` or `client_secret_post`. Supply `client_private_key_wo` for private-key JWT authentication.
+* `upstream_resource` - (Optional) RFC 8707 resource indicator. Use `auto` to derive it from the server URL. Returned by the proxy and tracked for drift.
+* `client_private_key_id` - (Optional) Key identifier for the client assertion JWT.
+* `client_assertion_signing_alg` - (Optional) Signing algorithm for the client assertion JWT.
+* `id_jag_resource_token_endpoint` - (Optional) ID-JAG resource authorization server token endpoint.
+* `id_jag_resource` - (Optional) Resource indicator for ID-JAG leg 1.
+* `id_jag_resource_client_id` - (Optional) OAuth client identifier for the ID-JAG resource authorization server.
+* `id_jag_subject_source` - (Optional) ID-JAG subject source, `login_assertion` or `refresh_token`.
+* `client_private_key_wo` - (Optional) Write-only, sensitive PEM private key for client assertions. Requires Terraform 1.11 or later and `client_private_key_wo_version`.
+* `client_private_key_wo_version` - (Optional) Integer version that triggers an update when the private key changes.
+* `id_jag_resource_client_secret_wo` - (Optional) Write-only, sensitive ID-JAG resource client secret. Requires Terraform 1.11 or later and `id_jag_resource_client_secret_wo_version`.
+* `id_jag_resource_client_secret_wo_version` - (Optional) Integer version that triggers an update when the ID-JAG resource client secret changes.
+
+OAuth endpoints, token-exchange settings, scopes and `upstream_resource` are read back into state. Add them to your configuration to manage them with Terraform. When omitted, their stored values are preserved on ordinary updates, including after a provider upgrade. Set `scopes = []` to clear stored scopes. The proxy omits the other credential settings from its response, so Terraform manages them from configuration.
+
+When the upstream URL, issuer, or authentication type changes, Terraform resends the OAuth settings declared in your configuration. This requires a proxy that supports `preserve_explicit_oauth_settings` on the MCP server update endpoint. The proxy may reset settings it discovered for the previous upstream and invalidate the previous OAuth client. Configure the issuer and endpoints that belong to the new upstream. When replacing a write-only credential, update its value and bump its version. To clear `client_private_key_wo` or `id_jag_resource_client_secret_wo`, remove both its value and version.
+
 * `alias` - (Optional) Alias for the MCP server. Used for easier reference.
 * `description` - (Optional) Description of the MCP server.
 * `spec_version` - (Optional) MCP specification version. Defaults to `2024-11-05`.
@@ -170,7 +201,7 @@ The following arguments are supported:
 * `auth_value_wo` - (Optional, Write-only, Sensitive) Credential for `api_key`, `bearer_token`, `basic` and `authorization` auth types (the token, or `user:password` for basic). Sent to the proxy on every apply and never written to plan or state. Requires Terraform 1.11 or later and `auth_value_wo_version`.
 * `auth_value_wo_version` - (Optional) Integer that triggers an update when `auth_value_wo` changes. Bump it whenever you rotate the token.
 * `client_id` - (Optional) OAuth 2.0 client id the proxy presents to the server's token endpoint (`oauth2` auth types). Not a secret, stored in state.
-* `client_secret_wo` - (Optional, Write-only, Sensitive) OAuth 2.0 client secret paired with `client_id`. Sent to the proxy on every apply and never written to plan or state. Requires Terraform 1.11 or later, `client_id` and `client_secret_wo_version`.
+* `client_secret_wo` - (Optional, Write-only, Sensitive) OAuth 2.0 client secret paired with `client_id`. Never written to plan or state. Requires Terraform 1.11 or later, `client_id` and `client_secret_wo_version`.
 * `client_secret_wo_version` - (Optional) Integer that triggers an update when `client_secret_wo` changes. Bump it whenever you rotate the secret.
 * `mcp_access_groups` - (Optional) List of access groups that can use this MCP server.
 * `command` - (Optional) Command to run for stdio transport.

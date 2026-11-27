@@ -259,7 +259,7 @@ class _PROXY_LiteLLMManagedVectorStores(
         return True
 
     async def check_managed_vector_store_access(
-        self, data: Dict, user_api_key_dict: UserAPIKeyAuth
+        self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
         """
         Check if user has access to a managed vector store in request data.
@@ -433,7 +433,7 @@ class _PROXY_LiteLLMManagedVectorStores(
         messages: Optional[List] = None,
         request_kwargs: Optional[Dict] = None,
         parent_otel_span: Optional[Span] = None,
-    ) -> List[Dict]:
+    ) -> List[dict[str, object]]:
         """
         Filter deployments based on vector store availability.
         

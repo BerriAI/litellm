@@ -1,15 +1,9 @@
 use std::fmt;
 
 use bytes::Bytes;
-use futures_util::{StreamExt, future::BoxFuture};
-use litellm_host::{
-    machine::HostServices,
-    protocol::{Protocol, Reply},
-};
+use litellm_host::protocol::Reply;
 use litellm_host_python::to_py;
-use litellm_inference_messages::{
-    Delivered, Error, Transport, TransportRequest, TransportResponse,
-};
+use litellm_inference_messages::{Error, Sent, SentBody, TransportCall};
 use pyo3::{
     exceptions::{PyBaseException, PyException, PyStopAsyncIteration},
     gc::{PyTraverseError, PyVisit},
@@ -18,74 +12,6 @@ use pyo3::{
 };
 
 use super::host::ROUTE_HOST_MODULE;
-
-pub(crate) enum TransportCall {
-    Send {
-        request: TransportRequest,
-        reply: Reply<Result<Sent, Error>>,
-    },
-    Read {
-        reply: Reply<Result<Option<Bytes>, Error>>,
-    },
-}
-
-pub(crate) struct Sent {
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: SentBody,
-}
-
-enum SentBody {
-    Text(String),
-    Stream,
-    Rejected { text: String, error: Error },
-}
-
-pub(super) struct PythonTransport<P: Protocol> {
-    services: HostServices<P>,
-}
-
-impl<P: Protocol> PythonTransport<P> {
-    pub(super) fn new(services: HostServices<P>) -> Self {
-        Self { services }
-    }
-}
-
-impl<P> Transport for PythonTransport<P>
-where
-    P: Protocol<Error = Error>,
-    P::HostCall: From<TransportCall>,
-{
-    fn send(
-        &self,
-        request: TransportRequest,
-    ) -> BoxFuture<'static, Result<TransportResponse, Error>> {
-        let services = self.services.clone();
-        Box::pin(async move {
-            let sent = services
-                .call(|reply| TransportCall::Send { request, reply }.into())
-                .await??;
-            let delivered = match sent.body {
-                SentBody::Text(text) => Delivered::Complete(text),
-                SentBody::Rejected { text, error } => Delivered::Rejected { text, error },
-                SentBody::Stream => Delivered::Stream(
-                    futures_util::stream::try_unfold(services, |services| async move {
-                        let chunk = services
-                            .call(|reply| TransportCall::Read { reply }.into())
-                            .await??;
-                        Ok(chunk.map(|chunk| (chunk, services)))
-                    })
-                    .boxed(),
-                ),
-            };
-            Ok(TransportResponse {
-                status: sent.status,
-                headers: sent.headers,
-                delivered,
-            })
-        })
-    }
-}
 
 #[derive(thiserror::Error)]
 #[error("the Python HTTP client failed")]

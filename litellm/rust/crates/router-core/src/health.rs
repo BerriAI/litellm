@@ -142,15 +142,50 @@ pub fn deployment_allowed_fails(
 /// What the cooldown rules need to know about the deployment's group.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GroupShape {
-    /// The deployment is the only one in its model group.
+    /// The deployment is the only one in its model group that could take the failed call.
     pub single_deployment: bool,
     /// The requested group has a fallback configured.
     pub has_fallback_group: bool,
+    /// The failed batch or file call had other deployments to go to, while the deployment alone
+    /// serves the group's other calls: its cooldown covers only batch and file calls
+    /// ([`batch_cooldown_id`]), so those move on and the other calls keep their only deployment.
+    pub batch_calls_only: bool,
+}
+
+impl GroupShape {
+    /// The shape of a failed call, `batch_call` when it was a batch or file call: `alone` says
+    /// whether the deployment was the only one that could take a call of the kind it is given.
+    pub(crate) fn of_failure(
+        batch_call: bool,
+        has_fallback_group: bool,
+        alone: impl Fn(bool) -> bool,
+    ) -> Self {
+        let alone_outside_batches = alone(false);
+        let single_deployment = if batch_call {
+            alone(true)
+        } else {
+            alone_outside_batches
+        };
+        Self {
+            single_deployment,
+            has_fallback_group,
+            batch_calls_only: alone_outside_batches && !single_deployment,
+        }
+    }
+}
+
+/// The cache key of a cooldown covering only the batch and file calls of deployment `id`.
+pub(crate) fn batch_cooldown_id(id: &str) -> String {
+    format!("{id}:batch-calls")
 }
 
 /// `_core_team_model_has_alternatives`: another routable deployment serves the deployment's team
 /// public name.
-pub(crate) fn team_model_has_alternatives(registry: &Registry, deployment: &Deployment) -> bool {
+pub(crate) fn team_model_has_alternatives(
+    registry: &Registry,
+    deployment: &Deployment,
+    batch_call: bool,
+) -> bool {
     let info = &deployment.model_info;
     let (Some(team_id), Some(public_name)) = (&info.team_id, &info.team_public_model_name) else {
         return false;
@@ -161,20 +196,30 @@ pub(crate) fn team_model_has_alternatives(registry: &Registry, deployment: &Depl
             siblings
                 .iter()
                 .filter(|sibling| !sibling.model_info.blocked)
+                .filter(|sibling| deployment.shares_calls_with(sibling, batch_call))
                 .count()
                 > 1
         })
 }
 
 /// `_core_routing_group_has_alternatives`: `model_group` names a callable routing group whose
-/// members span more than one deployment.
-pub(crate) fn routing_group_has_alternatives(registry: &Registry, model_group: &str) -> bool {
+/// members span more than one deployment that could take `deployment`'s place on the failed call.
+pub(crate) fn routing_group_has_alternatives(
+    registry: &Registry,
+    model_group: &str,
+    deployment: &Deployment,
+    batch_call: bool,
+) -> bool {
     let resolved = registry.alias_of(model_group).unwrap_or(model_group);
     registry.routing_group_named(resolved).is_some_and(|group| {
         group
             .models
             .iter()
-            .map(|member| registry.named(member).map_or(0, |members| members.len()))
+            .map(|member| {
+                registry
+                    .named(member)
+                    .map_or(0, |members| deployment.peers_in(&members, batch_call))
+            })
             .sum::<usize>()
             > 1
     })
@@ -326,14 +371,7 @@ pub(crate) fn cooldown_rule(
 /// cooldown and the TTL of the deployment's `allowed_fails:generic` counter.
 fn configured_cooldown(deployment: &Deployment) -> Option<Duration> {
     deployment
-        .model_info
-        .cooldown_time
-        .or_else(|| {
-            deployment
-                .raw_params
-                .get("cooldown_time")
-                .and_then(|v| v.as_f64())
-        })
+        .cooldown_time()
         .filter(|seconds| *seconds >= 0.0)
         .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
 }
@@ -345,19 +383,18 @@ pub enum Outcome {
     Failure(AttemptError),
 }
 
-#[derive(Clone)]
-pub struct Health<C> {
-    cache: C,
+pub struct Health<'a, C> {
+    cache: &'a C,
     clock: Arc<dyn Clock>,
 }
 
-impl<C: RouterCache> Health<C> {
-    pub fn new(cache: C, clock: Arc<dyn Clock>) -> Self {
+impl<'a, C: RouterCache> Health<'a, C> {
+    pub fn new(cache: &'a C, clock: Arc<dyn Clock>) -> Self {
         Self { cache, clock }
     }
 
-    pub fn cache(&self) -> &C {
-        &self.cache
+    pub fn cache(&self) -> &'a C {
+        self.cache
     }
 
     pub(crate) fn now_time(&self) -> SystemTime {
@@ -385,6 +422,32 @@ impl<C: RouterCache> Health<C> {
             .filter_map(|(id, value)| {
                 let value = value?;
                 (value.timestamp + value.cooldown_time - now > 0.0).then(|| (id.clone(), value))
+            })
+            .collect())
+    }
+
+    /// [`Self::active_cooldowns`] for a call, which on a batch or file call (`batch_call`) also
+    /// finds the cooldowns covering only those calls, each under its deployment's own id.
+    pub async fn cooling(
+        &self,
+        ids: &[String],
+        batch_call: bool,
+    ) -> Result<Vec<(String, CooldownValue)>, Error> {
+        if !batch_call {
+            return self.active_cooldowns(ids).await;
+        }
+        let batch_ids: Vec<String> = ids.iter().map(|id| batch_cooldown_id(id)).collect();
+        let found = self
+            .active_cooldowns(&[ids, batch_ids.as_slice()].concat())
+            .await?;
+        Ok(ids
+            .iter()
+            .zip(&batch_ids)
+            .filter_map(|(id, batch_id)| {
+                found
+                    .iter()
+                    .find(|(cooled, _)| cooled == id || cooled == batch_id)
+                    .map(|(_, value)| (id.clone(), value.clone()))
             })
             .collect())
     }
@@ -443,12 +506,7 @@ impl<C: RouterCache> Health<C> {
             .model_info
             .cooldown_time
             .or(call_cooldown)
-            .or_else(|| {
-                deployment
-                    .raw_params
-                    .get("cooldown_time")
-                    .and_then(|v| v.as_f64())
-            })
+            .or_else(|| deployment.params_cooldown_time())
             .filter(|seconds| *seconds >= 0.0)
             .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok());
         configured
@@ -510,8 +568,13 @@ impl<C: RouterCache> Health<C> {
         if !cools {
             return Ok(None);
         }
-        debug!(deployment_id = %deployment.id, cooldown_seconds = cooldown.as_secs_f64(), "cooling deployment down");
-        self.add_cooldown(&deployment.id, failure, cooldown).await?;
+        debug!(deployment_id = %deployment.id, cooldown_seconds = cooldown.as_secs_f64(), batch_calls_only = shape.batch_calls_only, "cooling deployment down");
+        let id = if shape.batch_calls_only {
+            batch_cooldown_id(&deployment.id)
+        } else {
+            deployment.id.clone()
+        };
+        self.add_cooldown(&id, failure, cooldown).await?;
         Ok(Some(cooldown))
     }
 
@@ -677,8 +740,8 @@ mod tests {
         .unwrap()
     }
 
-    fn health() -> Health<InMemoryRouterCache> {
-        Health::new(InMemoryRouterCache::default(), Arc::new(SystemClock))
+    fn health(cache: &InMemoryRouterCache) -> Health<'_, InMemoryRouterCache> {
+        Health::new(cache, Arc::new(SystemClock))
     }
 
     fn settings(dynamic: RouterDynamicConfig) -> Settings {
@@ -696,7 +759,8 @@ mod tests {
         #[case] counted: u64,
         #[case] cooled: bool,
     ) {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let mut failure = AttemptError::new(FailureKind::RateLimit, Some(429));
         failure.outside_deployment = outside_deployment;
@@ -733,7 +797,8 @@ mod tests {
         #[case] status: u16,
         #[case] base_class: &str,
     ) {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let failure = AttemptError::new(kind, Some(status));
 
@@ -771,7 +836,8 @@ mod tests {
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let failure = AttemptError::new(FailureKind::RateLimit, Some(429));
 
-        let cooldown = health()
+        let cache = InMemoryRouterCache::default();
+        let cooldown = health(&cache)
             .record_failure(
                 &settings,
                 &deployment,
@@ -827,14 +893,17 @@ mod tests {
     const ALONE: GroupShape = GroupShape {
         single_deployment: true,
         has_fallback_group: false,
+        batch_calls_only: false,
     };
     const ALONE_WITH_A_FALLBACK: GroupShape = GroupShape {
         single_deployment: true,
         has_fallback_group: true,
+        batch_calls_only: false,
     };
     const AMONG_OTHERS: GroupShape = GroupShape {
         single_deployment: false,
         has_fallback_group: false,
+        batch_calls_only: false,
     };
 
     fn ratio(status: u16, single_deployment: bool) -> CooldownRule {
@@ -1019,7 +1088,8 @@ mod tests {
         #[case] first_cools: bool,
         #[case] second_cools: bool,
     ) {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let settings = settings(allowed_fails(allowed));
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let fail = || async {
@@ -1042,7 +1112,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn the_failure_ratio_spares_a_lone_deployment_that_fails_with_500s() {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let fail = || async {
             health
@@ -1065,7 +1136,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn the_failure_ratio_cools_one_of_several_on_the_fifth_failure_of_a_minute() {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let fail = || async {
             health
@@ -1114,7 +1186,8 @@ mod tests {
         #[case] shape: GroupShape,
         #[case] next_counts: [f64; 3],
     ) {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", info)).unwrap();
         health
             .record_failure(
@@ -1126,7 +1199,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let cache = health.cache();
+        let cache = &cache;
         let next = |suffix| async move {
             cache
                 .increment_allowed_fails("a", suffix, MINUTE)
@@ -1166,7 +1239,10 @@ mod tests {
         )
         .unwrap();
         let first = registry.deployment("a").unwrap();
-        assert_eq!(team_model_has_alternatives(&registry, &first), expected);
+        assert_eq!(
+            team_model_has_alternatives(&registry, &first, false),
+            expected
+        );
     }
 
     #[rstest]
@@ -1192,8 +1268,9 @@ mod tests {
             vec![group],
         )
         .unwrap();
+        let first = registry.deployment("a").unwrap();
         assert_eq!(
-            routing_group_has_alternatives(&registry, requested),
+            routing_group_has_alternatives(&registry, requested, &first, false),
             expected
         );
     }
@@ -1211,7 +1288,8 @@ mod tests {
         #[case] info: serde_json::Value,
         #[case] cooled: bool,
     ) {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", info)).unwrap();
         let mut failure = AttemptError::new(FailureKind::BadRequest, None);
         failure.status_absent = true;
@@ -1238,7 +1316,7 @@ mod tests {
     async fn usage_is_keyed_by_the_model_served(#[case] model: Option<&str>, #[case] keyed: &str) {
         let cache = InMemoryRouterCache::default();
         let clock = Arc::new(SystemClock);
-        let health = Health::new(cache.clone(), clock.clone());
+        let health = Health::new(&cache, clock.clone());
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
 
         health

@@ -60,7 +60,7 @@ TOOL_CAPABLE_CALL_TYPES: Final = frozenset(
 )
 
 
-def extract_request_tool_names(route: str, data: dict) -> list[str]:
+def extract_request_tool_names(route: str, data: dict[str, object]) -> list[str]:
     """
     Extract tool names from the request body for the given route.
     Uses guardrail translation handlers when available, else standalone extractors

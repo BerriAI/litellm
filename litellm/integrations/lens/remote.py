@@ -176,6 +176,20 @@ class RemoteTraceStore:
             }
         )
 
+    async def get_conversation(
+        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None, page_size: int | None
+    ) -> JsonValue:
+        return await self._read(
+            {
+                "operation": "conversation",
+                "scope": scope,
+                "trace_id": trace_id,
+                "trace_ref": trace_ref,
+                "cursor": cursor,
+                "page_size": page_size,
+            }
+        )
+
     async def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str, cursor: str | None
     ) -> JsonValue:

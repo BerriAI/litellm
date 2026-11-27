@@ -6,12 +6,12 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -105,6 +105,11 @@ from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretField
 from litellm.types.router import reject_server_owned_wif_fields
 from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
 
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
+    from litellm.proxy.utils import PrismaClient
+
 #### Health ENDPOINTS ####
 
 
@@ -115,7 +120,7 @@ class _HealthBacklogResponse(TypedDict):
     rejected_requests: ReadOnly[int]
 
 
-def _reject_os_environ_references(params: dict) -> None:
+def _reject_os_environ_references(params: object) -> None:
     """
     Validate that the provided params do not contain any ``os.environ/``
     references. Values with that prefix are expected to come only from
@@ -737,7 +742,9 @@ async def health_services_endpoint(
         raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
-def convert_health_check_to_dict(check) -> dict:
+def convert_health_check_to_dict(
+    check: "prisma_models.LiteLLM_HealthCheckTable | LatestHealthCheckRow",
+) -> dict[str, object]:
     """Convert health check database record to dictionary format"""
     return {
         "health_check_id": check.health_check_id,
@@ -771,10 +778,10 @@ def _check_prisma_client():
 
 
 async def _save_health_check_to_db(
-    prisma_client,
+    prisma_client: "PrismaClient",
     model_name: str,
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
     start_time: float,
     user_id: str | None,
     model_id: str | None = None,
@@ -871,9 +878,9 @@ def _model_infos_for_endpoint(
 
 
 def _aggregate_health_check_results(
-    model_param_to_info: dict,
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    model_param_to_info: Mapping[str, object],
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
 ) -> dict:
     """
     Aggregate health check results per unique model.
@@ -965,9 +972,9 @@ def _should_persist_health_check_result(
 
 
 async def _save_health_check_results_if_changed(
-    prisma_client,
-    model_results: dict,
-    latest_checks_map: dict,
+    prisma_client: "PrismaClient",
+    model_results: Mapping[object, _AggregatedHealthResult],
+    latest_checks_map: Mapping[_LatestCheckKey, LatestHealthCheckRow],
     start_time: float,
     checked_by: str | None = None,
 ) -> bool:
@@ -1017,10 +1024,10 @@ async def _save_health_check_results_if_changed(
 
 
 async def save_background_health_checks_to_db(
-    prisma_client,
+    prisma_client: "PrismaClient | None",
     model_list: list,
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
     start_time: float,
     checked_by: str | None = None,
 ) -> bool:
@@ -1053,7 +1060,7 @@ async def save_background_health_checks_to_db(
 
         # Step 3: Get latest health checks for all models in one query to compare status
         latest_checks: Final = await query_latest_health_checks(prisma_client)
-        latest_checks_map: Final = {}
+        latest_checks_map: Final[dict[_LatestCheckKey, LatestHealthCheckRow]] = {}
         for check in latest_checks:
             key = _latest_check_key(check.model_id, check.model_name)
             if key not in latest_checks_map:
@@ -1103,7 +1110,7 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return role_value in _PROXY_ADMIN_ROLES
 
 
-def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
+def _strip_admin_only_fields_from_health_result(result: Mapping[str, object]) -> dict[str, object]:
     """
     Return a copy of the /health response with the admin-only fields (provider routing plus
     server-owned federation or OAuth token-exchange params) removed from each healthy/unhealthy
@@ -1480,7 +1487,7 @@ def _resolve_targeted_model_ids(
     }
 
 
-def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: set) -> dict:
+def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: Container[object]) -> dict[str, object]:
     """
     Restrict a cached background health-check result dict to endpoints whose
     model_id is in ``allowed_model_ids``.
@@ -1506,16 +1513,16 @@ def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: 
 
 
 async def _perform_health_check_and_save(
-    model_list,
-    target_model,
+    model_list: list[object],
+    target_model: str | None,
     recorded_model_name: str | None,
-    cli_model,
-    details,
-    prisma_client,
-    start_time,
-    user_id,
-    model_id=None,
-    max_concurrency=None,
+    cli_model: str | None,
+    details: bool | None,
+    prisma_client: "PrismaClient | None",
+    start_time: float,
+    user_id: str | None,
+    model_id: str | None = None,
+    max_concurrency: int | None = None,
     **perform_health_check_extra,
 ):
     """Helper function to perform health check and save results to database"""
@@ -1635,7 +1642,7 @@ async def health_endpoint(
     is_admin: Final = _is_proxy_admin(user_api_key_dict)
     model_specific_request: Final = bool(model or model_id)
 
-    def _post_process(result: dict) -> dict:
+    def _post_process(result: Mapping[str, object]) -> Mapping[str, object]:
         # api_base / api_version reveal which provider/region/internal host the
         # deployment talks to; only proxy admins receive them. Non-admin keys
         # still see model/model_id and the healthy/unhealthy status. We also
@@ -1926,7 +1933,7 @@ def read_license_data() -> EnterpriseLicenseData | None:
     return license_data
 
 
-def _read_allowed_features(license_data: Mapping[str, object]) -> list:
+def _read_allowed_features(license_data: Mapping[str, object]) -> list[object]:
     raw_allowed_features: Final = license_data.get("allowed_features")
     if isinstance(raw_allowed_features, list):
         return list(raw_allowed_features)
@@ -2643,8 +2650,8 @@ async def test_model_connection(
 
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
-        config_litellm_params: dict = {}
-        loaded_model_info: dict | None = None
+        config_litellm_params: dict[str, object] = {}
+        loaded_model_info: dict[str, object] | None = None
         deployment_by_id: Deployment | None = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when

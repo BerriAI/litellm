@@ -14,7 +14,7 @@ from litellm.types.decisions import (
     OpenAIDecisionInputTokensDetails,
 )
 
-_Model: Final = TypeVar("_Model", bound=BaseModel)
+_Model = TypeVar("_Model", bound=BaseModel)
 
 
 class _ProviderAttempt(BaseModel):

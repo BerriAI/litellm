@@ -106,10 +106,10 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, object]:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key: Final = (
             litellm_params.api_key
@@ -133,7 +133,7 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         api_base = (
             api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"

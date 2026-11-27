@@ -20,18 +20,20 @@
 
 use std::time::Duration;
 
-use litellm_auth::AuthServices;
+use litellm_auth::{AuthServices, CredentialPlacement};
 use litellm_core_utils::{
-    dot_notation_indexing::delete_nested_value,
+    dot_notation_indexing::{OverlappingPaths, delete_nested_values},
     get_provider_specific_headers::get_provider_specific_headers,
 };
 use litellm_env::Lookup;
 use litellm_host::interceptors::{Interceptors, ProviderIdentity, RequestContext, WireRequest};
+use litellm_http::request::without_headers;
 use litellm_inference::context::CallContext;
 use litellm_llms::anthropic::messages::transformation::is_claude_model;
 use litellm_llms::base_llm::{
     auth::{
-        AzureAdTokenHosts, Headers, LoggedIn, ValidatedEnvironment, prepare_auth, resolve_auth,
+        AuthScheme, AzureAdTokenHosts, Headers, LoggedIn, ValidatedEnvironment, prepare_auth,
+        resolve_auth,
     },
     messages::{
         context::MessagesTransformContext,
@@ -40,8 +42,9 @@ use litellm_llms::base_llm::{
     },
 };
 use litellm_llms_types::{
-    formats::messages::{MessagesOptionalParams, MessagesRequest},
+    formats::messages::{MessagesOptionalParams, MessagesRequest, Speed},
     headers::ProviderSpecificHeaders,
+    recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
@@ -51,6 +54,7 @@ use serde_json::{Map, Value};
 use super::{
     Error, MessagesCall, MessagesShaping, WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
+    pricing::RequestedPricing,
     types::invalid_request,
 };
 
@@ -71,6 +75,7 @@ pub(super) struct ProviderCall {
     pub(super) unencodable_request_header: Option<Vec<u8>>,
     pub(super) ascii_request_headers: bool,
     pub(super) connect_retry: bool,
+    pub(super) requested_pricing: RequestedPricing,
 }
 
 impl ProviderCall {
@@ -154,6 +159,7 @@ pub(super) async fn provider_call(
     model: String,
     call: MessagesCall,
     secrets: &(dyn Lookup + Send + Sync),
+    host_transport: bool,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<ProviderCall, Error> {
     let MessagesCall {
@@ -185,6 +191,11 @@ pub(super) async fn provider_call(
         &transform_context,
     )?;
     let logged_params = logged_params(config, &effective, &transform_context)?;
+    let requested_pricing = RequestedPricing {
+        service_tier: effective.params.service_tier.clone(),
+        fast: effective.params.speed == Some(Recognized::Known(Speed::Fast)),
+        inject_stream_cost: false,
+    };
     let trimmed =
         without_additional_drop_params(effective, &shaping.settings.additional_drop_params)?;
 
@@ -197,6 +208,7 @@ pub(super) async fn provider_call(
         config,
         credentials,
         CallAuthInput {
+            provider,
             request: &trimmed,
             forwarded: forwarded_headers(
                 provider,
@@ -214,6 +226,10 @@ pub(super) async fn provider_call(
     )
     .await?;
     let env_lookup = secret_lookup(secrets, deferred.as_ref());
+    let transform_context = MessagesTransformContext {
+        keeps_unsigned_thinking: !config.checks_claude_signatures(api_base.as_deref(), &env_lookup),
+        ..transform_context
+    };
 
     let connection_params = config.select_endpoint(
         connection_params,
@@ -270,6 +286,7 @@ pub(super) async fn provider_call(
         optional_params: logged_params,
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
+        host_transport,
     };
     let authenticated = resolve_auth(
         auth_services,
@@ -317,6 +334,7 @@ pub(super) async fn provider_call(
         unencodable_request_header: shaping.settings.unencodable_request_header,
         ascii_request_headers: shaping.settings.ascii_request_headers,
         connect_retry: shaping.settings.connect_retry,
+        requested_pricing,
     })
 }
 
@@ -346,6 +364,7 @@ fn effective_request(
 }
 
 struct CallAuthInput<'a> {
+    provider: MessagesProvider,
     request: &'a MessagesRequest,
     forwarded: Headers,
     configured_key: Option<&'a str>,
@@ -436,9 +455,12 @@ fn without_additional_drop_params(
         return Ok(request);
     }
     let params = serde_json::to_value(request.params).map_err(invalid_request)?;
-    let trimmed = paths
-        .iter()
-        .fold(params, |params, path| delete_nested_value(params, path));
+    let trimmed = delete_nested_values(params, paths.iter().map(String::as_str)).map_err(|_| {
+        Error::invalid_request(litellm_llms::ErrorDetail::Expected {
+            subject: "additional_drop_params",
+            expected: OverlappingPaths::EXPECTED,
+        })
+    })?;
     Ok(MessagesRequest {
         params: serde_json::from_value(trimmed).map_err(invalid_request)?,
         ..request
@@ -470,7 +492,7 @@ fn requested_optional_params(
         return Ok(request);
     }
     if request.params.service_tier.is_some() {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Dropping `service_tier` for model={} on provider={}. Only the Anthropic API routes accept it.",
             request.model,
             provider.as_str()
@@ -535,6 +557,52 @@ async fn resolve_environment(
     workload_identity: Option<&dyn WorkloadIdentity>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<ValidatedEnvironment, Error> {
+    if input.provider.as_str() == "anthropic"
+        && input
+            .connection_params
+            .extra
+            .get("oauth_client_credentials")
+            == Some(&Value::Bool(true))
+    {
+        let token = match workload_identity {
+            Some(identity) => {
+                identity
+                    .client_credentials_token(
+                        input.connection_params,
+                        input.api_base,
+                        &input.request.model,
+                    )
+                    .await?
+            }
+            None => None,
+        };
+        return token
+            .map(|secret| ValidatedEnvironment {
+                headers: without_headers(
+                    input.forwarded,
+                    &[
+                        "authorization",
+                        "x-api-key",
+                        "api-key",
+                        "x-goog-api-key",
+                        "ocp-apim-subscription-key",
+                        "x-litellm-api-key",
+                        "host",
+                    ],
+                ),
+                auth: AuthScheme::Credential {
+                    placement: CredentialPlacement::Bearer,
+                    secret,
+                },
+            })
+            .ok_or_else(|| {
+                litellm_auth::Error::MissingApiKey {
+                    provider: "Anthropic OAuth client credentials",
+                    environment_variable: "oauth_client_secret",
+                }
+                .into()
+            });
+    }
     let environment = config.validate_federated_environment(
         input.forwarded,
         input.configured_key,
@@ -777,6 +845,7 @@ mod tests {
             model,
             call,
             secrets,
+            false,
             &context,
         )
         .await
@@ -1103,7 +1172,8 @@ mod tests {
             detail.to_string(),
             "claude-test does not support temperature=1. anthropic-version 2026-10-21 removed \
              temperature, top_p and top_k. To drop unsupported params, set \
-             `litellm.drop_params = True`."
+             `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the \
+             proxy config."
         );
     }
 
@@ -1536,6 +1606,52 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.is_request(), "{error:?}");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn drop_paths_overlapping_past_the_cap_are_a_request_error(shaping: MessagesShaping) {
+        let depth = 7;
+        let additional_drop_params = (0..1usize << depth)
+            .map(|combo| {
+                let steps: String = (0..depth)
+                    .map(|level| {
+                        if combo >> level & 1 == 1 {
+                            "[*]"
+                        } else {
+                            "[0]"
+                        }
+                    })
+                    .collect();
+                format!("tools[0].input_schema.x{steps}[*].drop")
+            })
+            .collect();
+        let shaping = MessagesShaping {
+            settings: MessagesSettings {
+                additional_drop_params,
+                ..shaping.settings
+            },
+            ..shaping
+        };
+        let nested = (0..depth).fold(json!([{"drop": 1}]), |inner, _| json!([inner]));
+        assert_eq!(
+            wire_body(
+                json!({
+                    "model": "claude-test",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 16,
+                    "tools": [{"name": "t", "input_schema": {"type": "object", "x": nested}}]
+                }),
+                shaping,
+            )
+            .await,
+            Err(Error::invalid_request(
+                litellm_llms::ErrorDetail::Expected {
+                    subject: "additional_drop_params",
+                    expected: OverlappingPaths::EXPECTED,
+                }
+            ))
+        );
     }
 
     #[rstest]

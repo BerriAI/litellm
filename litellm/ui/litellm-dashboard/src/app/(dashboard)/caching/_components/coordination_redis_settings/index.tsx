@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { FormProvider, useForm } from "react-hook-form";
+import { FormProvider } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import {
@@ -12,20 +13,18 @@ import {
 } from "@/app/(dashboard)/hooks/coordinationRedis/useCoordinationRedisSettings";
 import CoordinationRedisFieldSection from "./CoordinationRedisFieldSection";
 import CoordinationRedisTypeSelector from "./CoordinationRedisTypeSelector";
-import { COORDINATION_FIELDS, CoordinationRedisType } from "./coordinationRedisFields";
+import type { CoordinationRedisType } from "./coordinationRedisFields";
 import {
   buildCoordinationPayload,
   buildInitialValues,
   configuredSecretFields,
-  CoordinationFormValues,
   inferRedisType,
-  isFieldVisible,
   sourceBadge,
-} from "./coordinationRedisUtils";
+} from "./mapper";
+import { createCoordinationRedisSchema } from "./schema";
 
 const CoordinationRedisSettings: React.FC = () => {
   const { t } = useTranslation();
-  const form = useForm<CoordinationFormValues>({ defaultValues: buildInitialValues({}) });
   const [selectedRedisType, setSelectedRedisType] = useState<CoordinationRedisType | null>(null);
 
   const { data, isLoading, isError } = useCoordinationRedisSettings();
@@ -33,6 +32,8 @@ const CoordinationRedisSettings: React.FC = () => {
   const testConnection = useTestCoordinationRedisConnection();
 
   const redisType = selectedRedisType ?? inferRedisType(data?.values ?? {});
+  const schema = createCoordinationRedisSchema(redisType, t);
+  const form = useZodForm(schema, { defaultValues: buildInitialValues({}) });
 
   useEffect(() => {
     if (data) {
@@ -46,16 +47,17 @@ const CoordinationRedisSettings: React.FC = () => {
     }
   }, [isError, t]);
 
-  const validate = (): CoordinationFormValues | null => {
+  const validate = () => {
     const values = form.getValues();
-    const failures = COORDINATION_FIELDS.filter((field) => isFieldVisible(field, redisType)).flatMap((field) => {
-      const message = field.rules?.map((rule) => rule(values[field.name])).find((result) => result !== null);
-      return message === undefined || message === null ? [] : [[field.name, message] as const];
-    });
-
+    const result = schema.safeParse(values);
     form.clearErrors();
-    failures.forEach(([name, message]) => form.setError(name, { message: t(message) }));
-    return failures.length > 0 ? null : values;
+    if (result.success) return values;
+
+    for (const issue of result.error.issues) {
+      const [name] = issue.path;
+      if (typeof name === "string") form.setError(name, { message: issue.message });
+    }
+    return null;
   };
 
   const handleTestConnection = async () => {

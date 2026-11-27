@@ -321,6 +321,7 @@ pub(super) fn logged_call<'py>(
         metadata,
         response: logged_object(&classes, response.cloned(), Some(kwargs))?,
         combined: logged_object(&classes, member(kwargs, "combined_usage_object"), None)?,
+        provider_billed: false,
         ended_before_slot_reuse: false,
     })
 }

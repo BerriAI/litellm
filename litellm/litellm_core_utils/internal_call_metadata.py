@@ -25,6 +25,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     NON_INFERENCE_CALL_TYPES,
+    SESSION_ID_INHERITED_METADATA_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
@@ -231,6 +232,11 @@ def parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mappin
     return MappingProxyType(
         {k: v for k in ("litellm_session_id", "litellm_trace_id") if isinstance(v := kwargs.get(k), str)}
     )
+
+
+def inherits_parent_session(params: Mapping[str, object]) -> bool:
+    buckets: Final = (as_str_mapping(params.get("metadata")), as_str_mapping(params.get("litellm_metadata")))
+    return any(bucket.get(SESSION_ID_INHERITED_METADATA_KEY) is True for bucket in buckets if bucket is not None)
 
 
 def effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | None) -> bool | None:

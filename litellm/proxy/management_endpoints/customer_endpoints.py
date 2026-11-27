@@ -55,7 +55,7 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
     UnblockUsersResponse,
 )
 
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 _CLEARABLE_LIST_FIELDS: Final = frozenset({"models"})
 
@@ -182,7 +182,7 @@ async def block_user(data: BlockUsers):
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-        records: Final = []
+        records: Final[list[PrismaEndUserRow]] = []
         if prisma_client is not None:
             for id in data.user_ids:
                 record = await _typed_table(EndUserRepository(prisma_client)).upsert(

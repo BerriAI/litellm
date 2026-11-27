@@ -396,6 +396,277 @@ func TestResourceLiteLLMModelReadDisplayName(t *testing.T) {
 	}
 }
 
+func TestResourceLiteLLMModelReadRoutingBaseModel(t *testing.T) {
+	cases := []struct {
+		name       string
+		params     map[string]string
+		pricing    string
+		wantModel  string
+		wantVendor string
+	}{
+		{
+			name:       "import without pricing metadata",
+			params:     map[string]string{"model": "azure_ai/gpt-6-astra", "custom_llm_provider": "azure_ai"},
+			wantModel:  "gpt-6-astra",
+			wantVendor: "azure_ai",
+		},
+		{
+			name:       "import with independent pricing metadata and nested model name",
+			params:     map[string]string{"model": "openrouter/anthropic/sonnet"},
+			pricing:    "anthropic/claude-sonnet",
+			wantModel:  "anthropic/sonnet",
+			wantVendor: "openrouter",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			info := map[string]string{"id": "model-123"}
+			if tc.pricing != "" {
+				info["base_model"] = tc.pricing
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/model/info" || r.URL.Query().Get("litellm_model_id") != "model-123" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				err := json.NewEncoder(w).Encode(map[string]any{
+					"data": []map[string]any{{"model_name": "imported-model", "litellm_params": tc.params, "model_info": info}},
+				})
+				if err != nil {
+					t.Errorf("write model response: %v", err)
+				}
+			}))
+			defer srv.Close()
+
+			d := schema.TestResourceDataRaw(t, resourceLiteLLMModel().Schema, nil)
+			d.SetId("model-123")
+			if err := resourceLiteLLMModelRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+				t.Fatalf("read imported model: %v", err)
+			}
+			if got := d.Get("base_model"); got != tc.wantModel {
+				t.Errorf("base_model = %q, want %q", got, tc.wantModel)
+			}
+			if got := d.Get("custom_llm_provider"); got != tc.wantVendor {
+				t.Errorf("custom_llm_provider = %q, want %q", got, tc.wantVendor)
+			}
+		})
+	}
+}
+
+func TestResourceLiteLLMModelCreateRejectsEmptyRoutingSuffix(t *testing.T) {
+	for _, baseModel := range []string{"", " "} {
+		d := schema.TestResourceDataRaw(t, resourceLiteLLMModel().Schema, map[string]any{
+			"model_name": "invalid-model", "custom_llm_provider": "anthropic", "base_model": baseModel,
+		})
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Errorf("unexpected request for base_model %q: %s %s", baseModel, r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+		}))
+		err := resourceLiteLLMModelCreate(d, NewClient(srv.URL, "test-key", true))
+		srv.Close()
+		if err == nil {
+			t.Errorf("expected an error for base_model %q", baseModel)
+		}
+	}
+}
+
+func TestResourceLiteLLMModelUpdateWritesRoutingOnlyWhenItChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		baseModel string
+		wantRoute string
+		wantPrice string
+	}{
+		{name: "rate limit change preserves external routing and pricing", baseModel: "claude-sonnet-4-5"},
+		{name: "deployment change writes the new routing and default pricing", baseModel: "new-deployment", wantRoute: "anthropic/new-deployment", wantPrice: "new-deployment"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var update struct {
+				Params map[string]json.RawMessage `json:"litellm_params"`
+				Info   map[string]json.RawMessage `json:"model_info"`
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/model/update":
+					if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+						t.Errorf("decode model update: %v", err)
+					}
+				case r.Method == http.MethodGet && r.URL.Path == "/model/info":
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				_, _ = w.Write([]byte(modelInfoBody("")))
+			}))
+			defer srv.Close()
+
+			res := resourceLiteLLMModel()
+			config := map[string]any{
+				"model_name": "sonnet-4-5-anthropic", "custom_llm_provider": "anthropic", "base_model": tc.baseModel, "rpm": 7,
+			}
+			d := schema.TestResourceDataRaw(t, res.Schema, nil)
+			d.SetId("model-123")
+			client := NewClient(srv.URL, "test-key", true)
+			if err := resourceLiteLLMModelRead(d, client); err != nil {
+				t.Fatalf("read imported model: %v", err)
+			}
+			state := d.State()
+			diff, err := res.Diff(context.Background(), state, terraform.NewResourceConfigRaw(config), nil)
+			if err != nil {
+				t.Fatalf("plan model update: %v", err)
+			}
+			d, err = schema.InternalMap(res.Schema).Data(state, diff)
+			if err != nil {
+				t.Fatalf("prepare model update: %v", err)
+			}
+			if err := resourceLiteLLMModelUpdate(d, client); err != nil {
+				t.Fatalf("update model: %v", err)
+			}
+			if got := string(update.Params["rpm"]); got != "7" {
+				t.Errorf("litellm_params.rpm = %s, want 7", got)
+			}
+			for _, field := range []struct {
+				key  string
+				got  json.RawMessage
+				want string
+			}{
+				{"litellm_params.model", update.Params["model"], tc.wantRoute},
+				{"model_info.base_model", update.Info["base_model"], tc.wantPrice},
+			} {
+				if field.want == "" {
+					if field.got != nil {
+						t.Errorf("expected %s to be omitted, got %s", field.key, field.got)
+					}
+				} else if encoded, _ := json.Marshal(field.want); string(field.got) != string(encoded) {
+					t.Errorf("%s = %s, want %s", field.key, field.got, encoded)
+				}
+			}
+		})
+	}
+}
+
+func TestResourceLiteLLMModelRefreshAndUpdateWithRoutingOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		override map[string]any
+		route    string
+	}{
+		{"keep the routing override", map[string]any{"model": "openai/deployment"}, "openai/deployment"},
+		{"remove the routing override", map[string]any{}, "openai/gpt-4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := map[string]any{"model": "openai/deployment", "custom_llm_provider": "openai", "rpm": 5}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/model/update":
+					var update ModelRequest
+					if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+						t.Errorf("decode model update: %v", err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					if got := update.LiteLLMParams["model"]; got != tc.route {
+						t.Errorf("updated route = %q, want %q", got, tc.route)
+					}
+					maps.Copy(params, update.LiteLLMParams)
+				case r.Method == http.MethodGet && r.URL.Path == "/model/info":
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				if err := json.NewEncoder(w).Encode(map[string]any{
+					"data": []map[string]any{{"model_name": "example", "litellm_params": params, "model_info": map[string]string{"id": "model-123"}}},
+				}); err != nil {
+					t.Errorf("write model response: %v", err)
+				}
+			}))
+			defer srv.Close()
+
+			res := resourceLiteLLMModel()
+			config := map[string]any{
+				"model_name": "example", "custom_llm_provider": "openai", "base_model": "gpt-4", "rpm": 5,
+				"additional_litellm_params": map[string]any{"model": "openai/deployment"},
+			}
+			d := schema.TestResourceDataRaw(t, res.Schema, config)
+			d.SetId("model-123")
+			client := NewClient(srv.URL, "test-key", true)
+			if err := resourceLiteLLMModelRead(d, client); err != nil {
+				t.Fatalf("refresh model: %v", err)
+			}
+			state := d.State()
+			config["rpm"] = 7
+			config["additional_litellm_params"] = tc.override
+			diff, err := res.Diff(context.Background(), state, terraform.NewResourceConfigRaw(config), nil)
+			if err != nil {
+				t.Fatalf("plan model update: %v", err)
+			}
+			if change, ok := diff.Attributes["base_model"]; ok {
+				t.Errorf("unexpected base_model change: %+v", change)
+			}
+			d, err = schema.InternalMap(res.Schema).Data(state, diff)
+			if err != nil {
+				t.Fatalf("prepare model update: %v", err)
+			}
+			if err := resourceLiteLLMModelUpdate(d, client); err != nil {
+				t.Fatalf("update model: %v", err)
+			}
+			if got := d.Get("base_model"); got != "gpt-4" {
+				t.Errorf("base_model after update = %q, want gpt-4", got)
+			}
+		})
+	}
+}
+
+func TestResourceLiteLLMModelCreateOmitsEmptyTier(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/model/new" {
+			var payload struct {
+				ModelInfo map[string]json.RawMessage `json:"model_info"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode model request: %v", err)
+			}
+			if tier, exists := payload.ModelInfo["tier"]; exists {
+				t.Errorf("expected tier to be omitted, got %s", tier)
+			}
+		}
+		_, _ = w.Write([]byte(modelInfoBody("")))
+	}))
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMModel().Schema, map[string]any{
+		"model_name": "sonnet-4-5-anthropic", "custom_llm_provider": "anthropic", "base_model": "claude-sonnet-4-5", "tier": "",
+	})
+	if err := resourceLiteLLMModelCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create without tier: %v", err)
+	}
+}
+
+func TestResourceLiteLLMModelPlanKeepsStoredModeWhenUnset(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(modelInfoDataEnvelope("")))
+	}))
+	defer srv.Close()
+
+	res := resourceLiteLLMModel()
+	config := map[string]any{
+		"model_name": "sonnet-4-5-anthropic", "custom_llm_provider": "anthropic", "base_model": "claude-sonnet-4-5",
+	}
+	d := schema.TestResourceDataRaw(t, res.Schema, config)
+	d.SetId("model-123")
+	if err := resourceLiteLLMModelRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read model: %v", err)
+	}
+	diff, err := res.Diff(context.Background(), d.State(), terraform.NewResourceConfigRaw(config), nil)
+	if err != nil {
+		t.Fatalf("plan model: %v", err)
+	}
+	if diff != nil && diff.Attributes["mode"] != nil {
+		t.Errorf("unexpected mode change: %+v", diff.Attributes["mode"])
+	}
+}
+
 func TestResourceLiteLLMModelReadEmptyBodyKeepsState(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -520,6 +791,26 @@ func TestResourceLiteLLMModelUpdateSkipsPatchWhenDisplayNameUnchanged(t *testing
 	d := updateResourceData(t, "Claude Sonnet 4.5", "Claude Sonnet 4.5")
 	if err := resourceLiteLLMModelUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
 		t.Fatalf("update failed: %v", err)
+	}
+}
+
+func TestResourceLiteLLMModel_ModeValidation(t *testing.T) {
+	validateMode := resourceLiteLLMModel().Schema["mode"].ValidateFunc
+
+	valid := []string{
+		"completion", "embedding", "image_generation", "chat", "moderation",
+		"audio_transcription", "audio_speech", "rerank",
+		"responses", "realtime", "image_edit", "ocr", "search", "video_generation", "evaluation",
+		"decisions", "extraction",
+	}
+	for _, mode := range valid {
+		if _, errs := validateMode(mode, "mode"); len(errs) != 0 {
+			t.Errorf("mode %q: expected no validation error, got %v", mode, errs)
+		}
+	}
+
+	if _, errs := validateMode("not_a_real_mode", "mode"); len(errs) == 0 {
+		t.Error(`mode "not_a_real_mode": expected a validation error, got none`)
 	}
 }
 

@@ -28,6 +28,12 @@ impl Object {
     }
 }
 
+impl FromIterator<(String, Value)> for Object {
+    fn from_iter<I: IntoIterator<Item = (String, Value)>>(fields: I) -> Self {
+        Self(fields.into_iter().collect())
+    }
+}
+
 impl Deref for Object {
     type Target = BTreeMap<String, Value>;
 

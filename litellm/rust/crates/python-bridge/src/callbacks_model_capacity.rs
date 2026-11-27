@@ -4,7 +4,7 @@ use futures_util::future::BoxFuture;
 use litellm_callbacks::{CallFacts, Callback, ErasedCallback, FieldValues, HookInput};
 use litellm_callbacks_model_capacity::{
     CapacityError, Facts, Frame, HostTransport, JsonHost, KeyFacts, KeyInputs, ModelCapacity,
-    SharedStash, StoreLimiter,
+    SharedStash, StoreLimiter, UsageTokens,
 };
 use litellm_callbacks_parallel_request_limiter::{Engine, Settings};
 use litellm_callbacks_python::RustCallback;
@@ -234,6 +234,50 @@ impl NativeModelCapacity {
                     answer["unverifiable"] = json!(true);
                     answer
                 }
+                Err(error) => failure(&error),
+            };
+            Ok(Pythonized(answer))
+        })
+    }
+
+    #[pyo3(signature = (connection, key, model, usage, facts, request = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn charge_turn<'py>(
+        &self,
+        py: Python<'py>,
+        connection: Option<PyRef<'py, NativeModelCapacityState>>,
+        key: &Bound<'py, PyAny>,
+        model: String,
+        usage: (i64, i64, i64, i64),
+        facts: &Bound<'py, PyAny>,
+        request: Option<PyRef<'py, NativeRequestRedis>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let key = key_facts(key)?;
+        let facts = self::facts(facts)?;
+        let inner = Arc::clone(&self.inner);
+        let connection = connection.map(|state| Arc::clone(&state.0));
+        let redis = request.map(|request| request.0.clone());
+        let in_memory = !self.rate_limits.has_redis();
+        let (prompt_tokens, completion_tokens, total_tokens, cached_tokens) = usage;
+        let used = UsageTokens {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            cached_tokens,
+        };
+        limiter_admission(py, in_memory, async move {
+            let answer = match inner
+                .charge_turn(
+                    connection.as_ref(),
+                    &key,
+                    &model,
+                    &used,
+                    redis.as_ref(),
+                    &facts,
+                )
+                .await
+            {
+                Ok(()) => json!({}),
                 Err(error) => failure(&error),
             };
             Ok(Pythonized(answer))

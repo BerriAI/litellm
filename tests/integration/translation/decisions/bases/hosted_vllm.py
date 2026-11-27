@@ -1,4 +1,3 @@
-import json
 from dataclasses import replace
 from typing import Final
 
@@ -165,7 +164,7 @@ QWEN3_0_6B_PREDICATE_REJECTED_TEST_CASE: Final = replace(
     expected_litellm_status_code=400,
     expected_litellm_response={
         "error": {
-            "message": f"litellm.BadRequestError: Hosted_vllmException - {json.dumps(VLLM_NOUL_REJECTED)}\n\n"
+            "message": f"litellm.BadRequestError: Hosted_vllmException - {VLLM_NOUL_REJECTED['error']['message']}\n\n"
             "LiteLLM: model group 'hosted_vllm/Qwen/Qwen3-0.6B' failed with the error above. No fallback was attempted.",
             "type": "invalid_request_error",
             "param": None,

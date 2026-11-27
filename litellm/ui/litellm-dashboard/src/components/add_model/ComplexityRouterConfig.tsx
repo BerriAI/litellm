@@ -126,8 +126,6 @@ export const CLASSIFICATION_RUBRIC_DESCRIPTIONS: Record<
   },
 };
 
-export const CLASSIFICATION_RUBRIC_KEYS = Object.keys(CLASSIFICATION_RUBRIC_DESCRIPTIONS) as ClassificationRubric[];
-
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;

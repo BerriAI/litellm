@@ -52,9 +52,9 @@ class APISerpentSearchParams:
     def _field_values(self) -> Mapping[str, object]:
         return asdict(self)
 
-    def to_request_params(self) -> dict:
+    def to_request_params(self) -> dict[str, object]:
         """Return non-None fields as request params, booleans lowercased."""
-        params: Final[dict] = {}
+        params: Final[dict[str, object]] = {}
         for key, value in self._field_values().items():
             if value is None:
                 continue
@@ -62,7 +62,7 @@ class APISerpentSearchParams:
         return params
 
     @classmethod
-    def field_names(cls) -> set:
+    def field_names(cls) -> set[str]:
         return set(cls.__dataclass_fields__.keys())
 
 

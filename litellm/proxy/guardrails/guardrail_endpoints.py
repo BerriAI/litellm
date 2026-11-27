@@ -364,7 +364,7 @@ async def list_guardrails_v2(
             else []
         )
 
-        excluded_guardrail_ids: Final[set] = set()
+        excluded_guardrail_ids: Final[set[str | None]] = set()
         if not is_admin:
             caller_team_ids: Final = await _get_user_team_ids(user_api_key_dict)
             allowed: Final[list[Guardrail]] = []
@@ -379,7 +379,7 @@ async def list_guardrails_v2(
             guardrails = allowed
 
         guardrail_configs: Final[list[GuardrailInfoResponse]] = []
-        seen_guardrail_ids: Final[set] = excluded_guardrail_ids.copy()
+        seen_guardrail_ids: Final[set[str | None]] = excluded_guardrail_ids.copy()
         for guardrail in guardrails:
             litellm_params: LitellmParams | dict | None = guardrail.get("litellm_params")
             litellm_params_dict = (
@@ -1482,13 +1482,18 @@ async def patch_guardrail(
         )
 
         guardrail_name = result.get("guardrail_name", "Unknown")
+        changes_logging_only_settings: Final = bool(
+            {"logging_only_scope", "logging_only_continue_on_input_failure"} & set(requested_litellm_params)
+        )
+        changes_tool_description_scan_mode: Final = (
+            bool({"mode", "scan_tool_descriptions_as_text"} & set(requested_litellm_params))
+            and litellm_params.scan_tool_descriptions_as_text is True
+        )
 
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
-                reject_invalid_logging_only_scope=bool(
-                    {"logging_only_scope", "logging_only_continue_on_input_failure"} & set(requested_litellm_params)
-                ),
+                reject_invalid_logging_only_scope=changes_logging_only_settings or changes_tool_description_scan_mode,
             )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
@@ -1847,7 +1852,7 @@ async def validate_blocked_words_file(request: dict[str, str]):
             return {"valid": False, "error": "'blocked_words' must be a list"}
 
         # Validate each entry
-        errors: Final = []
+        errors: Final[list[str]] = []
         for idx, word_data in enumerate(blocked_words_list):
             if not isinstance(word_data, dict):
                 errors.append(f"Entry {idx}: must be an object")
@@ -2115,7 +2120,7 @@ def _extract_fields_recursive(
             detail=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing model fields. Please check the model structure for excessive nesting.",
         )
 
-    fields: Final = {}
+    fields: Final[dict[str, object]] = {}
 
     for field_name, field in model.model_fields.items():
         field_annotation = field.annotation

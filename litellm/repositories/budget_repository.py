@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
-_Row: Final = TypeVar("_Row")
+_Row = TypeVar("_Row")
 _BUDGET_ROW: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 

@@ -29,7 +29,7 @@ class MemberBase(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="before")
     @classmethod
-    def check_user_info(cls, values):
+    def check_user_info(cls, values: object):
         if not isinstance(values, dict):
             raise ValueError("input needs to be a dictionary")
         if values.get("user_id") is None and values.get("user_email") is None:

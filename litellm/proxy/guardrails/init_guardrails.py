@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from typing import Final, cast
 
 import litellm
@@ -18,7 +19,7 @@ Map guardrail_name: <pre_call>, <post_call>, during_call
 
 
 def init_guardrails_v2(
-    all_guardrails: list[dict],
+    all_guardrails: Sequence[Mapping[str, object]],
     config_file_path: str | None = None,
     llm_router: Router | None = None,
 ):
@@ -103,7 +104,7 @@ def initialize_guardrails(
     guardrails_config: list[dict[str, GuardrailItemSpec]],
     premium_user: bool,
     config_file_path: str,
-    litellm_settings: dict,
+    litellm_settings: dict[str, object],
 ) -> dict[str, GuardrailItem]:
     try:
         verbose_proxy_logger.debug("validating  guardrails passed %s", guardrails_config)

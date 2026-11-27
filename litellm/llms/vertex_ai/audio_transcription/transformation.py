@@ -1,4 +1,5 @@
 import base64
+from collections.abc import Mapping
 from typing import Final
 
 from httpx import Headers, Response
@@ -66,11 +67,11 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         mapped: Final = {
             **optional_params,
@@ -90,19 +91,21 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
             ),
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return VertexAIError(status_code=status_code, message=error_message, headers=headers)
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         access_token, project_id = self._ensure_access_token(
             credentials=self.safe_get_vertex_ai_credentials(litellm_params),
             project_id=self.safe_get_vertex_ai_project(litellm_params),
@@ -120,8 +123,8 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         location: Final = validate_vertex_transcription_location(
@@ -133,7 +136,7 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         base_url: Final = api_base or f"https://{speech_to_text_host(location)}"
         return join_api_base(base_url, f"v2/projects/{project_id}/locations/{location}/recognizers/_:recognize")
 
-    def _resolve_project_id_from_credentials(self, litellm_params: dict) -> str:
+    def _resolve_project_id_from_credentials(self, litellm_params: dict[str, object]) -> str:
         _, project_id = self._ensure_access_token(
             credentials=self.safe_get_vertex_ai_credentials(litellm_params),
             project_id=None,
@@ -145,8 +148,8 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         processed_audio: Final = process_audio_file(audio_file)
         language: Final = optional_params.get("language")

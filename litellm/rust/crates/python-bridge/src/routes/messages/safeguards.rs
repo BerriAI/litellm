@@ -1,8 +1,7 @@
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
-use litellm_host::{machine::HostServices, protocol::Reply};
+use litellm_host::protocol::Reply;
 use litellm_host_python::{from_py, to_py};
-use litellm_inference_messages::{Error, MessagesBody, Safeguards};
+use litellm_inference_messages::SafeguardsCall;
 use pyo3::{
     exceptions::PyRuntimeError,
     gc::{PyTraverseError, PyVisit},
@@ -11,65 +10,7 @@ use pyo3::{
 };
 use serde_json::Value;
 
-use super::host::{MessagesHostCall, MessagesHosted, ROUTE_HOST_MODULE};
-
-pub(super) enum SafeguardsCall {
-    Results {
-        response: MessagesBody,
-        reply: Reply<Option<Value>>,
-    },
-    OpenStream {
-        reply: Reply<bool>,
-    },
-    Frames {
-        chunk: Bytes,
-        reply: Reply<Vec<Bytes>>,
-    },
-    Flush {
-        reply: Reply<Vec<Bytes>>,
-    },
-}
-
-pub(super) struct PythonSafeguards {
-    services: HostServices<MessagesHosted>,
-}
-
-impl PythonSafeguards {
-    pub(super) fn new(services: HostServices<MessagesHosted>) -> Self {
-        Self { services }
-    }
-
-    async fn ask<A: Send>(
-        &self,
-        call: impl FnOnce(Reply<A>) -> SafeguardsCall + Send,
-    ) -> Result<A, Error> {
-        self.services
-            .call(|reply| MessagesHostCall::Safeguards(call(reply)))
-            .await
-    }
-}
-
-impl Safeguards for PythonSafeguards {
-    fn results<'a>(
-        &'a self,
-        response: &'a MessagesBody,
-    ) -> BoxFuture<'a, Result<Option<Value>, Error>> {
-        let response = response.clone();
-        Box::pin(self.ask(|reply| SafeguardsCall::Results { response, reply }))
-    }
-
-    fn open_stream(&self) -> BoxFuture<'_, Result<bool, Error>> {
-        Box::pin(self.ask(|reply| SafeguardsCall::OpenStream { reply }))
-    }
-
-    fn frames(&self, chunk: Bytes) -> BoxFuture<'_, Result<Vec<Bytes>, Error>> {
-        Box::pin(self.ask(|reply| SafeguardsCall::Frames { chunk, reply }))
-    }
-
-    fn flush(&self) -> BoxFuture<'_, Result<Vec<Bytes>, Error>> {
-        Box::pin(self.ask(|reply| SafeguardsCall::Flush { reply }))
-    }
-}
+use super::host::ROUTE_HOST_MODULE;
 
 enum Pending {
     Results(Reply<Option<Value>>),

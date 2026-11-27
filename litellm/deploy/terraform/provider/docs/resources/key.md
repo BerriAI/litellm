@@ -63,6 +63,7 @@ The following arguments are supported:
 * `max_parallel_requests` - (Optional) Maximum number of parallel requests allowed for this key. This helps in controlling concurrent usage.
 
 * `metadata` - (Optional) Metadata associated with this key. This can be used to store additional, custom information about the key.
+* `logging_callback` - (Optional, repeatable) Logging callback managed by Terraform. Requires Terraform 1.11 or later.
 
 * `tpm_limit` - (Optional) Tokens per minute limit for this key. This sets a rate limit based on the number of tokens processed.
 
@@ -120,9 +121,33 @@ In addition to all arguments above, the following attributes are exported:
 
 * `key` - The generated API key. This is the actual key value that will be used for authentication.
 
-* `server_metadata` - Map of every metadata entry the proxy stores for this key, including entries not declared in `metadata`, so drift on them is visible on refresh. Entries already exposed as their own attributes (`model_rpm_limit`, `model_tpm_limit`, `tags`, `guardrails`, `enforced_params`, `allowed_passthrough_routes`, `rpm_limit_type`, `tpm_limit_type`, `prompts`) are omitted and non-string values are JSON encoded. Terraform never writes it; `metadata` still tracks only the entries declared in the configuration.
+* `server_metadata` - Read-only map of metadata stored by the proxy, including entries not declared in `metadata`. Entries already exposed as their own attributes are omitted and non-string values are JSON encoded. Callback variable values and legacy string-valued callback configurations are omitted.
 
 * `spend` - The current spend for this key. This reflects the total amount spent using this key so far.
+
+## Logging callbacks
+
+```hcl
+resource "litellm_key" "example" {
+  key_alias = "logging-example"
+
+  logging_callback {
+    callback_name = "langfuse"
+    callback_type = "success_and_failure"
+    callback_vars_wo = jsonencode({
+      langfuse_public_key = var.langfuse_public_key
+      langfuse_secret_key = var.langfuse_secret_key
+    })
+    callback_vars_wo_version = 1
+  }
+}
+```
+
+Set `callback_name` to the proxy callback name. `callback_type` accepts `success`, `failure`, or `success_and_failure` (the default). `callback_vars_wo` is a write-only JSON object with string values. Use `jsonencode({})` for callbacks without variables. Terraform does not save the value in plans or state. Bump `callback_vars_wo_version` when the values change, since Terraform cannot detect changes to the variables themselves. Use sensitive, ephemeral Terraform variables for secret inputs rather than hardcoding values.
+
+Terraform manages only the key callbacks you declare, matching them by name and type. Refresh does not add other callbacks to the managed blocks, and rotating or removing managed callbacks leaves the others on the key. If you remove every block, Terraform removes only the callbacks it managed. The key can inherit team logging again only when no key callbacks remain.
+
+To migrate, remove `metadata.logging` from your configuration and declare the blocks instead. If you previously stored secret values in metadata, rotate them and review access to old plans, state, and logs.
 
 ## State Management
 
