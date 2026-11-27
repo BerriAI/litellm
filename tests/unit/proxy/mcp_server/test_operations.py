@@ -1,6 +1,7 @@
 import asyncio
 import traceback
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
@@ -25,7 +26,7 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -37,6 +38,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
 )
 from litellm.proxy.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
+    MCPServerConfig,
     MCPServerManager,
 )
 from litellm.proxy.mcp_server.operations import GatewayOperations, prepare_context
@@ -44,7 +46,7 @@ from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPResourceURIMatch, MCPServer
 
 
 class _CatalogHookCapture(CustomLogger):
@@ -239,138 +241,121 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("server_source", ("config", "database"))
 @pytest.mark.parametrize(
-    ("requested_uri", "owner_uris", "other_uris", "other_fails", "expected_uri", "expected_error"),
+    ("mode", "requested_uri", "owner_uris", "other_uris", "other_fails", "expected_host", "expected_error"),
     [
-        (
-            "ui://widget/app.html?v=1",
-            ("ui://widget/app.html?v=2",),
+        pytest.param(None, "ui://widget/app?v=1", ("ui://widget/app?v=2",), (), False, None, "not found", id="default"),
+        pytest.param(
+            "strict", "ui://widget/app?v=1", ("ui://widget/app?v=2",), (), False, None, "not found", id="strict"
+        ),
+        pytest.param(
+            "path_only", "ui://widget/app?v=1", ("ui://widget/app?v=2",), (), False, "owner.example", None, id="version"
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?theme=light",
+            ("ui://widget/app?theme=dark",),
             (),
             False,
-            "ui://widget/app.html?v=2",
+            "owner.example",
             None,
+            id="any-query-key",
         ),
-        (
-            "ui://widget/app.html?v=1",
-            ("ui://widget/app.html?v=2",),
-            ("ui://[invalid",),
+        pytest.param(
+            "path_only", "ui://widget/app", ("ui://widget/app?v=2",), (), False, "owner.example", None, id="no-query"
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            ("ui://widget/app?v=2",),
+            ("ui://widget/app?v=1",),
             False,
-            "ui://widget/app.html?v=2",
+            "other.example",
             None,
+            id="exact-owner-priority",
         ),
-        (
-            "ui://widget/app.html?theme=dark&v=1&lang=en",
-            ("ui://widget/app.html?theme=dark&v=2&lang=en",),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            ("ui://widget/app?v=2",),
+            ("ui://widget/app?v=3",),
+            False,
+            None,
+            "ambiguous",
+            id="ambiguous-including-strict-peer",
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            ("ui://widget/app?v=2", "ui://widget/app?v=3"),
             (),
             False,
-            "ui://widget/app.html?theme=dark&v=2&lang=en",
+            "owner.example",
             None,
+            id="two-uris-one-owner",
         ),
-        (
-            "ui://widget/app.html?v=1",
-            ("ui://widget/app.html",),
-            (),
-            False,
-            "ui://widget/app.html",
-            None,
-        ),
-        (
-            "ui://widget/app.html?v=1",
-            ("ui://widget/app.html?v=1", "ui://widget/app.html?v=2"),
-            (),
-            False,
-            "ui://widget/app.html?v=1",
-            None,
-        ),
-        (
-            "ui://widget/app.html?theme=dark&v=1",
-            ("ui://widget/app.html?theme=light&v=2",),
-            (),
-            False,
-            None,
-            "not found",
-        ),
-        (
-            "ui://widget/app.html",
-            ("ui://widget/app.html?v=2",),
-            (),
-            False,
-            None,
-            "not found",
-        ),
-        (
-            "ui://widget/app.html?filter=active%20items&v=1",
-            ("ui://widget/app.html?filter=active+items&v=2",),
-            (),
-            False,
-            None,
-            "not found",
-        ),
-        (
-            "ui://widget/app.html?version=1",
-            ("ui://widget/app.html?version=2",),
-            (),
-            False,
-            None,
-            "not found",
-        ),
-        (
-            "ui://widget/app.html?v=1#tab1",
-            ("ui://widget/app.html?v=2#tab2",),
-            (),
-            False,
-            None,
-            "not found",
-        ),
-        (
-            "https://example.com/app.html?v=1",
-            ("https://example.com/app.html?v=2",),
-            (),
-            False,
-            None,
-            "not found",
-        ),
-        (
-            "ui://widget/app.html?v=1",
-            ("ui://widget/app.html?v=2",),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            ("ui://widget/app?v=2",),
             (),
             True,
             None,
             "owner is unknown",
+            id="failed-listing",
         ),
-        (
-            "ui://widget/app.html?v=1",
-            ("ui://widget/app.html?v=2", "ui://widget/app.html?v=3"),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1#one",
+            ("ui://widget/app?v=2#two",),
             (),
             False,
             None,
             "not found",
+            id="distinct-fragment",
         ),
-        (
-            "ui://widget/app.html?v=1",
-            ("ui://widget/app.html?v=2",),
-            ("ui://widget/app.html?v=3",),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            ("ui://different/app?v=2",),
+            (),
             False,
             None,
             "not found",
+            id="distinct-authority",
         ),
-        (
-            "ui://widget/app.html?v=1",
-            ("ui://widget/app.html?v=2", "ui://widget/app.html?v=3"),
-            ("ui://widget/app.html?v=4",),
+        pytest.param(
+            "path_only",
+            "https://example.com/app?a=1",
+            ("https://example.com/app?a=2",),
+            ("ui://[invalid",),
+            False,
+            "owner.example",
+            None,
+            id="non-ui-and-malformed-listing",
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            (),
+            ("ui://widget/app?v=2",),
             False,
             None,
             "not found",
+            id="strict-server-never-selected-via-path",
         ),
     ],
 )
-async def test_resource_read_ui_cache_buster_fallback(
+async def test_resource_read_uri_match_policy(
     monkeypatch: pytest.MonkeyPatch,
+    server_source: str,
+    mode: MCPResourceURIMatch | None,
     requested_uri: str,
     owner_uris: tuple[str, ...],
     other_uris: tuple[str, ...],
     other_fails: bool,
-    expected_uri: str | None,
+    expected_host: str | None,
     expected_error: str | None,
 ) -> None:
     from mcp.shared.exceptions import MCPError
@@ -423,22 +408,37 @@ async def test_resource_read_ui_cache_buster_fallback(
         )
 
     manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
-    servers: Final = tuple(
-        MCPServer(
-            server_id=name,
-            name=name,
-            url=f"https://{name}.example/mcp",
-            transport=MCPTransport.http,
-            allow_all_keys=True,
-        )
-        for name in ("owner", "other")
-    )
-    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-ui-fallback"))
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-resource-read-policy"))
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", _mcp_rate_limited_proxy_logging())
-    for server in servers:
-        monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
+    metadata: Final = {"resource_uri_match": mode} if mode is not None else {}
+    if server_source == "config":
+        servers: Final[dict[str, MCPServerConfig]] = {
+            name: {
+                "url": f"https://{name}.example/mcp",
+                "transport": MCPTransport.http,
+                "mcp_info": metadata if name == "owner" else {},
+                "allow_all_keys": True,
+            }
+            for name in ("owner", "other")
+        }
+        await manager.load_servers_from_config(servers)
+    else:
+        timestamp: Final = datetime(2026, 1, 1, tzinfo=UTC)
+        for name in ("owner", "other"):
+            await manager.add_server(
+                LiteLLM_MCPServerTable(
+                    server_id=name,
+                    server_name=name,
+                    url=f"https://{name}.example/mcp",
+                    transport=MCPTransport.http,
+                    mcp_info=metadata if name == "owner" else {},
+                    allow_all_keys=True,
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                )
+            )
 
     async def invoke() -> object:
         return await GatewayOperations().execute(
@@ -446,13 +446,13 @@ async def test_resource_read_ui_cache_buster_fallback(
             prepare_context(caller),
         )
 
-    if expected_uri is not None:
+    if expected_host is not None:
         result: Final = await invoke()
         assert result == ReadResourceResult(
-            contents=[TextResourceContents(uri=expected_uri, text=f"owner.example:{expected_uri}")]
+            contents=[TextResourceContents(uri=requested_uri, text=f"{expected_host}:{requested_uri}")]
         )
         assert forwarded_reads.qsize() == 1
-        assert forwarded_reads.get_nowait() == ("owner.example", expected_uri)
+        assert forwarded_reads.get_nowait() == (expected_host, requested_uri)
         return
 
     assert expected_error is not None
@@ -464,14 +464,14 @@ async def test_resource_read_ui_cache_buster_fallback(
 
 
 @pytest.mark.asyncio
-async def test_resource_read_continuation_binds_resolved_ui_uri(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resource_read_continuation_preserves_requested_uri(monkeypatch: pytest.MonkeyPatch) -> None:
     from mcp.types import ElicitResult, InputRequiredResult, ReadResourceRequest, ReadResourceRequestParams
 
     from litellm.proxy.mcp_server.contracts import WireCompat
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "resource-continuation-salt")
     stale_uri: Final = "ui://widget/app.html?v=1"
-    resolved_uri: Final = "ui://widget/app.html?v=2"
+    advertised_uri: Final = "ui://widget/app.html?v=2"
     list_calls: Final[asyncio.Queue[str]] = asyncio.Queue()
     read_calls: Final[asyncio.Queue[tuple[str, str, object]]] = asyncio.Queue()
     messages: Final = TypeAdapter(JSONRPCMessage)
@@ -500,7 +500,7 @@ async def test_resource_read_continuation_binds_resolved_ui_uri(monkeypatch: pyt
             )
         if payload.method == "resources/list":
             list_calls.put_nowait(host)
-            resources: Final = [{"name": "widget", "uri": resolved_uri}] if host == "owner.example" else []
+            resources: Final = [{"name": "widget", "uri": advertised_uri}] if host == "owner.example" else []
             return httpx2.Response(
                 200,
                 json={
@@ -549,6 +549,7 @@ async def test_resource_read_continuation_binds_resolved_ui_uri(monkeypatch: pyt
             protocol_version="2026-07-28",
             allow_elicitation=True,
             allow_all_keys=True,
+            mcp_info={"resource_uri_match": "path_only"} if name == "owner" else None,
         )
         monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
@@ -562,7 +563,7 @@ async def test_resource_read_continuation_binds_resolved_ui_uri(monkeypatch: pyt
     suspended: Final = await GatewayOperations().execute(initial, context)
     assert isinstance(suspended, InputRequiredResult)
     assert suspended.request_state is not None
-    assert read_calls.get_nowait() == ("owner.example", resolved_uri, None)
+    assert read_calls.get_nowait() == ("owner.example", stale_uri, None)
     assert list_calls.qsize() == 2
 
     resumed_request: Final = ReadResourceRequest(
@@ -573,8 +574,8 @@ async def test_resource_read_continuation_binds_resolved_ui_uri(monkeypatch: pyt
         )
     )
     completed: Final = await GatewayOperations().execute(resumed_request, context)
-    assert completed == ReadResourceResult(contents=[TextResourceContents(uri=resolved_uri, text="resumed-ok")])
-    assert read_calls.get_nowait() == ("owner.example", resolved_uri, "upstream-step-1")
+    assert completed == ReadResourceResult(contents=[TextResourceContents(uri=stale_uri, text="resumed-ok")])
+    assert read_calls.get_nowait() == ("owner.example", stale_uri, "upstream-step-1")
     assert list_calls.qsize() == 2
 
 
@@ -954,7 +955,7 @@ async def test_prompt_sampling_receives_explicit_operation_caller_headers_and_ip
 
     from litellm.proxy.mcp_server import operations
     from litellm.types.mcp import MCPTransport
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.mcp_server.mcp_server_manager import MCPResourceURIMatch, MCPServer
 
     upstream = MCPServer(
         server_id="explicit-prompt",
@@ -1439,7 +1440,7 @@ async def test_catalog_helpers_preserve_context_results_and_failure_policy(metho
 
     from litellm.proxy.mcp_server import operations, server
     from litellm.types.mcp import MCPTransport
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.mcp_server.mcp_server_manager import MCPResourceURIMatch, MCPServer
 
     operation, handler_name, manager_method, payload, collection = _catalog_case(method)
     caller = UserAPIKeyAuth(user_id="catalog-caller")

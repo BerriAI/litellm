@@ -1551,7 +1551,7 @@ class MCPClient:
 
     async def read_resource(
         self,
-        url: AnyUrl | str,
+        url: AnyUrl,
         *,
         input_responses: InputResponses | None = None,
         request_state: str | None = None,

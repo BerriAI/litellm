@@ -58,7 +58,6 @@ class BoundInputRequiredResult(InputRequiredResult):
     target_id: str | None = Field(default=None, exclude=True)
     target_digest: str | None = Field(default=None, exclude=True)
     gateway_responses: InputResponses | None = Field(default=None, exclude=True)
-    resolved_uri: str | None = Field(default=None, exclude=True)
 
 
 class ContinuationState(BaseModel):
@@ -70,7 +69,6 @@ class ContinuationState(BaseModel):
     target_digest: str
     upstream_state: str | None
     gateway_responses: InputResponses | None = None
-    resolved_uri: str | None = None
     policy: Literal["repeatable"] = "repeatable"
     expires_at: int
     nonce: str
@@ -97,21 +95,13 @@ def target_digest(server: MCPServer) -> str:
     )
 
 
-def bind_target(
-    result: InputRequiredResult, server: MCPServer, *, resolved_uri: str | None = None
-) -> BoundInputRequiredResult:
+def bind_target(result: InputRequiredResult, server: MCPServer) -> BoundInputRequiredResult:
     bound: Final = (
         result
         if isinstance(result, BoundInputRequiredResult)
         else BoundInputRequiredResult.model_validate(result.model_dump())
     )
-    return bound.model_copy(
-        update={
-            "target_id": server.server_id,
-            "target_digest": target_digest(server),
-            "resolved_uri": resolved_uri if resolved_uri is not None else bound.resolved_uri,
-        }
-    )
+    return bound.model_copy(update={"target_id": server.server_id, "target_digest": target_digest(server)})
 
 
 def _principal(context: OperationContext) -> str:
@@ -192,11 +182,6 @@ def seal_continuation(
         target_digest=result.target_digest,
         upstream_state=result.request_state,
         gateway_responses=result.gateway_responses,
-        resolved_uri=(
-            result.resolved_uri
-            if result.resolved_uri is not None
-            else (previous.resolved_uri if previous is not None else None)
-        ),
         expires_at=previous.expires_at if previous is not None else now + 600,
         nonce=previous.nonce if previous is not None else secrets.token_urlsafe(24),
     )

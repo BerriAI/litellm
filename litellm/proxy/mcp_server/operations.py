@@ -284,60 +284,39 @@ class _ResourceOwnerAmbiguous:
     server_names: tuple[str, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class _ResolvedResourceOwner:
-    server: MCPServer
-    url: AnyUrl | str
-
-
 _ResourceOwnerFailure: TypeAlias = (
     _ResourceOwnerRateLimited | ResourceListingFailed | _ResourceOwnerMissing | _ResourceOwnerAmbiguous
 )
 
 
-def _ui_uri_without_cache_buster(
-    uri: str,
-) -> tuple[tuple[str, str, str, tuple[str, ...], str], bool] | None:
-    if not uri.lower().startswith("ui://"):
-        return None
+def _resource_uri_without_query(uri: str) -> tuple[str, str, str, str] | None:
     try:
         parts: Final = urlsplit(uri)
     except ValueError:
         return None
-    query_items: Final = tuple(parts.query.split("&")) if parts.query else ()
-    filtered_query: Final = tuple(item for item in query_items if item.partition("=")[0] != "v")
-    has_cache_buster: Final = len(filtered_query) != len(query_items)
-    return (parts.scheme, parts.netloc, parts.path, filtered_query, parts.fragment), has_cache_buster
+    if not parts.scheme:
+        return None
+    return parts.scheme, parts.netloc, parts.path, parts.fragment
 
 
-def _resolve_ui_cache_buster_fallback(
-    listings: Sequence[tuple[MCPServer, tuple[Resource, ...]]],
-    requested_uri: str,
-) -> _ResolvedResourceOwner | None:
-    requested: Final = _ui_uri_without_cache_buster(requested_uri)
+def _resolve_resource_path_owner(
+    listings: Sequence[tuple[MCPServer, tuple[Resource, ...]]], requested_uri: str
+) -> MCPServer | _ResourceOwnerAmbiguous | None:
+    if not any(server.resource_uri_match == "path_only" for server, _ in listings):
+        return None
+    requested: Final = _resource_uri_without_query(requested_uri)
     if requested is None:
         return None
-    requested_key, requested_has_v = requested
-    if not requested_has_v:
-        return None
-    server_matches: Final = tuple(
-        (server, unique_uris)
+    owners: Final = tuple(
+        server
         for server, listing in listings
-        if (
-            unique_uris := tuple(
-                dict.fromkeys(
-                    str(resource.uri)
-                    for resource in listing
-                    if (candidate := _ui_uri_without_cache_buster(str(resource.uri))) is not None
-                    and candidate[0] == requested_key
-                )
-            )
-        )
+        if any(_resource_uri_without_query(str(resource.uri)) == requested for resource in listing)
     )
-    if len(server_matches) == 1 and len(server_matches[0][1]) == 1:
-        matched_server, matched_uris = server_matches[0]
-        return _ResolvedResourceOwner(server=matched_server, url=matched_uris[0])
-    return None
+    if not any(owner.resource_uri_match == "path_only" for owner in owners):
+        return None
+    if len(owners) > 1:
+        return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in owners))
+    return owners[0]
 
 
 def _withhold_fanned_out_caller_authorization(
@@ -352,7 +331,7 @@ def _withhold_fanned_out_caller_authorization(
     return extra_headers
 
 
-def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl | str) -> NoReturn:
+def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl) -> NoReturn:
     match failure:
         case _ResourceOwnerRateLimited(error=error):
             raise error
@@ -3322,7 +3301,7 @@ async def mcp_get_prompt(
 
 
 async def mcp_read_resource(
-    url: AnyUrl | str,
+    url: AnyUrl,
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
     mcp_servers: list[str] | None = None,
@@ -3371,7 +3350,7 @@ async def mcp_read_resource(
         )
         return candidate, listing
 
-    async def resolve_owner() -> _ResolvedResourceOwner | _ResourceOwnerFailure:
+    async def resolve_owner() -> MCPServer | _ResourceOwnerFailure:
         admission: Final = await _admit_mcp_servers(candidates, user_api_key_auth)
         if admission.rejected_servers:
             return _ResourceOwnerRateLimited(error=admission.rejected_servers[0][1])
@@ -3387,24 +3366,19 @@ async def mcp_read_resource(
             if any(str(resource.uri) == requested_uri for resource in listing)
         )
         if len(exact_owners) == 1:
-            return _ResolvedResourceOwner(server=exact_owners[0], url=url)
+            return exact_owners[0]
         if len(exact_owners) > 1:
             return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in exact_owners))
         if failures:
             return failures[0]
-        return _resolve_ui_cache_buster_fallback(listings, requested_uri) or _ResourceOwnerMissing()
+        return _resolve_resource_path_owner(listings, requested_uri) or _ResourceOwnerMissing()
 
     if len(allowed_mcp_servers) == 1:
         await _enforce_mcp_server_rate_limit(user_api_key_auth, allowed_mcp_servers[0])
-    resolved: Final = (
-        _ResolvedResourceOwner(server=allowed_mcp_servers[0], url=url)
-        if len(allowed_mcp_servers) == 1
-        else await resolve_owner()
-    )
+    resolved: Final = allowed_mcp_servers[0] if len(allowed_mcp_servers) == 1 else await resolve_owner()
     if isinstance(resolved, _ResourceOwnerFailure):
         _raise_resource_owner_failure(resolved, url)
-    server: Final = resolved.server
-    target_url: Final = resolved.url
+    server: Final = resolved
 
     server_auth_header, extra_headers = _prepare_mcp_server_headers(
         server=server,
@@ -3419,7 +3393,7 @@ async def mcp_read_resource(
     return await global_mcp_server_manager.read_resource_from_server(
         server=server,
         user_api_key_auth=user_api_key_auth,
-        url=target_url,
+        url=url,
         mcp_auth_header=server_auth_header,
         extra_headers=_withhold_fanned_out_caller_authorization(server, extra_headers, candidates),
         raw_headers=raw_headers,
@@ -4120,13 +4094,6 @@ class GatewayOperations:
                         }
                         if state is not None
                         else None,
-                        **(
-                            {"uri": state.resolved_uri}
-                            if state is not None
-                            and isinstance(operation, ReadResourceRequest)
-                            and state.resolved_uri is not None
-                            else {}
-                        ),
                     }
                 )
             }
