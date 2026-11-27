@@ -12,6 +12,8 @@ import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server import operations
 from litellm.proxy.mcp_server.tool_search import (
+    MCP_PROXY_TOOL_NAMES,
+    active_mcp_proxy_tool_names,
     get_mcp_proxy_tool_definitions,
     handle_mcp_proxy_tool,
     mcp_proxy_tool_id,
@@ -124,10 +126,12 @@ def test_workflow_check_does_not_claim_an_unproven_binding(
 
 def test_workflow_tool_is_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "mcp_tool_search", {})
+    assert active_mcp_proxy_tool_names() == MCP_PROXY_TOOL_NAMES
     assert "check_workflow" not in {tool["name"] for tool in get_mcp_proxy_tool_definitions()}
     assert "find_workflow_sources" not in {tool["name"] for tool in get_mcp_proxy_tool_definitions()}
 
     monkeypatch.setattr(litellm, "mcp_tool_search", {"enable_workflow_discovery": True})
+    assert active_mcp_proxy_tool_names() == MCP_PROXY_TOOL_NAMES | {"check_workflow", "find_workflow_sources"}
     definitions: Final = get_mcp_proxy_tool_definitions()
     for tool in definitions:
         Draft202012Validator.check_schema(tool["inputSchema"])

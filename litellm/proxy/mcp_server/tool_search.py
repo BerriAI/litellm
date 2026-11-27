@@ -49,10 +49,9 @@ MCP_PROXY_TOOL_NAMES: Final = frozenset(
         MCP_PROXY_SEARCH_TOOL_NAME,
         MCP_PROXY_SCHEMA_TOOL_NAME,
         MCP_PROXY_CALL_TOOL_NAME,
-        MCP_PROXY_WORKFLOW_TOOL_NAME,
-        MCP_PROXY_WORKFLOW_SOURCES_TOOL_NAME,
     )
 )
+_MCP_PROXY_WORKFLOW_TOOL_NAMES: Final = frozenset((MCP_PROXY_WORKFLOW_TOOL_NAME, MCP_PROXY_WORKFLOW_SOURCES_TOOL_NAME))
 AGENT_SEARCH_TOOL_NAME: Final[str] = "agent_search"
 SKILL_SEARCH_TOOL_NAME: Final[str] = "skill_search"
 VIRTUAL_TOOL_NAMES: Final = frozenset(
@@ -528,6 +527,15 @@ def get_mcp_proxy_tool_definitions() -> tuple[VirtualToolDefinition, ...]:
         (*base, _MCP_PROXY_WORKFLOW_DEFINITION, _MCP_PROXY_WORKFLOW_SOURCES_DEFINITION)
         if isinstance(settings, MCPToolSearchSettings) and settings.enable_workflow_discovery
         else base
+    )
+
+
+def active_mcp_proxy_tool_names() -> frozenset[str]:
+    settings: Final = mcp_tool_search_settings()
+    return (
+        MCP_PROXY_TOOL_NAMES | _MCP_PROXY_WORKFLOW_TOOL_NAMES
+        if isinstance(settings, MCPToolSearchSettings) and settings.enable_workflow_discovery
+        else MCP_PROXY_TOOL_NAMES
     )
 
 

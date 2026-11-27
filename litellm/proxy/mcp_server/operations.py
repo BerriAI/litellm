@@ -514,10 +514,10 @@ async def _dispatch_virtual_mcp_tool(
         AGENT_SEARCH_TOOL_NAME,
         DEFAULT_AGENT_SEARCH_TOP_K,
         MCP_PROXY_CALL_TOOL_NAME,
-        MCP_PROXY_TOOL_NAMES,
         MCP_TOOL_SEARCH_TOOL_NAME,
         SKILL_SEARCH_TOOL_NAME,
         VIRTUAL_TOOL_NAMES,
+        active_mcp_proxy_tool_names,
         coerce_top_k,
         handle_agent_search,
         handle_mcp_proxy_tool,
@@ -526,13 +526,14 @@ async def _dispatch_virtual_mcp_tool(
         handle_skill_search,
     )
 
-    if mcp_proxy_mode and name not in MCP_PROXY_TOOL_NAMES:
+    proxy_tool_names: Final = active_mcp_proxy_tool_names()
+    if mcp_proxy_mode and name not in proxy_tool_names:
         return CallToolResult(
             content=[TextContent(type="text", text=f"Tool {name} is unavailable on /mcp/proxy")],
             is_error=True,
         )
 
-    if mcp_proxy_mode and name in MCP_PROXY_TOOL_NAMES:
+    if mcp_proxy_mode and name in proxy_tool_names:
         assert user_api_key_auth is not None
         proxy_call_start: Final = datetime.now()  # noqa: DTZ005  # logging pipeline uses naive datetimes
         proxy_arguments: Final = arguments or {}
