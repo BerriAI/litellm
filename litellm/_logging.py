@@ -1,4 +1,6 @@
 import ast
+import asyncio
+import contextlib
 import contextvars
 import functools
 import inspect
@@ -8,7 +10,7 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
 from types import FrameType, MappingProxyType, TracebackType
@@ -921,11 +923,23 @@ RUST_FIELDS_RECORD_ATTR: Final = "rust_fields"
 _RUST_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
-async def drain_rust_log_lines() -> None:
-    """Waits until every log line Rust queued so far has gone through the handlers; for the shutdown path."""
+RUST_LOG_DRAIN_TIMEOUT_SECONDS: Final = 5.0
+
+
+def _rust_log_lines_delivered() -> Awaitable[None]:
     from litellm.rust_bridge._native import rust_log_lines_delivered
 
-    await rust_log_lines_delivered()
+    return rust_log_lines_delivered()
+
+
+async def drain_rust_log_lines(
+    timeout: float, delivered: Callable[[], Awaitable[None]] = _rust_log_lines_delivered
+) -> None:
+    """Waits up to ``timeout`` seconds for every log line Rust queued so far to go through the handlers; for the
+    shutdown path."""
+    # A stalled handler holds its lock, so logging the timeout here would block on that handler too
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(delivered(), timeout=timeout)
 
 
 def _rust_fields_suffix(record: logging.LogRecord) -> str:
