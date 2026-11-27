@@ -92,6 +92,7 @@ pub(crate) struct OwnedClaim {
     pub(crate) field: String,
     pub(crate) value: String,
     pub(crate) issuer: Option<String>,
+    pub(crate) strict: bool,
 }
 
 impl From<MappedClaim<'_>> for OwnedClaim {
@@ -100,6 +101,7 @@ impl From<MappedClaim<'_>> for OwnedClaim {
             field: claim.field.to_owned(),
             value: claim.value.to_owned(),
             issuer: claim.issuer.map(str::to_owned),
+            strict: claim.strict,
         }
     }
 }

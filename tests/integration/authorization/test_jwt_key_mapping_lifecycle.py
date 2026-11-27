@@ -675,6 +675,17 @@ def test_disabling_global_mapping_fallback_rejects_issuer_jwt_with_only_a_global
         _assert_unmapped(_chat(gateway, runtime.model, token, "issuer without a scoped mapping"), client_id)
         _assert_upstream_requests(runtime.upstream, ())
 
+        strict_key: Final = "jwt_key_mapping_strict:" + json.dumps([runtime.strict_issuer, _CLIENT_CLAIM, client_id])
+        with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
+            assert cache.get(strict_key) == b'"__NO_MAPPING__"'
+            scoped: Final = _create_mapping(gateway, key, client_id, runtime.strict_issuer)
+            scenario.cleanups.callback(_delete_mapping_if_present, gateway, scoped.id)
+            assert cache.get(strict_key) is None
+
+        prompt: Final = "issuer with a newly created scoped mapping"
+        _assert_chat(gateway, runtime.model, token, prompt, sha256(key.encode()).hexdigest())
+        _assert_upstream_requests(runtime.upstream, (_expected_chat_request(runtime.model, prompt),))
+
 
 def test_an_issuer_that_allows_fallback_warms_a_global_key_that_a_strict_issuer_skips(
     issuer_without_global_fallback: _GlobalFallbackRuntime,

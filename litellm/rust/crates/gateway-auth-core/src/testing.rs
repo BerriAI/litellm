@@ -110,6 +110,13 @@ fn keyed(record: &KeyRecord, label: &str) -> Keyed<String> {
 
 /// The key the script records a claim's mapping under.
 fn mapping_key(claim: MappedClaim<'_>) -> String {
+    if claim.strict {
+        let issuer = claim.issuer.unwrap_or_default();
+        return format!(
+            "jwt_key_mapping_strict:{issuer}:{}:{}",
+            claim.field, claim.value
+        );
+    }
     match claim.issuer.filter(|issuer| !issuer.is_empty()) {
         None => format!("jwt_key_mapping:{}:{}", claim.field, claim.value),
         Some(issuer) => format!("jwt_key_mapping:{issuer}:{}:{}", claim.field, claim.value),

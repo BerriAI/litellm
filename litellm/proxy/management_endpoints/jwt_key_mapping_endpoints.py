@@ -33,13 +33,14 @@ def _mapping_cache_keys(jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: s
     from litellm.proxy.proxy_server import litellm_jwtauth
 
     own_key: Final = AuthObject.jwt_key_mapping(jwt_claim_name, jwt_claim_value, jwt_issuer).key
+    strict_key: Final = AuthObject.jwt_key_mapping(jwt_claim_name, jwt_claim_value, jwt_issuer, strict=True).key
     if jwt_issuer:
-        return (own_key,)
+        return (own_key, strict_key)
     issuer_keys: Final = tuple(
         AuthObject.jwt_key_mapping(jwt_claim_name, jwt_claim_value, issuer_config.issuer).key
         for issuer_config in litellm_jwtauth.issuers or ()
     )
-    return tuple(dict.fromkeys((own_key, *issuer_keys)))
+    return tuple(dict.fromkeys((own_key, strict_key, *issuer_keys)))
 
 
 def _validated_token_hash(token: str) -> str:

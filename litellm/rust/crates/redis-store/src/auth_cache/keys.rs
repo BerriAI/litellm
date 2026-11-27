@@ -61,6 +61,7 @@ pub enum AuthObject {
         issuer: Option<String>,
         claim_name: String,
         claim_value: String,
+        strict: bool,
     },
     AgentIdentity {
         tenant_id: String,
@@ -129,6 +130,20 @@ impl AuthObject {
                 issuer,
                 claim_name,
                 claim_value,
+                strict: true,
+            } => format!(
+                "jwt_key_mapping_strict:{}",
+                json_strings(&[
+                    issuer.as_deref().unwrap_or_default(),
+                    claim_name,
+                    claim_value
+                ])
+            ),
+            Self::JwtKeyMapping {
+                issuer,
+                claim_name,
+                claim_value,
+                strict: false,
             } => match issuer.as_deref().filter(|issuer| !issuer.is_empty()) {
                 None => format!("jwt_key_mapping:{claim_name}:{claim_value}"),
                 Some(issuer) => format!("jwt_key_mapping:{issuer}:{claim_name}:{claim_value}"),
@@ -149,12 +164,7 @@ impl AuthObject {
 }
 
 /// `json.dumps(tuple(items))`.
-fn json_strings(items: &[&String]) -> String {
-    let list = Value::List(
-        items
-            .iter()
-            .map(|item| Value::from(item.as_str()))
-            .collect(),
-    );
+fn json_strings(items: &[&str]) -> String {
+    let list = Value::List(items.iter().copied().map(Value::from).collect());
     json::dumps(&list).expect("json.dumps never refuses a list of strings")
 }

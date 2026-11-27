@@ -62,9 +62,7 @@ def drain_post_call_redis_batches() -> Future[None]: ...
 class NativeCostMapSource:
     def __new__(cls, url: str, *, use_http_settings: bool) -> NativeCostMapSource: ...
     @staticmethod
-    def remote(
-        url: str, *, local_only: bool, offline: bool, use_http_settings: bool
-    ) -> NativeCostMapSource | None: ...
+    def remote(url: str, *, local_only: bool, offline: bool, use_http_settings: bool) -> NativeCostMapSource | None: ...
     @property
     def shown_url(self) -> str: ...
     def fetch_blocking(self, policy: NativeFetchPolicy) -> NativeFetched | NativeFetchFailed: ...
@@ -277,9 +275,7 @@ class NativeRateCard:
 @final
 class NativeModelCostMap:
     @staticmethod
-    def bundled(
-        min_model_count: int | None = None, max_shrink_ratio: float | None = None
-    ) -> NativeModelCostMap: ...
+    def bundled(min_model_count: int | None = None, max_shrink_ratio: float | None = None) -> NativeModelCostMap: ...
     @property
     def min_model_count(self) -> int: ...
     @property
@@ -1528,26 +1524,36 @@ class RustAuthStep:
 
     @final
     class CachedKeyMapping(RustAuthStep):
-        __match_args__: tuple[Literal["claim_field"], Literal["claim_value"], Literal["issuer"]] = (
+        __match_args__: tuple[Literal["claim_field"], Literal["claim_value"], Literal["issuer"], Literal["strict"]] = (
             "claim_field",
             "claim_value",
             "issuer",
+            "strict",
         )
-        def __new__(cls, claim_field: str, claim_value: str, issuer: str | None) -> RustAuthStep.CachedKeyMapping: ...
+        def __new__(
+            cls, claim_field: str, claim_value: str, issuer: str | None, strict: bool
+        ) -> RustAuthStep.CachedKeyMapping: ...
         @property
         def claim_field(self) -> str: ...
         @property
         def claim_value(self) -> str: ...
         @property
         def issuer(self) -> str | None: ...
+        @property
+        def strict(self) -> bool: ...
 
     @final
     class CacheKeyMapping(RustAuthStep):
         __match_args__: tuple[
-            Literal["claim_field"], Literal["claim_value"], Literal["issuer"], Literal["value"], Literal["ttl_seconds"]
-        ] = ("claim_field", "claim_value", "issuer", "value", "ttl_seconds")
+            Literal["claim_field"],
+            Literal["claim_value"],
+            Literal["issuer"],
+            Literal["strict"],
+            Literal["value"],
+            Literal["ttl_seconds"],
+        ] = ("claim_field", "claim_value", "issuer", "strict", "value", "ttl_seconds")
         def __new__(
-            cls, claim_field: str, claim_value: str, issuer: str | None, value: object, ttl_seconds: float
+            cls, claim_field: str, claim_value: str, issuer: str | None, strict: bool, value: object, ttl_seconds: float
         ) -> RustAuthStep.CacheKeyMapping: ...
         @property
         def claim_field(self) -> str: ...
@@ -1556,24 +1562,31 @@ class RustAuthStep:
         @property
         def issuer(self) -> str | None: ...
         @property
+        def strict(self) -> bool: ...
+        @property
         def value(self) -> object: ...
         @property
         def ttl_seconds(self) -> float: ...
 
     @final
     class ForgetKeyMapping(RustAuthStep):
-        __match_args__: tuple[Literal["claim_field"], Literal["claim_value"], Literal["issuer"]] = (
+        __match_args__: tuple[Literal["claim_field"], Literal["claim_value"], Literal["issuer"], Literal["strict"]] = (
             "claim_field",
             "claim_value",
             "issuer",
+            "strict",
         )
-        def __new__(cls, claim_field: str, claim_value: str, issuer: str | None) -> RustAuthStep.ForgetKeyMapping: ...
+        def __new__(
+            cls, claim_field: str, claim_value: str, issuer: str | None, strict: bool
+        ) -> RustAuthStep.ForgetKeyMapping: ...
         @property
         def claim_field(self) -> str: ...
         @property
         def claim_value(self) -> str: ...
         @property
         def issuer(self) -> str | None: ...
+        @property
+        def strict(self) -> bool: ...
 
     @final
     class Team(RustAuthStep):
@@ -2083,7 +2096,9 @@ class AuthObject:
     @staticmethod
     def managed_vector_store(vector_store_id: str) -> AuthObject: ...
     @staticmethod
-    def jwt_key_mapping(claim_name: str, claim_value: str, issuer: str | None = None) -> AuthObject: ...
+    def jwt_key_mapping(
+        claim_name: str, claim_value: str, issuer: str | None = None, *, strict: bool = False
+    ) -> AuthObject: ...
     @staticmethod
     def agent_identity(tenant_id: str, client_id: str) -> AuthObject: ...
     @staticmethod

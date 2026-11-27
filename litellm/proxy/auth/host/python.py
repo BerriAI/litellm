@@ -553,22 +553,26 @@ class PythonAuthHost:
         await self.jwks_cache.async_set_cache(key=key, value=value, ttl=ttl_seconds)
 
     @with_service_target(AUTH_OBJECTS_TARGET)
-    async def cached_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> object:
+    async def cached_key_mapping(
+        self, claim_field: str, claim_value: str, issuer: str | None, *, strict: bool
+    ) -> object:
         return _DECODED_JSON.validate_python(
-            await self.user_api_key_cache.async_get_cache(AuthObject.jwt_key_mapping(claim_field, claim_value, issuer))
+            await self.user_api_key_cache.async_get_cache(
+                AuthObject.jwt_key_mapping(claim_field, claim_value, issuer, strict=strict)
+            )
         )
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def cache_key_mapping(
-        self, claim_field: str, claim_value: str, issuer: str | None, value: object, ttl_seconds: float
+        self, claim_field: str, claim_value: str, issuer: str | None, value: object, ttl_seconds: float, *, strict: bool
     ) -> None:
         await self.user_api_key_cache.async_set_cache(
-            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer), value, ttl=ttl_seconds
+            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer, strict=strict), value, ttl=ttl_seconds
         )
 
-    async def forget_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> None:
+    async def forget_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None, *, strict: bool) -> None:
         await self.user_api_key_cache.async_delete_cache(
-            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer).key
+            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer, strict=strict).key
         )
 
     async def _team(
