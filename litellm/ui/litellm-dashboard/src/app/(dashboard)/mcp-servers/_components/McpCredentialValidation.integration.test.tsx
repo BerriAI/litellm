@@ -17,9 +17,7 @@ function CredentialForm({ children }: { children: ReactNode }) {
 
   return (
     <McpFormProvider form={form} registerValidation={registerValidation}>
-      <MountedFormProvider value={{ control: form.control, registry }}>
-        {children}
-      </MountedFormProvider>
+      <MountedFormProvider value={{ control: form.control, registry }}>{children}</MountedFormProvider>
     </McpFormProvider>
   );
 }

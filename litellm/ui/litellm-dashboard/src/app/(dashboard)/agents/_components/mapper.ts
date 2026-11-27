@@ -1,6 +1,11 @@
 import type { Agent } from "@/components/agents/types";
 import type { AgentCreateInfo } from "@/components/networking";
-import { AGENT_FORM_CONFIG, buildAgentDataFromForm, buildMcpObjectPermission, getDefaultFormValues } from "./agent_config";
+import {
+  AGENT_FORM_CONFIG,
+  buildAgentDataFromForm,
+  buildMcpObjectPermission,
+  getDefaultFormValues,
+} from "./agent_config";
 import type { DiscoveredAgentCardSelection } from "./agent_card_discovery";
 import { overlayDiscoveredCardParams } from "./agent_discovery_utils";
 import { unmountedA2AFieldNames } from "./agent_form_fields";
@@ -86,7 +91,11 @@ interface CreateAgentOptions {
 
 export const mapAgentCreate = (
   values: AgentFormValues,
-  { agentType, selectedAgentTypeInfo, appliedDiscoveredSelection }: {
+  {
+    agentType,
+    selectedAgentTypeInfo,
+    appliedDiscoveredSelection,
+  }: {
     agentType: string;
     selectedAgentTypeInfo: AgentCreateInfo | undefined;
     appliedDiscoveredSelection: DiscoveredAgentCardSelection | null;
@@ -141,7 +150,12 @@ export const mapAgentCreate = (
 export const mapAgentEdit = (
   submitted: AgentFormValues,
   agent: Agent,
-  { dynamicInfo, mountedPanels, appliedDiscoveredSelection, isDirty }: {
+  {
+    dynamicInfo,
+    mountedPanels,
+    appliedDiscoveredSelection,
+    isDirty,
+  }: {
     dynamicInfo: AgentCreateInfo | undefined;
     mountedPanels: readonly string[];
     appliedDiscoveredSelection: DiscoveredAgentCardSelection | null;
@@ -150,9 +164,7 @@ export const mapAgentEdit = (
 ): AgentRequestPayload => {
   const values = omitFieldValues(
     submitted,
-    dynamicInfo
-      ? unmountedDynamicFieldNames(mountedPanels)
-      : unmountedA2AFieldNames(mountedPanels),
+    dynamicInfo ? unmountedDynamicFieldNames(mountedPanels) : unmountedA2AFieldNames(mountedPanels),
   );
 
   const built: AgentRequestPayload = dynamicInfo

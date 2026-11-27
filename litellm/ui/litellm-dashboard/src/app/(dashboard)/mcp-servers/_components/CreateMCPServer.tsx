@@ -960,7 +960,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     </Collapsible>
                   )}
 
-                  {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && <AwsSigV4Fields />}
+                  {authSectionMounted && isAwsSigV4AuthType && <AwsSigV4Fields />}
 
                   {/* Stdio Configuration - only show for stdio transport */}
                   {transportType === "stdio" && !stdioEnabled && <StdioDisabledBanner />}

@@ -60,7 +60,6 @@ import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import i18n from "@/i18n/i18n";
 
-
 const STEP_TITLES = [
   "agents.addForm.steps.configure",
   "agents.addForm.steps.entitlements",
@@ -120,8 +119,6 @@ const StepProgress: React.FC<{ current: number }> = ({ current }) => (
     ))}
   </ol>
 );
-
-
 
 interface AddAgentFormProps {
   visible: boolean;
@@ -314,7 +311,11 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         maxIterations,
         maxBudgetPerSession,
       };
-      const mapped = mapAgentCreate(values, { agentType, selectedAgentTypeInfo, appliedDiscoveredSelection }, createOptions);
+      const mapped = mapAgentCreate(
+        values,
+        { agentType, selectedAgentTypeInfo, appliedDiscoveredSelection },
+        createOptions,
+      );
       if (!mapped) {
         toast.error(t("agents.addForm.toasts.buildFailed"));
         setIsSubmitting(false);
