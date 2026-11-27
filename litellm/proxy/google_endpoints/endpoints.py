@@ -596,6 +596,8 @@ async def create_interaction(
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = "gemini"
 
+    if PINNED_DEPLOYMENT_KEY in data:
+        del data[PINNED_DEPLOYMENT_KEY]
     prepared: Final = _prepare_create_interaction_routing(data, llm_router, user_api_key_dict)
     if prepared.previous_interaction_id is not None:
         data["previous_interaction_id"] = prepared.previous_interaction_id

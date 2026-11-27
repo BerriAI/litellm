@@ -1336,3 +1336,67 @@ def test_colliding_deployment_id_and_group_name_pins_previous_interaction_id(
     assert alpha_post.call_count == 1
     assert beta_post.call_count == 0
     assert denied_resp.status_code == 403, denied_resp.text
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_create_interaction_strips_client_supplied_pinned_deployment_id(
+    interactions_proxy: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router: Final = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "shared",
+                "vertex_ai/gemini-4-argon",
+                "pub-project",
+                "shared-pub",
+                access_groups=("public",),
+            ),
+            _vertex_deployment(
+                "shared",
+                "vertex_ai/gemini-4-argon",
+                "priv-project",
+                "shared-priv",
+                access_groups=("tools-private",),
+            ),
+            _vertex_deployment(
+                "tools-group",
+                "vertex_ai/gemini-4-argon",
+                "tools-project",
+                "tools-private",
+            ),
+        ]
+    )
+    pub_post: Final = respx_mock.post(_project_url("pub-project")).mock(
+        return_value=httpx.Response(200, json={"id": _INTERACTION_ID, "object": "interaction", "status": "completed"})
+    )
+    priv_post: Final = respx_mock.post(_project_url("priv-project")).mock(
+        return_value=httpx.Response(200, json={"id": "wrong-priv", "object": "interaction", "status": "completed"})
+    )
+    tools_post: Final = respx_mock.post(_project_url("tools-project")).mock(
+        return_value=httpx.Response(200, json={"id": "wrong-tools", "object": "interaction", "status": "completed"})
+    )
+
+    try:
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        with _cached_key(UserAPIKeyAuth(models=["public", "tools*"])) as authorization:
+            response: Final = interactions_proxy.post(
+                "/v1beta/interactions",
+                json={
+                    "model": "shared",
+                    "_pinned_deployment_id": "tools-private",
+                    "input": "Hi",
+                },
+                headers={"authorization": authorization},
+            )
+    finally:
+        router.retire()
+
+    assert response.status_code == 200, response.text
+    assert pub_post.call_count == 1
+    assert priv_post.call_count == 0
+    assert tools_post.call_count == 0
+    assert response.headers["x-litellm-model-id"] == "shared-pub"

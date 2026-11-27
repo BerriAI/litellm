@@ -52,22 +52,39 @@ def pinned_deployment_wildcard_grant(
     registry: RouterRegistry,
     *,
     by_pinned_id: bool = False,
+    requested_model: object = None,
 ) -> tuple[str, ...] | None:
     granted: Final = _names(allowed_models)
-    if not isinstance(name, str) or not granted or name in granted:
+    if not isinstance(name, str) or not granted:
         return None
-    if not by_pinned_id and name in registry.index("model_name"):
+    if not by_pinned_id and (name in granted or name in registry.index("model_name")):
         return None
     deployment: Final = registry.deployment(name)
     if deployment is None:
         return None
+    if by_pinned_id:
+        valid_targets: Final = tuple(
+            target
+            for target in (
+                deployment.model_name,
+                deployment.model_info.team_public_model_name,
+                deployment.model_info.id,
+            )
+            if target
+        )
+        if not isinstance(requested_model, str) or requested_model not in valid_targets:
+            return None
     from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
 
     access_groups: Final = registry.access_groups(model_name=deployment.model_name, team_id=team_id)
     patterns: Final = tuple(model for model in granted if model not in access_groups)
     if not model_matches_any_wildcard_pattern_in_list(deployment.model_name, patterns):
         return None
-    return (*granted, name, deployment.model_name) if by_pinned_id else (*granted, name)
+    if by_pinned_id:
+        additions: Final = (name,) if requested_model == name else (deployment.model_name,)
+        extra: Final = tuple(model for model in additions if model not in granted)
+        return (*granted, *extra) if extra else None
+    return (*granted, name)
 
 
 def _router_weights_error(raw: object) -> BaseException:
