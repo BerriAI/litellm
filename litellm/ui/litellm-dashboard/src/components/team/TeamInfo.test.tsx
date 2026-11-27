@@ -1873,7 +1873,7 @@ describe("TeamInfoView", () => {
 
       await waitFor(() => {
         expect(networking.teamUpdateCall).toHaveBeenCalledWith(
-          "123",
+          defaultProps.accessToken,
           expect.objectContaining({ team_id: "123", team_member_key_duration: null }),
         );
       });
