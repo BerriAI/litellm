@@ -57,9 +57,10 @@ pub use store::AuthStore;
 
 /// The rows the native host hands the core: a key's, and a core record for each thing a caller
 /// belongs to. The host reads a key's team, owner, membership, organization and project, and a JWT's
-/// team, user and membership. The model can choose the JWT's team. These associations still go
-/// to Python at admit. The other record reads decline. A row this host cannot read is `Infallible`.
-/// An end user's record names the end user alone when its row holds nothing the native app applies.
+/// team, user and membership. The model can choose the JWT's team. A JWT's team or user can be
+/// served, while keys with these associations go to Python. The other record reads decline.
+/// A row this host cannot read is `Infallible`. An end user's record names only the end user
+/// when its row holds nothing the native app applies.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeRows;
 

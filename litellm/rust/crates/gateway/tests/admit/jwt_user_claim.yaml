@@ -1,9 +1,8 @@
 # With a user claim configured, the user a JWT names is read natively, with its membership of the
-# team the JWT chooses. A user Python has nothing to write for is found, and its caller still goes
-# to Python, since the native spend log charges no user yet, and over its team when it also
-# chooses one. A user that holds a budget, a user Python links the sign-in to, a user the database
-# does not hold, which Python looks up by its sign-in, and a team Python adds the user to are not
-# native.
+# team the JWT chooses. A user Python has nothing to write for is found, and its caller is served,
+# in its team when it also chooses one. A user that holds a budget, a user Python links the
+# sign-in to, a user the database does not hold, which Python looks up by its sign-in, and a team
+# Python adds the user to are not native.
 enterprise: true
 
 config:
@@ -33,17 +32,13 @@ requests:
   - name: a proxy admin JWT naming a user
     jwt: {claims: {scope: litellm_proxy_admin, sub: user-1}}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: user
+    expect: rust
 
   - name: a proxy admin JWT naming a user and choosing a team
     jwt: {claims: {scope: litellm_proxy_admin, sub: user-1}}
     headers: {x-litellm-team-id: team-1}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: team
+    expect: rust
 
   - name: a proxy admin JWT naming a user the database does not hold
     jwt: {claims: {scope: litellm_proxy_admin, sub: user-gone}}
@@ -60,17 +55,13 @@ requests:
   - name: a user JWT naming a user
     jwt: {claims: {sub: user-1}}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: user
+    expect: rust
 
   - name: a user JWT naming a user and choosing a team it belongs to
     jwt: {claims: {sub: user-member, groups: [team-1]}}
     headers: {x-litellm-team-id: team-1}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: team
+    expect: rust
 
   - name: a user JWT choosing a team Python adds its user to
     jwt: {claims: {sub: user-1, groups: [team-1]}}
