@@ -34,10 +34,11 @@ use litellm_cost::receipt::Receipt;
 use litellm_inference::Error as InferenceError;
 use litellm_inference_messages::{PricedCall, Pricing, PricingIdentity, price_call};
 use litellm_llms::{bedrock_mantle::messages::transformation as mantle, vertex_ai::common_utils};
+use litellm_model_catalog::wire::EntryWire;
 use litellm_model_catalog::{Catalog, CostLookup, CostMap, KnownNames, PricingContext};
 use litellm_router_core::Deployment;
 use litellm_secrets::source::SecretSource;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::Error;
 
@@ -50,173 +51,12 @@ const RENAMED_MODELS: [&str; 6] = [
     "ada",
 ];
 
-/// Python's `_CUSTOM_PRICING_KEYS`, the fields of `CustomPricingLiteLLMParams`, with
-/// `off_peak_pricing`, which `_MODEL_INFO_CUSTOM_PRICING_KEYS` adds for `model_info`.
-const CUSTOM_PRICING_KEYS: [&str; 164] = [
-    "annotation_cost_per_page",
-    "annotation_cost_per_page_batches",
-    "cache_creation_input_audio_token_cost",
-    "cache_creation_input_token_cost",
-    "cache_creation_input_token_cost_above_100k_tokens",
-    "cache_creation_input_token_cost_above_100k_tokens_batches",
-    "cache_creation_input_token_cost_above_12hr",
-    "cache_creation_input_token_cost_above_12hr_above_272k_tokens",
-    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches",
-    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex",
-    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority",
-    "cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast",
-    "cache_creation_input_token_cost_above_12hr_batches",
-    "cache_creation_input_token_cost_above_12hr_flex",
-    "cache_creation_input_token_cost_above_12hr_priority",
-    "cache_creation_input_token_cost_above_12hr_ultrafast",
-    "cache_creation_input_token_cost_above_1hr",
-    "cache_creation_input_token_cost_above_1hr_above_100k_tokens",
-    "cache_creation_input_token_cost_above_200k_tokens",
-    "cache_creation_input_token_cost_above_200k_tokens_batches",
-    "cache_creation_input_token_cost_above_272k_tokens",
-    "cache_creation_input_token_cost_above_272k_tokens_batches",
-    "cache_creation_input_token_cost_above_272k_tokens_flex",
-    "cache_creation_input_token_cost_above_272k_tokens_priority",
-    "cache_creation_input_token_cost_above_272k_tokens_ultrafast",
-    "cache_creation_input_token_cost_batches",
-    "cache_creation_input_token_cost_flex",
-    "cache_creation_input_token_cost_priority",
-    "cache_creation_input_token_cost_ultrafast",
-    "cache_read_input_audio_token_cost",
-    "cache_read_input_audio_token_cost_batches",
-    "cache_read_input_audio_token_cost_flex",
-    "cache_read_input_audio_token_cost_priority",
-    "cache_read_input_image_token_cost",
-    "cache_read_input_image_token_cost_batches",
-    "cache_read_input_image_token_cost_priority",
-    "cache_read_input_token_cost",
-    "cache_read_input_token_cost_above_100k_tokens",
-    "cache_read_input_token_cost_above_100k_tokens_batches",
-    "cache_read_input_token_cost_above_200k_tokens",
-    "cache_read_input_token_cost_above_200k_tokens_batches",
-    "cache_read_input_token_cost_above_200k_tokens_priority",
-    "cache_read_input_token_cost_above_272k_tokens",
-    "cache_read_input_token_cost_above_272k_tokens_batches",
-    "cache_read_input_token_cost_above_272k_tokens_flex",
-    "cache_read_input_token_cost_above_272k_tokens_priority",
-    "cache_read_input_token_cost_above_272k_tokens_ultrafast",
-    "cache_read_input_token_cost_above_512k_tokens",
-    "cache_read_input_token_cost_balanced",
-    "cache_read_input_token_cost_batches",
-    "cache_read_input_token_cost_flex",
-    "cache_read_input_token_cost_priority",
-    "cache_read_input_token_cost_ultrafast",
-    "citation_cost_per_token",
-    "cost_per_second",
-    "explicit_cache_read_input_token_cost",
-    "fedramp_uplift_multiplier",
-    "google_maps_grounding_cost_per_query",
-    "input_cost_per_audio_per_second",
-    "input_cost_per_audio_per_second_above_128k_tokens",
-    "input_cost_per_audio_token",
-    "input_cost_per_audio_token_above_200k_tokens",
-    "input_cost_per_audio_token_above_200k_tokens_batches",
-    "input_cost_per_audio_token_above_200k_tokens_flex",
-    "input_cost_per_audio_token_above_200k_tokens_priority",
-    "input_cost_per_audio_token_batches",
-    "input_cost_per_audio_token_flex",
-    "input_cost_per_audio_token_priority",
-    "input_cost_per_character",
-    "input_cost_per_character_above_128k_tokens",
-    "input_cost_per_image",
-    "input_cost_per_image_above_128k_tokens",
-    "input_cost_per_image_token",
-    "input_cost_per_image_token_batches",
-    "input_cost_per_image_token_priority",
-    "input_cost_per_pixel",
-    "input_cost_per_query",
-    "input_cost_per_second",
-    "input_cost_per_text_message",
-    "input_cost_per_token",
-    "input_cost_per_token_above_100k_tokens",
-    "input_cost_per_token_above_100k_tokens_batches",
-    "input_cost_per_token_above_128k_tokens",
-    "input_cost_per_token_above_200k_tokens",
-    "input_cost_per_token_above_200k_tokens_batches",
-    "input_cost_per_token_above_200k_tokens_flex",
-    "input_cost_per_token_above_200k_tokens_priority",
-    "input_cost_per_token_above_272k_tokens",
-    "input_cost_per_token_above_272k_tokens_batches",
-    "input_cost_per_token_above_272k_tokens_flex",
-    "input_cost_per_token_above_272k_tokens_priority",
-    "input_cost_per_token_above_272k_tokens_ultrafast",
-    "input_cost_per_token_above_512k_tokens",
-    "input_cost_per_token_balanced",
-    "input_cost_per_token_batches",
+/// Fields of Python's `CustomPricingLiteLLMParams` that the cost map does not read as prices.
+const CUSTOM_PRICING_KEYS_OUTSIDE_PRICES: [&str; 4] = [
     "input_cost_per_token_cache_hit",
-    "input_cost_per_token_flex",
-    "input_cost_per_token_priority",
-    "input_cost_per_token_ultrafast",
-    "input_cost_per_video_per_second",
-    "input_cost_per_video_per_second_above_128k_tokens",
-    "input_cost_per_video_per_second_above_15s_interval",
-    "input_cost_per_video_per_second_above_8s_interval",
-    "input_cost_per_video_token",
-    "input_cost_per_video_token_batches",
-    "ocr_cost_per_credit",
-    "ocr_cost_per_page",
-    "ocr_cost_per_page_batches",
-    "off_peak_pricing",
     "output_cost_per_audio_per_second",
-    "output_cost_per_audio_token",
-    "output_cost_per_billable_unit",
-    "output_cost_per_character",
-    "output_cost_per_character_above_128k_tokens",
-    "output_cost_per_image",
-    "output_cost_per_image_1024",
-    "output_cost_per_image_1536",
-    "output_cost_per_image_1K",
-    "output_cost_per_image_2K",
-    "output_cost_per_image_512",
-    "output_cost_per_image_token",
-    "output_cost_per_image_token_batches",
-    "output_cost_per_image_token_priority",
-    "output_cost_per_pixel",
-    "output_cost_per_reasoning_token",
-    "output_cost_per_reasoning_token_flex",
-    "output_cost_per_reasoning_token_priority",
-    "output_cost_per_second",
-    "output_cost_per_second_1080p",
-    "output_cost_per_second_2k",
-    "output_cost_per_second_480p",
-    "output_cost_per_second_4k",
-    "output_cost_per_second_720p",
-    "output_cost_per_second_768p",
-    "output_cost_per_token",
-    "output_cost_per_token_above_100k_tokens",
-    "output_cost_per_token_above_100k_tokens_batches",
-    "output_cost_per_token_above_128k_tokens",
-    "output_cost_per_token_above_200k_tokens",
-    "output_cost_per_token_above_200k_tokens_batches",
-    "output_cost_per_token_above_200k_tokens_flex",
-    "output_cost_per_token_above_200k_tokens_priority",
-    "output_cost_per_token_above_272k_tokens",
-    "output_cost_per_token_above_272k_tokens_batches",
-    "output_cost_per_token_above_272k_tokens_flex",
-    "output_cost_per_token_above_272k_tokens_priority",
-    "output_cost_per_token_above_272k_tokens_ultrafast",
-    "output_cost_per_token_above_512k_tokens",
-    "output_cost_per_token_balanced",
-    "output_cost_per_token_batches",
-    "output_cost_per_token_flex",
-    "output_cost_per_token_priority",
-    "output_cost_per_token_ultrafast",
-    "output_cost_per_video",
-    "output_cost_per_video_clip",
-    "output_cost_per_video_per_second",
-    "output_cost_per_video_token",
     "output_vector_size",
-    "regional_endpoint_uplift_multiplier",
-    "regional_processing_uplift_multiplier_eu",
-    "regional_processing_uplift_multiplier_us",
-    "search_context_cost_per_query",
     "search_queries_cost_per_query",
-    "tiered_pricing",
 ];
 
 /// Prices a call over the cost map installed when it is priced, with no discount or margin config.
@@ -324,6 +164,23 @@ fn regional(deployment: &Deployment) -> Option<Regional> {
     }
 }
 
+/// Whether `fields`, read by the cost map as `wire`, set a price of their own the way Python's
+/// `_CUSTOM_PRICING_KEYS` finds one. `off_peak_pricing` counts only in `model_info`, so the caller
+/// checks it.
+fn sets_prices(fields: &Map<String, Value>, wire: &EntryWire) -> bool {
+    !wire.prices.is_empty()
+        || wire.tier_rows.is_some()
+        || wire.search_context.is_some()
+        || wire.output_cost_per_video_clip.is_some()
+        || wire.regional_endpoint_uplift.is_some()
+        || wire.residency_uplift_eu.is_some()
+        || wire.residency_uplift_us.is_some()
+        || wire.fedramp_uplift.is_some()
+        || CUSTOM_PRICING_KEYS_OUTSIDE_PRICES
+            .iter()
+            .any(|key| fields.get(*key).is_some_and(|value| !value.is_null()))
+}
+
 /// What a call to `deployment` is priced with. `None`, so the call goes unpriced, for one Python
 /// prices another way: custom pricing in its params or `model_info`, a `pricing_provider`, or a
 /// Bedrock `model_id`. A Vertex AI deployment prices in the location the call is sent to, and a
@@ -337,9 +194,12 @@ pub(crate) fn identity(
     let params = &deployment.params;
     let model_info = &deployment.model_info.raw;
     let set = |value: Option<&Value>| value.is_some_and(|value| !value.is_null());
-    let custom = CUSTOM_PRICING_KEYS.iter().any(|key| {
-        (*key != "off_peak_pricing" && set(params.extra.get(*key))) || set(model_info.get(*key))
-    });
+    let model_info_prices = EntryWire::read(model_info);
+    let custom = sets_prices(
+        &deployment.raw_params,
+        &EntryWire::read(&deployment.raw_params),
+    ) || sets_prices(model_info, &model_info_prices)
+        || model_info_prices.off_peak.is_some();
     if custom || set(params.extra.get("model_id")) || set(model_info.get("pricing_provider")) {
         return None;
     }
@@ -472,6 +332,13 @@ mod tests {
     #[case::custom_pricing_in_its_params(json!({"input_cost_per_token": 0.000001}), json!({}), None)]
     #[case::custom_pricing_in_its_model_info(json!({}), json!({"output_cost_per_token": 0.000002}), None)]
     #[case::off_peak_pricing_in_its_model_info(json!({}), json!({"off_peak_pricing": {}}), None)]
+    #[case::off_peak_pricing_in_its_params(json!({"off_peak_pricing": {}}), json!({}), Some(None))]
+    #[case::a_flex_image_output_rate(json!({"output_cost_per_image_token_flex": 0.000001}), json!({}), None)]
+    #[case::a_band_and_tier_combination(json!({}), json!({"input_cost_per_token_above_512k_tokens_priority": 0.000001}), None)]
+    #[case::tiered_pricing(json!({"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 0.000001}]}), json!({}), None)]
+    #[case::an_uplift_multiplier(json!({}), json!({"fedramp_uplift_multiplier": 1.2}), None)]
+    #[case::a_cache_hit_rate(json!({"input_cost_per_token_cache_hit": 0.000001}), json!({}), None)]
+    #[case::a_rate_the_cost_map_has_no_meter_for(json!({}), json!({"search_queries_cost_per_query": 0.01}), None)]
     #[case::a_custom_pricing_key_left_unset(json!({"input_cost_per_token": null}), json!({}), Some(None))]
     #[case::a_pricing_provider(json!({}), json!({"pricing_provider": "anthropic"}), None)]
     #[case::an_invoked_bedrock_model_id(json!({"model_id": "arn:aws:bedrock:model"}), json!({}), None)]
