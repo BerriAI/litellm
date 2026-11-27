@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use litellm_redis_store::auth_cache::{ExcludedIfNone, OrganizationMembershipEntry, UserEntry};
 use litellm_repositories::{
-    OrganizationMembership, Resolution, Side, SignIn, SsoLink, User, UserRepository,
+    Inserted, NewUserDefaults, OrganizationMembership, Resolution, Side, SignIn, SsoLink, User,
+    UserRepository,
 };
 
 use crate::{
@@ -52,6 +53,51 @@ impl UserDatabase {
             sso_link,
             owes_email,
         }))
+    }
+
+    /// Creates the user `sign_in` names with `defaults`, as `get_user_object` does under
+    /// `user_id_upsert`, and returns the entry for the row as stored. A sign-in that loses to a
+    /// concurrent one gets the entry for the row that won, or `Conflict(None)` when that row is
+    /// gone again.
+    pub async fn insert(
+        &self,
+        sign_in: &SignIn,
+        defaults: &NewUserDefaults,
+    ) -> Result<Inserted<UserEntry>, Error> {
+        Ok(match self.users.insert(sign_in, defaults).await? {
+            Inserted::Created(user) => Inserted::Created(user_entry(user)?),
+            Inserted::Conflict(user) => Inserted::Conflict(user.map(user_entry).transpose()?),
+        })
+    }
+
+    /// Stores `user_email` on `user_id` while the row has none, as `_backfill_null_user_email`
+    /// does, and returns the entry for the row as stored, also when it already held an email.
+    /// `None` when another user holds the email and `links_any_user` is off, or the row is gone.
+    pub async fn backfill_email(
+        &self,
+        user_id: &str,
+        user_email: &str,
+        links_any_user: bool,
+    ) -> Result<Option<UserEntry>, Error> {
+        self.users
+            .backfill_email_returning(user_id, user_email, links_any_user)
+            .await?
+            .map(user_entry)
+            .transpose()
+    }
+
+    /// Sets the role of `user_id`, as the JWT role sync does, and returns the entry for the row as
+    /// stored, or `None` when no row has that id.
+    pub async fn set_role(
+        &self,
+        user_id: &str,
+        user_role: &str,
+    ) -> Result<Option<UserEntry>, Error> {
+        self.users
+            .set_role(user_id, user_role)
+            .await?
+            .map(user_entry)
+            .transpose()
     }
 }
 

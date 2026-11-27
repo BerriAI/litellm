@@ -1,10 +1,11 @@
 # Auth store
 
-Database reads for `gateway-auth-core`'s store ports. Each `*Database` reads one auth object through the `repositories` readers and shapes it into the record the auth cache holds for it, so no host shapes a row on its own
+Database reads and writes for `gateway-auth-core`'s store ports. Each `*Database` reads or writes one auth object through its `repositories` repository and shapes the row into the record the auth cache holds for it, so no host shapes a row on its own
 
 ## Boundary
 
-- No decision lives here. The core decides who may call what, and this crate only reads. A caller that must refuse on what a read found, such as a writer read whose object permission row is gone, gets the facts back and refuses itself
+- It reads and writes the objects the core asks a host for, and nothing else. A write returns the entry for the row as stored, which is what a host caches after it, and a write that can lose to a concurrent one returns the entry for the row that won
+- No decision lives here. The core decides who may call what and whether a write happens, and this crate only carries it out. A caller that must refuse on what a read found, such as a writer read whose object permission row is gone, gets the facts back and refuses itself
 - No cache is touched here. The value is the family's typed record in `redis-store/src/auth_cache/types/`, and reading, writing and evicting the cache stay with the host
 - No query is written here. A row comes from its repository
 - It covers only objects the core asks a host for. The object permission is read here because a cached key, a cached team and a cached end user nest it
@@ -15,7 +16,7 @@ Database reads for `gateway-auth-core`'s store ports. Each `*Database` reads one
 
 ## The reads
 
-Each object has one entry here, in the same form, and a later object adds its own. Nothing is returned for an id no row has
+Each object has one entry here, its writes included, in the same form, and a later object adds its own. Nothing is returned for an id no row has
 
 ### Key
 
@@ -69,6 +70,7 @@ Each object has one entry here, in the same form, and a later object adds its ow
 - Query by sign-in: `UserDatabase::sign_in`, the resolve of a sign-in that carries the id, the SSO id and the email (`resolve_sign_in`), by id, then by SSO id, then by email, linking the SSO id as `get_user_object` does. It returns `SignedIn`: the entry, `SsoLink::Linked` when the resolve stored the SSO id before returning and `SsoLink::Pending` when it left the link to the background under `links_any_user`, and `owes_email` when the sign-in carries an email the row lacks, which `_backfill_null_user_email` stores. The entry is the row as the resolve read it, which Python caches, so a user that just had its own id linked as its SSO id still holds none, while an email match linked in line holds the new SSO id. How often the host backfills (`email_in_use_checked_at`) stays with the host
 - Entry: `UserEntry` under `AuthObject::User`, the `LiteLLM_UserTable` dump. `get_user_object` caches it for the row it read, for the row its upsert stored and for that row with a backfilled email, and the Python auth host recaches it after a role or team change. The password is never dumped
 - Nested: each organization membership, as `LiteLLM_OrganizationMembershipTable` dumps it (`OrganizationMembershipEntry`). The model requires `spend` and both times, which the columns let be NULL, so a membership missing one refuses the whole user as `organization_memberships.<column>`. The model types the membership's `user` as any object, so it stays plain data, while an organization's `users` is a list of `UserEntry`
+- Writes: `UserDatabase::insert` creates the user under `user_id_upsert` with the `NewUserDefaults` the host resolved from `default_internal_user_params` (`UserRepository::insert`), and returns `Inserted` with the entry for the row that won a concurrent sign-in. `UserDatabase::backfill_email` stores a sign-in's email on a row with none (`backfill_email_returning`), and `UserDatabase::set_role` sets the role the JWT role sync maps (`set_role`). Both return the entry for the row as stored. Python caches the row it already held with the email copied in, so its `updated_at` is the one before the backfill. Joining `default_internal_user_params.teams` after an insert is not written here
 - Not read: the object permission the user points at, and each membership's budget and user
 
 ## The cached shape
