@@ -95,8 +95,8 @@ class ModalSandboxConfig(BaseSandboxConfig):
             app=app,
             image=modal.Image.from_registry(template) if template else modal.Image.debian_slim(),
             timeout=timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
-            cpu=cpus,
-            memory=memory_mb,
+            cpu=(cpus, cpus),
+            memory=(memory_mb, memory_mb),
             block_network=allow_internet_access is False,
             client=client,
         )

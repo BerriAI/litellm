@@ -335,7 +335,41 @@ async def test_modal_lifecycle_goes_through_the_sdk(monkeypatch):
     assert record["create"]["app"] == "my-app"
     assert record["create"]["timeout"] == 60
     assert record["create"]["block_network"] is True
+    cpu_request, cpu_limit = record["create"]["cpu"]
+    memory_request, memory_limit = record["create"]["memory"]
+    assert cpu_request == cpu_limit and memory_request == memory_limit
     assert record["exec"][-1] == "exit 3"
     assert (result.stdout, result.stderr, result.exit_code) == ("out\n", "err\n", 3)
     assert deleted is True and record["terminated"] is True
     assert (await litellm.asandbox_cost(provider="modal", container=handle)).source == "estimate"
+
+
+@pytest.mark.asyncio
+async def test_boat_sandboxes_never_receive_the_account_secrets():
+    client = FakeHTTPClient(_boat)
+    await litellm.acreate_sandbox(provider="boat", api_key="k", client=client)
+    assert client.calls[0][3]["noEnv"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider, route, blocked",
+    [
+        ("boat", _boat, {"mode": "deny"}),
+        ("tensorlake", _tensorlake_route(), {"allow_internet_access": False}),
+    ],
+)
+async def test_blocking_internet_access_reaches_the_provider(provider, route, blocked):
+    client = FakeHTTPClient(route)
+    await litellm.acreate_sandbox(provider=provider, api_key="k", allow_internet_access=False, client=client)
+    await litellm.acreate_sandbox(provider=provider, api_key="k", client=client)
+    assert client.calls[0][3]["network"] == blocked
+    assert "network" not in client.calls[1][3]
+
+
+@pytest.mark.asyncio
+async def test_blaxel_refuses_to_create_a_sandbox_it_cannot_cut_off_from_the_internet():
+    client = FakeHTTPClient(_blaxel)
+    with pytest.raises(ValueError, match="internet"):
+        await litellm.acreate_sandbox(provider="blaxel", api_key="k", allow_internet_access=False, client=client)
+    assert client.calls == []

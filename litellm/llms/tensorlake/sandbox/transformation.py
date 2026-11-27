@@ -89,6 +89,7 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
                 "timeout_secs": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
                 "resources": {"cpus": cpus, "memory_mb": memory_mb},
                 **({"image": template} if template else {}),
+                **({"network": {"allow_internet_access": False}} if allow_internet_access is False else {}),
             },
         )
         created: Final = _Created.model_validate(response.json())

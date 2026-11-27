@@ -80,6 +80,8 @@ class BlaxelSandboxConfig(BaseSandboxConfig):
         client: AsyncHTTPHandler | None = None,
         **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> ContainerHandle:
+        if allow_internet_access is False:
+            raise ValueError("The Blaxel sandbox provider cannot block internet access. Use another provider.")
         base: Final = api_base or BLAXEL_API_BASE
         headers: Final = self._headers(None, api_key)
         created_at: Final = time.time()

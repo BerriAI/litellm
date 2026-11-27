@@ -93,6 +93,8 @@ class BoatSandboxConfig(BaseSandboxConfig):
             json={
                 "type": template or BOAT_DEFAULT_TYPE,
                 "ttlSeconds": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
+                "noEnv": True,
+                **({"network": {"mode": "deny"}} if allow_internet_access is False else {}),
             },
         )
         sandbox: Final = _Created.model_validate(response.json()).sandbox
