@@ -1130,6 +1130,37 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["name"] == "get_weather"
             assert output_data[0]["arguments"] == {}
 
+    @pytest.mark.parametrize("tool_input", ("console.log('hello')", REDACTED_BY_LITELLM))
+    def test_responses_api_with_custom_tool_calls(self, tool_input: str) -> None:
+        from litellm.types.responses.main import CustomToolCallOutputItem
+
+        response_obj: Final = ResponsesAPIResponse(
+            id="response-790",
+            created_at=1625247700,
+            output=[
+                CustomToolCallOutputItem(
+                    id="ctc-123",
+                    type="custom_tool_call",
+                    name="exec",
+                    call_id="call-def",
+                    input=tool_input,
+                    status="completed",
+                )
+            ],
+        )
+        attributes: Final = _emitted({"call_type": "responses"}, response_obj)
+
+        assert json.loads(str(attributes["langfuse.observation.output"])) == [
+            {
+                "id": "ctc-123",
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "call-def",
+                "input": tool_input,
+            }
+        ]
+        assert attributes["langfuse.trace.output"] == attributes["langfuse.observation.output"]
+
 
 _TRACER: Final = TracerProvider().get_tracer("langfuse-otel-tests")
 TRACE_FIELD_KEYS: Final = (
