@@ -378,6 +378,11 @@ class TestSwaggerChatCompletions:
 
         from litellm.proxy.proxy_server import app, custom_openapi, get_openapi_schema
 
+        def openapi_without_route_schemas(
+            *, title: str, version: str, description: str, routes: object
+        ) -> dict[str, object]:
+            return {"openapi": "3.1.0", "info": {"title": title, "version": version}, "paths": {}}
+
         # Test cases: (server_root_path, expected_servers_url)
         # Note: empty string is falsy in Python, so servers won't be set
         test_cases = [
@@ -391,7 +396,10 @@ class TestSwaggerChatCompletions:
             # Clear cached schema
             app.openapi_schema = None
 
-            with patch("litellm.proxy.proxy_server.server_root_path", root_path):
+            with (
+                patch("litellm.proxy.proxy_server.server_root_path", root_path),
+                patch("litellm.proxy.proxy_server.get_openapi", openapi_without_route_schemas),
+            ):
                 # Test get_openapi_schema
                 schema = get_openapi_schema()
 
@@ -405,7 +413,10 @@ class TestSwaggerChatCompletions:
 
             # Test custom_openapi as well
             app.openapi_schema = None
-            with patch("litellm.proxy.proxy_server.server_root_path", root_path):
+            with (
+                patch("litellm.proxy.proxy_server.server_root_path", root_path),
+                patch("litellm.proxy.proxy_server.get_openapi", openapi_without_route_schemas),
+            ):
                 schema = custom_openapi()
 
                 assert (
