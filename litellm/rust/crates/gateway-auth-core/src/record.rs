@@ -1,13 +1,11 @@
 //! The rows a caller belongs to, as the core reads them: one record per entity, holding its id and
 //! what its stored row says, and nothing a request or another row adds. A host builds a record
 //! from the row it read and decides nothing while it does. A record grows a field with the first
-//! rule that reads it, except a team's and a user's, which copy each column of their row that a
-//! plain value holds, read or not. The host refuses a caller whose team or user holds one nothing
-//! reads yet.
+//! rule that reads it, except a team's, a user's and a project's, which copy each column of their
+//! row that a plain value holds, read or not. The host refuses a caller whose team, user or
+//! project holds one nothing reads yet.
 
 use std::collections::BTreeMap;
-
-use serde_json::{Map, Value};
 
 use crate::authz::ModelList;
 
@@ -79,7 +77,9 @@ pub struct OrgRecord {
 pub struct ProjectRecord {
     pub project_id: String,
     pub project_alias: Option<String>,
-    pub metadata: Option<Map<String, Value>>,
+    pub team_id: Option<String>,
+    pub models: Vec<String>,
+    pub blocked: bool,
     pub budget: Budget,
 }
 

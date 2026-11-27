@@ -1,17 +1,17 @@
-//! Reads a caller's team and key owner from the auth cache into core records. Each entry is taken
-//! apart by name, so a field added to it does not compile here until it is copied onto the record,
-//! read for nothing or declined. A column that holds a structure no record field has a type for
-//! yet is declined here, naming the field, and [`unserved`] and [`unserved_user`] name the first
-//! copied column the native app does not serve yet.
+//! Reads a caller's team, key owner and project from the auth cache into core records. Each entry
+//! is taken apart by name, so a field added to it does not compile here until it is copied onto the
+//! record, read for nothing or declined. A column that holds a structure no record field has a type
+//! for yet is declined here, naming the field, and [`unserved`], [`unserved_user`] and
+//! [`unserved_project`] name the first copied column the native app does not serve yet.
 
 use litellm_gateway_auth_core::{
     authz::ModelList,
     identity::jwt::{Team, User},
-    record::{Budget, MinuteLimits, TeamRecord, UserRecord},
+    record::{Budget, MinuteLimits, ProjectRecord, TeamRecord, UserRecord},
     routes::passthrough::PassthroughGrants,
 };
 use litellm_python_compat::Value;
-use litellm_redis_store::auth_cache::{Bag, TeamEntry, UserEntry};
+use litellm_redis_store::auth_cache::{Bag, ProjectEntry, TeamEntry, UserEntry};
 
 use super::{
     carried::{Carried, carried, newer},
@@ -317,6 +317,72 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
         allowed_cache_controls,
         policies,
     ]
+}
+
+/// The project's record, or the first field it holds that no record field has a type for yet.
+pub(super) fn project(project: &ProjectEntry) -> Result<ProjectRecord, &'static str> {
+    let ProjectEntry {
+        project_id,
+        project_alias,
+        description: _,
+        team_id,
+        budget_id,
+        metadata,
+        models,
+        spend: _,
+        model_spend: _,
+        model_rpm_limit,
+        model_tpm_limit,
+        blocked,
+        object_permission_id,
+        created_by: _,
+        updated_by: _,
+        created_at: _,
+        updated_at: _,
+        litellm_budget_table,
+        object_permission,
+        last_refreshed_at: _,
+        unread,
+    } = project;
+    let unread = &newer(unread);
+    let held = carried![
+        budget_id,
+        metadata,
+        model_rpm_limit,
+        model_tpm_limit,
+        object_permission_id,
+        litellm_budget_table,
+        object_permission,
+        unread,
+    ];
+    if let Some(field) = held {
+        return Err(field);
+    }
+    Ok(ProjectRecord {
+        project_id: project_id.clone(),
+        project_alias: project_alias.clone(),
+        team_id: team_id.clone(),
+        models: models.clone(),
+        blocked: *blocked,
+        ..ProjectRecord::default()
+    })
+}
+
+/// The first column of `project` that holds something nothing in the native app reads yet, which
+/// sends its caller to Python, taken apart by name as [`unserved`] takes a team.
+pub(crate) fn unserved_project(project: &ProjectRecord) -> Option<&'static str> {
+    let ProjectRecord {
+        project_id: _,
+        project_alias: _,
+        team_id,
+        models,
+        blocked,
+        budget: Budget {
+            max: max_budget,
+            spend: _,
+        },
+    } = project;
+    carried![team_id, models, blocked, max_budget]
 }
 
 #[cfg(test)]
