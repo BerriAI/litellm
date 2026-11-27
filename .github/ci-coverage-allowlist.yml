@@ -63,6 +63,7 @@ test_paths:
       credentials, neither of which a pull request job holds
     paths:
       - tests/integration/sandbox/test_e2b_sandbox.py
+      - tests/integration/sandbox/test_sandbox_providers.py
       - tests/integration/test_oci_integration.py
       - tests/integration/test_oci_proxy_integration.py
 
