@@ -3,6 +3,7 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 """
 
 import base64
+import traceback
 import logging
 import time
 from collections.abc import Callable, Mapping
@@ -23,6 +24,8 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import common_checks
 from litellm.proxy.auth.auth_utils import (
+    is_authentication_failure,
+    refusals_fail_authentication,
     _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
@@ -7040,3 +7043,15 @@ def test_chatgpt_model_configuration_reaches_role_authorization(
                 model="",
                 route=inference_route,
             )
+
+
+def test_a_refusal_before_authentication_is_marked_and_raised_as_it_was() -> None:
+    refusal: Final = HTTPException(status_code=403, detail="Access forbidden: IP address 203.0.113.9 not allowed.")
+    with pytest.raises(HTTPException) as raised:
+        with refusals_fail_authentication():
+            raise refusal
+    assert raised.value is refusal
+    assert is_authentication_failure(refusal)
+    assert [frame.name for frame in traceback.extract_tb(refusal.__traceback__)] == [
+        "test_a_refusal_before_authentication_is_marked_and_raised_as_it_was"
+    ]
