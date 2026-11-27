@@ -394,6 +394,22 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
     )
 
 
+_HOSTED_TOOL_ITEM_TYPES: Final = frozenset(
+    {"web_search_call", "file_search_call", "mcp_list_tools", "mcp_call", "code_interpreter_call"}
+)
+
+
+def _is_hosted_tool_item(item: object) -> bool:
+    raw: Final[object] = item.model_dump() if isinstance(item, BaseModel) else item
+    return _json_field(raw, "type") in _HOSTED_TOOL_ITEM_TYPES
+
+
+def _holds_only_reasoning_and_hosted_tool_calls(output_items: Sequence[object]) -> bool:
+    reasoning_count: Final = len(_reasoning_items_from_output_items(output_items))
+    hosted_count: Final = sum(map(_is_hosted_tool_item, output_items))
+    return 0 < reasoning_count and reasoning_count + hosted_count == len(output_items)
+
+
 _TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_output"})
 _TOOL_SEARCH_REPLAY_ITEM_TYPES: Final = frozenset({"reasoning", *_TOOL_SEARCH_ITEM_TYPES})
 _TOOL_SEARCH_ITEMS_KEY: Final = "tool_search_items"
@@ -1725,6 +1741,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         response_is_incomplete: Final = raw_response.status == "incomplete" or (
             raw_response.incomplete_details is not None and raw_response.incomplete_details.reason is not None
         )
+
+        if len(choices) == 0 and raw_response.status == "completed":
+            completed_items: Final = cast("Sequence[object]", output_items)  # cast-ok: output is partially untyped
+            if _holds_only_reasoning_and_hosted_tool_calls(completed_items):
+                choices.append(self._build_empty_choice(completed_items, "stop"))
 
         if len(choices) == 0 and not response_is_incomplete:
             raise ValueError(f"Unknown items in responses API response: {output_items}")
