@@ -1,13 +1,14 @@
 //! The gateway's answers to `gateway-auth-core`'s host steps on the key path, so it authenticates
 //! a virtual key with no Python behind it, the native counterpart of python-bridge's
-//! `PythonAuthHost`. A key's row is read and shaped by `auth-store`, as the Python proxy's is,
-//! and `store.rs` puts the auth cache in front of it, as `UserApiKeyCache` sits in front of
-//! Python's: this process's memory, and the Redis shared with the Python pods when
+//! `PythonAuthHost`. A key's row and its team's are read and shaped by `auth-store`, as the Python
+//! proxy's are, and `store.rs` puts the auth cache in front of them, as `UserApiKeyCache` sits in
+//! front of Python's: this process's memory, and the Redis shared with the Python pods when
 //! `enable_redis_auth_cache` attaches it, then the proxy's database on a miss, which fills it.
 //!
 //! A step this host does not answer yet declines, which sends the request to Python. A later
 //! change serves more keys by answering one more step.
 
+mod affiliation;
 mod carried;
 mod end_user;
 mod key;
@@ -44,10 +45,11 @@ pub(crate) use models::{allowed_models, layers};
 pub use store::AuthStore;
 
 /// The rows the native host hands the core: a key's, and a core record for each thing a caller
-/// belongs to. The steps that would read those records still decline, so no caller this host
-/// serves holds one yet. `Infallible` is a row this host has no record for, so no identity that
-/// needs one exists. The end user's record is empty for a request that names none, and names
-/// the end user alone for one whose row holds nothing the native app would have to apply.
+/// belongs to. A key's team is read, and a caller that holds a team still goes to Python at
+/// admit. The steps that read the other records decline. `Infallible` is a row this host has no
+/// record for, so no identity that needs one exists. The end user's record is empty for a request
+/// that names none, and names the end user alone for one whose row holds nothing the native app
+/// would have to apply.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeRows;
 
@@ -98,6 +100,21 @@ fn declined<T>(step: &'static str) -> Result<T, Error> {
         "the native auth host does not serve what this request needs"
     );
     Err(Error::HostDeclined)
+}
+
+/// A read the database failed is declined, so the request goes to Python.
+fn unless_failed<T>(
+    read: Result<T, litellm_auth_store::Error>,
+    step: &'static str,
+) -> Result<T, Error> {
+    read.or_else(|error| {
+        tracing::warn!(
+            error = %litellm_error::Report::new(&error),
+            step,
+            "the native auth host could not read what this request needs"
+        );
+        declined(step)
+    })
 }
 
 fn keyed(key: &KeyEntry) -> Result<Option<Keyed<Key>>, Error> {
@@ -288,12 +305,23 @@ impl AuthHost for NativeAuthHost {
         declined("resolve_user_identity")
     }
 
+    /// The core asks for the cached team only to bring a key's own copy of the team's values up
+    /// to date. This host reads none of that copy, since [`Self::key_team`] reads the team's row,
+    /// so it has nothing to refresh a key from.
     async fn cached_team(&self, _: &str) -> Result<Option<Refreshed<TeamRecord>>, Error> {
-        declined("cached_team")
+        Ok(None)
     }
 
-    async fn key_team(&self, _: &str) -> Result<Option<TeamRecord>, Error> {
-        declined("key_team")
+    /// A team with no row declines, since the key is then judged by its own copy of the team's
+    /// values, which this host does not read.
+    async fn key_team(&self, team_id: &str) -> Result<Option<TeamRecord>, Error> {
+        let read = self.store("key_team")?.team(team_id).await;
+        match unless_failed(read, "key_team")? {
+            Some(team) => affiliation::team(&team)
+                .map(|team| Some(team.row))
+                .or_else(declined),
+            None => declined("team_id"),
+        }
     }
 
     async fn team(&self, _: &str, _: bool) -> Result<TeamRead<TeamRecord>, Error> {
@@ -394,7 +422,7 @@ impl AuthHost for NativeAuthHost {
         declined("team_model_access")
     }
 
-    /// A key this host read has no team and no owner, so no membership budgets it.
+    /// A key this host read has no owner, so no membership budgets it.
     async fn team_member_budget(&self, _: &Key, _: Option<&UserRecord>) -> Result<(), Error> {
         Ok(())
     }
@@ -464,9 +492,13 @@ mod tests {
     };
     use jiff::Timestamp;
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
-    use litellm_gateway_auth_core::Credential;
+    use litellm_gateway_auth_core::{
+        Credential, Holder, Team,
+        authz::{Layer, ModelList},
+    };
     use litellm_redis_store::{
-        cache_invalidation::CacheInvalidation, spend_counters::SpendCounters,
+        auth_cache::AuthObject, cache_invalidation::CacheInvalidation,
+        spend_counters::SpendCounters,
     };
     use litellm_redis_testing::{RedisServer, eventually};
     use litellm_repositories::Database;
@@ -490,7 +522,10 @@ mod tests {
         INSERT INTO "LiteLLM_ProjectTable" (project_id, project_alias, team_id, models, created_by, updated_by)
             VALUES ('project', 'Project', 'team', ARRAY[]::text[], 'test', 'test');
         INSERT INTO "LiteLLM_ObjectPermissionTable" (object_permission_id) VALUES ('permission');
+        INSERT INTO "LiteLLM_ModelTable" (id, created_by, updated_by) VALUES (7, 'test', 'test');
     "#;
+
+    const SQUAD: &str = "squad";
 
     fn config(general_settings: &str) -> Config {
         Config::from_yaml(&format!(
@@ -562,6 +597,29 @@ mod tests {
     async fn authenticate_holding(columns: Columns) -> Result<Authenticated<NativeRows>, Rejected> {
         let held = holding(columns).await;
         presenting(held.database(), VIRTUAL_KEY).await
+    }
+
+    async fn in_team(key: Columns, team: Columns) -> Held {
+        let held = Held::start().await;
+        held.execute(PARENTS).await;
+        held.key(VIRTUAL_KEY, merged(json!({"team_id": SQUAD}), key))
+            .await;
+        held.insert_named(
+            "LiteLLM_TeamTable",
+            &merged(json!({"team_id": SQUAD}), team),
+        )
+        .await;
+        held
+    }
+
+    fn merged(base: Columns, over: Columns) -> Columns {
+        let fields = base.as_object().into_iter().chain(over.as_object());
+        Columns::Object(
+            fields
+                .flatten()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+        )
     }
 
     #[rstest]
@@ -707,7 +765,7 @@ mod tests {
     #[case::router_settings(json!({"router_settings": {"a": 1}}))]
     #[case::user_id(json!({"user_id": "user"}))]
     #[case::an_empty_user_id(json!({"user_id": ""}))]
-    #[case::team_id(json!({"team_id": "team"}))]
+    #[case::a_team_with_no_row(json!({"team_id": "gone"}))]
     #[case::the_ui_team(json!({"team_id": "litellm-dashboard"}))]
     #[case::agent_id(json!({"agent_id": "agent"}))]
     #[case::project_id(json!({"project_id": "project"}))]
@@ -851,6 +909,130 @@ mod tests {
     }
 
     #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_in_a_team_holds_the_teams_row_and_is_checked_against_both_lists() {
+        let held = in_team(
+            json!({"models": ["haiku"]}),
+            json!({"team_alias": "Squad", "models": ["claude"]}),
+        )
+        .await;
+
+        let caller = presenting(held.database(), VIRTUAL_KEY).await.unwrap();
+
+        let (key, team) = (["haiku".to_owned()], ["claude".to_owned()]);
+        assert_eq!(
+            (
+                &caller.affiliation.holder,
+                layers(&caller).collect::<Vec<_>>(),
+                allowed_models(&caller),
+            ),
+            (
+                &Holder::Team(Team::Row(TeamRecord {
+                    team_id: SQUAD.to_owned(),
+                    team_alias: Some("Squad".to_owned()),
+                    models: team.to_vec(),
+                    ..TeamRecord::default()
+                })),
+                vec![
+                    Layer::Key(ModelList::read(&key)),
+                    Layer::Team(ModelList::read(&team)),
+                ],
+                [key.clone(), team.clone()].concat(),
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::organization_id(json!({"organization_id": "org"}))]
+    #[case::object_permission_id(json!({"object_permission_id": "permission"}))]
+    #[case::metadata(json!({"metadata": {"guardrails": ["pii"]}}))]
+    #[case::max_budget(json!({"max_budget": 5.0}))]
+    #[case::soft_budget(json!({"soft_budget": 1.0}))]
+    #[case::budget_duration(json!({"budget_duration": "30d"}))]
+    #[case::budget_reset_at(json!({"budget_reset_at": "1970-01-01T00:00:09"}))]
+    #[case::budget_limits(json!({"budget_limits": [{"a": 1}]}))]
+    #[case::model_max_budget(json!({"model_max_budget": {"claude": 1}}))]
+    #[case::tpm_limit(json!({"tpm_limit": 100}))]
+    #[case::rpm_limit(json!({"rpm_limit": 10}))]
+    #[case::a_limit_of_zero(json!({"rpm_limit": 0}))]
+    #[case::tpd_limit(json!({"tpd_limit": 100}))]
+    #[case::max_parallel_requests(json!({"max_parallel_requests": 1}))]
+    #[case::blocked(json!({"blocked": true}))]
+    #[case::router_settings(json!({"router_settings": {"a": 1}}))]
+    #[case::access_group_ids(json!({"access_group_ids": ["group"]}))]
+    #[case::policies(json!({"policies": ["policy"]}))]
+    #[case::default_team_member_models(json!({"default_team_member_models": ["claude"]}))]
+    #[case::model_aliases(json!({"model_id": 7}))]
+    #[case::allow_team_guardrail_config(json!({"allow_team_guardrail_config": true}))]
+    #[case::a_model_pattern(json!({"models": ["claude", "anthropic/*"]}))]
+    #[case::the_team_models(json!({"models": ["all-team-models"]}))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_whose_team_holds_anything_the_native_app_does_not_apply_is_not_native(
+        #[case] team: Columns,
+    ) {
+        let held = in_team(json!({}), team).await;
+
+        let refused = presenting(held.database(), VIRTUAL_KEY).await;
+
+        assert!(
+            matches!(refused, Err(Rejected::NotNative)),
+            "{:?}",
+            refused.err()
+        );
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_team_is_read_from_the_database_again_only_once_it_is_evicted() {
+        let held = in_team(json!({}), json!({})).await;
+        let cache = keys::memory_cache();
+        let store = Arc::new(AuthStore::new(cache.clone(), held.database()));
+        let gateway = auth(&with_master_key(), Some(store), false);
+
+        let read = bearing(&gateway, VIRTUAL_KEY).await.is_ok();
+        held.execute(r#"UPDATE "LiteLLM_TeamTable" SET max_budget = 1 WHERE team_id = 'squad'"#)
+            .await;
+        let kept = bearing(&gateway, VIRTUAL_KEY).await.is_ok();
+        cache
+            .delete_local(&AuthObject::Team(SQUAD.to_owned()).key())
+            .unwrap();
+        let read_again = bearing(&gateway, VIRTUAL_KEY).await;
+
+        assert_eq!((read, kept), (true, true));
+        assert!(
+            matches!(read_again, Err(Rejected::NotNative)),
+            "{:?}",
+            read_again.err()
+        );
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_team_read_from_the_database_is_cached_for_python_with_the_time_it_was_read() {
+        let redis = RedisServer::start().await.unwrap();
+        let held = in_team(json!({}), json!({})).await;
+        let key = AuthObject::Team(SQUAD.to_owned()).key();
+
+        let authenticated = bearing(&pod(&redis, &held).await, VIRTUAL_KEY).await;
+
+        let cached: Columns =
+            serde_json::from_str(&redis.cli(&["GET", &key]).await.unwrap()).unwrap();
+        let ttl = redis.cli(&["TTL", &key]).await.unwrap();
+        let seconds: i64 = ttl.trim().parse().unwrap();
+        assert!(authenticated.is_ok());
+        assert_eq!(
+            (
+                &cached["team_id"],
+                cached["last_refreshed_at"]
+                    .as_f64()
+                    .is_some_and(|at| at > 0.0),
+                (1..=60).contains(&seconds),
+            ),
+            (&json!(SQUAD), true, true)
+        );
+    }
+
+    #[rstest]
     #[case::alone(json!({"blocked": true}))]
     #[case::of_a_team(json!({"blocked": true, "team_id": "team"}))]
     #[tokio::test(flavor = "multi_thread")]
@@ -987,7 +1169,6 @@ mod tests {
 
     #[rstest]
     #[case::with_an_owner(json!({"user_id": "user"}))]
-    #[case::in_a_team(json!({"team_id": "team"}))]
     #[case::with_a_budget(json!({"max_budget": 5.0}))]
     #[case::blocked(json!({"blocked": true}))]
     #[tokio::test(flavor = "multi_thread")]

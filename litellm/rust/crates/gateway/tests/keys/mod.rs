@@ -87,6 +87,30 @@ impl Held {
             .unwrap();
     }
 
+    /// Stores `row` in `table`, each field in the column of its name and every other column at its
+    /// default.
+    pub async fn insert_named(&self, table: &str, row: &Value) {
+        let columns = row
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|column| format!(r#""{column}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Fixture statements are outside the compile-checked query set"
+        )]
+        let statement = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"INSERT INTO "{table}" ({columns}) SELECT {columns} FROM jsonb_populate_record(NULL::"{table}", $1::jsonb)"#
+        )));
+        statement
+            .bind(sqlx::types::Json(row))
+            .execute(self.postgres.pool())
+            .await
+            .unwrap();
+    }
+
     /// Runs the fixture statements of `sql`.
     pub async fn execute(&self, sql: &'static str) {
         #[expect(

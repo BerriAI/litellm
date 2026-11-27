@@ -29,6 +29,6 @@ pub use self::{
     record::ExcludedIfNone,
     settings::Settings,
     team::{ModelAliases, ModelTableEntry, TeamEntry},
-    team_membership::TeamMembershipEntry,
+    team_membership::{TeamMembershipEntry, TeamMembershipReservation},
     user::UserEntry,
 };
