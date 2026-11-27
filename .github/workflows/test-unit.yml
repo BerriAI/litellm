@@ -1396,11 +1396,13 @@ jobs:
           - part: typecheck
           - part: type-tests
           - part: vitest-1
-            vitest-shard: 1/3
+            vitest-shard: 1/4
           - part: vitest-2
-            vitest-shard: 2/3
+            vitest-shard: 2/4
           - part: vitest-3
-            vitest-shard: 3/3
+            vitest-shard: 3/4
+          - part: vitest-4
+            vitest-shard: 4/4
     defaults:
       run:
         working-directory: litellm/ui/litellm-dashboard
