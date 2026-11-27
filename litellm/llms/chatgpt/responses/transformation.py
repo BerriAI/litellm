@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from openai.types.responses.response_input_param import ResponseInputItemParam
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -37,6 +38,43 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
+
+
+def _system_item_as_developer(item: ResponseInputItemParam) -> ResponseInputItemParam:
+    # The Codex backend 400s on {"type": "message", "role": "system"} items ("System messages are not
+    # allowed") but accepts role=developer in the same position, which is what the Codex CLI sends.
+    if item.get("role") != "system":
+        return item
+    return cast(  # cast-ok: only the role changes, and developer is valid wherever system is
+        ResponseInputItemParam, {**item, "role": "developer"}
+    )
+
+
+def _mentions_json(value: object) -> bool:
+    match value:
+        case str():
+            return "json" in value.lower()
+        case {"role": "user" | "developer", "content": object() as content}:
+            return _mentions_json(content)
+        case {"text": object() as text}:
+            return _mentions_json(text)
+        case list():
+            return any(map(_mentions_json, cast("list[object]", value)))  # cast-ok: matched any list
+        case _:
+            return False
+
+
+def _json_object_instructions_missing_from_input(request: object, base_instructions: str) -> str | None:
+    match request:
+        case {
+            "text": {"format": {"type": "json_object"}},
+            "instructions": str() as instructions,
+            "input": object() as input_items,
+        } if not _mentions_json(input_items):
+            caller_instructions: Final = instructions.replace(base_instructions, "").strip()
+            return caller_instructions if _mentions_json(caller_instructions) else None
+        case _:
+            return None
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -76,16 +114,24 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
+        normalized_input: Final = self._validate_input_param(input)
         request: Final = super().transform_responses_api_request(
             model,
-            input,
+            [{"role": "user", "content": normalized_input}]
+            if isinstance(normalized_input, str)
+            else [_system_item_as_developer(item) for item in normalized_input],
             response_api_optional_request_params,
             litellm_params,
             headers,
         )
         base_instructions: Final = get_chatgpt_default_instructions()
         existing_instructions: Final = request.get("instructions")
-        if existing_instructions:
+        untyped_request: Final = cast(object, request)  # cast-ok: base returns untyped dict
+        json_instructions: Final = _json_object_instructions_missing_from_input(untyped_request, base_instructions)
+        if json_instructions is not None:
+            request["input"] = [{"role": "developer", "content": json_instructions}, *request["input"]]
+            request["instructions"] = base_instructions
+        elif existing_instructions:
             if base_instructions not in existing_instructions:
                 request["instructions"] = f"{base_instructions}\n\n{existing_instructions}"
         else:
@@ -109,6 +155,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "reasoning",
             "previous_response_id",
             "truncation",
+            "text",
+            "max_output_tokens",
         }
 
         filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
@@ -184,7 +232,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
                 continue
 
-            if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            if event_type in (
+                ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            ):
                 # Real OUTPUT_ITEM_DONE events take precedence at any given
                 # output_index, but text-only items at indices without a
                 # matching OUTPUT_ITEM_DONE must still be preserved (e.g.
