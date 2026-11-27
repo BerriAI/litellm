@@ -229,6 +229,19 @@ def _chat_message_file_id(part: object, role: str) -> str | None:
     return None
 
 
+def _gemini_file_part_uris(part: object) -> tuple[str, ...]:
+    fields: Final = as_str_mapping(part)
+    if fields is None or fields.get("type") not in ("file", "input_file"):
+        return ()
+    nested: Final = as_str_mapping(fields.get("file")) or {}
+    candidates: Final = (source.get(key) for source in (fields, nested) for key in ("file_id", "file_data", "file_url"))
+    return tuple(
+        dict.fromkeys(
+            value for value in candidates if isinstance(value, str) and value.startswith(GEMINI_FILES_API_URI_PREFIXES)
+        )
+    )
+
+
 _FILE_ACCESS_PART_ROLES: Final = {"system": "user", "developer": "user"}
 
 
@@ -1759,6 +1772,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             for part in content:
                 if (file_id := _chat_message_file_id(part, _FILE_ACCESS_PART_ROLES.get(role, role))) is not None:
                     yield file_id
+                yield from _gemini_file_part_uris(part)
 
     @staticmethod
     def _responses_input_file_id(part: Mapping[str, object]) -> str | None:
@@ -1794,6 +1808,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
             if (file_id := self._responses_input_file_id(item)) is not None:
                 file_ids.append(file_id)
+            file_ids.extend(_gemini_file_part_uris(item))
 
             # Check for input_file in content array
             content = item.get("content")
@@ -1804,6 +1819,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         and (file_id := self._responses_input_file_id(content_item)) is not None
                     ):
                         file_ids.append(file_id)
+                    file_ids.extend(_gemini_file_part_uris(content_item))
 
         return file_ids
 
