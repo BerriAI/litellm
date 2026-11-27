@@ -1,15 +1,17 @@
 import asyncio
+import json
 import traceback
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Final, Literal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx2
 import pytest
 from fastapi import HTTPException
 from mcp.server.context import ServerRequestContext
+from mcp.shared.exceptions import MCPError
 from mcp.types import (
     CallToolRequest,
     CallToolRequestParams,
@@ -17,20 +19,26 @@ from mcp.types import (
     GetPromptRequest,
     GetPromptRequestParams,
     GetPromptResult,
+    InputRequiredResult,
     JSONRPCMessage,
     JSONRPCRequest,
+    ListPromptsRequest,
+    ListResourcesRequest,
+    ListResourceTemplatesRequest,
+    ListToolsRequest,
     ListToolsResult,
     ReadResourceResult,
     TextContent,
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import TypeAdapter
+from pydantic import AnyUrl, TypeAdapter
 
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -45,6 +53,7 @@ from litellm.proxy.mcp_server.auth_profile_selection import (
     unusable_profile_detail,
     unusable_profile_status,
 )
+from litellm.proxy.mcp_server.faults.list_outcomes import ServerListFault
 from litellm.types.mcp_server.auth_profile_grants import UnreadableGrants
 from litellm.proxy.mcp_server.mcp_server_manager import (
     HTTPException as MCPServerManagerHTTPException,
@@ -57,6 +66,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
 from litellm.proxy.mcp_server.openapi_to_mcp_generator import request_auth_header, request_resolved_auth_headers
 from litellm.proxy.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
+from litellm.proxy.mcp_server.tool_search import handle_mcp_tool_search
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
@@ -69,8 +79,11 @@ from tests._support.mcp_auth_profiles import (
     call_tickets_add,
     call_tickets_tool,
     caller_granted,
+    credential_label,
     install_profile_manager,
+    plain_server,
     profile_manager,
+    stored_caller_granted,
     tickets_server,
 )
 
@@ -3026,6 +3039,186 @@ async def test_a_tool_listing_serves_the_callers_selected_credential(
     assert upstream.credentials_seen() == {expected}
 
 
+async def _gateway_tools(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    result: Final = await GatewayOperations().execute(ListToolsRequest(), prepare_context(caller))
+    return tuple(tool.name for tool in result.tools)
+
+
+async def _gateway_prompts(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    result: Final = await GatewayOperations().execute(ListPromptsRequest(), prepare_context(caller))
+    return tuple(prompt.name for prompt in result.prompts)
+
+
+async def _gateway_resources(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    result: Final = await GatewayOperations().execute(ListResourcesRequest(), prepare_context(caller))
+    return tuple(resource.name for resource in result.resources)
+
+
+async def _gateway_templates(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    result: Final = await GatewayOperations().execute(ListResourceTemplatesRequest(), prepare_context(caller))
+    return tuple(template.name for template in result.resource_templates)
+
+
+async def _legacy_prompts(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    prompts: Final = await operations._get_prompts_from_mcp_servers(caller, None, None)
+    return tuple(prompt.name for prompt in prompts)
+
+
+async def _legacy_resources(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    resources: Final = await operations._get_resources_from_mcp_servers(caller, None, None)
+    return tuple(resource.name for resource in resources)
+
+
+async def _legacy_templates(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    templates: Final = await operations._get_resource_templates_from_mcp_servers(caller, None, None)
+    return tuple(template.name for template in templates)
+
+
+async def _virtual_tool_search(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    result: Final = await handle_mcp_tool_search("tool", 5, caller)
+    assert isinstance(result.content[0], TextContent)
+    return tuple(hit["name"] for hit in json.loads(result.content[0].text))
+
+
+async def _get_prompt(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    result: Final = await operations.mcp_get_prompt("tickets-anything", user_api_key_auth=caller)
+    assert not isinstance(result, InputRequiredResult)
+    return tuple(str(message.content.text) for message in result.messages if isinstance(message.content, TextContent))
+
+
+async def _read_resource(caller: UserAPIKeyAuth) -> tuple[str, ...]:
+    result: Final = await operations.mcp_read_resource(AnyUrl("file:///thing"), user_api_key_auth=caller)
+    assert not isinstance(result, InputRequiredResult)
+    return tuple(contents.text for contents in result.contents if hasattr(contents, "text"))
+
+
+_SURFACES: Final = pytest.mark.parametrize(
+    "surface",
+    [
+        pytest.param(_gateway_tools, id="tools-list"),
+        pytest.param(_gateway_prompts, id="prompts-list"),
+        pytest.param(_gateway_resources, id="resources-list"),
+        pytest.param(_gateway_templates, id="resource-templates-list"),
+        pytest.param(_legacy_prompts, id="prompts-helper"),
+        pytest.param(_legacy_resources, id="resources-helper"),
+        pytest.param(_legacy_templates, id="resource-templates-helper"),
+        pytest.param(_virtual_tool_search, id="virtual-tool-search"),
+        pytest.param(_get_prompt, id="get-prompt"),
+        pytest.param(_read_resource, id="read-resource"),
+    ],
+)
+_Surface = Callable[[UserAPIKeyAuth], Awaitable[tuple[str, ...]]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@_SURFACES
+@pytest.mark.parametrize(
+    ("granted", "token"),
+    [
+        pytest.param(None, DEFAULT_CREDENTIAL, id="no-grant-is-served-as-the-default-credential"),
+        pytest.param("bots", "bots-token", id="a-static-profile-is-served-as-itself"),
+        pytest.param("ops", MINTED_PROFILE_TOKEN, id="a-client-credentials-profile-is-served-as-its-minted-token"),
+    ],
+)
+async def test_every_catalog_surface_serves_the_callers_selected_credential(
+    monkeypatch: pytest.MonkeyPatch, surface: _Surface, granted: str | None, token: str
+) -> None:
+    upstream: Final = ProfileUpstream()
+    server: Final = tickets_server()
+    install_profile_manager(monkeypatch, profile_manager(server, upstream))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    served: Final = await surface(stored_caller_granted(granted))
+
+    assert served
+    assert all(credential_label(token) in name for name in served)
+    assert {authorization for _, authorization in upstream.requests} == {f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@pytest.mark.parametrize("granted", ["ghost", "empty"])
+@pytest.mark.parametrize(
+    "surface",
+    [
+        pytest.param(_gateway_tools, id="tools-list"),
+        pytest.param(_gateway_prompts, id="prompts-list"),
+        pytest.param(_gateway_resources, id="resources-list"),
+        pytest.param(_gateway_templates, id="resource-templates-list"),
+        pytest.param(_legacy_prompts, id="prompts-helper"),
+        pytest.param(_virtual_tool_search, id="virtual-tool-search"),
+    ],
+)
+async def test_a_listing_leaves_out_a_server_whose_profile_is_unusable_and_keeps_the_rest(
+    monkeypatch: pytest.MonkeyPatch, surface: _Surface, granted: str
+) -> None:
+    upstream: Final = ProfileUpstream()
+    manager: Final = profile_manager(tickets_server(), upstream)
+    manager.config_mcp_servers = {**manager.config_mcp_servers, "plain": plain_server()}
+    install_profile_manager(monkeypatch, manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    served: Final = await surface(stored_caller_granted(granted))
+
+    assert served
+    assert all(credential_label(None) in name for name in served)
+    assert {authorization for _, authorization in upstream.requests} == {None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@pytest.mark.parametrize(
+    "surface",
+    [
+        pytest.param(_gateway_tools, id="tools-list"),
+        pytest.param(_gateway_prompts, id="prompts-list"),
+        pytest.param(_gateway_resources, id="resources-list"),
+        pytest.param(_gateway_templates, id="resource-templates-list"),
+        pytest.param(_legacy_prompts, id="prompts-helper"),
+        pytest.param(_virtual_tool_search, id="virtual-tool-search"),
+        pytest.param(_get_prompt, id="get-prompt"),
+        pytest.param(_read_resource, id="read-resource"),
+    ],
+)
+async def test_a_surface_with_no_usable_server_fails_without_reaching_the_upstream(
+    monkeypatch: pytest.MonkeyPatch, surface: _Surface
+) -> None:
+    upstream: Final = ProfileUpstream()
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), upstream))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    if surface is _virtual_tool_search:
+        assert await surface(stored_caller_granted("ghost")) == ()
+    else:
+        with pytest.raises((HTTPException, MCPError)) as unavailable:
+            await surface(stored_caller_granted("ghost"))
+        if surface is _gateway_tools:
+            assert isinstance(unavailable.value, MCPError)
+            assert unavailable.value.error.message == "Every MCP server in scope failed to list tools"
+            assert unavailable.value.error.data == {
+                "litellm.ai/server_outcomes": {"tickets": {"status": "internal", "http_status": 500}}
+            }
+        else:
+            assert unusable_profile_detail(MissingProfile("tickets", "ghost")) in (
+                unavailable.value.detail
+                if isinstance(unavailable.value, HTTPException)
+                else unavailable.value.error.message
+            )
+    assert upstream.request_count() == 0
+
+
+class _HostRecordingUpstream(ProfileUpstream):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hosts: Final[list[tuple[str, str]]] = []  # mutable-ok: the fake records where each request went
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            self.hosts.append((request.url.host, json.loads(request.content)["method"]))
+        return super().__call__(request)
+
+
 def _tickets_and_wiki(monkeypatch: pytest.MonkeyPatch, upstream: ProfileUpstream) -> None:
     manager: Final = profile_manager(tickets_server(), upstream)
     wiki: Final = tickets_server(
@@ -3046,21 +3239,60 @@ async def test_a_tool_listing_leaves_out_a_server_whose_profile_is_unusable_and_
     listing: Final = await operations._get_tools_from_mcp_servers(caller_granted("ghost"), None, None)
 
     assert [listed.name for listed in listing.tools] == ["wiki-tool_default_credential"]
+    assert listing.outcomes["tickets"] == ServerListFault(tag="internal", status_code=500)
     assert upstream.credentials_seen() == {f"Bearer {DEFAULT_CREDENTIAL}"}
 
 
 @pytest.mark.asyncio
-async def test_a_tool_listing_with_no_usable_server_fails_without_reaching_the_upstream(
+async def test_a_tool_listing_with_no_usable_server_reports_per_server_outcome_without_reaching_the_upstream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     upstream: Final = ProfileUpstream()
     install_profile_manager(monkeypatch, profile_manager(tickets_server(), upstream))
 
-    with pytest.raises(HTTPException) as unavailable:
-        await operations._get_tools_from_mcp_servers(caller_granted("ghost"), None, None)
+    listing: Final = await operations._get_tools_from_mcp_servers(caller_granted("ghost"), None, None)
 
-    assert (unavailable.value.status_code, unavailable.value.detail) == (
-        500,
-        unusable_profile_detail(MissingProfile("tickets", "ghost")),
-    )
+    assert listing.tools == []
+    assert listing.outcomes == {"tickets": ServerListFault(tag="internal", status_code=500)}
     assert upstream.request_count() == 0
+
+
+@pytest.mark.parametrize(
+    ("granted", "refusal"),
+    [
+        pytest.param(
+            "ghost",
+            (500, unusable_profile_detail(MissingProfile("tickets", "ghost"))),
+            id="the-owner-may-be-the-server-left-out",
+        ),
+        pytest.param(
+            "bots",
+            (404, "Resource 'file:///thing' not found on any allowed MCP server."),
+            id="with-nothing-left-out-the-resource-is-not-found",
+        ),
+    ],
+)
+async def test_a_resource_no_usable_server_owns_is_never_read_from_another_server(
+    monkeypatch: pytest.MonkeyPatch, granted: str, refusal: tuple[int, str]
+) -> None:
+    upstream: Final = _HostRecordingUpstream()
+    _tickets_and_wiki(monkeypatch, upstream)
+
+    with pytest.raises(HTTPException) as refused:
+        await operations.mcp_read_resource(AnyUrl("file:///thing"), user_api_key_auth=caller_granted(granted))
+
+    assert (refused.value.status_code, refused.value.detail) == refusal
+    assert [host for host, method in upstream.hosts if method == "resources/read"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_resource_a_usable_server_owns_is_read_there_when_another_server_was_left_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _HostRecordingUpstream()
+    _tickets_and_wiki(monkeypatch, upstream)
+    wiki_resource: Final = f"file:///{credential_label(f'Bearer {DEFAULT_CREDENTIAL}')}"
+
+    await operations.mcp_read_resource(AnyUrl(wiki_resource), user_api_key_auth=caller_granted("ghost"))
+
+    assert [host for host, method in upstream.hosts if method == "resources/read"] == ["wiki.example.com"]

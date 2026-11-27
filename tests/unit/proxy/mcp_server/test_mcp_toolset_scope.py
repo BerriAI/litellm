@@ -879,3 +879,108 @@ class TestMCPActiveToolsetContextVar:
         assert b"x-mcp-toolset-id" not in header_keys
         assert b"authorization" in header_keys
         assert b"content-type" in header_keys
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@pytest.mark.parametrize(
+    ("granted", "permission_loaded", "profile"),
+    [
+        pytest.param("bots", False, "bots", id="a-key-whose-permission-was-not-loaded-keeps-its-grant"),
+        pytest.param("bots", True, "bots", id="a-key-whose-permission-was-loaded-keeps-its-grant"),
+        pytest.param(None, False, None, id="a-key-with-no-grant-keeps-the-default-credential"),
+    ],
+)
+async def test_a_toolset_scope_keeps_the_keys_auth_profile_grant(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, permission_loaded: bool, profile: str | None
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.auth_profile_selection import resolve_effective_server
+    from litellm.proxy.mcp_server.server import apply_toolset_scope
+    from tests._support.mcp_auth_profiles import stored_caller_granted, tickets_server
+
+    async def acting_as_itself(caller: UserAPIKeyAuth) -> UserAPIKeyAuth:
+        return caller
+
+    async def granted_the_toolset(caller: UserAPIKeyAuth) -> frozenset[str]:
+        return frozenset({"tickets-toolset"})
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    loaded: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id=f"perm-{granted}", mcp_auth_profiles=None if granted is None else {"tickets": granted}
+    )
+    caller: Final = stored_caller_granted(granted).model_copy(
+        update={"object_permission": loaded if permission_loaded else None}
+    )
+    with patch(
+        "litellm.proxy.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
+        new=AsyncMock(return_value={"tickets": ["add"]}),
+    ):
+        scoped: Final = await apply_toolset_scope(
+            caller, "tickets-toolset", acting_user=acting_as_itself, granted=granted_the_toolset
+        )
+
+    effective: Final = await resolve_effective_server(tickets_server(), scoped)
+
+    assert getattr(effective, "auth_profile_id", type(effective).__name__) == profile
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@pytest.mark.parametrize(
+    ("cached_without_grants", "carried"),
+    [
+        pytest.param(False, ({"tickets": "bots"}, True), id="grants-read-with-the-key-are-carried"),
+        pytest.param(True, (None, False), id="grants-not-read-with-the-key-are-left-for-the-grant-reader"),
+    ],
+)
+async def test_a_toolset_scope_carries_the_keys_grants_only_when_they_were_read(
+    monkeypatch: pytest.MonkeyPatch, cached_without_grants: bool, carried: tuple[dict[str, str] | None, bool]
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.auth.auth_profile_grants import toolset_scope_permission
+    from litellm.proxy.mcp_server.auth_profile_selection import resolve_effective_server
+    from litellm.redis.stores.auth_cache import AuthObject
+    from tests._support.mcp_auth_profiles import stored_caller_granted, tickets_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    if cached_without_grants:
+        await proxy_server.user_api_key_cache.async_set_cache(
+            key=AuthObject.object_permission("perm-bots"),
+            value=LiteLLM_ObjectPermissionTable(object_permission_id="perm-bots"),
+            model_type=LiteLLM_ObjectPermissionTable,
+        )
+    caller: Final = stored_caller_granted("bots")
+
+    scoped: Final = await toolset_scope_permission(caller, ["tickets"], {"tickets": ["add"]})
+    effective: Final = await resolve_effective_server(
+        tickets_server(), caller.model_copy(update={"object_permission": scoped})
+    )
+
+    assert (scoped.object_permission_id, scoped.mcp_auth_profiles, "mcp_auth_profiles" in scoped.model_fields_set) == (
+        "perm-bots",
+        *carried,
+    )
+    assert getattr(effective, "auth_profile_id", None) == "bots"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+async def test_a_toolset_scope_still_applies_when_the_keys_permission_row_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.auth.auth_profile_grants import toolset_scope_permission
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    fresh_caller_with_a_missing_row: Final = UserAPIKeyAuth(
+        api_key="hashed-key", object_permission_id="perm-missing"
+    ).model_copy(update={"requires_fresh_policy": True})
+
+    scoped: Final = await toolset_scope_permission(fresh_caller_with_a_missing_row, ["tickets"], {"tickets": ["add"]})
+
+    assert (scoped.object_permission_id, scoped.mcp_servers, scoped.mcp_tool_permissions) == (
+        "toolset-scope",
+        ["tickets"],
+        {"tickets": ["add"]},
+    )

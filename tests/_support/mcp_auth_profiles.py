@@ -11,6 +11,7 @@ from mcp.types import CallToolResult, InputRequiredResult
 
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server import mcp_server_manager as mcp_server_manager_module
 from litellm.proxy.mcp_server import operations
 from litellm.proxy.mcp_server.auth_profiles import parse_auth_profiles
@@ -23,6 +24,7 @@ from litellm.proxy.mcp_server.outbound_credentials.client_credentials import (
 from litellm.proxy.mcp_server.outbound_credentials.resolver import UpstreamCredentialProvider
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, RustStoreRows, install_rust_auth_stores
 
 DEFAULT_CREDENTIAL: Final = "default-credential"
 MINTED_PROFILE_TOKEN: Final = "ops-minted-token"
@@ -64,12 +66,19 @@ class ProfileUpstream:
         results: Final[Mapping[str, Mapping[str, object]]] = {
             "initialize": {
                 "protocolVersion": payload.get("params", {}).get("protocolVersion"),
-                "capabilities": {"tools": {}},
+                "capabilities": {"tools": {}, "prompts": {}, "resources": {}},
                 "serverInfo": {"name": "tickets", "version": "1"},
                 "instructions": f"instructions for {label}",
             },
             "tools/list": {"tools": [{"name": f"tool_{label}", "inputSchema": {"type": "object"}}], "ttlMs": 60000},
             "tools/call": {"content": [{"type": "text", "text": "added"}]},
+            "prompts/list": {"prompts": [{"name": f"prompt_{label}"}], "ttlMs": 60000},
+            "prompts/get": {"messages": [{"role": "user", "content": {"type": "text", "text": label}}]},
+            "resources/list": {"resources": [{"name": f"resource_{label}", "uri": f"file:///{label}"}]},
+            "resources/templates/list": {
+                "resourceTemplates": [{"name": f"template_{label}", "uriTemplate": f"file:///{label}/{{id}}"}]
+            },
+            "resources/read": {"contents": [{"uri": "file:///thing", "text": label}]},
         }
         return httpx2.Response(
             200, json={"jsonrpc": "2.0", "id": payload["id"], "result": results.get(payload["method"], {})}
@@ -132,6 +141,39 @@ def caller_granted(granted: str | None) -> UserAPIKeyAuth:
         object_permission_id="perm-1", mcp_auth_profiles=None if granted is None else {"tickets": granted}
     )
     return UserAPIKeyAuth(api_key="hashed-key", object_permission=permission, object_permission_id="perm-1")
+
+
+def stored_caller_granted(granted: str | None) -> UserAPIKeyAuth:
+    """A key whose permission row `perm-<granted>` is read from the store, as `grants_database` provides it."""
+    return UserAPIKeyAuth(api_key="hashed-key", object_permission_id=f"perm-{granted}")
+
+
+def install_grants_database(monkeypatch: pytest.MonkeyPatch) -> dict[str, LiteLLM_ObjectPermissionTable]:
+    """Stored key permissions `perm-<profile>` granting that profile of tickets; `perm-None` grants none."""
+    permissions: Final[dict[str, LiteLLM_ObjectPermissionTable]] = {  # mutable-ok: tests edit a stored grant
+        f"perm-{granted}": LiteLLM_ObjectPermissionTable(
+            object_permission_id=f"perm-{granted}",
+            mcp_auth_profiles=None if granted is None else {"tickets": granted},
+        )
+        for granted in (None, "default", "bots", "ops", "ghost", "empty", "a", "b", "shared")
+    }
+    install_rust_auth_stores(
+        monkeypatch, RustAuthStores(object_permission=RustStoreRows(reader=permissions, writer=permissions))
+    )
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _: False)
+    return permissions
+
+
+def plain_server() -> MCPServer:
+    return MCPServer(
+        server_id="plain",
+        name="plain",
+        alias="plain",
+        transport=MCPTransport.http,
+        url="https://plain.example.com/mcp",
+        allow_all_keys=True,
+    )
 
 
 def profile_manager(

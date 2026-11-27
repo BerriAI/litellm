@@ -79,6 +79,7 @@ from litellm.proxy.mcp_server.auth_profile_selection import (
     raise_unusable_profile,
     resolve_effective_servers,
     resolve_usable_server,
+    unusable_profile_status,
 )
 from litellm.proxy.mcp_server.byok_credential_cache import (
     byok_credential_cache,
@@ -106,6 +107,7 @@ from litellm.proxy.mcp_server.exceptions import (
 )
 from litellm.proxy.mcp_server.faults.list_outcomes import (
     AggregateToolListing,
+    ServerListFault,
     ServerListOk,
     ServerOutcome,
     classify_list_exception,
@@ -1244,7 +1246,7 @@ def _prepare_mcp_server_headers(
 
 
 def _merge_gateway_initialize_instructions(
-    allowed_mcp_servers: list[MCPServer],
+    allowed_mcp_servers: Sequence[MCPServer],
 ) -> str | None:
     """YAML/DB override, else upstream text (prefetch on init, or list_tools / health_check / call_tool cache)."""
     if not allowed_mcp_servers:
@@ -1256,7 +1258,7 @@ def _merge_gateway_initialize_instructions(
         if server.instructions and server.instructions.strip():
             texts.append((label, server.instructions.strip()))
             continue
-        if server.spec_path:
+        if server.spec_path or server.uses_auth_profile:
             continue
         cached = global_mcp_server_manager._upstream_initialize_instructions_by_server_id.get(server.server_id)
         if cached and cached.strip():
@@ -1490,17 +1492,27 @@ async def _get_tools_from_mcp_servers(
             litellm_logging_obj = None
 
     try:
-        allowed_mcp_servers: Final = await _get_usable_mcp_servers(
+        all_allowed_servers: Final = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-        if mcp_servers and not allowed_mcp_servers:
+        if mcp_servers and not all_allowed_servers:
             await raise_denied_scoped_mcp_access(
                 requested_names=mcp_servers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=client_ip,
             )
+        allowed_mcp_servers, left_out_servers = await _split_usable_mcp_servers(
+            all_allowed_servers,
+            user_api_key_auth,
+        )
+        left_out_outcomes: Final = {
+            _aggregate_server_key(server): ServerListFault(
+                tag="internal", status_code=unusable_profile_status(unusable)
+            )
+            for server, unusable in left_out_servers
+        }
 
         # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
         # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
@@ -1554,12 +1566,13 @@ async def _get_tools_from_mcp_servers(
                 | {
                     _aggregate_server_key(server): classify_list_exception(error)
                     for server, error in server_admission.rejected_servers
-                },
+                }
+                | left_out_outcomes,
             )
         else:
             from litellm.proxy.mcp_server.catalog import aggregate_gateway_tools
 
-            aggregated = await aggregate_gateway_tools(
+            raw_aggregated: Final = await aggregate_gateway_tools(
                 context,
                 params,
                 allowed_mcp_servers,
@@ -1567,6 +1580,16 @@ async def _get_tools_from_mcp_servers(
                 record_listing=record_listing,
                 enforce_rate_limits=enforce_rate_limits,
                 use_tool_list_cache=use_tool_list_cache,
+            )
+            aggregated = (
+                AggregateToolListing(
+                    tools=raw_aggregated.tools,
+                    outcomes=raw_aggregated.outcomes | left_out_outcomes,
+                    next_cursor=raw_aggregated.next_cursor,
+                    ttl_ms=raw_aggregated.ttl_ms,
+                )
+                if left_out_outcomes
+                else raw_aggregated
             )
         all_tools: Final = aggregated.tools
         server_outcomes: Final = aggregated.outcomes
@@ -1652,7 +1675,7 @@ async def _get_prompts_from_mcp_servers(
         List[Prompt]: Combined list of prompts from filtered servers
     """
 
-    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+    allowed_mcp_servers: Final = await _get_usable_mcp_servers(
         user_api_key_auth=user_api_key_auth,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -1708,7 +1731,7 @@ async def _get_resources_from_mcp_servers(
 ) -> list[Resource]:
     """Fetch resources from allowed MCP servers."""
 
-    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+    allowed_mcp_servers: Final = await _get_usable_mcp_servers(
         user_api_key_auth=user_api_key_auth,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -1761,7 +1784,7 @@ async def _get_resource_templates_from_mcp_servers(
 ) -> list[ResourceTemplate]:
     """Fetch resource templates from allowed MCP servers."""
 
-    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+    allowed_mcp_servers: Final = await _get_usable_mcp_servers(
         user_api_key_auth=user_api_key_auth,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -3339,7 +3362,11 @@ async def mcp_get_prompt(
     # Extract server name from prefixed prompt name
     original_prompt_name, server_name = split_server_prefix_from_name(name)
 
-    server: Final = next((s for s in allowed_mcp_servers if s.name == server_name), None)
+    server: Final = await _caller_view_if_admitted(
+        next((s for s in allowed_mcp_servers if s.name == server_name), None),
+        allowed_mcp_servers,
+        user_api_key_auth,
+    )
     if server is None:
         raise HTTPException(
             status_code=403,
@@ -3386,11 +3413,14 @@ async def mcp_read_resource(
 ) -> ReadResourceResult | InputRequiredResult:
     """Read resource contents from upstream MCP servers."""
 
-    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
-        user_api_key_auth=user_api_key_auth,
-        mcp_servers=mcp_servers,
-        client_ip=client_ip,
+    allowed_mcp_servers, left_out = await _split_usable_mcp_servers(
+        await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+        ),
+        user_api_key_auth,
     )
+    if left_out and not allowed_mcp_servers:
+        raise_unusable_profile(left_out[0][1])
 
     if not allowed_mcp_servers:
         raise HTTPException(
@@ -3444,9 +3474,12 @@ async def mcp_read_resource(
             return failures[0]
         return _resolve_resource_path_owner(listings, requested_uri) or _ResourceOwnerMissing()
 
-    if len(allowed_mcp_servers) == 1:
+    only_server: Final = len(allowed_mcp_servers) == 1 and not left_out
+    if only_server:
         await _enforce_mcp_server_rate_limit(user_api_key_auth, allowed_mcp_servers[0])
-    resolved: Final = allowed_mcp_servers[0] if len(allowed_mcp_servers) == 1 else await resolve_owner()
+    resolved: Final = allowed_mcp_servers[0] if only_server else await resolve_owner()
+    if isinstance(resolved, _ResourceOwnerMissing) and left_out:
+        raise_unusable_profile(left_out[0][1])
     if isinstance(resolved, _ResourceOwnerFailure):
         _raise_resource_owner_failure(resolved, url)
     server: Final = resolved

@@ -71,7 +71,7 @@ def _auth_profile_secrets_digest(server: MCPServer) -> Mapping[str, str]:
     )
 
 
-def _configuration_identity(server: MCPServer) -> str:
+def configuration_identity(server: MCPServer) -> str:
     return json.dumps(
         {
             **server.model_dump(
@@ -1199,7 +1199,7 @@ async def list_gateway_catalog(
     from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
     from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
     from litellm.proxy.mcp_server.operations import (
-        _get_allowed_mcp_servers,
+        get_usable_mcp_servers,
         global_mcp_server_manager,
         raise_denied_scoped_mcp_access,
     )
@@ -1212,9 +1212,7 @@ async def list_gateway_catalog(
     scope: Final = context.mcp_servers
     client_ip: Final = context.client_ip
     async with global_mcp_server_manager.catalog.operation() as snapshot:
-        allowed: Final = await _get_allowed_mcp_servers(
-            user_api_key_auth=caller, mcp_servers=scope, client_ip=client_ip
-        )
+        allowed: Final = await get_usable_mcp_servers(user_api_key_auth=caller, mcp_servers=scope, client_ip=client_ip)
         if scope and not allowed:
             await raise_denied_scoped_mcp_access(
                 requested_names=list(scope), user_api_key_auth=caller, client_ip=client_ip
@@ -1394,12 +1392,14 @@ class _Expiring(Protocol):
 
 
 _DiscoveryPage = TypeVar("_DiscoveryPage", bound=_Expiring)
-_DiscoveryKey: TypeAlias = tuple[str, str | None]
+_configuration_identity: Final = configuration_identity
+DiscoveryKey: TypeAlias = tuple[str, str | None]
+_DiscoveryKey: TypeAlias = DiscoveryKey
 _DISCOVERY_CACHE_LIMIT: Final = 1024
 _DISCOVERY_ENTRY: Final = TypeAdapter(tuple[float, bytes])
 
 
-class _DiscoveryCache(Generic[_DiscoveryPage]):
+class DiscoveryCache(Generic[_DiscoveryPage]):
     def __init__(
         self,
         ttl: float,
@@ -1512,3 +1512,6 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
             len(entry) // 1024,
             self._entries.max_size_per_item,
         )
+
+
+_DiscoveryCache: Final = DiscoveryCache

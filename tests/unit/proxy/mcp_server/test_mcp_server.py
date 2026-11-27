@@ -9,6 +9,7 @@ from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
 from starlette.types import Receive, Scope, Send
@@ -20,6 +21,15 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
     MCPTransport,
 )
 from litellm.types.mcp import MCPAuth
+from tests._support.mcp_auth_profiles import (
+    DEFAULT_CREDENTIAL,
+    ProfileUpstream,
+    caller_granted,
+    install_profile_manager,
+    plain_server,
+    profile_manager,
+    tickets_server,
+)
 
 mcp_server_manager = MCPServerManager()
 
@@ -3496,3 +3506,97 @@ async def test_bare_options_skips_litellm_auth(path: str):
     assert start["status"] == 204
     headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}
     assert headers["allow"] == "GET, POST, DELETE, OPTIONS"
+
+
+async def _gateway_initialize_instructions(granted: str | None) -> str | None:
+    from litellm.proxy.mcp_server import server as mcp_server
+
+    async with mcp_server._gateway_initialize_instructions_request_scope(caller_granted(granted), None, None):
+        return mcp_server.mcp_gateway_initialize_instructions.get()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "requests", "instructions"),
+    [
+        pytest.param(
+            None,
+            [("initialize", f"Bearer {DEFAULT_CREDENTIAL}"), ("notifications/initialized", f"Bearer {DEFAULT_CREDENTIAL}")],
+            "instructions for default_credential",
+            id="no-grant-is-served-the-default-credentials-instructions",
+        ),
+        pytest.param("bots", [], None, id="a-selected-profile-is-never-probed-or-served-with-the-default-credential"),
+    ],
+)
+async def test_gateway_initialize_instructions_follow_the_credential_the_caller_will_use(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, requests: list[tuple[str, str]], instructions: str | None
+) -> None:
+    upstream: Final = ProfileUpstream()
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), upstream))
+
+    served: Final = await _gateway_initialize_instructions(granted)
+
+    assert (served, upstream.requests) == (instructions, requests)
+
+
+@pytest.mark.asyncio
+async def test_gateway_initialize_with_no_usable_server_fails_without_reaching_the_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server.auth_profile_selection import MissingProfile, unusable_profile_detail
+
+    upstream: Final = ProfileUpstream()
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), upstream))
+
+    with pytest.raises(HTTPException) as unavailable:
+        await _gateway_initialize_instructions("ghost")
+
+    assert (unavailable.value.status_code, unavailable.value.detail, upstream.requests) == (
+        500,
+        unusable_profile_detail(MissingProfile("tickets", "ghost")),
+        [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_with_no_usable_server_is_left_to_answer_with_a_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server import server as mcp_server
+
+    upstream: Final = ProfileUpstream()
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), upstream))
+
+    async with mcp_server._gateway_initialize_instructions_request_scope(
+        caller_granted("ghost"), None, None, is_tool_call=True
+    ):
+        served = mcp_server.mcp_gateway_initialize_instructions.get()
+
+    assert (served, upstream.requests) == (None, [])
+
+
+@pytest.mark.asyncio
+async def test_gateway_initialize_leaves_out_a_server_whose_profile_is_unusable_and_serves_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = ProfileUpstream()
+    manager: Final = profile_manager(tickets_server(), upstream)
+    manager.config_mcp_servers = {**manager.config_mcp_servers, "plain": plain_server()}
+    install_profile_manager(monkeypatch, manager)
+
+    served: Final = await _gateway_initialize_instructions("ghost")
+
+    assert served == "instructions for anonymous"
+    assert {authorization for _, authorization in upstream.requests} == {None}
+
+
+@pytest.mark.asyncio
+async def test_gateway_initialize_never_serves_a_profile_caller_the_instructions_another_caller_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), ProfileUpstream()))
+    cached_by_a_default_caller: Final = await _gateway_initialize_instructions(None)
+
+    served: Final = await _gateway_initialize_instructions("bots")
+
+    assert (cached_by_a_default_caller, served) == ("instructions for default_credential", None)

@@ -107,7 +107,15 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: F401 
     is_mcp_admitted_user_subject,
 )
 from litellm.proxy.mcp_server.auth_profile_selection import resolve_usable_server
-from litellm.proxy.mcp_server.catalog import _configuration_identity, _DiscoveryCache, _DiscoveryKey
+from litellm.proxy.mcp_server.catalog import (
+    DiscoveryCache as _DiscoveryCache,
+)
+from litellm.proxy.mcp_server.catalog import (
+    DiscoveryKey as _DiscoveryKey,
+)
+from litellm.proxy.mcp_server.catalog import (
+    configuration_identity as _configuration_identity,
+)
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
