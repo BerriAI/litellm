@@ -4,7 +4,7 @@
 //!
 //! How one `/v1/messages` call's cost reaches its spend log row:
 //!
-//! 1. Boot: `Gateway::with_pricing` hands the messages route a [`CostMapPricing`] over the
+//! 1. Boot: `Gateway::new` hands the messages route a [`CostMapPricing`] over the
 //!    gateway's cost map, so a call prices over whichever map is installed when it is priced.
 //! 2. Each attempt: `MessagesAttempt::run` (`messages.rs`) sets the call's
 //!    `MessagesSettings.pricing` to [`priced_as`], or `None` to leave it unpriced.

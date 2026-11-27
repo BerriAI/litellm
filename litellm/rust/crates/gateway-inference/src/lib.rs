@@ -82,16 +82,6 @@ impl<H: Host> Gateway<H> {
         }
     }
 
-    /// Prices each Messages call whose deployment has a pricing identity over the cost map
-    /// installed when the call is priced.
-    pub fn with_pricing(self) -> Self {
-        let pricing = Arc::new(pricing::CostMapPricing::new(self.cost_map.clone()));
-        Self {
-            messages: self.messages.with_pricing(pricing),
-            ..self
-        }
-    }
-
     /// The deployments' routing state, which the host hands router-core.
     pub fn routing(&self) -> &RoutingCache {
         &self.routing
@@ -128,13 +118,15 @@ impl<H: Host> Gateway<H> {
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
         let auth = resources.auth.clone();
+        let cost_map = Arc::new(ArcSwap::from_pointee(CostMap::bundled()));
         Ok(Self {
             host,
             cache: None,
             routing: routing.into(),
-            cost_map: Arc::new(ArcSwap::from_pointee(CostMap::bundled())),
             messages_settings,
-            messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
+            messages: MessagesRoute::new(provider, auth.clone(), secrets.clone())
+                .with_pricing(Arc::new(pricing::CostMapPricing::new(cost_map.clone()))),
+            cost_map,
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,
                 &http,

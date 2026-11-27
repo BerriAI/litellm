@@ -158,8 +158,7 @@ pub(crate) async fn inference_over(
     )?
     .with_body_check(litellm_gateway_inference::BodyCheck::new(
         &config.general_settings,
-    ))
-    .with_pricing();
+    ));
     Ok(Inference {
         gateway: Arc::new(gateway),
         key_limiter,
