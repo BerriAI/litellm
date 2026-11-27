@@ -983,6 +983,8 @@ async def test_model_armor_handler_raised_http_error_sanitized(sanitize: bool):
 
 
 _ARMOR_FOUND_NOTHING = {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND", "filterResults": {}}}
+_ARMOR_ECHOED_THE_TEXT = {**_ARMOR_FOUND_NOTHING, "sanitizedText": "model output"}
+_ARMOR_REWROTE_WITHOUT_A_MATCH = {**_ARMOR_FOUND_NOTHING, "sanitizedText": "model [X]"}
 _ARMOR_DEIDENTIFIED = {
     "sanitizationResult": {
         "filterMatchState": "MATCH_FOUND",
@@ -996,16 +998,22 @@ _ARMOR_DEIDENTIFIED = {
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("skip_passed", "armor_response", "logged_action"),
-    [(True, _ARMOR_FOUND_NOTHING, "none"), (True, _ARMOR_DEIDENTIFIED, None), (False, _ARMOR_FOUND_NOTHING, None)],
-    ids=["clean", "masked", "setting_off"],
+    [
+        (True, _ARMOR_FOUND_NOTHING, "none"),
+        (True, _ARMOR_ECHOED_THE_TEXT, "none"),
+        (True, _ARMOR_DEIDENTIFIED, None),
+        (True, _ARMOR_REWROTE_WITHOUT_A_MATCH, None),
+        (False, _ARMOR_FOUND_NOTHING, None),
+    ],
+    ids=["clean", "clean_echo", "masked", "rewritten_without_match", "setting_off"],
 )
 async def test_model_armor_post_call_logging_says_a_clean_run_did_not_act_with_skip_passed_on(
-    monkeypatch, skip_passed, armor_response, logged_action
-):
+    monkeypatch: pytest.MonkeyPatch, skip_passed: bool, armor_response: dict[str, object], logged_action: str | None
+) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", skip_passed)
-    guardrail = ModelArmorGuardrail(
+    guardrail: Final = ModelArmorGuardrail(
         template_id="test-template",
         project_id="test-project",
         guardrail_name="model-armor-test",
@@ -1013,16 +1021,16 @@ async def test_model_armor_post_call_logging_says_a_clean_run_did_not_act_with_s
     )
     guardrail.make_model_armor_request = AsyncMock(return_value=armor_response)
     guardrail.should_run_guardrail = Mock(return_value=True)
-    mock_llm_response = litellm.ModelResponse()
+    mock_llm_response: Final = litellm.ModelResponse()
     mock_llm_response.choices = [litellm.Choices(message=litellm.Message(content="model output"))]
-    request_data = {
+    request_data: Final = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "synthetic input"}],
         "metadata": {},
         "litellm_logging_obj": MagicMock(),
     }
 
-    logged_runs = []
+    logged_runs: Final[list[dict[str, object]]] = []
     monkeypatch.setattr(
         "litellm.proxy.common_utils.callback_utils.add_guardrail_response_to_standard_logging_object",
         lambda litellm_logging_obj, guardrail_response: logged_runs.append(guardrail_response),

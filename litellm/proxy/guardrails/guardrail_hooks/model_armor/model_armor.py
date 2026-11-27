@@ -1002,7 +1002,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 if isinstance(response, ResponsesAPIResponse)
                 else self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
             )
-            self._log_post_call_armor_response(data, armor_response, blocked=blocked)
+            self._log_post_call_armor_response(data, armor_response, scanned=content, blocked=blocked)
 
             # Add guardrail to applied_guardrails BEFORE potential blocking
             # This ensures guardrail is recorded even when it blocks the request
@@ -1100,7 +1100,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             await self._responses_handler().spread_text_rewrite(response, message_sanitized)
 
     def _log_post_call_armor_response(
-        self, data: Mapping[str, object], armor_response: _ModelArmorResponse, *, blocked: bool
+        self, data: Mapping[str, object], armor_response: _ModelArmorResponse, *, scanned: str, blocked: bool
     ) -> None:
         from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.proxy.common_utils.callback_utils import add_guardrail_response_to_standard_logging_object
@@ -1118,7 +1118,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             guardrail_status="success",
             start_time=start_time if isinstance(start_time, float) else None,
         )
-        if not blocked and not self._should_block_content(armor_response) and acting_runs_are_logged():
+        found_nothing: Final = not blocked and not self._should_block_content(armor_response)
+        if found_nothing and self._get_sanitized_content(armor_response) in (None, scanned) and acting_runs_are_logged():
             run["guardrail_action"] = GUARDRAIL_ACTION_NONE
         add_guardrail_response_to_standard_logging_object(
             litellm_logging_obj=logging_obj if isinstance(logging_obj, Logging) else None,
@@ -1130,7 +1131,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             content=message_text, source="model_response", request_data=request_data
         )
         blocked: Final = self._blocks_unmaskable_response(armor_response)
-        self._log_post_call_armor_response(request_data, armor_response, blocked=blocked)
+        self._log_post_call_armor_response(request_data, armor_response, scanned=message_text, blocked=blocked)
         if blocked:
             raise HTTPException(
                 status_code=400,

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from typing import Final
 
 from fastapi.exceptions import HTTPException
 from litellm.proxy.guardrails.guardrail_hooks.xecguard.xecguard import (
@@ -1660,14 +1661,20 @@ class TestXecGuardLoggingHook:
         ids=["clean", "unsafe", "setting_off"],
     )
     async def test_async_logging_hook_says_a_clean_run_did_not_act_with_skip_passed_on(
-        self, monkeypatch, xecguard_guardrail, mock_request_data, skip_passed, decision, logged_action
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        xecguard_guardrail: XecGuardGuardrail,
+        mock_request_data: dict[str, object],
+        skip_passed: bool,
+        decision: str,
+        logged_action: str | None,
+    ) -> None:
         from litellm.proxy import proxy_server
         from litellm.proxy.guardrails.usage_tracking import guardrail_ran_without_acting
 
         monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", skip_passed)
-        resp = _make_response({"decision": decision, "trace_id": "lg-1"})
-        kwargs = {**mock_request_data, "standard_logging_object": {}}
+        resp: Final = _make_response({"decision": decision, "trace_id": "lg-1"})
+        kwargs: Final = {**mock_request_data, "standard_logging_object": {}}
         with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
             await xecguard_guardrail.async_logging_hook(
                 kwargs=kwargs, result=_build_model_response("some answer"), call_type="acompletion"
