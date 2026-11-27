@@ -5371,7 +5371,7 @@ class MCPServerManager:
         self,
         server: MCPServer,
         user_api_key_auth: UserAPIKeyAuth | None,
-        url: AnyUrl,
+        url: AnyUrl | str,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
