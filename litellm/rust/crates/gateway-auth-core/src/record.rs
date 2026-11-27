@@ -1,9 +1,9 @@
 //! The rows a caller belongs to, as the core reads them: one record per entity, holding its id and
 //! what its stored row says, and nothing a request or another row adds. A host builds a record
 //! from the row it read and decides nothing while it does. A record grows a field with the first
-//! rule that reads it, except a team's, a user's and a project's, which copy each column of their
-//! row that a plain value holds, read or not. The host refuses a caller whose team, user or
-//! project holds one nothing reads yet.
+//! rule that reads it, except a team's, a user's, a project's and an end user's, which copy each
+//! column of their row that a plain value holds, read or not. The host refuses a caller whose
+//! team, user, project or end user holds one nothing reads yet.
 
 use std::collections::BTreeMap;
 
@@ -89,6 +89,9 @@ pub struct ProjectRecord {
 pub struct EndUserRecord {
     pub end_user_id: Option<String>,
     pub found: bool,
+    pub blocked: bool,
+    pub default_model: Option<String>,
+    pub models: Vec<String>,
     pub limits: MinuteLimits,
     pub budget: Budget,
 }
