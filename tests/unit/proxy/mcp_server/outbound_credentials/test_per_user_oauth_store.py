@@ -11,6 +11,7 @@ from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
     ServerLookup,
 )
+from litellm.proxy.mcp_server.outbound_credentials.result import Ok
 
 
 class _RecordingStore:
@@ -70,7 +71,10 @@ async def test_native_refresh_persists_actual_grant_through_storage_adapter(
         record_oauth_scope_refusal,
         store_user_oauth_credential,
     )
-    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeRefresher
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
+        AuthorizationCodeRefresher,
+        AuthorizationCodeTokenSuccess,
+    )
     from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _persist_credential
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -86,13 +90,16 @@ async def test_native_refresh_persists_actual_grant_through_storage_adapter(
 
     async def token_endpoint(url, form, headers):
         assert url == server.token_url and form["grant_type"] == "refresh_token"
-        return {"access_token": "rotated", **({"scope": response_scope} if response_scope is not None else {})}
+        return AuthorizationCodeTokenSuccess(
+            body={"access_token": "rotated", **({"scope": response_scope} if response_scope is not None else {})}
+        )
 
     await store_user_oauth_credential(credentials_prisma, "alice", "srv", "old", refresh_token="refresh")
     await record_oauth_scope_refusal(credentials_prisma, "alice", "srv", "gist")
     refresher = AuthorizationCodeRefresher(lambda _: server, token_endpoint, _persist_credential)
     refreshed = await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="refresh", scopes=prior_scopes))
-    assert refreshed is not None and refreshed.scopes == tuple(expected)
+    assert isinstance(refreshed, Ok)
+    assert refreshed.ok.scopes == tuple(expected)
     payload = await get_user_oauth_credential(credentials_prisma, "alice", "srv")
     assert payload is not None and payload.get("scopes") == expected
     assert payload["access_token"] == "rotated"

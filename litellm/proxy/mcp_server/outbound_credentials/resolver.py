@@ -36,11 +36,13 @@ from litellm.proxy.mcp_server.outbound_credentials.client_credentials import (
 )
 from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import (
     NoOpAuth,
+    PerUserOAuthBearerAuth,
     StaticHeaderAuth,
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
-    OAuthTokenStore,
+    OAuthTokenResolutionError,
+    ReactiveOAuthTokenStore,
     TokenStoreUnavailable,
 )
 from litellm.proxy.mcp_server.outbound_credentials.result import (
@@ -110,6 +112,17 @@ class _NullOAuthTokenStore:
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         return None
 
+    async def peek(self, user_id: str, server_id: str) -> OAuthToken | None:
+        return None
+
+    async def invalidate(self, user_id: str, server_id: str) -> None:
+        return None
+
+    async def refresh_now(
+        self, user_id: str, server_id: str, failed_access_token: str
+    ) -> Result[OAuthToken, CredError]:
+        return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
+
 
 class _NullTokenExchanger:
     """Fail-closed default: with no exchanger wired, token_exchange cannot produce a credential."""
@@ -136,14 +149,14 @@ class UpstreamCredentialProvider:
 
     def __init__(
         self,
-        oauth_token_store: OAuthTokenStore | None = None,
+        oauth_token_store: ReactiveOAuthTokenStore | None = None,
         token_exchanger: TokenExchanger | None = None,
         token_endpoint: TokenEndpointClient | None = None,
         exchanged_tokens: ExchangedTokenCache | None = None,
         client_credentials_source: ClientCredentialsTokenSource | None = None,
         sso_assertion_store: SSOAssertionStore | None = None,
     ) -> None:
-        self._oauth_token_store: OAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
+        self._oauth_token_store: ReactiveOAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
         self._token_exchanger: TokenExchanger = token_exchanger or _NullTokenExchanger()
         self._token_endpoint: TokenEndpointClient = token_endpoint or TokenEndpointClient()
         self._exchanged_tokens: ExchangedTokenCache = exchanged_tokens or ExchangedTokenCache()
@@ -182,12 +195,14 @@ class UpstreamCredentialProvider:
     async def has_user_token(self, subject: Subject, server: ServerSpec) -> bool:
         """Whether a usable per-user token exists for this server (the preemptive 401's check).
 
-        Reads from the same per-user store as the ``authorization_code`` arm, so the discovery
-        challenge and the egress agree on whether the user is authorized. Returns a typed ``bool``
-        (no ``httpx2.Auth``), unlike ``resolve_credentials``. A non-per-user mode has no token in the
-        store, so it reads as False without a per-mode branch here.
+        Reads from the same per-user store as the ``authorization_code`` arm. An unknown transient
+        outcome returns True so the request reaches egress, where the resolver returns its typed
+        retryable or configuration error instead of the preemptive check downgrading it to reauth.
         """
-        return await self._authz_token(subject, server) is not None
+        try:
+            return await self._oauth_token_store.peek(subject.subject_id, server.server_id) is not None
+        except (OAuthTokenResolutionError, TokenStoreUnavailable):
+            return True
 
     def _passthrough(self, subject: Subject) -> Result[httpx2.Auth, CredError]:
         """Forward the caller's own upstream credential verbatim; the gateway mints nothing.
@@ -333,12 +348,20 @@ class UpstreamCredentialProvider:
 
     async def _authorization_code(
         self, subject: Subject, server: ServerSpec, config: AuthorizationCodeConfig
-    ) -> Result[StaticHeaderAuth, CredError]:
-        token: Final = await self._authz_token(subject, server)
+    ) -> Result[httpx2.Auth, CredError]:
+        try:
+            token: Final = await self._oauth_token_store.fetch(subject.subject_id, server.server_id)
+        except OAuthTokenResolutionError as exc:
+            return Error(exc.error)
+        except TokenStoreUnavailable:
+            return Error(CredError.of_upstream_unavailable("OAuth token store is unavailable; retry the request."))
         if token is None:
             return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
-        header_name, header_value = config.header(token.access_token)
-        return Ok(StaticHeaderAuth(header_value, header_name=header_name))
+
+        async def refresh_now(failed_access_token: str) -> Result[OAuthToken, CredError]:
+            return await self._oauth_token_store.refresh_now(subject.subject_id, server.server_id, failed_access_token)
+
+        return Ok(PerUserOAuthBearerAuth(token.access_token, refresh_now, config))
 
     async def _client_credentials(
         self, server_id: str, config: ClientCredentialsConfig
@@ -412,17 +435,6 @@ class UpstreamCredentialProvider:
         inputs reads as a miss rather than being served.
         """
         self._exchanged_tokens.invalidate(_id_jag_slot_key(subject, server))
-
-    async def _authz_token(self, subject: Subject, server: ServerSpec) -> OAuthToken | None:
-        """The user's authorization_code token, or None when absent or the store is unreachable.
-
-        A store outage is mapped to None (the OAuth challenge), not raised, so a transient outage
-        does not 500; it is the store, not this resolver, that declines to cache the failure.
-        """
-        try:
-            return await self._oauth_token_store.fetch(subject.subject_id, server.server_id)
-        except TokenStoreUnavailable:
-            return None
 
 
 def _login_refresh_token_subject(

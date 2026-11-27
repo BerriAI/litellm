@@ -39,6 +39,8 @@ from litellm.proxy.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
 from litellm.proxy.mcp_server.faults.traversal import iter_exception_tree
+from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import PER_USER_OAUTH_RECOVERY_EXTENSION
+from litellm.proxy.mcp_server.outbound_credentials.types import CredError
 from litellm.types.llms.base import LiteLLMBaseModel
 
 ListFaultCategory: TypeAlias = Literal[
@@ -110,6 +112,16 @@ def _find_upstream_response(exc: BaseException) -> httpx.Response | httpx2.Respo
     return next(_iter_upstream_responses(exc), None)
 
 
+def _per_user_oauth_recovery_error(exc: BaseException) -> CredError | None:
+    for current in iter_exception_tree(exc):
+        response = getattr(current, "response", None)
+        if isinstance(response, (httpx.Response, httpx2.Response)):
+            recovery_error = response.extensions.get(PER_USER_OAUTH_RECOVERY_EXTENSION)
+            if isinstance(recovery_error, CredError):
+                return recovery_error
+    return None
+
+
 def upstream_auth_challenge(exc: BaseException) -> tuple[int, str | None] | None:
     """The first upstream 401/403 in deliberate order and its ``WWW-Authenticate`` challenge, both
     read from the SAME response, so the status that picks the carrier channel and the challenge that
@@ -156,7 +168,11 @@ def raise_classified_list_failure(
     a classified fault. Every fetch site delegates here so the two channels cannot drift apart per
     call site. ``suppress_challenge`` is for dcr_bridge servers, whose upstream challenge points
     clients at the wrong protected-resource metadata and must never relay."""
+    recovery_error: Final = _per_user_oauth_recovery_error(exc)
     auth: Final = upstream_auth_challenge(exc)
+    if recovery_error is not None and recovery_error.tag != "unauthorized":
+        fault: Final = "unreachable" if recovery_error.tag == "upstream_unavailable" else "internal"
+        raise MCPServerListError(ServerListFault(tag=fault), server_name) from exc
     if auth is not None:
         status_code, challenge = auth
         raise MCPUpstreamAuthError(

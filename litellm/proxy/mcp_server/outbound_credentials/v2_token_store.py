@@ -42,7 +42,7 @@ def _to_scopes(raw: object) -> tuple[str, ...]:
 
 def _to_oauth_token(payload: Mapping[str, object]) -> OAuthToken | None:
     access_token: Final = payload.get("access_token")
-    if not isinstance(access_token, str):
+    if not isinstance(access_token, str) or not access_token:
         return None
     refresh_token: Final = payload.get("refresh_token")
     expires_at: Final = payload.get("expires_at")

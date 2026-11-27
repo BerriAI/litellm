@@ -1068,7 +1068,7 @@ async def _managed_authorization_scope(
         else None
     )
     prior_grant: Final = (
-        await get_user_oauth_credential(prisma_client, scope_user_id, server.server_id)
+        await get_user_oauth_credential(prisma_client, scope_user_id, server.server_id, include_invalidated=True)
         if scope_user_id and prisma_client is not None
         else None
     )

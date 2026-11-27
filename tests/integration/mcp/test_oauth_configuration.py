@@ -1,4 +1,5 @@
 import json
+import os
 import queue
 import threading
 import uuid
@@ -10,6 +11,7 @@ from typing import Final, Literal
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import psycopg
 import pytest
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
@@ -565,3 +567,65 @@ def test_same_url_oauth_credentials_and_revocation_are_isolated_by_user_and_serv
                 )
                 assert changed.status_code == 200, changed.text
                 assert changed.json()["has_credential"] is (transition == "expire"), changed.text
+
+
+def test_oauth_credential_revocation_waits_for_the_credential_row_lock(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            "oauth" + uuid.uuid4().hex,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            authorization_url=peer.url + "/authorize",
+            token_url=peer.url + "/token",
+            credentials={"client_id": "synthetic-oauth-client"},
+        )
+        user: Final = scenario.user(user_role="internal_user")
+        key: Final = scenario.key(user_id=user, object_permission={"mcp_servers": [identity]})
+        stored: Final = gateway.request(
+            "POST",
+            f"/v1/mcp/server/{identity}/oauth-user-credential",
+            {"access_token": "synthetic-locked-token", "expires_in": 3600},
+            key=key,
+        )
+        assert stored.status_code == 200, stored.text
+
+        executor: Final = ThreadPoolExecutor(max_workers=1)
+        try:
+            with psycopg.connect(os.environ["DATABASE_URL"]) as blocker:
+                blocker.execute(
+                    'SELECT user_id FROM "LiteLLM_MCPUserCredentials" WHERE user_id=%s AND server_id=%s FOR UPDATE',
+                    (user, identity),
+                )
+                delete: Final = executor.submit(
+                    gateway.request,
+                    "DELETE",
+                    f"/v1/mcp/server/{identity}/oauth-user-credential",
+                    key=key,
+                )
+                try:
+                    eventually(
+                        lambda: read_rows(
+                            "SELECT pid FROM pg_stat_activity "
+                            "WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE %s",
+                            ("%SELECT%LiteLLM_MCPUserCredentials%FOR UPDATE%",),
+                        ),
+                        lambda rows: len(rows) >= 1,
+                        seconds=5,
+                    )
+                finally:
+                    blocker.rollback()
+
+            response: Final = delete.result(timeout=10)
+        finally:
+            executor.shutdown(wait=True)
+
+        assert response.status_code == 200, response.text
+        assert (
+            read_rows(
+                'SELECT user_id FROM "LiteLLM_MCPUserCredentials" WHERE user_id=%s AND server_id=%s',
+                (user, identity),
+            )
+            == []
+        )

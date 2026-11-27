@@ -11,33 +11,42 @@ collaborators acquire their globals per call, mirroring v1's lazy-import pattern
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable, Mapping
 from functools import partial
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeAlias
+
+import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.proxy.mcp_server.oauth_identity_binding import credential_binding_matches
 from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
+    AuthorizationCodeTokenDenied,
+    AuthorizationCodeTokenSuccess,
+    AuthorizationCodeTokenUnreachable,
 )
 from litellm.proxy.mcp_server.outbound_credentials.dual_cache_token_backend import (
     DualCacheTokenCacheBackend,
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     CachedOAuthTokenStore,
-    InvalidatableOAuthTokenStore,
     OAuthToken,
+    ReactiveOAuthTokenStore,
     RefreshCoordinator,
     RefreshingTokenStore,
     TokenCacheBackend,
     TokenStoreUnavailable,
 )
+from litellm.proxy.mcp_server.outbound_credentials.result import Result
 from litellm.proxy.mcp_server.outbound_credentials.runtime_refresh_coordinator import (
     runtime_refresh_coordinator,
 )
 from litellm.proxy.mcp_server.outbound_credentials.token_cache_codec import (
     OAuthTokenCacheCodec,
 )
+from litellm.proxy.mcp_server.outbound_credentials.types import CredError
 from litellm.proxy.mcp_server.outbound_credentials.v2_token_store import (
     V2PerUserTokenStore,
 )
@@ -48,15 +57,16 @@ if TYPE_CHECKING:
 # A token with no declared expiry is cached for this long; one with an expiry is cached until then.
 _DEFAULT_TTL_SECONDS: Final = 300.0
 
-ServerLookup = Callable[[str], "MCPServer | None"]
-StoreBuilder = Callable[[ServerLookup], tuple[InvalidatableOAuthTokenStore, bool]]
+ServerLookup: TypeAlias = Callable[[str], "MCPServer | None"]
+StoreBuilder: TypeAlias = Callable[[ServerLookup], tuple[ReactiveOAuthTokenStore, bool]]
+_TOKEN_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 async def _read_credential(user_id: str, server_id: str) -> Mapping[str, object] | None:
     from litellm.proxy.mcp_server.db import (  # noqa: PLC0415
         get_user_oauth_credential,
     )
-    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global is wired after module import
 
     if prisma_client is None:
         raise TokenStoreUnavailable("Database not connected")
@@ -77,7 +87,7 @@ async def _persist_credential(
     from litellm.proxy.mcp_server.db import (  # noqa: PLC0415
         store_user_oauth_credential,
     )
-    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global is wired after module import
 
     if prisma_client is None:
         return
@@ -96,53 +106,88 @@ async def _persist_credential(
     )
 
 
-async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str, str]) -> dict[str, object] | None:
+async def _post_token_endpoint(
+    url: str, form: dict[str, str], headers: dict[str, str]
+) -> AuthorizationCodeTokenSuccess | AuthorizationCodeTokenDenied | AuthorizationCodeTokenUnreachable:
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore
     )
     from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415
 
-    # litellm's httpx handler and httpx.Response are only partially typed; the IdP returns a JSON
-    # object and the refresher validates each field, so the untyped boundary is contained here.
     provider: Final = httpxSpecialProvider.Oauth2Check
     request_headers: Final = {"Accept": "application/json", **headers}
-    # A failed refresh is a miss, not a 500 (matches v1), so any error becomes None.
     try:
         client: Final = get_async_httpx_client(llm_provider=provider)  # pyright: ignore
         response: Final = await client.post(url, headers=request_headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
-        body: Final[dict[str, object]] = response.json()  # pyright: ignore
+        body: Final = _TOKEN_BODY_ADAPTER.validate_json(response.content)
+    except httpx.HTTPStatusError as exc:
+        try:
+            error_body: Final = _TOKEN_BODY_ADAPTER.validate_json(exc.response.content)
+        except (ValidationError, json.JSONDecodeError, UnicodeDecodeError):
+            return AuthorizationCodeTokenDenied(
+                status_code=exc.response.status_code,
+                body={},
+                detail=f"token endpoint returned HTTP {exc.response.status_code}",
+            )
+        return AuthorizationCodeTokenDenied(
+            status_code=exc.response.status_code,
+            body=error_body,
+            detail=f"token endpoint returned HTTP {exc.response.status_code}",
+        )
     except Exception as exc:  # noqa: BLE001
-        verbose_logger.warning("MCP OAuth refresh request failed: %s", exc)
-        return None
-    else:
-        return body  # pyright: ignore
+        verbose_logger.warning("MCP OAuth refresh request failed: %s", type(exc).__name__)
+        return AuthorizationCodeTokenUnreachable(detail=type(exc).__name__)
+    return AuthorizationCodeTokenSuccess(body=body)
+
+
+async def _revoke_credential(user_id: str, server_id: str, access_token: str, refresh_token: str | None) -> None:
+    from litellm.proxy.mcp_server.db import (  # noqa: PLC0415  # runtime global avoids a package import cycle
+        invalidate_user_oauth_credential_if_grant_matches,
+    )
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global is wired after module import
+
+    if prisma_client is None:
+        return
+    await invalidate_user_oauth_credential_if_grant_matches(
+        prisma_client, user_id, server_id, access_token, refresh_token
+    )
 
 
 def _redis_cache_is_available() -> bool:
-    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+    from litellm.proxy.proxy_server import (
+        redis_usage_cache,  # noqa: PLC0415  # runtime global is wired after module import
+    )
 
-    return user_api_key_cache.has_redis
+    return redis_usage_cache is not None
 
 
-def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, RefreshCoordinator | None, bool]:
+def _runtime_result_coordinator() -> RefreshCoordinator[Result[OAuthToken, CredError]] | None:
+    return runtime_refresh_coordinator()
+
+
+def _runtime_backend_and_coordinator() -> tuple[
+    TokenCacheBackend | None, RefreshCoordinator[Result[OAuthToken, CredError]] | None, bool
+]:
     """The cross-replica cache + coordinator when Redis is wired, else ``(None, None, False)`` so the
     foundation's in-process defaults are used (a single replica needs no shared cache or lock).
     """
-    from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: PLC0415
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: PLC0415  # runtime helpers stay lazy like the surrounding proxy
         decrypt_value_helper,
         encrypt_value_helper,
     )
-    from litellm.proxy.proxy_server import mcp_state_cache  # noqa: PLC0415
+    from litellm.proxy.proxy_server import (
+        redis_usage_cache,  # noqa: PLC0415  # runtime global is wired after module import
+    )
 
-    coordinator: Final = runtime_refresh_coordinator()
-    if coordinator is None:
+    coordinator: Final = _runtime_result_coordinator()
+    if coordinator is None or redis_usage_cache is None:
         return None, None, False
     codec: Final = OAuthTokenCacheCodec(
         encrypt_value_helper,
         lambda blob: decrypt_value_helper(blob, "mcp_per_user_token", exception_type="debug"),
     )
-    backend: Final = DualCacheTokenCacheBackend(mcp_state_cache, codec)
+    backend: Final = DualCacheTokenCacheBackend(redis_usage_cache, codec)
     return backend, coordinator, True
 
 
@@ -162,7 +207,9 @@ def _build_per_user_oauth_token_store(
     server_lookup: ServerLookup,
 ) -> tuple[CachedOAuthTokenStore, bool]:
     backend, coordinator, uses_redis = _runtime_backend_and_coordinator()
-    refresher: Final = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
+    refresher: Final = AuthorizationCodeRefresher(
+        server_lookup, _post_token_endpoint, _persist_credential, revoke=_revoke_credential
+    )
     refreshing: Final = RefreshingTokenStore(
         V2PerUserTokenStore(partial(_read_bound_credential, server_lookup)), refresher, coordinator=coordinator
     )
@@ -194,7 +241,7 @@ class LazyPerUserOAuthTokenStore:
         self._server_lookup = server_lookup
         self._store_builder = store_builder
         self._redis_available = redis_available
-        self._store: InvalidatableOAuthTokenStore | None = None
+        self._store: ReactiveOAuthTokenStore | None = None
         self._uses_redis = False
         self._fetch_lock = asyncio.Condition()
         self._local_fetches = 0
@@ -213,13 +260,41 @@ class LazyPerUserOAuthTokenStore:
 
     async def _fetch_token(self, user_id: str, server_id: str) -> OAuthToken | None:
         if self._uses_redis:
-            store = self._store
-            if store is not None:
-                return await store.fetch(user_id, server_id)
+            cached_store: Final = self._store
+            if cached_store is not None:
+                return await cached_store.fetch(user_id, server_id)
 
         store, uses_redis = await self._store_for_fetch()
         try:
             return await store.fetch(user_id, server_id)
+        finally:
+            if not uses_redis:
+                await self._finish_local_fetch()
+
+    async def peek(self, user_id: str, server_id: str) -> OAuthToken | None:
+        if self._uses_redis:
+            cached_store: Final = self._store
+            if cached_store is not None:
+                return await cached_store.peek(user_id, server_id)
+
+        store, uses_redis = await self._store_for_fetch()
+        try:
+            return await store.peek(user_id, server_id)
+        finally:
+            if not uses_redis:
+                await self._finish_local_fetch()
+
+    async def refresh_now(
+        self, user_id: str, server_id: str, failed_access_token: str
+    ) -> Result[OAuthToken, CredError]:
+        if self._uses_redis:
+            cached_store: Final = self._store
+            if cached_store is not None:
+                return await cached_store.refresh_now(user_id, server_id, failed_access_token)
+
+        store, uses_redis = await self._store_for_fetch()
+        try:
+            return await store.refresh_now(user_id, server_id, failed_access_token)
         finally:
             if not uses_redis:
                 await self._finish_local_fetch()
@@ -231,9 +306,9 @@ class LazyPerUserOAuthTokenStore:
         on an empty cache.
         """
         if self._uses_redis:
-            store = self._store
-            if store is not None:
-                await store.invalidate(user_id, server_id)
+            cached_store: Final = self._store
+            if cached_store is not None:
+                await cached_store.invalidate(user_id, server_id)
                 return
 
         store, uses_redis = await self._store_for_fetch()
@@ -243,7 +318,7 @@ class LazyPerUserOAuthTokenStore:
             if not uses_redis:
                 await self._finish_local_fetch()
 
-    async def _store_for_fetch(self) -> tuple[InvalidatableOAuthTokenStore, bool]:
+    async def _store_for_fetch(self) -> tuple[ReactiveOAuthTokenStore, bool]:
         async with self._fetch_lock:
             while (
                 self._store is not None and not self._uses_redis and self._redis_available() and self._local_fetches > 0

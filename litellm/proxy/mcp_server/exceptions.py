@@ -48,6 +48,7 @@ class MCPUpstreamAuthError(Exception):
         required_scope: str | None = None,
         server_id: str | None = None,
         public_detail: object = None,
+        managed_reauth: bool = False,
     ) -> None:
         self.status_code = status_code
         self.www_authenticate = www_authenticate
@@ -55,6 +56,7 @@ class MCPUpstreamAuthError(Exception):
         self.required_scope = required_scope
         self.server_id = server_id
         self.public_detail = TOKEN_EXCHANGE_SUBJECT_ERROR if public_detail == TOKEN_EXCHANGE_SUBJECT_ERROR else None
+        self.managed_reauth = managed_reauth
         super().__init__(f"Upstream MCP server {server_name!r} returned {status_code}")
 
     def to_http_exception(
@@ -87,8 +89,8 @@ class MCPUpstreamAuthError(Exception):
         the client originally targeted, matching the path-aware behaviour of
         ``get_passthrough_resource_metadata_url`` in ``oauth_utils.py``.
         """
-        aggregate_step_up: Final = (
-            self.required_scope is not None
+        use_aggregate_metadata: Final = (
+            (self.required_scope is not None or self.managed_reauth)
             and request_path is not None
             and (request_path.rstrip("/") == "/mcp" or request_path.startswith("/toolset/"))
         )
@@ -96,21 +98,32 @@ class MCPUpstreamAuthError(Exception):
             " ".join(
                 encode_upstream_scope(self.server_id or self.server_name, item) for item in self.required_scope.split()
             )
-            if aggregate_step_up and self.required_scope
+            if use_aggregate_metadata and self.required_scope
             else self.required_scope
         )
-        challenge: str | None = self.www_authenticate
-        if challenge is None and (self.status_code == 401 or self.required_scope is not None) and base_url:
-            prefix: Final = base_url.rstrip("/")
-            name: Final = quote(self.server_name, safe="/:@!$&'()*+,;=")
-            resource_metadata_url: Final = (
+        prefix: Final = base_url.rstrip("/") if base_url else None
+        name: Final = quote(self.server_name, safe="/:@!$&'()*+,;=")
+        resource_metadata_url: Final = (
+            (
                 f"{prefix}/.well-known/oauth-protected-resource"
-                if aggregate_step_up
+                if use_aggregate_metadata
                 else f"{prefix}/.well-known/oauth-protected-resource{well_known_root_suffix()}/{name}/mcp"
                 if request_path and request_path.startswith(f"/{self.server_name}/mcp")
                 else f"{prefix}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{name}"
             )
-            challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
+            if prefix and (self.status_code == 401 or self.required_scope is not None)
+            else None
+        )
+        gateway_challenge: Final = (
+            f'Bearer resource_metadata="{resource_metadata_url}"' if resource_metadata_url else None
+        )
+        challenge: Final = (
+            gateway_challenge
+            if self.managed_reauth
+            else self.www_authenticate
+            if self.www_authenticate is not None
+            else gateway_challenge
+        )
         scoped_challenge: Final = (
             (f'{challenge}, error="insufficient_scope"' if challenge else 'Bearer error="insufficient_scope"')
             + (f', scope="{requested_scope}"' if requested_scope else "")

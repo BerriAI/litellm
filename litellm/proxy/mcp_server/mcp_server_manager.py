@@ -122,6 +122,7 @@ from litellm.proxy.mcp_server.faults.list_outcomes import (
     upstream_auth_challenge,
     upstream_insufficient_scope,
 )
+from litellm.proxy.mcp_server.faults.traversal import iter_exception_tree
 from litellm.proxy.mcp_server.interactions import bind_target
 from litellm.proxy.mcp_server.legacy_callbacks import get_scope_response, has_active_mcp_request_context
 from litellm.proxy.mcp_server.mcp_debug import describe_upstream_http_failure, record_auth_resolution
@@ -147,8 +148,9 @@ from litellm.proxy.mcp_server.outbound_credentials.adapter import (
     to_server_spec,
     to_subject,
 )
+from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import PER_USER_OAUTH_RECOVERY_EXTENSION
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
-    InvalidatableOAuthTokenStore,
+    ReactiveOAuthTokenStore,
 )
 from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
@@ -160,6 +162,7 @@ from litellm.proxy.mcp_server.outbound_credentials.types import (
     DEFAULT_CREDENTIAL_HEADER,
     ApiKeyConfig,
     AuthResolution,
+    CredError,
     IdJagConfig,
     PassthroughConfig,
     TokenExchangeConfig,
@@ -1731,6 +1734,16 @@ def caller_authorization_fans_out(
 _caller_authorization_fans_out: Final = caller_authorization_fans_out
 
 
+def _extract_per_user_oauth_recovery_error(exc: BaseException) -> CredError | None:
+    for current in iter_exception_tree(exc):
+        response = getattr(current, "response", None)
+        if isinstance(response, (httpx.Response, httpx2.Response)):
+            recovery_error = response.extensions.get(PER_USER_OAUTH_RECOVERY_EXTENSION)
+            if isinstance(recovery_error, CredError):
+                return recovery_error
+    return None
+
+
 def _extract_upstream_auth_failure(
     exc: BaseException,
 ) -> tuple[int, str | None] | None:
@@ -2209,7 +2222,7 @@ class MCPServerManager:
     def __init__(
         self,
         cred_provider: UpstreamCredentialProvider | None = None,
-        per_user_oauth_token_store: InvalidatableOAuthTokenStore | None = None,
+        per_user_oauth_token_store: ReactiveOAuthTokenStore | None = None,
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
@@ -7140,6 +7153,20 @@ class MCPServerManager:
                                 server_id=mcp_server.server_id,
                             ) from e
                         auth_info: Final = _extract_upstream_auth_failure(e)
+                        recovery_error: Final = _extract_per_user_oauth_recovery_error(e) if managed_per_user else None
+                        match (recovery_error, auth_info):
+                            case (CredError() as oauth_error, (401, www_authenticate)):
+                                if oauth_error.tag == "unauthorized":
+                                    raise MCPUpstreamAuthError(
+                                        status_code=401,
+                                        www_authenticate=www_authenticate,
+                                        server_name=server_label,
+                                        server_id=mcp_server.server_id,
+                                        managed_reauth=True,
+                                    ) from e
+                                raise_public(oauth_error)
+                            case _:
+                                pass
                         if not relays_upstream_auth or auth_info is None or auth_info[0] != 401:
                             # A genuine (non-auth or 403-forbidden) upstream/transport failure.
                             # raise_on_error demoted the client-layer log to debug, so surface it here at

@@ -7256,6 +7256,12 @@ class TestMCPServerManager:
             async def fetch(self, user_id: str, server_id: str):
                 return None
 
+            async def peek(self, user_id: str, server_id: str):
+                return None
+
+            async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+                raise NotImplementedError
+
             async def invalidate(self, user_id: str, server_id: str) -> None:
                 self.invalidations.append((user_id, server_id))
 
@@ -7273,6 +7279,12 @@ class TestMCPServerManager:
         class _Store:
             async def fetch(self, user_id: str, server_id: str):
                 return None
+
+            async def peek(self, user_id: str, server_id: str):
+                return None
+
+            async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+                raise NotImplementedError
 
             async def invalidate(self, user_id: str, server_id: str) -> None:
                 return None
@@ -7298,6 +7310,12 @@ class TestMCPServerManager:
             async def fetch(self, user_id: str, server_id: str):
                 return None
 
+            async def peek(self, user_id: str, server_id: str):
+                return None
+
+            async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+                raise NotImplementedError
+
             async def invalidate(self, user_id: str, server_id: str) -> None:
                 raise RuntimeError("redis down")
 
@@ -7321,6 +7339,12 @@ class TestMCPServerManager:
         class _Store:
             async def fetch(self, user_id: str, server_id: str):
                 return None
+
+            async def peek(self, user_id: str, server_id: str):
+                return None
+
+            async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+                raise NotImplementedError
 
             async def invalidate(self, user_id: str, server_id: str) -> None:
                 return None
@@ -16447,6 +16471,15 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
             self.calls += 1
             return OAuthToken(access_token="stored-token") if user_id == "alice" else None
 
+        async def peek(self, user_id: str, server_id: str) -> OAuthToken | None:
+            return await self.fetch(user_id, server_id)
+
+        async def invalidate(self, user_id: str, server_id: str) -> None:
+            return None
+
+        async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+            raise NotImplementedError
+
     store = Store()
     context = MCPAuthenticatedUser(UserAPIKeyAuth(user_id="alice"))
     diagnostics = MCPAuthDiagnostics()
@@ -16478,7 +16511,7 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
         )
         request = httpx.Request("GET", "https://up.example/mcp", headers=remaining)
         if auth is not None:
-            next(auth.auth_flow(request))
+            await anext(auth.async_auth_flow(request))
         assert diagnostics.resolution() == expected_source
         assert request.headers.get("Authorization") == expected_authorization
         assert store.calls == (1 if config == "stored" else 0)
@@ -18456,8 +18489,14 @@ async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None
             self.calls = (*self.calls, (user_id, server_id))
             return OAuthToken(access_token="stored-token")
 
+        async def peek(self, user_id: str, server_id: str) -> OAuthToken | None:
+            return await self.fetch(user_id, server_id)
+
         async def invalidate(self, user_id: str, server_id: str) -> None:
             return None
+
+        async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+            raise NotImplementedError
 
     store: Final = TokenStore()
     manager: Final = MCPServerManager(per_user_oauth_token_store=store)

@@ -244,6 +244,20 @@ def test_to_http_exception_preserves_upstream_www_authenticate(public_detail: ob
     }
 
 
+def test_managed_reauth_replaces_an_upstream_challenge_with_the_gateway_challenge():
+    err = MCPUpstreamAuthError(
+        status_code=401,
+        www_authenticate='Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"',
+        server_name="sample_docs",
+        managed_reauth=True,
+    )
+
+    http_exc = err.to_http_exception(base_url="https://gateway.example.com/")
+    assert http_exc.headers == {
+        "www-authenticate": 'Bearer resource_metadata="https://gateway.example.com/.well-known/oauth-protected-resource/mcp/sample_docs"'
+    }
+
+
 def test_to_http_exception_skips_fabrication_when_base_url_missing():
     """Without ``base_url`` we cannot build an RFC 9728 §3.2-compliant absolute
     URI, so we omit the fabricated ``WWW-Authenticate`` challenge entirely
@@ -777,6 +791,29 @@ async def test_scope_middleware_preserves_non_http_requests():
 
 
 @pytest.mark.parametrize("path", ["/mcp", "/toolset/demo/mcp"])
+def test_managed_reauth_on_an_aggregate_route_names_the_aggregate_resource(path):
+    from urllib.parse import urlsplit
+
+    from mcp.shared.auth_utils import check_resource_allowed
+
+    error = MCPUpstreamAuthError(
+        401,
+        'Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"',
+        "docs",
+        managed_reauth=True,
+    )
+    response = error.to_http_exception("https://gateway.test", path)
+    challenge = response.headers["www-authenticate"]
+    assert challenge == 'Bearer resource_metadata="https://gateway.test/.well-known/oauth-protected-resource"'
+    metadata_path = urlsplit(challenge.split('resource_metadata="', 1)[1].split('"', 1)[0]).path
+    resource_path = metadata_path.removeprefix("/.well-known/oauth-protected-resource")
+    assert check_resource_allowed(
+        requested_resource=f"https://gateway.test{path}",
+        configured_resource=f"https://gateway.test{resource_path}",
+    ), "the SDK must accept the advertised resource before it can reauthorize"
+
+
+@pytest.mark.parametrize("path", ["/mcp", "/toolset/demo/mcp"])
 def test_managed_step_up_metadata_matches_the_sdk_configured_resource(path):
     from urllib.parse import urlsplit
 
@@ -862,3 +899,26 @@ async def test_scope_step_up_denial_still_ignores_an_unauthorized_response() -> 
     await asyncio.wait_for(started, 1)
 
     assert [call.args[0]["status"] for call in send.await_args_list] == [200]
+
+@pytest.mark.asyncio
+async def test_managed_reauth_denial_replaces_the_pending_tool_response_with_the_gateway_challenge() -> None:
+    send: Final = AsyncMock()
+    gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/docs/mcp")
+    started: Final = await _pending_listing_response(gate, send)
+
+    gate.deny(
+        MCPUpstreamAuthError(
+            401,
+            'Bearer resource_metadata="https://upstream/.well-known/oauth-protected-resource"',
+            "docs",
+            managed_reauth=True,
+        )
+    )
+    await asyncio.wait_for(started, 1)
+
+    start, body = [call.args[0] for call in send.await_args_list]
+    assert start["status"] == 401
+    assert dict(start["headers"])[b"www-authenticate"].decode() == (
+        'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/docs/mcp"'
+    )
+    assert body["body"] == b'{"detail":"Unauthorized"}'

@@ -43,9 +43,7 @@ async def test_optional_fields_absent_yield_none():
 
 @pytest.mark.asyncio
 async def test_unparseable_expiry_is_dropped_not_raised():
-    store = V2PerUserTokenStore(
-        _reader({"access_token": "at", "expires_at": "not-a-date"})
-    )
+    store = V2PerUserTokenStore(_reader({"access_token": "at", "expires_at": "not-a-date"}))
     token = await store.fetch("alice", "srv")
     assert token is not None and token.expires_at is None
 
@@ -71,3 +69,9 @@ async def test_empty_user_short_circuits_without_reading():
 
     assert await V2PerUserTokenStore(read).fetch("", "srv") is None
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_empty_access_token_is_not_authorized():
+    store = V2PerUserTokenStore(_reader({"access_token": "", "refresh_token": "rt"}))
+    assert await store.fetch("alice", "srv") is None

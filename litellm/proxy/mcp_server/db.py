@@ -77,7 +77,12 @@ class _UserEnvVarsTransactionClient(Protocol):
     @property
     def litellm_mcpservertable(self) -> "TableActions[prisma_db_models.LiteLLM_MCPServerTable]": ...
 
+    @property
+    def litellm_mcpusercredentials(self) -> "TableActions[prisma_db_models.LiteLLM_MCPUserCredentials]": ...
+
     async def execute_raw(self, query: str, *args: object) -> int: ...
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 class _UserEnvVarsTransaction(Protocol):
@@ -256,6 +261,7 @@ class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
     refresh_token: str
     expires_at: str
     connected_at: str
+    grant_id: ReadOnly[str]
     scopes: list[str]
     server_id: str
     needs_scopes: ReadOnly[Sequence[str]]
@@ -1869,13 +1875,16 @@ async def store_user_oauth_credential(
     if expires_in is not None:
         expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
-    payload: Final[OAuthCredentialPayload] = {
-        "type": "oauth2",
-        "access_token": access_token,
-        "connected_at": datetime.now(timezone.utc).isoformat(),
-        **({"identity_binding_proof": identity_binding_proof} if identity_binding_proof else {}),
-        **({"cimd_client_id": cimd_client_id} if cimd_client_id else {}),
-    }
+    payload: Final[OAuthCredentialPayload] = _OAUTH_CREDENTIAL_PAYLOAD_ADAPTER.validate_python(
+        {
+            "type": "oauth2",
+            "access_token": access_token,
+            "connected_at": datetime.now(timezone.utc).isoformat(),
+            "grant_id": str(uuid.uuid4()),
+            **({"identity_binding_proof": identity_binding_proof} if identity_binding_proof else {}),
+            **({"cimd_client_id": cimd_client_id} if cimd_client_id else {}),
+        }
+    )
     if refresh_token:
         payload["refresh_token"] = refresh_token
     if expires_at:
@@ -1929,10 +1938,15 @@ async def _store_refreshed_oauth_credential(
         return False
     refreshed: Final[OAuthCredentialPayload] = _OAUTH_CREDENTIAL_PAYLOAD_ADAPTER.validate_python(
         {
-            **payload,
-            "refresh_token": payload.get("refresh_token") or refreshed_from,
-            **({"connected_at": grant["connected_at"]} if "connected_at" in grant else {}),
-            **({"needs_scopes": grant["needs_scopes"]} if "needs_scopes" in grant else {}),
+            key: value
+            for key, value in {
+                **payload,
+                "refresh_token": payload.get("refresh_token") or refreshed_from,
+                **({"connected_at": grant["connected_at"]} if "connected_at" in grant else {}),
+                **({"grant_id": grant["grant_id"]} if "grant_id" in grant else {}),
+                **({"needs_scopes": grant["needs_scopes"]} if "needs_scopes" in grant else {}),
+            }.items()
+            if key not in ("connected_at", "grant_id") or key in grant
         }
     )
     written: Final = await _user_credential_actions(prisma_client).update_many(
@@ -1949,7 +1963,7 @@ async def _store_refreshed_oauth_credential(
         return False
     if latest.credential_b64 == row.credential_b64:
         return False
-    if latest_grant.get("connected_at") != grant.get("connected_at"):
+    if _oauth_grant_generation(latest_grant) != _oauth_grant_generation(grant):
         return False
     return await _store_refreshed_oauth_credential(prisma_client, latest, payload, refreshed_from)
 
@@ -1990,8 +2004,9 @@ async def get_user_oauth_credential(
     server_id: str,
     *,
     use_writer: bool = False,
+    include_invalidated: bool = False,
 ) -> OAuthCredentialPayload | None:
-    """Return the decoded OAuth2 payload dict for a user+server pair, or None."""
+    """Return the decoded OAuth2 payload for a user+server pair, hiding invalidated grants by default."""
 
     row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=use_writer)
     if row is None:
@@ -1999,7 +2014,63 @@ async def get_user_oauth_credential(
     decoded: Final = _decode_user_credential(row.credential_b64)
     if decoded is None:
         _warn_undecryptable_credential(user_id, server_id)
-    return _parse_oauth_payload(decoded)
+    payload: Final = _parse_oauth_payload(decoded)
+    if payload is not None and not include_invalidated and not payload.get("access_token"):
+        return None
+    return payload
+
+
+def _oauth_grant_generation(grant: OAuthCredentialPayload) -> str | None:
+    return grant.get("grant_id") or grant.get("connected_at")
+
+
+async def invalidate_user_oauth_credential_if_grant_matches(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    access_token: str,
+    refresh_token: str | None,
+) -> bool:
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
+    grant: Final = None if row is None else decode_oauth_payload(row.credential_b64)
+    if row is None or grant is None:
+        return False
+    if grant.get("access_token") != access_token or grant.get("refresh_token") != refresh_token:
+        return False
+    invalidated: Final = _OAUTH_CREDENTIAL_PAYLOAD_ADAPTER.validate_python({**grant, "access_token": ""})
+    written: Final = await _user_credential_actions(prisma_client).update_many(
+        where={"user_id": row.user_id, "server_id": row.server_id, "credential_b64": row.credential_b64},
+        data={"credential_b64": encrypt_value_helper(json.dumps(invalidated))},
+    )
+    return written > 0
+
+
+async def delete_user_oauth_credential_if_grant_matches(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    grant_generation: str | None,
+) -> Literal["deleted", "missing", "changed"]:
+    async with _db_transaction_manager(prisma_client) as tx:
+        rows: Final = await tx.query_raw(
+            'SELECT user_id, server_id, credential_b64 FROM "LiteLLM_MCPUserCredentials" '
+            "WHERE user_id=$1 AND server_id=$2 FOR UPDATE",
+            user_id,
+            server_id,
+        )
+        row: Final = rows[0] if rows else None
+        credential_b64: Final = None if row is None else row.get("credential_b64")
+        if row is None or not isinstance(credential_b64, str):
+            return "missing"
+        grant: Final = decode_oauth_payload(credential_b64)
+        if grant is None:
+            return "missing"
+        if _oauth_grant_generation(grant) != grant_generation:
+            return "changed"
+        deleted: Final = await tx.litellm_mcpusercredentials.delete_many(
+            where={"user_id": user_id, "server_id": server_id, "credential_b64": credential_b64}
+        )
+        return "deleted" if deleted > 0 else "missing"
 
 
 async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:
@@ -2034,10 +2105,10 @@ async def _record_oauth_scope_refusal(
     latest_grant: Final = None if latest is None else decode_oauth_payload(latest.credential_b64)
     if latest is None or latest_grant is None or latest.credential_b64 == row.credential_b64:
         return
-    connected_at: Final = grant.get("connected_at")
+    generation: Final = _oauth_grant_generation(grant)
     same_grant: Final = (
-        latest_grant.get("connected_at") == connected_at
-        if connected_at
+        _oauth_grant_generation(latest_grant) == generation
+        if generation
         else {key: value for key, value in latest_grant.items() if key != "needs_scopes"}
         == {key: value for key, value in grant.items() if key != "needs_scopes"}
     )
@@ -2047,8 +2118,10 @@ async def _record_oauth_scope_refusal(
 
 def _server_user_credential_item(
     row: "prisma_db_models.LiteLLM_MCPUserCredentials",
-) -> MCPServerUserCredentialListItem:
+) -> MCPServerUserCredentialListItem | None:
     oauth_payload: Final = decode_oauth_payload(row.credential_b64)
+    if oauth_payload is not None and not oauth_payload.get("access_token"):
+        return None
     if oauth_payload is None:
         return MCPServerUserCredentialListItem(
             user_id=row.user_id,
@@ -2073,7 +2146,7 @@ async def list_server_user_credentials(
         prisma_client,
         {"server_id": server_id},
     )
-    return tuple(_server_user_credential_item(row) for row in rows)
+    return tuple(item for row in rows if (item := _server_user_credential_item(row)) is not None)
 
 
 async def list_user_oauth_credentials(
@@ -2089,7 +2162,7 @@ async def list_user_oauth_credentials(
         if decoded is None:
             _warn_undecryptable_credential(user_id, row.server_id)
         payload = _parse_oauth_payload(decoded)
-        if payload is None:
+        if payload is None or not payload.get("access_token"):
             continue
         payload["server_id"] = row.server_id
         results.append(payload)
