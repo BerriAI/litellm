@@ -50,14 +50,14 @@ requests:
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: not_native
+    over: max_budget
 
   - name: a key in a team with a rate limit
     headers: {authorization: Bearer sk-limited}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: not_native
+    over: rpm_limit
 
   - name: a key in a team with metadata
     headers: {authorization: Bearer sk-tagged}

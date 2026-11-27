@@ -1,17 +1,20 @@
 //! Reads a caller's team from the auth cache into a core record. Each entry is taken apart by
-//! name, so a field added to it does not compile here until it is honored or declined. Nothing
-//! here charges or limits a team, so a row that holds a limit, a budget or anything else the
-//! native app does not apply is declined, naming the field.
+//! name, so a field added to it does not compile here until it is copied onto the record, read
+//! for nothing or declined. A column that holds a structure no record field has a type for yet is
+//! declined here, naming the field, and [`unserved`] names the first copied column the native app
+//! does not serve yet.
 
 use litellm_gateway_auth_core::{
-    authz::ModelList, identity::jwt::Team, record::TeamRecord,
+    authz::ModelList,
+    identity::jwt::Team,
+    record::{Budget, MinuteLimits, TeamRecord},
     routes::passthrough::PassthroughGrants,
 };
 use litellm_redis_store::auth_cache::TeamEntry;
 
 use super::carried::{Carried, carried, newer};
 
-/// The team's record, or the first field it holds that the native app does not apply.
+/// The team's record, or the first field it holds that no record field has a type for yet.
 pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
     let TeamEntry {
         team_alias,
@@ -34,7 +37,7 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
         router_settings,
         access_group_ids,
         default_team_member_models,
-        spend: _,
+        spend,
         max_parallel_requests,
         budget_reset_at,
         model_id,
@@ -54,25 +57,12 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
     let unread_models = ModelList::read(models) == ModelList::Unread;
     let held = unread_models.then_some("models").or_else(|| {
         carried![
-            organization_id,
             metadata,
-            tpm_limit,
-            rpm_limit,
-            tpd_limit,
-            max_budget,
-            soft_budget,
-            budget_duration,
             budget_limits,
-            blocked,
             router_settings,
-            access_group_ids,
-            default_team_member_models,
-            max_parallel_requests,
             budget_reset_at,
             model_id,
             model_max_budget,
-            policies,
-            allow_team_guardrail_config,
             litellm_model_table,
             object_permission,
             object_permission_id,
@@ -94,9 +84,74 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
             team_id: team_id.clone(),
             team_alias: team_alias.clone(),
             models: models.clone(),
+            organization_id: organization_id.clone(),
+            limits: MinuteLimits {
+                rpm: *rpm_limit,
+                tpm: *tpm_limit,
+            },
+            tpd_limit: *tpd_limit,
+            max_parallel_requests: *max_parallel_requests,
+            budget: Budget {
+                max: *max_budget,
+                spend: spend.unwrap_or_default(),
+            },
+            soft_budget: *soft_budget,
+            budget_duration: budget_duration.clone(),
+            blocked: *blocked,
+            access_group_ids: access_group_ids.clone().unwrap_or_default(),
+            default_team_member_models: default_team_member_models.clone().unwrap_or_default(),
+            policies: policies.clone().unwrap_or_default(),
+            allow_team_guardrail_config: allow_team_guardrail_config.unwrap_or_default(),
             ..TeamRecord::default()
         },
     })
+}
+
+/// The first column of `team` that holds something nothing in the native app reads yet, which
+/// sends its caller to Python. The record is taken apart by name, so a column added to it does
+/// not compile here until it is named as read or listed. Whoever makes the native app honor a
+/// column takes it off the list in the same change.
+pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
+    let TeamRecord {
+        team_id: _,
+        team_alias: _,
+        models: _,
+        organization_id,
+        limits: MinuteLimits {
+            rpm: rpm_limit,
+            tpm: tpm_limit,
+        },
+        tpd_limit,
+        max_parallel_requests,
+        budget: Budget {
+            max: max_budget,
+            spend: _,
+        },
+        soft_budget,
+        budget_duration,
+        blocked,
+        access_group_ids,
+        default_team_member_models,
+        policies,
+        allow_team_guardrail_config,
+        member_max_budget,
+    } = team;
+    carried![
+        organization_id,
+        tpm_limit,
+        rpm_limit,
+        tpd_limit,
+        max_parallel_requests,
+        max_budget,
+        soft_budget,
+        budget_duration,
+        blocked,
+        access_group_ids,
+        default_team_member_models,
+        policies,
+        allow_team_guardrail_config,
+        member_max_budget,
+    ]
 }
 
 #[cfg(test)]
@@ -109,6 +164,16 @@ mod tests {
 
     fn cached(entry: &str) -> TeamEntry {
         TeamEntry::from_value(&json::loads(entry).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_teams_organization_is_copied_and_named_unserved() {
+        let team = team(&cached(r#"{"team_id": "squad", "organization_id": "org"}"#)).unwrap();
+
+        assert_eq!(
+            (team.row.organization_id.as_deref(), unserved(&team.row)),
+            (Some("org"), Some("organization_id"))
+        );
     }
 
     #[rstest]

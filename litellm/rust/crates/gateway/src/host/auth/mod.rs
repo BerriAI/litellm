@@ -39,6 +39,7 @@ use litellm_gateway_auth_core::{
 use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
+pub(crate) use affiliation::unserved;
 pub(crate) use end_user::end_user;
 pub use key::Key;
 pub(crate) use models::{allowed_models, layers};
@@ -945,29 +946,16 @@ mod tests {
     #[rstest]
     #[case::organization_id(json!({"organization_id": "org"}))]
     #[case::object_permission_id(json!({"object_permission_id": "permission"}))]
+    #[case::model_aliases(json!({"model_id": 7}))]
     #[case::metadata(json!({"metadata": {"guardrails": ["pii"]}}))]
-    #[case::max_budget(json!({"max_budget": 5.0}))]
-    #[case::soft_budget(json!({"soft_budget": 1.0}))]
-    #[case::budget_duration(json!({"budget_duration": "30d"}))]
     #[case::budget_reset_at(json!({"budget_reset_at": "1970-01-01T00:00:09"}))]
     #[case::budget_limits(json!({"budget_limits": [{"a": 1}]}))]
     #[case::model_max_budget(json!({"model_max_budget": {"claude": 1}}))]
-    #[case::tpm_limit(json!({"tpm_limit": 100}))]
-    #[case::rpm_limit(json!({"rpm_limit": 10}))]
-    #[case::a_limit_of_zero(json!({"rpm_limit": 0}))]
-    #[case::tpd_limit(json!({"tpd_limit": 100}))]
-    #[case::max_parallel_requests(json!({"max_parallel_requests": 1}))]
-    #[case::blocked(json!({"blocked": true}))]
     #[case::router_settings(json!({"router_settings": {"a": 1}}))]
-    #[case::access_group_ids(json!({"access_group_ids": ["group"]}))]
-    #[case::policies(json!({"policies": ["policy"]}))]
-    #[case::default_team_member_models(json!({"default_team_member_models": ["claude"]}))]
-    #[case::model_aliases(json!({"model_id": 7}))]
-    #[case::allow_team_guardrail_config(json!({"allow_team_guardrail_config": true}))]
     #[case::a_model_pattern(json!({"models": ["claude", "anthropic/*"]}))]
     #[case::the_team_models(json!({"models": ["all-team-models"]}))]
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_key_whose_team_holds_anything_the_native_app_does_not_apply_is_not_native(
+    async fn a_key_whose_team_holds_what_no_record_field_has_a_type_for_is_not_native(
         #[case] team: Columns,
     ) {
         let held = in_team(json!({}), team).await;
@@ -982,6 +970,41 @@ mod tests {
     }
 
     #[rstest]
+    #[case::max_budget(json!({"max_budget": 5.0}), "max_budget")]
+    #[case::soft_budget(json!({"soft_budget": 1.0}), "soft_budget")]
+    #[case::budget_duration(json!({"budget_duration": "30d"}), "budget_duration")]
+    #[case::tpm_limit(json!({"tpm_limit": 100}), "tpm_limit")]
+    #[case::rpm_limit(json!({"rpm_limit": 10}), "rpm_limit")]
+    #[case::a_limit_of_zero(json!({"rpm_limit": 0}), "rpm_limit")]
+    #[case::tpd_limit(json!({"tpd_limit": 100}), "tpd_limit")]
+    #[case::max_parallel_requests(json!({"max_parallel_requests": 1}), "max_parallel_requests")]
+    #[case::blocked(json!({"blocked": true}), "blocked")]
+    #[case::access_group_ids(json!({"access_group_ids": ["group"]}), "access_group_ids")]
+    #[case::policies(json!({"policies": ["policy"]}), "policies")]
+    #[case::default_team_member_models(
+        json!({"default_team_member_models": ["claude"]}),
+        "default_team_member_models"
+    )]
+    #[case::allow_team_guardrail_config(
+        json!({"allow_team_guardrail_config": true}),
+        "allow_team_guardrail_config"
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_in_a_team_copies_each_plain_column_its_team_holds_and_names_it_unserved(
+        #[case] team: Columns,
+        #[case] column: &str,
+    ) {
+        let held = in_team(json!({}), team).await;
+
+        let caller = presenting(held.database(), VIRTUAL_KEY).await.unwrap();
+
+        let Some(Team::Row(team)) = caller.affiliation.holder.team() else {
+            panic!("the key holds no team row");
+        };
+        assert_eq!(unserved(team), Some(column));
+    }
+
+    #[rstest]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_team_is_read_from_the_database_again_only_once_it_is_evicted() {
         let held = in_team(json!({}), json!({})).await;
@@ -989,21 +1012,24 @@ mod tests {
         let store = Arc::new(AuthStore::new(cache.clone(), held.database()));
         let gateway = auth(&with_master_key(), Some(store), false);
 
-        let read = bearing(&gateway, VIRTUAL_KEY).await.is_ok();
+        let budget = async || {
+            let caller = bearing(&gateway, VIRTUAL_KEY).await.unwrap();
+            match caller.affiliation.holder.team() {
+                Some(Team::Row(team)) => team.budget.max,
+                _ => None,
+            }
+        };
+
+        let read = budget().await;
         held.execute(r#"UPDATE "LiteLLM_TeamTable" SET max_budget = 1 WHERE team_id = 'squad'"#)
             .await;
-        let kept = bearing(&gateway, VIRTUAL_KEY).await.is_ok();
+        let kept = budget().await;
         cache
             .delete_local(&AuthObject::Team(SQUAD.to_owned()).key())
             .unwrap();
-        let read_again = bearing(&gateway, VIRTUAL_KEY).await;
+        let read_again = budget().await;
 
-        assert_eq!((read, kept), (true, true));
-        assert!(
-            matches!(read_again, Err(Rejected::NotNative)),
-            "{:?}",
-            read_again.err()
-        );
+        assert_eq!((read, kept, read_again), (None, None, Some(1.0)));
     }
 
     #[rstest]
