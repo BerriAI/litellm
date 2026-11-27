@@ -51,4 +51,9 @@ def per_request_price(call_type: str, call_params: object, deployment_id: str | 
     requested: Final = _price_in(call_params)
     if requested is not None:
         return requested
-    return _price_in(model_cost_table.published().get(deployment_id)) if deployment_id else None
+    return deployment_request_price(deployment_id) if deployment_id else None
+
+
+def deployment_request_price(deployment_id: str) -> float | None:
+    """The flat per-request price a router deployment declared when it registered, if any."""
+    return _price_in(model_cost_table.published().get(deployment_id))

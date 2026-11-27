@@ -15,7 +15,6 @@ import litellm
 from litellm.proxy.auth.auth_checks import is_model_cost_zero
 from litellm.router import Router
 
-
 UNPRICED_ZERO_COST_MODEL = "ollama/unpriced-zero-cost-target"
 
 
@@ -769,3 +768,11 @@ class TestUnmappedModelBudgetEnforcement:
 
         result = is_model_cost_zero(model="paid-model", llm_router=mock_router)
         assert result is False
+
+
+def test_zero_token_price_with_a_flat_request_price_enforces_budget():
+    flat_priced = _explicitly_free("flat-priced-model")
+    flat_priced["litellm_params"]["input_cost_per_query"] = 0.05
+    router = Router(model_list=[flat_priced])
+
+    assert is_model_cost_zero(model="flat-priced-model", llm_router=router) is False
