@@ -35,11 +35,8 @@ from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 
-@pytest.mark.parametrize(
-    ("model", "expected_free"),
-    [("parallel_ai/decision", False), ("fireworks_ai/accounts/fireworks/routers/rune", True)],
-)
-def test_query_price_keeps_budgets_only_where_it_is_billed(model: str, expected_free: bool) -> None:
+@pytest.mark.parametrize("model", ["parallel_ai/decision", "fireworks_ai/accounts/fireworks/routers/rune"])
+def test_a_declared_query_price_keeps_budgets(model: str) -> None:
     router = Router(
         model_list=[
             {
@@ -55,7 +52,7 @@ def test_query_price_keeps_budgets_only_where_it_is_billed(model: str, expected_
         ]
     )
 
-    assert is_model_cost_zero("query-priced", router) is expected_free
+    assert is_model_cost_zero("query-priced", router) is False
 
 
 @pytest.fixture
