@@ -2,7 +2,6 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use axum::extract::FromRef;
 use futures_util::StreamExt;
-use litellm_auth_store::KeyDatabase;
 use litellm_config::{Config, Environment, GeneralSettings};
 use litellm_db::Pools;
 use litellm_env::{Lookup, ProcessEnvironment};
@@ -17,9 +16,7 @@ use litellm_redis_store::{
     spend_counters::SpendCounters,
     system_clock,
 };
-use litellm_repositories::{
-    Database, GatewayRequestRepository, KeyRepository, ObjectPermissionRepository,
-};
+use litellm_repositories::{Database, GatewayRequestRepository};
 use tokio::runtime::Handle;
 
 use crate::{
@@ -39,7 +36,7 @@ pub struct AppState {
     pub database: Option<Pools>,
     /// Where a virtual key is read from: the auth cache in front of the proxy's database. `None`
     /// without a database.
-    pub keys: Option<Arc<AuthStore>>,
+    pub auth_store: Option<Arc<AuthStore>>,
     pub entitlements: Arc<Entitlements>,
     /// The proxy's `parallel_request_limiter_v3`, which the inference routes' callback stage runs
     /// and the limit check before the body asks.
@@ -103,18 +100,18 @@ impl AppState {
                     GatewayRequestRepository::new(repositories.clone()),
                     environment,
                 );
-                let keys = Arc::new(keys(config, &redis, repositories));
-                (pools, (keys, (requests, Arc::new(flush))))
+                let auth_store = Arc::new(auth_store(config, &redis, repositories));
+                (pools, (auth_store, (requests, Arc::new(flush))))
             })
             .unzip();
-        let (keys, gateway_requests) = connected.unzip();
+        let (auth_store, gateway_requests) = connected.unzip();
         let (gateway_requests, gateway_requests_flush) = gateway_requests.unzip();
         let entitlements = Arc::new(build_license(config, environment, resources).await);
         Ok(Self {
             inference,
             redis,
             database,
-            keys,
+            auth_store,
             entitlements,
             key_limiter,
             spend_logs,
@@ -152,8 +149,8 @@ impl AppState {
             self.spend_logs.as_deref(),
         )
         .await?;
-        if let Some(keys) = &self.keys {
-            keys.resize(auth_cache_settings(&config.general_settings).memory_entries);
+        if let Some(auth_store) = &self.auth_store {
+            auth_store.resize(auth_cache_settings(&config.general_settings).memory_entries);
         }
         inference.install((*self.inference.cost_map()).clone());
         Ok(Self {
@@ -168,7 +165,7 @@ impl AppState {
     /// Who the inference routes and `admit` authenticate, which the core decides over the native
     /// host: the master key of `config`, and with a database a virtual key it holds.
     pub(crate) fn auth(&self, config: &Config) -> Auth<NativeRows> {
-        host::auth::auth(config, self.keys.clone())
+        host::auth::auth(config, self.auth_store.clone())
     }
 
     /// Drains the spend logs still queued, writes the gateway request counts still in memory,
@@ -204,11 +201,7 @@ fn gateway_requests_flush(
 /// this process's memory in front of the database, with the coordination Redis between them when
 /// `enable_redis_auth_cache` attaches it. Every pod's evictions reach the memory whenever a
 /// coordination Redis carries them, as Python subscribes with the flag on or off.
-pub(crate) fn keys(config: &Config, redis: &RedisClients, database: Database) -> AuthStore {
-    let database = KeyDatabase::new(
-        Arc::new(KeyRepository::new(database.clone())),
-        Arc::new(ObjectPermissionRepository::new(database)),
-    );
+pub(crate) fn auth_store(config: &Config, redis: &RedisClients, database: Database) -> AuthStore {
     let cache = Arc::new(auth_cache(config, redis, system_clock()));
     if let Some(client) = &redis.coordination {
         hear_evictions(&cache, client);
@@ -340,7 +333,7 @@ mod tests {
         let state = AppState::build(&config(booted), &Environment::default())
             .await
             .unwrap();
-        let keys = state.keys.clone().unwrap();
+        let keys = state.auth_store.clone().unwrap();
         assert!(keys.loaded(&hash("sk-first")).await.unwrap().is_some());
 
         let next = state.next(&config(reloaded)).await.unwrap();

@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import React, { useEffect, useState } from "react";
 import { getPromptVersions, PromptSpec } from "@/components/networking";
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +24,7 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
   activeVersionId,
   onSelectVersion,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [versions, setVersions] = useState<PromptSpec[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -78,7 +79,7 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
-    return new Date(dateString).toLocaleString();
+    return displayTimestamp(new Date(dateString), locale.language);
   };
 
   if (!isOpen) return null;

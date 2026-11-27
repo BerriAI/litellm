@@ -4,6 +4,7 @@ lines 8400-11100): the ``UnsupportedEndpointError`` skip-and-stop rule, the retr
 ``base_model``, and the request the async failure callback counts toward group usage.
 """
 
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -14,6 +15,7 @@ from tests.unit.test_router.core.retries_health_helpers import (
     MakeCore,
     MetadataRecorder,
     attempt,
+    usage_since,
 )
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit, server_error
 
@@ -141,15 +143,16 @@ async def test_a_retry_breadcrumb_names_the_deployments_base_model(
 
 @pytest.mark.asyncio
 async def test_a_failed_call_counts_a_request_but_no_tokens_in_group_usage(
-    make_core: MakeCore, host: ScriptedHost
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     core: Final = make_core(model_list=[deployment("g", "a", rpm=5)], num_retries=0)
     host.answer("*", rate_limit())
 
     error: Final = await attempt(core)
 
     assert isinstance(error, litellm.RateLimitError)
-    assert await core.health().usage("g") == (None, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (None, 1)
 
 
 class TestUsageWhenTheHostLogsSuccessAfterTheResponse:
@@ -163,12 +166,18 @@ class TestUsageWhenTheHostLogsSuccessAfterTheResponse:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("failures", "requests"), [(0, 1), (1, 2), (2, 3)])
     async def test_every_failed_attempt_and_the_final_success_count_as_requests(
-        self, make_core: MakeCore, host: BackgroundSuccessLoggingHost, failures: int, requests: int
+        self,
+        make_core: MakeCore,
+        host: BackgroundSuccessLoggingHost,
+        monkeypatch: pytest.MonkeyPatch,
+        failures: int,
+        requests: int,
     ) -> None:
+        started: Final = datetime.now(timezone.utc)
         core: Final = make_core(model_list=[deployment("g", "a", rpm=50)], num_retries=2)
         host.answer("*", *([server_error()] * failures), None)
 
         await attempt(core)
         await host.drain()
 
-        assert await core.health().usage("g") == (10, requests)
+        assert await usage_since(core, monkeypatch, "g", started) == (10, requests)

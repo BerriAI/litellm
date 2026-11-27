@@ -1,7 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
+import { I18nextProvider } from "react-i18next";
 
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import { DateCell, formatCellDate, formatFullTimestamp } from "./date_cell";
 
 const localIso = new Date(2026, 6, 7, 9, 50, 13).toISOString();
@@ -28,6 +31,24 @@ describe("formatFullTimestamp", () => {
 });
 
 describe("DateCell", () => {
+  it("uses Chinese date order and a 24-hour clock in the cell and its tooltip", async () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    await locale.changeLanguage("zh-CN");
+    const value = "2026-11-27T03:23:23Z";
+    render(
+      <I18nextProvider i18n={locale}>
+        <DateCell value={value} timeZone="UTC" />
+        <DateCell value={value} timeZone="UTC" precision="date" />
+      </I18nextProvider>,
+    );
+
+    const timestamp = screen.getByText("11月27日 03:23:23 UTC");
+    expect(screen.getByText("2026年11月27日 UTC")).toBeInTheDocument();
+    await userEvent.hover(timestamp);
+    expect(await screen.findByText("2026年11月27日 03:23:23 (UTC)")).toBeInTheDocument();
+  });
+
   it("renders the datetime format by default", () => {
     render(<DateCell value={localIso} />);
     expect(screen.getByText("Jul 7, 09:50:13")).toBeInTheDocument();

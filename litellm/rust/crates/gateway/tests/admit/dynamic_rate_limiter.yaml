@@ -23,7 +23,7 @@ config:
     master_key: gateway-key
 
 keys:
-  sk-any: []
+  sk-any: {}
 
 requests:
   - name: the master key

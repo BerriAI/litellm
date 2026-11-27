@@ -14,7 +14,7 @@ use serde_json::{Map, Number, Value};
 
 use crate::{
     error::Error,
-    host::{LogLevel, ModelInfoLookup, RegistryHost},
+    host::{ModelInfoLookup, RegistryHost},
 };
 
 /// The key the host wraps a value it cannot spell as JSON in.
@@ -144,12 +144,6 @@ pub(crate) async fn discovered(
         Value::Object(limits) => Ok(limits),
         _ => Err(malformed("discovered")),
     }
-}
-
-async fn log(host: &impl RegistryHost, level: LogLevel, message: String) -> Result<(), Error> {
-    lookup(host, ModelInfoLookup::Log { level, message })
-        .await
-        .map(|_| ())
 }
 
 /// `_provider_model_id`: the model id a cost-map key or base model names, bedrock base model ids
@@ -297,23 +291,13 @@ pub async fn router_model_info(
             _ => false,
         };
         if resolves {
-            log(
-                host,
-                LogLevel::Debug,
-                format!(
-                    "Azure deployment '{resolved_model}' has no base_model set; using '{fallback_key}' from the model cost map for max tokens, cost tracking, etc."
-                ),
-            )
-            .await?;
+            tracing::debug!(
+                "Azure deployment '{resolved_model}' has no base_model set; using '{fallback_key}' from the model cost map for max tokens, cost tracking, etc."
+            );
         } else {
-            log(
-                host,
-                LogLevel::Error,
-                format!(
-                    "Could not identify azure model '{resolved_model}'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models"
-                ),
-            )
-            .await?;
+            tracing::error!(
+                "Could not identify azure model '{resolved_model}'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models"
+            );
         }
     } else if provider != "azure" {
         model = Value::String(resolved_model.clone());
