@@ -17,6 +17,7 @@ from litellm.constants import VLLM_CHOICE_FIELDS, VLLM_STREAM_PROMPT_FIELDS
 from litellm.litellm_core_utils.core_helpers import (
     PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
     UPSTREAM_USAGE_COST,
+    as_str_mapping,
     chunk_usage,
     finite_cost,
     provider_reported_usage_cost,
@@ -72,8 +73,6 @@ from litellm.types.utils import (
 from litellm.utils import get_base_model_from_metadata, print_verbose, token_counter
 
 if TYPE_CHECKING:
-    from openai.types.completion_usage import CompletionUsage
-
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
         UsagePerChunk,
@@ -81,6 +80,79 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import (
         ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
+    )
+
+
+def _margin_has_fixed_amount(margin: object) -> bool:
+    fields: Final = as_str_mapping(margin)
+    if fields is None:
+        return False
+    fixed: Final[object] = fields.get("fixed_amount")
+    return isinstance(fixed, (int, float)) and not isinstance(fixed, bool) and fixed > 0
+
+
+def _cost_margin_has_fixed_amount() -> bool:
+    return bool(litellm.cost_margin_config) and any(map(_margin_has_fixed_amount, litellm.cost_margin_config.values()))
+
+
+def has_stream_cost_without_token_usage(logging_obj: "Logging | None") -> bool:
+    if _cost_margin_has_fixed_amount():
+        return True
+    if logging_obj is None:
+        return False
+    if (
+        logging_obj.custom_cost_per_second is not None
+        or logging_obj.a2a_agent_cost_per_query is not None
+        or logging_obj.model_call_details.get("additional_response_cost") is not None
+    ):
+        return True
+    if (
+        getattr(logging_obj, "_provider_reported_cost", None) is not None
+        or getattr(logging_obj, "_route_priced_cost", None) is not None
+    ):
+        return True
+    if any(value is not None for value in logging_obj.standard_built_in_tools_params.values()):
+        return True
+    options: Final = as_str_mapping(getattr(logging_obj, "optional_params", None))
+    return options is not None and options.get("web_search_options") is not None
+
+
+def _reported_usage_from_chunk(chunk: object) -> object:
+    fields: Final = as_str_mapping(chunk)
+    reported: Final[object] = fields.get("usage") if fields is not None else getattr(chunk, "usage", None)
+    if reported is not None and not isinstance(reported, UnreportedUsage):
+        return reported
+    hidden: Final = get_hidden_params(chunk)
+    usage: Final[object] = hidden.get("usage") if hidden is not None else None
+    if usage is not None and not isinstance(usage, UnreportedUsage):
+        return usage
+    return None
+
+
+def chunk_has_reported_usage(chunk: object) -> bool:
+    return _reported_usage_from_chunk(chunk) is not None
+
+
+def chunk_has_reported_spend(chunk: object) -> bool:
+    if chunk_has_reported_usage(chunk):
+        return True
+    hidden: Final = get_hidden_params(chunk)
+    if hidden is not None and (hidden.get(UPSTREAM_USAGE_COST) is not None or hidden.get("response_cost") is not None):
+        return True
+    as_mapping: Final = as_str_mapping(chunk)
+    fields: Final = as_str_mapping(
+        as_mapping.get("provider_specific_fields")
+        if as_mapping is not None
+        else getattr(chunk, "provider_specific_fields", None)
+    )
+    return fields is not None and any(field in fields for field in BEDROCK_TRACE_FIELDS)
+
+
+def should_skip_partial_stream_rebuild(chunks: Iterable[object], logging_obj: "Logging | None" = None) -> bool:
+    return (
+        litellm.disable_token_counter is True
+        and not has_stream_cost_without_token_usage(logging_obj)
+        and not any(map(chunk_has_reported_spend, chunks))
     )
 
 
@@ -968,20 +1040,10 @@ class ChunkProcessor:
     def extract_usage_chunk(
         chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream | TextCompletionResponse",
     ) -> Usage | None:
-        usage_chunk: Usage | CompletionUsage | None = None
-        if hasattr(chunk, "usage") and chunk.usage is not None:
-            usage_chunk = chunk.usage
-        elif "usage" in chunk:
-            usage_chunk = chunk["usage"]
-        elif (isinstance(chunk, ModelResponse) or isinstance(chunk, ModelResponseStream)) and hasattr(
-            chunk, "_hidden_params"
-        ):
-            usage_chunk = chunk.hidden_params.get("usage", None)
+        usage_chunk: Final = _reported_usage_from_chunk(chunk)
 
         if isinstance(usage_chunk, dict):
             return Usage(**_usage_fields(usage_chunk))
-        if isinstance(usage_chunk, UnreportedUsage):
-            return None
         if usage_chunk is None or isinstance(usage_chunk, Usage):
             return usage_chunk
         return Usage(**_usage_fields(require_attributes(usage_chunk, _SupportsModelDump, "model_dump").model_dump()))

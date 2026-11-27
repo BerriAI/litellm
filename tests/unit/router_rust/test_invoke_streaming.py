@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
+import litellm
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -13,8 +14,9 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     partial_responses_incomplete_event_on_disconnect,
 )
-from litellm.router_rust.invoke.streaming import FallbackResponsesStreamWrapper
+from litellm.router_rust.invoke.streaming import FallbackResponsesStreamWrapper, _extract_partial_responses_usage
 from litellm.types.llms.openai import ResponseIncompleteEvent, ResponsesAPIResponse, ResponsesAPIStreamEvents
+from litellm.types.utils import ModelResponseStream, Usage
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit, rust_core
 from tests.unit.test_router.core.streaming_helpers import Event, ScriptedResponsesStream
 
@@ -246,6 +248,52 @@ def _primary_cut_after_text(shared_logging: LiteLLMLoggingObj) -> object:
 def _core_falling_back(host: ScriptedHost) -> object:
     return rust_core(
         host, model_list=[deployment("a", "a"), deployment("b", "b")], fallbacks=[{"a": ["b"]}], num_retries=0
+    )
+
+
+@pytest.mark.parametrize(("reported_tokens", "buffered"), ((None, False), (0, False), (7, True)))
+async def test_bridge_fallback_only_carries_reported_usage_with_counting_disabled(
+    monkeypatch: pytest.MonkeyPatch, reported_tokens: int | None, buffered: bool
+) -> None:
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": 0.001}})
+    chat_stream: Final = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="hello there",
+        stream=True,
+        api_key="test-key",
+    )
+    bridge: Final = LiteLLMCompletionStreamingIterator(
+        model="gpt-4o-mini",
+        litellm_custom_stream_wrapper=chat_stream,
+        request_input="hello",
+        responses_api_request={},
+        custom_llm_provider="openai",
+    )
+    for _ in range(6):
+        await bridge.__anext__()
+    if reported_tokens is not None:
+        usage: Final = Usage(prompt_tokens=0, completion_tokens=reported_tokens, total_tokens=reported_tokens)
+        if buffered:
+            bridge.litellm_custom_stream_wrapper.chunks.append(ModelResponseStream(choices=[], usage=usage))
+        else:
+            bridge.collected_chat_completion_chunks.append({"model": "gpt-4o-mini", "choices": [], "usage": usage})
+    else:
+        def fail_builder(*_args: object, **_kwargs: object) -> object:  # kwargs-ok: spies on untyped builder signature
+            raise AssertionError("stream_chunk_builder should not run without reported usage")
+
+        monkeypatch.setattr(litellm.main, "stream_chunk_builder", fail_builder)
+
+    recovered: Final = _extract_partial_responses_usage(bridge)
+
+    assert (recovered is None, None if recovered is None else recovered.output_tokens) == (
+        reported_tokens is None,
+        reported_tokens,
     )
 
 

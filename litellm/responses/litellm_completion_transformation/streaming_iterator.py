@@ -1,7 +1,7 @@
 import time
 import uuid
 from collections.abc import Mapping, Sequence
-from itertools import filterfalse
+from itertools import chain, filterfalse
 from types import MappingProxyType
 from typing import Any, Final, Protocol, cast
 
@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import should_skip_partial_stream_rebuild
 from litellm.llms.anthropic.common_utils import anthropic_server_call_fields, anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.native.utils import openai_chat_refusal_text
 from litellm.main import stream_chunk_builder
@@ -1750,6 +1751,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         relayed_or_kept: Final = self.collected_chat_completion_chunks or self.litellm_custom_stream_wrapper.chunks
         if self.completed_response is not None or not relayed_or_kept:
             return None
+        if should_skip_partial_stream_rebuild(
+            chain(self.collected_chat_completion_chunks, self.litellm_custom_stream_wrapper.chunks),
+            self.litellm_logging_obj,
+        ):
+            created: Final = self.create_response_created_event().response
+            return ResponseIncompleteEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                response=created.model_copy(update={"status": "incomplete", "usage": None}),
+            )
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
             input=self.request_input,
             responses_api_request=dict(self.responses_api_request),

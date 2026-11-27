@@ -3064,6 +3064,8 @@ class CustomStreamWrapper:
         if self.logging_obj is None:
             return
         try:
+            if self._can_skip_failed_chat_usage_recovery():
+                return
             partial_response: Final = self.partial_response()
             if partial_response is None:
                 return
@@ -3081,6 +3083,15 @@ class CustomStreamWrapper:
                 "could not recover partial usage for interrupted stream: %s",
                 recover_error,
             )
+
+    def _can_skip_failed_chat_usage_recovery(self) -> bool:
+        if litellm.disable_token_counter is not True or self.logging_obj.call_type not in ("completion", "acompletion"):
+            return False
+        if self._earlier_rounds_spend is not None:
+            return False
+        from litellm.litellm_core_utils.streaming_chunk_builder_utils import should_skip_partial_stream_rebuild
+
+        return should_skip_partial_stream_rebuild(self.chunks, self.logging_obj)
 
     # Delta fields a text-only prefill continuation cannot carry, so a stream
     # that emitted any of them is not eligible for mid-stream continuation.
