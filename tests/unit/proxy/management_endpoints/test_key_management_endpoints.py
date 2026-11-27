@@ -3,7 +3,7 @@ import inspect
 import json
 from collections.abc import Mapping
 from contextlib import ExitStack
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -116,6 +116,7 @@ from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.cache_invalidation import PythonCaches
 from litellm.rust_bridge._native import NativeRedisStoreError
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 
 
 @pytest.mark.parametrize("value", ("false", 0, 1, [], {}))
@@ -10558,6 +10559,158 @@ async def test_default_key_generate_params_duration(monkeypatch):
 
     # Verify duration was applied from defaults
     assert request.duration == "180d"
+
+
+_KEY_DURATION_NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+class _KeyDurationClock(datetime):
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> datetime:
+        return _KEY_DURATION_NOW.astimezone(tz) if tz is not None else _KEY_DURATION_NOW.replace(tzinfo=None)
+
+
+@pytest.fixture
+def key_duration_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.management_endpoints.key_management_endpoints.datetime", _KeyDurationClock)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("key_duration_clock")
+@pytest.mark.parametrize(
+    ("team_duration", "requested", "upperbound", "effective_days"),
+    (
+        ("30d", {}, None, 30),
+        ("30d", {"duration": "1d"}, None, 1),
+        ("30d", {"duration": "90d"}, "7d", 7),
+        ("30d", {}, "7d", 7),
+        ("30d", {"duration": None}, None, 30),
+        pytest.param("30d", {"duration": ""}, None, 30, id="empty-duration"),
+        pytest.param("30d", {"duration": "  "}, "60d", 30, id="whitespace-duration"),
+        ("-1", {}, None, None),
+        ("-1", {"duration": "90d"}, None, 90),
+        ("  ", {}, None, 2),
+    ),
+)
+async def test_generation_applies_team_member_key_duration_to_the_request_not_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+    team_duration: str,
+    requested: dict[str, str | None],
+    upperbound: str | None,
+    effective_days: int | None,
+) -> None:
+    expected_expiry: Final = None if effective_days is None else _KEY_DURATION_NOW + timedelta(days=effective_days)
+
+    async def check_policy(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        assert policy_request.effective_key.expires == expected_expiry
+        return {"decision": False, "message": "Stop before persisting the key"}
+
+    monkeypatch.setattr(litellm, "default_key_generate_params", {"duration": "2d"})
+    monkeypatch.setattr(
+        litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration=upperbound)
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_policy", check_policy)
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team", metadata={"team_member_key_duration": team_duration})
+    with pytest.raises(HTTPException, match="Stop before persisting the key"):
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(user_id="member", team_id=team.team_id, **requested),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+            litellm_changed_by=None,
+            team_table=team,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("key_duration_clock")
+@pytest.mark.parametrize(
+    ("previous_owner", "fields", "expected"),
+    (
+        ("member", {"duration": "-1", "user_id": None}, {"expires": _KEY_DURATION_NOW + timedelta(days=30)}),
+        (None, {"duration": None, "user_id": "member"}, {"expires": _KEY_DURATION_NOW + timedelta(days=30)}),
+        ("member", {"duration": "1d"}, {"expires": _KEY_DURATION_NOW + timedelta(days=1)}),
+        ("member", {"user_id": None}, {}),
+        ("member", {"duration": "-1", "team_id": None}, {"expires": None}),
+        (None, {"duration": "-1"}, {"expires": None}),
+    ),
+)
+async def test_prepare_update_applies_duration_ceiling_to_the_effective_team_and_either_owner(
+    previous_owner: str | None, fields: dict[str, str | None], expected: dict[str, datetime | None]
+) -> None:
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team", metadata={"team_member_key_duration": "30d"})
+    stored: Final = LiteLLM_VerificationToken(token="token", user_id=previous_owner, team_id=team.team_id)
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest.model_validate({"key": stored.token, **fields}), stored, team_obj=team
+    )
+    assert {key: prepared[key] for key in prepared if key == "expires"} == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duration", ("", " \t"), ids=["empty", "whitespace"])
+async def test_blank_team_member_update_duration_keeps_expiry_with_proxy_upperbound(
+    monkeypatch: pytest.MonkeyPatch, duration: str
+) -> None:
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="60d"))
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team", metadata={"team_member_key_duration": "30d"})
+    stored: Final = LiteLLM_VerificationToken(
+        token="token", user_id="member", team_id=team.team_id, expires=_KEY_DURATION_NOW
+    )
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key=stored.token, duration=duration), stored, team_obj=team
+    )
+    assert "expires" not in prepared
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("generate", "update"))
+async def test_unparseable_team_member_duration_returns_bad_request(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", None)
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team", metadata={"team_member_key_duration": "30d"})
+    stored: Final = LiteLLM_VerificationToken(token="token", user_id="member", team_id=team.team_id)
+    attempt: Final = (
+        _common_key_generation_helper(
+            data=GenerateKeyRequest(user_id="member", team_id=team.team_id, duration="tomorrow"),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+            litellm_changed_by=None,
+            team_table=team,
+        )
+        if operation == "generate"
+        else prepare_key_update_data(UpdateKeyRequest(key=stored.token, duration="tomorrow"), stored, team_obj=team)
+    )
+    with pytest.raises(HTTPException, match="Invalid duration") as error:
+        await attempt
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("generate", "update", "regenerate"))
+async def test_explicit_duration_below_team_ceiling_still_obeys_proxy_upperbound(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="60d"))
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team", metadata={"team_member_key_duration": "120d"})
+    stored: Final = LiteLLM_VerificationToken(token="token", user_id="member", team_id=team.team_id)
+    request: Final = (
+        RegenerateKeyRequest(duration="90d")
+        if operation == "regenerate"
+        else UpdateKeyRequest(key=stored.token, duration="90d")
+    )
+    attempt: Final = (
+        _common_key_generation_helper(
+            data=GenerateKeyRequest(user_id="member", team_id=team.team_id, duration="90d"),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+            litellm_changed_by=None,
+            team_table=team,
+        )
+        if operation == "generate"
+        else prepare_key_update_data(request, stored, team_obj=team)
+    )
+    with pytest.raises(HTTPException) as error:
+        await attempt
+    assert error.value.status_code == 400
+    assert "duration" in str(error.value.detail)
+    assert "60d" in str(error.value.detail)
 
 
 async def test_default_key_generate_params_object_permission_applied_when_absent(

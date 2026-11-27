@@ -1472,6 +1472,8 @@ async def validate_team_id_used_in_service_account_request(
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
+    *,
+    check_duration: bool = True,
 ) -> None:
     """
     Enforce upperbound limits on key parameters.
@@ -1503,7 +1505,8 @@ def _enforce_upperbound_key_params(
     if upperbound is None:
         return
 
-    _enforce_duration_upperbound(data, "duration", data.duration, upperbound.duration, fill_defaults=fill_defaults)
+    if check_duration:
+        _enforce_duration_upperbound(data, "duration", data.duration, upperbound.duration, fill_defaults=fill_defaults)
     _enforce_numeric_upperbound(data, "max_budget", data.max_budget, upperbound.max_budget, fill_defaults=fill_defaults)
     _enforce_numeric_upperbound(
         data,
@@ -1562,6 +1565,63 @@ def _enforce_duration_upperbound(
     user_duration: Final = float("inf") if value == "-1" else duration_in_seconds(duration=value)
     if user_duration > upperbound_duration:
         raise _over_upperbound_error(key, value, upperbound_value)
+
+
+def _cap_key_duration(duration: str | None, ceiling: str | None) -> str | None:
+    if ceiling is None or ceiling == "-1":
+        return duration
+    if duration is None or duration == "-1" or duration_in_seconds(duration) >= duration_in_seconds(ceiling):
+        return ceiling
+    return duration
+
+
+def _team_member_key_duration(
+    team: LiteLLM_TeamTable | None,
+    requested_duration: str | None,
+    fallback_duration: str | None,
+    *,
+    generating: bool = False,
+) -> str | None:
+    metadata: Final = as_str_mapping(attribute_or_none(team, "metadata"))
+    configured: Final = metadata.get("team_member_key_duration") if metadata is not None else None
+    team_duration: Final = configured.strip() if isinstance(configured, str) else ""
+    if not team_duration:
+        return fallback_duration
+    upperbound: Final = litellm.upperbound_key_generate_params
+    proxy_duration: Final = upperbound.duration if upperbound is not None else None
+    if team_duration == "-1":
+        if generating and requested_duration is None:
+            return proxy_duration
+        if generating and requested_duration == "-1" and proxy_duration is None:
+            return None
+        return fallback_duration
+    if requested_duration is not None and requested_duration != "-1":
+        try:
+            requested_seconds: Final = duration_in_seconds(requested_duration)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400, detail={"error": "Invalid duration format. Use a duration such as '1d' or '1w'."}
+            ) from error
+        if requested_seconds < duration_in_seconds(team_duration):
+            return requested_duration
+    return _cap_key_duration(team_duration, proxy_duration)
+
+
+def _apply_enterprise_key_generation_params(
+    data: GenerateKeyRequest, team_table: LiteLLM_TeamTableCachedObj | None
+) -> GenerateKeyRequest:
+    try:
+        from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import (
+            apply_enterprise_key_management_params,
+        )
+
+        enterprise_data: Final[object] = apply_enterprise_key_management_params(data, team_table)
+        return GenerateKeyRequest.model_validate(enterprise_data)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - %s", e
+        )
+        return data
 
 
 def _team_admin_requests_member_key(
@@ -1711,19 +1771,23 @@ async def _common_key_generation_helper(
     # exemption key off what the caller explicitly requested, not a value that
     # default_key_generate_params injected.
     _requested_max_budget: Final = data.max_budget
+    normalized_data: Final = (
+        data.model_copy(update={"duration": None}) if data.duration is not None and not data.duration.strip() else data
+    )
+    requested_duration: Final = normalized_data.duration
     _requested_team_id: Final = data.team_id
     _requested_metadata: Final = data.metadata  # pyright: ignore[reportUnknownMemberType]  # request models declare `metadata` as bare dict
 
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
-        for elem in _model_items(data):
+        for elem in _model_items(normalized_data):
             key, value = elem
             if (
                 value is None
-                and (key != "budget_duration" or key not in data.model_fields_set)
+                and (key != "budget_duration" or key not in normalized_data.model_fields_set)
                 and (
                     key not in {"user_id", "team_id"}
-                    or key not in data.model_fields_set
+                    or key not in normalized_data.model_fields_set
                     or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
                 )
                 and key
@@ -1740,45 +1804,49 @@ async def _common_key_generation_helper(
             ):
                 default_value = litellm.default_key_generate_params.get(key)
                 if default_value is not None:
-                    setattr(data, key, default_value)
+                    setattr(normalized_data, key, default_value)
             elif key == "models" and value == []:
-                setattr(data, key, litellm.default_key_generate_params.get(key, []))
+                setattr(normalized_data, key, litellm.default_key_generate_params.get(key, []))
             elif key == "metadata" and value == {}:
-                setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+                setattr(normalized_data, key, litellm.default_key_generate_params.get(key, {}))
+
+    duration: Final = _team_member_key_duration(
+        team_table if normalized_data.user_id is not None else None,
+        requested_duration,
+        normalized_data.duration,
+        generating=True,
+    )
+    bounded_data: Final = (
+        normalized_data.model_copy(update={"duration": duration})
+        if duration != normalized_data.duration
+        else normalized_data
+    )
 
     # check if user set upperbound key/generate params on config.yaml
-    _enforce_upperbound_key_params(data, fill_defaults=True)
+    _enforce_upperbound_key_params(bounded_data, fill_defaults=True)
 
     _enforce_budget_delegation_ceiling(
         requested_max_budget=_requested_max_budget,
         requested_team_id=_requested_team_id,
-        budget_limits=data.budget_limits,
+        budget_limits=bounded_data.budget_limits,
         team_table=team_table,
         user_api_key_dict=user_api_key_dict,
     )
     check_permissions_caller_permission(
-        data=data,
+        data=bounded_data,
         user_api_key_dict=user_api_key_dict,
     )
     check_disable_global_guardrails_caller_permission(
-        data.disable_global_guardrails,
+        bounded_data.disable_global_guardrails,
         _requested_metadata,
         user_api_key_dict,
     )
-    await validate_guardrail_names(data.guardrails, _requested_metadata, None, prisma_client, license_first=True)
+    await validate_guardrail_names(
+        bounded_data.guardrails, _requested_metadata, None, prisma_client, license_first=True
+    )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
-    try:
-        from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import (
-            apply_enterprise_key_management_params,
-        )
-
-        enterprise_data: Final[object] = apply_enterprise_key_management_params(data, team_table)
-        data = GenerateKeyRequest.model_validate(enterprise_data)
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - %s", e
-        )
+    data = _apply_enterprise_key_generation_params(bounded_data, team_table)
 
     await _enforce_custom_key_policy(
         hook=_custom_key_policy_hook(proxy_server),
@@ -3364,6 +3432,8 @@ async def prepare_key_update_data(
     prisma_client: PrismaClient | None = None,
     llm_router: Router | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
+    team_obj: LiteLLM_TeamTableCachedObj | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
 ):
     if user_api_key_dict is not None:
         await _check_key_semantic_cache_update(data, existing_key_row, user_api_key_dict, prisma_client)
@@ -3431,12 +3501,39 @@ async def prepare_key_update_data(
             continue
         non_default_values[k] = v
 
-    if "duration" in non_default_values:
-        duration: Final = non_default_values.pop("duration")
+    non_default_values.pop("duration", None)
+    requested_duration: Final = data.duration
+    if "duration" in data.model_fields_set and (requested_duration is None or requested_duration.strip()):
+        team_id: Final = (
+            (data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id)
+            if team_obj is not None or user_api_key_cache is not None
+            else None
+        )
+        is_member: Final = team_id is not None and (existing_key_row.user_id is not None or data.user_id is not None)
+        effective_team: Final = (
+            team_obj
+            if team_obj is not None and team_obj.team_id == team_id
+            else await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
+            )
+            if team_id is not None and is_member and user_api_key_cache is not None
+            else None
+        )
+        duration: Final = (
+            _team_member_key_duration(effective_team, requested_duration, requested_duration)
+            if is_member
+            else requested_duration
+        )
+        upperbound: Final = litellm.upperbound_key_generate_params
+        if upperbound is not None:
+            _enforce_duration_upperbound(data, "duration", duration, upperbound.duration, fill_defaults=False)
         if duration is None or duration == "-1":
             # Set expires to None to indicate the key never expires
             non_default_values["expires"] = None
-        elif duration and (isinstance(duration, str)) and len(duration) > 0:
+        elif duration:
             duration_s: Final = duration_in_seconds(duration=duration)
             expires: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
             non_default_values["expires"] = expires
@@ -3753,7 +3850,7 @@ async def _process_single_key_update(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
 
     # Enforce upperbound key params on update (don't fill defaults)
-    _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
+    _enforce_upperbound_key_params(update_key_request, fill_defaults=False, check_duration=False)
 
     # Get team object and check team limits if team_id is provided
     team_obj: LiteLLM_TeamTableCachedObj | None = None
@@ -3809,6 +3906,8 @@ async def _process_single_key_update(
         prisma_client=prisma_client,
         llm_router=llm_router,
         user_api_key_dict=user_api_key_dict,
+        team_obj=team_obj,
+        user_api_key_cache=user_api_key_cache,
     )
 
     await _enforce_custom_key_policy(
@@ -4118,7 +4217,7 @@ async def _validate_update_key_data(
     premium_user: bool,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
-) -> None:
+) -> LiteLLM_TeamTableCachedObj | None:
     """Validate permissions and constraints for key update."""
     checked_prisma_client: Final = _require_prisma_client(prisma_client)
 
@@ -4426,6 +4525,8 @@ async def _validate_update_key_data(
         if normalized_object_permission is not None:
             data.object_permission = LiteLLM_ObjectPermissionBase(**normalized_object_permission)
 
+    return team_obj
+
 
 @router.post("/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
@@ -4551,7 +4652,7 @@ async def update_key_fn(
         key: Final = _resolve_token_to_update(data=data, existing_key_row=existing_key_row)
         data.key = key
 
-        await _validate_update_key_data(
+        team_obj: Final = await _validate_update_key_data(
             data=data,
             existing_key_row=existing_key_row,
             user_api_key_dict=user_api_key_dict,
@@ -4564,13 +4665,15 @@ async def update_key_fn(
         await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=data)
 
         # Enforce upperbound key params on update (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, fill_defaults=False, check_duration=False)
         non_default_values: Final = await prepare_key_update_data(
             data=data,
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
+            team_obj=team_obj,
+            user_api_key_cache=user_api_key_cache,
         )
 
         # Only validate key_alias format if it's actually being changed
@@ -6700,6 +6803,7 @@ async def _execute_virtual_key_regeneration(
     litellm_changed_by: str | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    team_obj: LiteLLM_TeamTableCachedObj | None = None,
 ) -> GenerateKeyResponse:
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy import proxy_server
@@ -6768,13 +6872,15 @@ async def _execute_virtual_key_regeneration(
         if update_request is not None:
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
         # Enforce upperbound key params on regenerate (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, fill_defaults=False, check_duration=False)
         non_default_values = await prepare_key_update_data(
             data=data,
             existing_key_row=key_in_db,
             prisma_client=prisma_client,
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
+            team_obj=team_obj,
+            user_api_key_cache=user_api_key_cache,
         )
         # Only validate key_alias format if it's actually being changed
         new_key_alias: Final = non_default_values.get("key_alias")
@@ -7130,8 +7236,8 @@ async def regenerate_key_fn(
             license_first=True,
         )
 
+        regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
         if data is not None and (data.access_group_ids or data.object_permission is not None):
-            regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
             if _key_in_db.team_id is not None:
                 regenerate_team_table = await get_team_object(
                     team_id=_key_in_db.team_id,
@@ -7187,6 +7293,7 @@ async def regenerate_key_fn(
             litellm_changed_by=litellm_changed_by,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            team_obj=regenerate_team_table,
         )
     except Exception as e:
         verbose_proxy_logger.exception("Error regenerating key: %s", e)
