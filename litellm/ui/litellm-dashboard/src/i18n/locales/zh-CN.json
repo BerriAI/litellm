@@ -2530,7 +2530,7 @@
       "secretKey": "密钥",
       "status": {
         "active": "正常",
-        "blocked": "已拦截",
+        "blocked": "已封禁",
         "overBudget": "超出预算",
         "expired": "已过期"
       }
@@ -2736,9 +2736,9 @@
         "resetsAt": "于 {{time}} 重置"
       },
       "alerts": {
-        "blockedTitle": "此密钥已被拦截",
-        "blockedDescription": "在解除拦截之前，使用此密钥的请求将失败。",
-        "unblock": "解除拦截",
+        "blockedTitle": "此密钥已被封禁",
+        "blockedDescription": "在解除封禁之前，使用此密钥的请求将失败。",
+        "unblock": "解除封禁",
         "usedUpTitle": "{{owner}}已用尽",
         "usedUpDescription": "在预算重置之前，使用此密钥的请求将失败。已用 {{spend}}，限额为 {{limit}}。{{reset}}",
         "open": {
@@ -16614,13 +16614,13 @@
         "frameTitle": "用量报告",
         "summary": {
           "title": "汇总",
-          "spend": "总花费",
+          "spend": "总费用",
           "requests": "请求数",
           "successful": "成功请求",
           "failed": "失败请求",
-          "tokens": "总令牌数",
-          "promptTokens": "提示令牌",
-          "completionTokens": "补全令牌"
+          "tokens": "总 Token 数",
+          "promptTokens": "提示 Token",
+          "completionTokens": "补全 Token"
         },
         "breakdown": "明细",
         "columns": {
@@ -16628,12 +16628,12 @@
           "key": "密钥",
           "model": "模型",
           "user": "用户",
-          "spend": "花费",
+          "spend": "费用",
           "requests": "请求数",
           "successful": "成功",
           "failed": "失败",
-          "promptTokens": "提示令牌",
-          "completionTokens": "补全令牌"
+          "promptTokens": "提示 Token",
+          "completionTokens": "补全 Token"
         },
         "meta": {
           "dateRange": "日期范围",

@@ -37,9 +37,20 @@ const ACTION_TONE: Record<string, StatusTone> = {
   kill_switch_fired: "error",
 };
 
-export const auditActionLabel = (action: string): string => {
-  const words = action.replace(/_/g, " ");
-  return words ? words.charAt(0).toUpperCase() + words.slice(1) : words;
+export const AUDIT_ACTION_OPTIONS = [
+  { labelKey: "logs.audit.actionOptions.created", value: "created" },
+  { labelKey: "logs.audit.actionOptions.updated", value: "updated" },
+  { labelKey: "logs.audit.actionOptions.deleted", value: "deleted" },
+  { labelKey: "logs.audit.actionOptions.rotated", value: "rotated" },
+  { labelKey: "logs.audit.actionOptions.killSwitchFired", value: "kill_switch_fired" },
+] as const;
+
+export const auditActionTone = (action: string): StatusTone =>
+  Object.hasOwn(ACTION_TONE, action) ? ACTION_TONE[action] : "neutral";
+
+export const auditActionLabel = (action: string, t: TFunction): string => {
+  const option = AUDIT_ACTION_OPTIONS.find((option) => option.value === action);
+  return option ? t(option.labelKey) : action;
 };
 
 interface AuditLogsTableColumnsDeps {
@@ -65,7 +76,7 @@ export const getAuditLogsTableColumns = (
     size: 110,
     enableSorting: false,
     cell: ({ row }) => (
-      <StatusBadge tone={ACTION_TONE[row.original.action] ?? "neutral"} label={auditActionLabel(row.original.action)} />
+      <StatusBadge tone={auditActionTone(row.original.action)} label={auditActionLabel(row.original.action, t)} />
     ),
   },
   {

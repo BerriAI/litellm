@@ -70,6 +70,26 @@ describe("buildUsageReportHtml", () => {
     );
   });
 
+  it("uses the Chinese usage glossary in the printed summary and breakdown", () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    const doc = render({ language: "zh-CN", t: locale.getFixedT("zh-CN") });
+
+    const summaryLabels = [...doc.querySelectorAll('[data-testid="usage-report-summary"] .label')].map(
+      (cell) => cell.textContent,
+    );
+    expect(summaryLabels).toEqual([
+      "总费用",
+      "请求数",
+      "成功请求",
+      "失败请求",
+      "总 Token 数",
+      "提示 Token",
+      "补全 Token",
+    ]);
+    expect(headers(doc)).toEqual(["日期", "团队", "费用", "请求数", "成功", "失败", "提示 Token", "补全 Token"]);
+  });
+
   it.each([
     ["daily", [], "Team A"],
     ["daily_with_keys", ["Key"], "prod-key"],
