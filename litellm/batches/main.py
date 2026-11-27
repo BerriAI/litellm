@@ -592,7 +592,7 @@ def retrieve_batch(
         litellm_logging_obj: Final = None if raw_logging_obj is None else logging_obj_of(raw_logging_obj)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-        litellm_params: Final = get_litellm_params(
+        litellm_params: Final[dict[str, object]] = get_litellm_params(  # mutable-ok: update_from_kwargs pops from it
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )

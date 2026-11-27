@@ -106,7 +106,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         api_key: str,
         api_base: str,
         logging_obj: _CallLogger,
-        headers: dict,
+        headers: Mapping[str, object],
         client: AsyncHTTPHandler | HTTPHandler | None = None,
     ) -> EmbeddingResponse:
         response = None

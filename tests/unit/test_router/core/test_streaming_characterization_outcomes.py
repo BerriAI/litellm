@@ -11,6 +11,7 @@ then, with the assembled response's usage.
 import asyncio
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -18,6 +19,7 @@ import pytest
 import litellm
 from litellm.router_core import RouterCore
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
+from tests.unit.test_router.core.retries_health_helpers import usage_since
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit
 from tests.unit.test_router.core.streaming_helpers import (
     MESSAGE_STOP,
@@ -282,8 +284,9 @@ async def test_a_consumed_responses_stream_counts_its_final_tokens_and_one_reque
 
 
 async def test_a_responses_stream_that_breaks_after_output_counts_one_failure_and_cools_down(
-    make_core: MakeCore, host: ScriptedHost
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     host.answer(
         "openai/a",
         responses_stream(
@@ -307,7 +310,7 @@ async def test_a_responses_stream_that_breaks_after_output_counts_one_failure_an
     assert core.health().failures_this_minute("a") == 1
     assert successes(core, "a") is None
     assert cooled(core, "a", "b") == ["a"]
-    assert await core.health().usage("g") == (0, 2)
+    assert await usage_since(core, monkeypatch, "g", started) == (0, 2)
 
 
 # --- /v1/messages streams ------------------------------------------------------------------------

@@ -2,7 +2,6 @@ import { useTheme } from "next-themes";
 import { useTranslation } from "react-i18next";
 import { JsonView, darkStyles, defaultStyles } from "react-json-view-lite";
 import "react-json-view-lite/dist/index.css";
-import { JSON_MAX_HEIGHT, SPACING_LARGE } from "./constants";
 
 interface JsonViewerProps {
   data: any;
@@ -20,15 +19,7 @@ export function JsonViewer({ data }: JsonViewerProps) {
   if (!data) return <span className="text-muted-foreground">{t("logs.detail.jsonViewer.noData")}</span>;
 
   return (
-    <div
-      className="bg-background"
-      style={{
-        maxHeight: JSON_MAX_HEIGHT,
-        overflow: "auto",
-        padding: SPACING_LARGE,
-        borderRadius: 4,
-      }}
-    >
+    <div className="max-h-[400px] overflow-auto rounded-[4px] bg-background p-3">
       <div className="**:[[role='tree']]:bg-transparent!">
         <JsonView data={data} style={resolvedTheme === "dark" ? darkStyles : defaultStyles} clickToExpandNode={true} />
       </div>

@@ -28,7 +28,7 @@ jobs:
       pull-requests: read
     outputs:
       artifact: ${{ steps.bridge.outputs.artifact }}
-    runs-on: ubuntu-latest-16-cores
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
@@ -39,24 +39,6 @@ jobs:
         id: changes
         timeout-minutes: 2
         uses: ./.github/actions/detect-changes
-
-      - name: Build the gateway wheel only for runs of the full unit matrix
-        id: scope
-        if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 1
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
-          LABELS: ${{ toJSON(github.event.pull_request.labels) }}
-        run: |
-          gateway=true
-          if [ "${EVENT_NAME}" = pull_request ]; then
-            case "${BASE_REF}" in
-              rc/* | stable/* | lts/*) ;;
-              *) jq -e 'any(.[]?; .name == "run-all-unit-shards")' <<< "${LABELS}" > /dev/null || gateway=false ;;
-            esac
-          fi
-          echo "gateway=${gateway}" | tee -a "$GITHUB_OUTPUT"
 
       - name: Detect a cost-map-only change
         id: cost-map-only
@@ -72,19 +54,15 @@ jobs:
         timeout-minutes: 20
         uses: ./.github/actions/build-rust-bridge
         with:
-          gateway: ${{ steps.scope.outputs.gateway }}
+          gateway: "true"
           save-cache: ${{ github.ref == 'refs/heads/main' }}
           stale-cost-map: ${{ steps.cost-map-only.outputs.decision == 'run' }}
   plan:
     name: plan
     permissions:
       contents: read
-      pull-requests: read
     outputs:
-      mode: ${{ steps.plan.outputs.mode }}
       skipped: ${{ steps.plan.outputs.skipped }}
-      changed-tests: ${{ steps.plan.outputs.changed-tests }}
-      tests-only: ${{ steps.plan.outputs.tests-only }}
       lint-runtime: ${{ steps.plan.outputs.lint-runtime }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -94,57 +72,22 @@ jobs:
           persist-credentials: false
       - name: Assert every test directory and file is claimed by a shard
         run: python3 .github/scripts/assert_ci_coverage.py --shards
-      - name: Run every job off pull requests, on release branches and on labelled pull requests
+      - name: Skip lint-runtime on pull requests into release branches
         id: plan
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-          CHANGED_FILE_COUNT: ${{ github.event.pull_request.changed_files }}
-          GH_TOKEN: ${{ github.token }}
         run: |
-          set -o pipefail
-          mode=core
           lint_runtime=true
-          [ -n "${PR_NUMBER}" ] || mode=full
+          skipped='[]'
           case "${BASE_REF}" in
-            rc/* | stable/* | lts/*) mode=full; lint_runtime=false ;;
+            rc/* | stable/* | lts/*) lint_runtime=false; skipped='["lint-runtime"]' ;;
           esac
-          if [ "${mode}" = core ]; then
-            labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name')" || mode=full
-            ! grep -qx 'run-all-unit-shards' <<< "${labels:-}" || mode=full
-          fi
-          [ "${mode}" != core ] || [ "${CHANGED_FILE_COUNT:-0}" -le 3000 ] || mode=full
-          changed_tests=''
-          tests_only=false
-          if [ "${mode}" = core ]; then
-            changed_files="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')" || mode=full
-            if [ "${mode}" = core ]; then
-              classification="$(printf '%s\n' "${changed_files}" | bash .github/scripts/ci/classify_changes.sh tests-only)" || classification=skip
-              selection_args=()
-              if [ "${classification}" = run ]; then
-                tests_only=true
-                selection_args+=(--include-core)
-              fi
-              changed_tests="$(printf '%s\n' "${changed_files}" \
-                | python3 .github/scripts/ci/select_changed_tests.py "${selection_args[@]}" | paste -sd ' ' -)" || { mode=full; changed_tests=''; tests_only=false; }
-            fi
-          fi
-          if [ "${mode}" = full ]; then
-            skipped=(unit-core unit-changed)
-          else
-            skipped=(unit docs helm openai-sdk-compat redis-compat)
-            [ "${tests_only}" = false ] || skipped+=(unit-core)
-            [ -n "${changed_tests}" ] || skipped+=(unit-changed)
-          fi
-          [ "${lint_runtime}" = true ] || skipped+=(lint-runtime)
-          skipped_json="$(printf '%s\n' "${skipped[@]}" | jq -R . | jq -sc .)"
-          printf 'mode=%s\nskipped=%s\nchanged-tests=%s\nlint-runtime=%s\ntests-only=%s\n' \
-            "${mode}" "${skipped_json}" "${changed_tests}" "${lint_runtime}" "${tests_only}" | tee -a "$GITHUB_OUTPUT"
+          printf 'skipped=%s\nlint-runtime=%s\n' "${skipped}" "${lint_runtime}" | tee -a "$GITHUB_OUTPUT"
   unit:
     name: ${{ matrix.shard }}
     needs: [rust-bridge, plan]
-    if: ${{ !cancelled() && needs.plan.outputs.mode == 'full' }}
-    runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.job-timeout-minutes }}
     permissions:
       contents: read
@@ -156,25 +99,47 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: core-utils
+          - shard: core-utils-1
             test-path: |-
               tests/unit/accounting
               tests/unit/batch_completion
               tests/unit/decisions
               tests/unit/extraction
-              tests/unit/litellm_core_utils
               tests/unit/systemone
+              tests/unit/litellm_core_utils/test_batch_utils.py
+              tests/unit/litellm_core_utils/test_exception_mapping_utils.py
             python-version: "3.12"
             workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
 
-          - shard: enterprise-routing
+          - shard: core-utils-2
+            test-path: |-
+              tests/unit/litellm_core_utils
+              --ignore=tests/unit/litellm_core_utils/test_batch_utils.py
+              --ignore=tests/unit/litellm_core_utils/test_exception_mapping_utils.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: worksteal
+
+          - shard: enterprise-routing-1
+            test-path: |-
+              tests/unit/router_strategy
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: worksteal
+
+          - shard: enterprise-routing-2
             test-path: |-
               tests/unit/google_genai
-              tests/unit/router_strategy
               tests/unit/router_utils
               tests/unit/redis
               tests/unit/proxy/common_utils/test_cache_aware_routing.py
@@ -194,17 +159,30 @@ jobs:
             reruns: 2
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
 
-          - shard: integrations
+          - shard: integrations-1
             test-path: |-
-              tests/unit/integrations
+              tests/unit/integrations/test_s3_v2_rust.py
+              tests/unit/integrations/test_s3_v2_native.py
             python-version: "3.12"
             workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
+
+          - shard: integrations-2
+            test-path: |-
+              tests/unit/integrations
+              --ignore=tests/unit/integrations/test_s3_v2_rust.py
+              --ignore=tests/unit/integrations/test_s3_v2_native.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: worksteal
 
           - shard: llms-vertex-ai
             test-path: >-
@@ -224,7 +202,7 @@ jobs:
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
 
           - shard: llms-bedrock
             test-path: |-
@@ -237,8 +215,7 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: llms-providers
-            runner: ubuntu-latest-16-cores
+          - shard: llms-providers-1
             test-path: |-
               tests/unit/llms/test_api_base_trailing_slash_routes.py
               tests/unit/llms/test_cache_control_and_reasoning.py
@@ -278,6 +255,16 @@ jobs:
               tests/unit/llms/compactifai
               tests/unit/llms/crusoe
               tests/unit/llms/custom_httpx
+              --ignore=tests/unit/llms/base_llm/batches/base_batches_config_test.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: worksteal
+
+          - shard: llms-providers-2
+            test-path: |-
               tests/unit/llms/dashscope
               tests/unit/llms/databricks
               tests/unit/llms/dataforseo
@@ -399,13 +386,12 @@ jobs:
               tests/unit/llms/xinference
               tests/unit/llms/you_com
               tests/unit/llms/zai
-              --ignore=tests/unit/llms/base_llm/batches/base_batches_config_test.py
             python-version: "3.12"
-            workers: 8
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
 
           - shard: llms-openai-meta
             test-path: >-
@@ -418,27 +404,68 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: root
-            runner: ubuntu-latest-16-cores
-            test-path: >-
-              tests/unit/test_*.py
+          - shard: root-1
+            test-path: |-
+              tests/unit/test_[a-m]*.py
             python-version: "3.12"
-            workers: 8
+            workers: 4
             reruns: 2
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
 
-          - shard: router
-            test-path: >-
-              tests/unit/router_rust
-              tests/unit/test_router
+          - shard: root-2
+            test-path: |-
+              tests/unit/test_[n-z]*.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: worksteal
+
+          - shard: router-1
+            test-path: |-
+              tests/unit/test_router/test_router.py
             python-version: "3.12"
             workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
+
+          - shard: router-2
+            test-path: |-
+              tests/unit/test_router/core/test_[a-p]*.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: worksteal
+
+          - shard: router-3
+            test-path: |-
+              tests/unit/test_router/core/test_[q-z]*.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: worksteal
+
+          - shard: router-4
+            test-path: |-
+              tests/unit/router_rust
+              tests/unit/test_router
+              --ignore=tests/unit/test_router/test_router.py
+              --ignore=tests/unit/test_router/core
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: worksteal
 
           - shard: endpoints
             test-path: >-
@@ -543,10 +570,21 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: proxy-endpoints
-            runner: ubuntu-latest-16-cores
+          - shard: proxy-endpoints-1
             test-path: |-
               tests/unit/proxy/management_endpoints
+              --ignore=tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
+              --ignore=tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
+              --ignore=tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: worksteal
+
+          - shard: proxy-endpoints-2
+            test-path: |-
               tests/unit/proxy/management_helpers
               tests/unit/proxy/list_api
               tests/unit/proxy/analytics_endpoints
@@ -557,27 +595,32 @@ jobs:
               tests/unit/proxy/openai_files_endpoint
               tests/unit/proxy/health_endpoints
               tests/unit/proxy/batches_endpoints
-              --ignore=tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
-              --ignore=tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
-              --ignore=tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
               --ignore=tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
             python-version: "3.12"
-            workers: 8
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
 
-          - shard: proxy-feature-endpoints
-            runner: ubuntu-latest-16-cores
+          - shard: proxy-feature-endpoints-1
             test-path: |-
               tests/unit/proxy/guardrails
               --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
               --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
               --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
+              tests/unit/proxy/google_endpoints
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: worksteal
+
+          - shard: proxy-feature-endpoints-2
+            test-path: |-
               --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
               tests/unit/proxy/anthropic_endpoints
-              tests/unit/proxy/google_endpoints
               tests/unit/proxy/container_endpoints
               tests/unit/proxy/fine_tuning_endpoints
               tests/unit/proxy/vector_store_files_endpoints
@@ -602,11 +645,11 @@ jobs:
               tests/unit/proxy/config_resolvers
               tests/unit/proxy/utils
             python-version: "3.12"
-            workers: 8
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
 
           - shard: proxy-server
             test-path: >-
@@ -637,7 +680,6 @@ jobs:
           - shard: proxy-infra-db-spend
             test-path: |-
               tests/unit/proxy/db
-              --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
               --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
               tests/unit/proxy/spend_tracking
               --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py
@@ -652,7 +694,7 @@ jobs:
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
 
           - shard: proxy-infra-routing
             test-path: |-
@@ -672,7 +714,7 @@ jobs:
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: worksteal
 
           - shard: proxy-infra-root-a-p
             test-path: |-
@@ -954,7 +996,6 @@ jobs:
           - shard: db-and-spend
             test-path: |-
               tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
-              tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
               tests/unit/proxy/db/test_update_daily_tag_spend.py
               tests/unit/proxy/test_db_schema_changes.py
               tests/unit/proxy/test_prisma_client_backoff_retry.py
@@ -1053,6 +1094,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
@@ -1088,7 +1130,7 @@ jobs:
           fi
 
       - name: Check litellm/schema.prisma against the merge base
-        if: steps.changes.outputs.decision != 'skip' && (matrix.shard == 'db-and-spend' || matrix.shard == 'core-auth-spend') && github.event_name == 'pull_request'
+        if: steps.changes.outputs.decision != 'skip' && matrix.shard == 'db-and-spend' && github.event_name == 'pull_request'
         timeout-minutes: 3
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1180,161 +1222,6 @@ jobs:
           path: junit.xml
           if-no-files-found: ignore
           retention-days: 14
-  unit-core:
-    name: ${{ matrix.shard }}
-    needs: [rust-bridge, plan]
-    if: ${{ !cancelled() && needs.plan.outputs.mode == 'core' && needs.plan.outputs.tests-only == 'false' }}
-    runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
-    timeout-minutes: ${{ matrix.job-timeout-minutes }}
-    permissions:
-      contents: read
-      pull-requests: read
-    env:
-      UV_PYTHON: ${{ matrix.python-version }}
-      LITELLM_LOCAL_MODEL_COST_MAP: "True"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - shard: core-auth-request
-            test-path: |-
-              tests/unit/proxy/auth/test_user_api_key_auth.py
-              tests/unit/proxy/auth/test_user_api_key_auth_request_flow.py
-              tests/unit/proxy/db/test_prisma_query_span.py
-              tests/unit/test_package_layout.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 10
-            job-timeout-minutes: 15
-            dist: worksteal
-
-          - shard: core-auth-spend
-            test-path: |-
-              tests/unit/proxy/auth/test_auth_checks.py
-              tests/unit/proxy/auth/test_auth_checks_object_access_and_lookup.py
-              tests/unit/proxy/db/test_db_spend_update_writer.py
-              tests/unit/proxy/spend_tracking/test_spend_tracking_utils.py
-              tests/unit/proxy/hooks/test_proxy_track_cost_callback.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 10
-            job-timeout-minutes: 15
-            dist: worksteal
-
-          - shard: core-logging-request-path
-            test-path: |-
-              tests/unit/litellm_core_utils/test_litellm_logging.py
-              tests/unit/litellm_core_utils/test_streaming_handler.py
-              tests/unit/proxy/test_litellm_pre_call_utils.py
-              tests/unit/proxy/hooks/test_parallel_request_limiter_v3.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 10
-            job-timeout-minutes: 15
-            dist: worksteal
-
-          - shard: core-management-cost
-            test-path: |-
-              tests/unit/proxy/management_endpoints/test_key_management_endpoints.py
-              tests/unit/proxy/management_endpoints/test_team_endpoints.py
-              tests/unit/proxy/management_endpoints/test_internal_user_endpoints.py
-              tests/unit/test_cost_calculator.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 10
-            job-timeout-minutes: 15
-            dist: worksteal
-
-          - shard: core-utils-route
-            test-path: |-
-              tests/unit/test_utils.py
-              tests/unit/proxy/test_route_llm_request.py
-            python-version: "3.12"
-            workers: 4
-            reruns: 0
-            timeout-minutes: 10
-            job-timeout-minutes: 15
-            dist: worksteal
-
-          - shard: core-router
-            test-path: |-
-              tests/unit/test_router
-              --ignore=tests/unit/test_router/core
-              --deselect=tests/unit/test_router/test_router.py::test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fallback_usage
-              --deselect=tests/unit/test_router/test_router.py::test_continued_stream_success_log_bills_every_cut_leg
-              --deselect=tests/unit/test_router/test_router.py::test_num_retries_per_request_stops_retries_at_caps_above_four
-              --deselect=tests/unit/test_router/test_router.py::test_retry_records_keep_only_the_last_four_attempts
-              --deselect=tests/unit/test_router/test_router.py::test_retry_records_stay_per_request_and_flat_across_failing_requests
-              --deselect=tests/unit/test_router/test_router.py::TestMemberAutoRouterInference
-              --deselect=tests/unit/test_router/test_router.py::test_router_caller_entra_rejection_on_a_stream_leaves_the_shared_deployment_routable
-              --deselect=tests/unit/test_router/test_router.py::test_retry_records_never_carry_a_forwarded_credential
-              --deselect=tests/unit/test_router/test_router.py::test_retry_records_are_flat_and_name_the_failed_group_on_fallback_hops
-              --deselect=tests/unit/test_router/test_router.py::test_router_not_found_retries_governs_every_404_shape
-            runner: ubuntu-latest-16-cores
-            python-version: "3.12"
-            workers: 12
-            reruns: 0
-            timeout-minutes: 10
-            job-timeout-minutes: 15
-            dist: worksteal
-
-          - shard: core-router-retries
-            test-path: |-
-              tests/unit/test_router/test_router.py::test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fallback_usage
-              tests/unit/test_router/test_router.py::test_continued_stream_success_log_bills_every_cut_leg
-              tests/unit/test_router/test_router.py::test_num_retries_per_request_stops_retries_at_caps_above_four
-              tests/unit/test_router/test_router.py::test_retry_records_keep_only_the_last_four_attempts
-              tests/unit/test_router/test_router.py::test_retry_records_stay_per_request_and_flat_across_failing_requests
-              tests/unit/test_router/test_router.py::TestMemberAutoRouterInference
-              tests/unit/test_router/test_router.py::test_router_caller_entra_rejection_on_a_stream_leaves_the_shared_deployment_routable
-              tests/unit/test_router/test_router.py::test_retry_records_never_carry_a_forwarded_credential
-              tests/unit/test_router/test_router.py::test_retry_records_are_flat_and_name_the_failed_group_on_fallback_hops
-              tests/unit/test_router/test_router.py::test_router_not_found_retries_governs_every_404_shape
-            runner: ubuntu-latest-16-cores
-            python-version: "3.12"
-            workers: 12
-            reruns: 0
-            timeout-minutes: 10
-            job-timeout-minutes: 15
-            dist: worksteal
-
-          - shard: core-router-core
-            test-path: |-
-              tests/unit/test_router/core
-            runner: ubuntu-latest-16-cores
-            python-version: "3.12"
-            workers: 12
-            reruns: 0
-            timeout-minutes: 10
-            job-timeout-minutes: 15
-            dist: worksteal
-    steps: *unit-steps
-  unit-changed:
-    name: changed-tests
-    needs: [rust-bridge, plan]
-    if: ${{ !cancelled() && needs.plan.outputs.changed-tests != '' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 7
-    permissions:
-      contents: read
-      pull-requests: read
-    env:
-      UV_PYTHON: "3.12"
-      LITELLM_LOCAL_MODEL_COST_MAP: "True"
-    strategy:
-      matrix:
-        include:
-          - shard: changed-tests
-            test-path: ${{ needs.plan.outputs.changed-tests }}
-            workers: 4
-            reruns: 0
-            timeout-minutes: 7
-            dist: worksteal
-    steps: *unit-steps
   unit-python-310:
     name: ${{ matrix.shard }}
     needs: [rust-bridge]
@@ -1464,12 +1351,32 @@ jobs:
           python ./tests/documentation_tests/test_api_docs.py
           EOF
   ui-unit:
-    name: ui-unit
+    name: ui-unit (${{ matrix.part }})
     permissions:
       contents: read
       pull-requests: read
-    runs-on: ubuntu-latest-16-cores
+    runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      VITEST_SHARD: ${{ matrix.vitest-shard }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: typecheck
+          - part: type-tests
+          - part: vitest-1
+            vitest-shard: 1/6
+          - part: vitest-2
+            vitest-shard: 2/6
+          - part: vitest-3
+            vitest-shard: 3/6
+          - part: vitest-4
+            vitest-shard: 4/6
+          - part: vitest-5
+            vitest-shard: 5/6
+          - part: vitest-6
+            vitest-shard: 6/6
     defaults:
       run:
         working-directory: litellm/ui/litellm-dashboard
@@ -1500,17 +1407,17 @@ jobs:
         run: npm ci
 
       - name: Check UI production source types
-        if: steps.changes.outputs.decision != 'skip'
+        if: steps.changes.outputs.decision != 'skip' && matrix.part == 'typecheck'
         run: npm run typecheck
 
       - name: Run UI type tests (Vitest)
-        if: steps.changes.outputs.decision != 'skip'
+        if: steps.changes.outputs.decision != 'skip' && matrix.part == 'type-tests'
         env:
           CI: "true"
         run: npm run test:types
 
       - name: Run UI unit tests (Vitest)
-        if: steps.changes.outputs.decision != 'skip'
+        if: steps.changes.outputs.decision != 'skip' && matrix.vitest-shard != ''
         env:
           CI: "true"
           GH_TOKEN: ${{ github.token }}
@@ -1518,7 +1425,8 @@ jobs:
           EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          full_suite() { npm run test -- --run --pool forks --maxWorkers=14; }
+          shard_args=(${VITEST_SHARD:+--shard="$VITEST_SHARD"})
+          full_suite() { npm run test -- --run --pool forks --maxWorkers=4 "${shard_args[@]}"; }
 
           if [ -z "$PR_NUMBER" ]; then
             echo "Push to $GITHUB_REF_NAME: running the full suite"
@@ -1548,11 +1456,11 @@ jobs:
 
           echo "Pull request: running tests related to ${#changed_files[@]} changed UI files"
           npm run test -- related "${changed_files[@]}" --run --passWithNoTests \
-            --pool forks --maxWorkers=14
+            --pool forks --maxWorkers=4 "${shard_args[@]}"
   docs:
     name: docs
-    needs: plan
-    if: ${{ needs.plan.outputs.mode == 'full' }}
+    needs: rust-bridge
+    if: ${{ !cancelled() }}
     permissions:
       contents: read
       pull-requests: read
@@ -1586,37 +1494,30 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Cache uv dependencies
-        if: steps.changes.outputs.decision != 'skip' && github.ref == 'refs/heads/main'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Cache uv dependencies
-        if: steps.changes.outputs.decision != 'skip' && github.ref != 'refs/heads/main'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-
-
-      - name: Cache the Rust build
         if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-cargo-build
+        uses: ./.github/actions/cache-uv-downloads
+
+      - name: Set up the Rust build
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
+        env:
+          RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard
+          if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard
+          else
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --no-install-project --no-install-package litellm-proxy
+            uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
+            cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
+          fi
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
@@ -1636,8 +1537,6 @@ jobs:
           uv run --no-sync python ./tests/documentation_tests/test_circular_imports.py
   helm:
     name: helm
-    needs: plan
-    if: ${{ needs.plan.outputs.mode == 'full' }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -1679,8 +1578,8 @@ jobs:
           echo "$chart: all $declared declared test suites ran"
   openai-sdk-compat:
     name: OpenAI ${{ matrix.openai-version }} compatibility
-    needs: [rust-bridge, plan]
-    if: ${{ !cancelled() && needs.plan.outputs.mode == 'full' }}
+    needs: rust-bridge
+    if: ${{ !cancelled() }}
     permissions:
       contents: read
       pull-requests: read
@@ -1716,6 +1615,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Set up the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
@@ -1760,8 +1660,8 @@ jobs:
         run: uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json
   redis-compat:
     name: redis-py ${{ matrix.redis-py }} compatibility
-    needs: [rust-bridge, plan]
-    if: ${{ !cancelled() && needs.plan.outputs.mode == 'full' }}
+    needs: rust-bridge
+    if: ${{ !cancelled() }}
     permissions:
       contents: read
       pull-requests: read
@@ -1801,6 +1701,7 @@ jobs:
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
+          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
 
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
@@ -1830,17 +1731,6 @@ jobs:
           uv pip install --python .venv/bin/python "redis==${REDIS_PY_VERSION:?}"
           uv run --no-sync python -c 'import os, redis; assert redis.__version__ == os.environ["REDIS_PY_VERSION"], redis.__version__'
 
-      - name: Install redis-server 7.2.16
-        if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 5
-        run: |
-          mkdir -p "$RUNNER_TEMP/redis-bin"
-          cid="$(docker create redis:7.2.16@sha256:0637954999d01b7c9ce9167db2da50656e2590d3b884f1c600c5f63bb6e6773c)"
-          docker cp "${cid}:/usr/local/bin/redis-server" "$RUNNER_TEMP/redis-bin/redis-server"
-          docker rm "$cid"
-          "$RUNNER_TEMP/redis-bin/redis-server" --version | grep -q 'v=7.2.16'
-          echo "$RUNNER_TEMP/redis-bin" >> "$GITHUB_PATH"
-
       - name: Run Redis compatibility tests
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 15
@@ -1854,7 +1744,7 @@ jobs:
   unit-passed:
     name: unit passed
     permissions: {}
-    needs: [rust-bridge, plan, unit, unit-core, unit-changed, unit-python-310, lint-runtime, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
+    needs: [rust-bridge, plan, unit, unit-python-310, lint-runtime, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2

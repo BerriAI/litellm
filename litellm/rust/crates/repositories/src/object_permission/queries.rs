@@ -6,22 +6,34 @@ use litellm_db::Error;
 
 use crate::RawJson;
 
-/// One `LiteLLM_ObjectPermissionTable` row.
+/// One `LiteLLM_ObjectPermissionTable` row. An array column that is NULL reads as an empty list, as
+/// Prisma read it, whether the row comes from a query of its own or nested as JSON in another row.
+#[serde_with::serde_as]
 #[macro_rules_attribute::apply(crate::db_row)]
-#[derive(serde::Serialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct ObjectPermission {
     pub object_permission_id: String,
+    #[serde_as(as = "serde_with::DefaultOnNull")]
     pub mcp_servers: Vec<String>,
+    #[serde_as(as = "serde_with::DefaultOnNull")]
     pub mcp_access_groups: Vec<String>,
     pub mcp_tool_permissions: Option<RawJson>,
+    #[serde_as(as = "serde_with::DefaultOnNull")]
     pub vector_stores: Vec<String>,
+    #[serde_as(as = "serde_with::DefaultOnNull")]
     pub agents: Vec<String>,
+    #[serde_as(as = "serde_with::DefaultOnNull")]
     pub agent_access_groups: Vec<String>,
+    #[serde_as(as = "serde_with::DefaultOnNull")]
     pub models: Vec<String>,
+    #[serde_as(as = "serde_with::DefaultOnNull")]
     pub blocked_tools: Vec<String>,
+    #[serde_as(as = "serde_with::DefaultOnNull")]
     pub mcp_toolsets: Vec<String>,
+    #[serde_as(as = "serde_with::DefaultOnNull")]
     pub search_tools: Vec<String>,
     pub mcp_tool_search_enabled: Option<bool>,
+    #[serde_as(as = "serde_with::DefaultOnNull")]
     pub skills: Vec<String>,
 }
 
@@ -45,8 +57,29 @@ mod tests {
     use rstest::rstest;
     use sqlx::PgPool;
 
-    use super::find_object_permission;
+    use super::{ObjectPermission, find_object_permission};
     use crate::test_support::database_pool;
+
+    #[rstest]
+    fn a_null_array_nested_as_json_reads_as_an_empty_list() {
+        let permission: ObjectPermission = serde_json::from_str(
+            r#"{"object_permission_id": "p", "mcp_servers": null, "mcp_access_groups": null,
+                "mcp_tool_permissions": null, "vector_stores": null, "agents": null,
+                "agent_access_groups": null, "models": ["m"], "blocked_tools": null,
+                "mcp_toolsets": null, "search_tools": null, "mcp_tool_search_enabled": null,
+                "skills": null, "apps": []}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            (
+                permission.models,
+                permission.mcp_toolsets,
+                permission.skills
+            ),
+            (vec!["m".to_owned()], Vec::new(), Vec::new())
+        );
+    }
 
     #[rstest]
     #[tokio::test]

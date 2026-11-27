@@ -37,7 +37,7 @@ PULL_REQUEST_EVENT: Final = MappingProxyType(
     {"number": "1", "base.ref": "main", "base.sha": "basesha", "head.sha": "headsha"}
 )
 
-FULL_SUITE_ARGV = ["run", "test", "--", "--run", "--pool", "forks", "--maxWorkers=14"]
+FULL_SUITE_ARGV = ["run", "test", "--", "--run", "--pool", "forks", "--maxWorkers=4"]
 
 NON_SRC_FILES = [
     "package.json",
@@ -110,7 +110,10 @@ def _stub(bin_dir: Path, name: str, body: str) -> None:
 
 
 def _run_step(
-    tmp_path: Path, changed: list[str], pull_request: Mapping[str, str] | None = PULL_REQUEST_EVENT
+    tmp_path: Path,
+    changed: list[str],
+    pull_request: Mapping[str, str] | None = PULL_REQUEST_EVENT,
+    vitest_shard: str = "",
 ) -> tuple[int, str, list[list[str]]]:
     """Run the workflow step's real shell; return its status, stdout and every npm argv."""
     bin_dir = tmp_path / "bin"
@@ -135,6 +138,7 @@ def _run_step(
         "GITHUB_REF_NAME": "release_branch",
         "CHANGED_FILES": str(changed_file),
         "NPM_LOG": str(npm_log),
+        "VITEST_SHARD": vitest_shard,
     }
 
     result = subprocess.run(
@@ -160,7 +164,7 @@ def _related_argv(changed: list[str]) -> list[str]:
         "--passWithNoTests",
         "--pool",
         "forks",
-        "--maxWorkers=14",
+        "--maxWorkers=4",
     ]
 
 
@@ -189,3 +193,16 @@ def test_step_runs_nothing_when_the_pull_request_touches_no_dashboard_file(tmp_p
     returncode, output, invocations = _run_step(tmp_path, [])
     assert returncode == 0, output
     assert invocations == []
+
+
+def test_a_vitest_shard_runs_only_its_slice_of_the_related_tests(tmp_path: Path) -> None:
+    changed = ["src/app/page.tsx"]
+    returncode, output, invocations = _run_step(tmp_path, changed, vitest_shard="2/6")
+    assert returncode == 0, output
+    assert invocations == [[*_related_argv(changed), "--shard=2/6"]]
+
+
+def test_a_vitest_shard_runs_only_its_slice_of_the_full_suite_on_a_push(tmp_path: Path) -> None:
+    returncode, output, invocations = _run_step(tmp_path, ["src/app/page.tsx"], pull_request=None, vitest_shard="6/6")
+    assert returncode == 0, output
+    assert invocations == [[*FULL_SUITE_ARGV, "--shard=6/6"]]
