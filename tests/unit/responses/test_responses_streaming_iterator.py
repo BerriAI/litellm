@@ -503,6 +503,52 @@ async def test_a_provider_failure_while_draining_a_cut_stream_logs_no_failure_si
     )
 
 
+class _UpstreamWhoseProviderFailsTheResponseOnceReleased:
+    headers: dict[str, str] = {}
+
+    def __init__(self) -> None:
+        self.released: Final = asyncio.Event()
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        yield f"data: {json.dumps(_CREATED_WITH_PRIORITY_TIER)}\n\n".encode()
+        await self.released.wait()
+        failed: Final = {
+            "type": "response.failed",
+            "sequence_number": 9,
+            "response": {
+                **_CREATED_RESPONSE_WITH_PRIORITY_TIER,
+                "status": "failed",
+                "error": {"code": "server_error", "message": "The model had an internal error"},
+                "usage": {"input_tokens": 400, "output_tokens": 9, "total_tokens": 409},
+            },
+        }
+        yield f"data: {json.dumps(failed)}\n\n".encode()
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_a_response_the_provider_fails_while_draining_is_billable_with_the_usage_that_event_reports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamWhoseProviderFailsTheResponseOnceReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    upstream.released.set()
+    drained: Final = await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+
+    assert drained is False
+    assert (recorder.success_payloads, recorder.failure_payloads) == ((), ())
+    assert incomplete_event is not None, "no failure log bills a response that failed after its client left"
+    billed: Final = incomplete_event.response.usage
+    assert (billed.input_tokens, billed.output_tokens, billed.total_tokens) == (400, 9, 409)
+
+
 class _UpstreamThatFailsOnceReleasedAfterRelayingText:
     headers: dict[str, str] = {}
 
