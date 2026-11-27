@@ -1031,16 +1031,20 @@ async def test_model_armor_post_call_logging_says_a_clean_run_did_not_act_with_s
     }
 
     logged_runs: Final[list[dict[str, object]]] = []
+
+    def record_run(litellm_logging_obj: object, guardrail_response: dict[str, object]) -> None:
+        logged_runs.append(guardrail_response)
+
     monkeypatch.setattr(
-        "litellm.proxy.common_utils.callback_utils.add_guardrail_response_to_standard_logging_object",
-        lambda litellm_logging_obj, guardrail_response: logged_runs.append(guardrail_response),
+        "litellm.proxy.common_utils.callback_utils.add_guardrail_response_to_standard_logging_object", record_run
     )
 
     await guardrail.async_post_call_success_hook(
         data=request_data, user_api_key_dict=UserAPIKeyAuth(), response=mock_llm_response
     )
 
-    assert [run.get("guardrail_action") for run in logged_runs] == [logged_action]
+    logged_actions: Final = [run.get("guardrail_action") for run in logged_runs]
+    assert logged_actions == [logged_action]
 
 
 @pytest.mark.asyncio

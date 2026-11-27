@@ -1679,9 +1679,9 @@ class TestXecGuardLoggingHook:
             await xecguard_guardrail.async_logging_hook(
                 kwargs=kwargs, result=_build_model_response("some answer"), call_type="acompletion"
             )
-        (info,) = kwargs["standard_logging_object"]["guardrail_information"]
-        assert info.get("guardrail_action") == logged_action
-        assert guardrail_ran_without_acting(info) is (logged_action == "none")
+        logged_runs: Final = kwargs["standard_logging_object"]["guardrail_information"]
+        assert [run.get("guardrail_action") for run in logged_runs] == [logged_action]
+        assert guardrail_ran_without_acting(logged_runs[0]) is (logged_action == "none")
 
     @pytest.mark.asyncio
     async def test_async_logging_hook_appends_to_existing_guardrail_info(
