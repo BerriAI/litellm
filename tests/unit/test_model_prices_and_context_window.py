@@ -42,6 +42,8 @@ def prices() -> dict:
         ("perplexity/google/gemini-4-neon", "perplexity", "responses"),
         ("fireworks_ai/accounts/fireworks/models/inkling-2-mini", "fireworks_ai", "chat"),
         ("databricks/databricks-gemini-nano-banana-2-1", "databricks", "chat"),
+        ("azure_ai/MAI-Image-2.7", "azure_ai", "image_generation"),
+        ("azure_ai/MAI-Image-2.7-Flash", "azure_ai", "image_generation"),
     ),
 )
 def test_provider_model_info_resolves_in_its_published_mode(
@@ -49,6 +51,52 @@ def test_provider_model_info_resolves_in_its_published_mode(
 ) -> None:
     info: Final = litellm.get_model_info(model)
     assert (info["litellm_provider"], info["mode"]) == (provider, mode)
+
+
+@pytest.mark.parametrize(
+    ("model", "mode", "endpoints"),
+    (
+        ("openai/Qwen/Qwen3-ASR-1.7B", "audio_transcription", ("/v1/audio/transcriptions", "/v1/chat/completions")),
+        ("fireworks_ai/accounts/fireworks/models/rune", "decisions", ("/v1/systemone",)),
+    ),
+)
+def test_registry_models_resolve_on_their_published_endpoints(
+    local_model_cost_map: None, model: str, mode: str, endpoints: tuple[str, ...]
+) -> None:
+    info: Final = litellm.get_model_info(model)
+    assert (info["mode"], info["supported_endpoints"]) == (mode, list(endpoints))
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("gpt-6.2-astra", "gpt-6.2-sol", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"),
+)
+def test_foundry_openai_models_resolve_to_their_own_registry_rows(
+    local_model_cost_map: None, prices: CostMap, model: str
+) -> None:
+    key: Final = f"azure_ai/{model}"
+    info: Final = litellm.get_model_info(key)
+    row: Final = prices[key]
+    assert (info["litellm_provider"], info["mode"], info["supported_endpoints"]) == (
+        "azure_ai",
+        row["mode"],
+        row["supported_endpoints"],
+    )
+    assert info["input_cost_per_token"] == row["input_cost_per_token"]
+
+
+def test_mai_code_flash_uses_the_cached_input_rate(local_model_cost_map: None, prices: CostMap) -> None:
+    model: Final = "azure_ai/MAI-Code-2-Flash"
+    row: Final = prices[model]
+    costs: Final = litellm.cost_per_token(
+        model=model,
+        usage_object=Usage(
+            prompt_tokens=1,
+            completion_tokens=1,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=1),
+        ),
+    )
+    assert costs == (row["cache_read_input_token_cost"], row["output_cost_per_token"])
 
 
 @pytest.mark.parametrize("model", ("azure/gpt-audio-1.5-2026-02-23", "azure/gpt-audio-mini-2025-10-06"))
