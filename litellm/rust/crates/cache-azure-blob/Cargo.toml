@@ -12,8 +12,8 @@ litellm-auth-types.workspace = true
 litellm-cache.workspace = true
 
 async-trait = "0.1"
-azure_core = "1.1.0"
-azure_storage_blob = "1.1.0"
+azure_core = { version = "1.1.0", default-features = false, features = ["reqwest", "reqwest_deflate", "reqwest_gzip", "tokio"] }
+azure_storage_blob = { version = "1.1.0", default-features = false, features = ["tokio"] }
 futures-util.workspace = true
 reqwest.workspace = true
 thiserror.workspace = true

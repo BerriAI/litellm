@@ -669,29 +669,16 @@ The Terraform modules live at [`litellm/deploy/terraform/litellm/aws/`](./litell
 
 ### Verify Docker Image Signatures
 
-All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Releases are signed with the key introduced in [commit `e82a3c6`](https://github.com/BerriAI/litellm/commit/e82a3c646908ba0a6ee0beddc4310d7a6cac4065).
-
-**Verify using the pinned commit hash (recommended):**
-
-A commit hash is cryptographically immutable, so this is the strongest way to ensure you are using the published signing key:
+All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Releases published since November 15, 2026 use keyless signing tied to our release workflow:
 
 ```bash
 cosign verify \
-  --key https://raw.githubusercontent.com/BerriAI/litellm/e82a3c646908ba0a6ee0beddc4310d7a6cac4065/cosign.pub \
+  --certificate-identity https://github.com/BerriAI/project-releaser/.github/workflows/release.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/berriai/litellm:<release-tag>
 ```
 
-**Verify using a release tag (convenience):**
-
-Tags are protected in this repository and resolve to the same key. This option is easier to read but relies on tag protection rules:
-
-```bash
-cosign verify \
-  --key https://raw.githubusercontent.com/BerriAI/litellm/<release-tag>/cosign.pub \
-  ghcr.io/berriai/litellm:<release-tag>
-```
-
-Replace `<release-tag>` with the version you are deploying (e.g. `v1.83.0-stable`).
+Replace `<release-tag>` with the version you are deploying. Older releases are signed with a key and verify with the `cosign.pub` from the commit that introduced it. See [Release Signing](.github/SECURITY.md#release-signing) for those commands.
 
 ---
 

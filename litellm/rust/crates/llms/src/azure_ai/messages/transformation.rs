@@ -12,6 +12,7 @@ use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
+use crate::anthropic::messages::handler::shape_anthropic_messages_request;
 use crate::{
     Error,
     anthropic::{
@@ -166,7 +167,7 @@ impl MessagesDialect for AzureAiMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn tool_custom_field(&self, model: &str) -> ToolCustomField {

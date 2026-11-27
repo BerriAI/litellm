@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import ClassVar, Final, cast
 
 import litellm
@@ -70,9 +70,9 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         top_p: float | None = None,
         top_k: int | None = None,
         response_mime_type: str | None = None,
-        response_schema: dict | None = None,
+        response_schema: Mapping[str, object] | None = None,
         candidate_count: int | None = None,
-        stop_sequences: list | None = None,
+        stop_sequences: Sequence[object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -120,7 +120,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         self,
         messages: list[AllMessageValues],
         model: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> list[ContentType]:
         """
         Google AI Studio Gemini does not support HTTP/HTTPS URLs for files.

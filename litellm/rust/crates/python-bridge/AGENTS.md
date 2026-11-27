@@ -130,6 +130,18 @@ GIL handling to `litellm-host-python`.
   mapping. The 256-character cap applies only to HTTP error diagnostics, not
   response bodies. Do not log those args.
 
+## Pricing
+
+- `src/cost/` is the whole pricing bridge. `NativePrices` lowers one row with `billed_prices` when it is built and holds no Python object after that
+- `src/cost/query.rs` answers `NativeModelCostMap.price`, `bound`, `rates` and `adjust` over one call's `CostLookup` of the cost snapshot. Python hands it the raw facts of a call as a document, which deserializes into litellm-cost's `TokenCall`, and litellm-cost does the rest (which names to try, the service tier and residency spellings, the rows and the price). What stays here is Python-shaped: reading the document and Python rows, the discount and margin config as Python's `float()` reads it, and the PyO3 answers
+  - A call the core does not price answers `None`, and Python prices it the old way. That covers `NotPorted`, a deferred candidate list and a call no row prices, so main's own error is still the one raised
+- `NativeTokenUsage` is the core's `TokenUsage` document, billed through `TokenUsage::billed`, the one conversion from counts to meters
+  - It asks `BilledPrices::for_prompt` for the prices on every `calculate` and `quote`, because an empty prompt on a tiered row reads the flat prices
+- Python hands it quantities, never a `Usage`. Reading the provider's usage into counts stays in `litellm_core_utils/llm_cost_calc/utils.py`, and every rate rule stays in `litellm-cost`
+- `RoutePricing` is the Messages route's `Pricing`, over the snapshot taken when the call is set up. Each price it answers reads that snapshot through one call's `CostLookup`, so the rows are the ones the table holds when the call finishes. It hands the route's call to `litellm_inference_messages::price_call`, which reads it into litellm-cost's `TokenCall` and prices it through the same `candidates::priced` as `NativeModelCostMap.price`, so a finished `/v1/messages` call resolves its candidates, rows and discount and margin exactly as the Python document does. The pricing identity comes from `host/routes/messages.py` `settings`, which reads it where `Logging.response_cost_calculator` reads it
+- A row crosses as the mapping Python holds. A value JSON cannot hold, such as a `datetime` in router `model_info`, is skipped with its key
+- The call's provider replaces the row's `litellm_provider` before lowering, because the band edge and the Fireworks cache-read default follow the call
+
 ## Tests
 
 - `cargo test --workspace` must compile this crate.

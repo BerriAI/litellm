@@ -34,8 +34,8 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,
     _get_budget_counters,
     _get_team_member_budget_counter,
-    _input_cost_for_cost_info,
-    _max_cost_for_cost_info,
+    input_cost_for_cost_info,
+    max_cost_for_cost_info,
     count_request_input_tokens,
     customer_window_counters,
     estimate_request_input_cost,
@@ -1091,7 +1091,7 @@ _THRESHOLD_PRICED: Final = {
 def test_cached_content_reservation_prices_the_rest_of_the_window(
     model_info: dict[str, object], expected: float
 ) -> None:
-    reserved: Final = _max_cost_for_cost_info(
+    reserved: Final = max_cost_for_cost_info(
         request_body=_CACHED_BODY,
         route=GEMINI_ROUTES[0],
         model_info=model_info,
@@ -1104,7 +1104,7 @@ def test_cached_content_reservation_prices_the_rest_of_the_window(
 
 
 def test_a_gemini_prompt_past_a_price_threshold_is_held_at_the_higher_rates() -> None:
-    reserved: Final = _max_cost_for_cost_info(
+    reserved: Final = max_cost_for_cost_info(
         request_body=GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 100}},
         route=GEMINI_ROUTES[0],
         model_info=_THRESHOLD_PRICED,
@@ -1124,10 +1124,10 @@ def test_a_gemini_body_held_at_the_whole_window_it_could_not_count_keeps_the_bas
     model_info: Final = _THRESHOLD_PRICED | {"max_input_tokens": 300_000}
     cost_inputs: Final = {"request_body": image_body, "route": GEMINI_ROUTES[0], "input_tokens": None}
 
-    reserved: Final = _max_cost_for_cost_info(
+    reserved: Final = max_cost_for_cost_info(
         **cost_inputs, model_info=model_info, requested_output_tokens=100, output_multiplier=1
     )
-    floor: Final = _input_cost_for_cost_info(**cost_inputs, model_info=model_info)
+    floor: Final = input_cost_for_cost_info(**cost_inputs, model_info=model_info)
 
     assert reserved == pytest.approx(300_000 * 1e-06 + 100 * 4e-06)
     assert floor == pytest.approx(300_000 * 1e-06)
@@ -1292,7 +1292,7 @@ def test_a_gemini_config_name_without_an_output_cap_keeps_a_larger_cap_from_anot
 def test_the_input_floor_prices_a_gemini_prompt_at_the_rates_its_size_bills_at(
     request_body: dict[str, object], input_tokens: int, expected: float
 ) -> None:
-    floor: Final = _input_cost_for_cost_info(
+    floor: Final = input_cost_for_cost_info(
         request_body=request_body,
         route=GEMINI_ROUTES[0],
         model_info=_THRESHOLD_PRICED | {"max_input_tokens": 300_000},
@@ -1326,7 +1326,7 @@ def test_a_routed_gemini_deployment_prices_its_cached_window_at_its_above_thresh
 
 
 def test_cached_content_without_an_input_or_cache_read_price_cannot_be_reserved() -> None:
-    reserved: Final = _max_cost_for_cost_info(
+    reserved: Final = max_cost_for_cost_info(
         request_body=_CACHED_BODY,
         route=GEMINI_ROUTES[0],
         model_info={"output_cost_per_token": 4e-06, "max_input_tokens": 10_000},
@@ -1461,10 +1461,10 @@ def test_a_gemini_body_with_inline_audio_holds_its_input_at_the_higher_of_the_te
         body: Final = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": 100}}
         pricing: Final = {"request_body": body, "route": GEMINI_ROUTES[0]}
         return (
-            _max_cost_for_cost_info(
+            max_cost_for_cost_info(
                 **pricing, model_info=model_info, requested_output_tokens=100, output_multiplier=1, input_tokens=200
             ),
-            _input_cost_for_cost_info(**pricing, model_info=model_info, input_tokens=200),
+            input_cost_for_cost_info(**pricing, model_info=model_info, input_tokens=200),
         )
 
     assert held([{"text": "Transcribe this."}, audio_part]) == (

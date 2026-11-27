@@ -79,6 +79,7 @@ import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filt
 import { Tag } from "../tag_management/types";
 import EditLoggingSettings from "../team/EditLoggingSettings";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { SemanticCacheJsonControls } from "@/components/shared/SemanticCacheControls";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
@@ -915,6 +916,11 @@ function KeyEditSession({
             )}
           </FormField>
 
+          {!editingMemberKeyAsTeamAdmin && (
+            <FormField control={form.control} name="metadata">
+              {({ value, onChange }) => <SemanticCacheJsonControls value={value} onChange={onChange} />}
+            </FormField>
+          )}
           <KeyMetadataField form={form} budgetAlertRowsShown={!editingMemberKeyAsTeamAdmin} />
 
           <div className="mb-4">

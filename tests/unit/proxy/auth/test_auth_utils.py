@@ -876,6 +876,30 @@ def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_cr
     assert (out["api_base"], out["api_key"]) == ("https://caller.example/v1", "sk-caller")
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("api_key", "test-key"), ("api_base", "https://alternate.example/v1"), ("base_url", "https://alternate.example/v1")),
+)
+def test_named_provider_oauth_deployment_rejects_client_side_overrides(
+    monkeypatch: pytest.MonkeyPatch, field: str, value: str
+) -> None:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.models.credentials import CredentialItem
+
+    credential: Final = CredentialItem(
+        credential_name="provider-oauth",
+        credential_values={"oauth_client_credentials": True},
+        credential_info={},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+    with pytest.raises(BadRequestError, match="OAuth client credentials deployments"):
+        get_dynamic_litellm_params(
+            litellm_params={"model": "custom_openai/gpt-6-luna", "litellm_credential_name": credential.credential_name},
+            request_kwargs={field: value},
+        )
+
+
 def test_test_connection_may_name_a_credential_holding_an_oidc_api_key(oidc_api_key_credential):
     """The admin UI tests a stored credential by name, which is how a proxy admin checks an oidc/ api_key works."""
     assert (
@@ -1755,7 +1779,10 @@ def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_u
 
 @pytest.mark.parametrize(
     "route, url_model",
-    [("/v1beta/models/premium-model:countTokens", "premium-model"), ("/models/premium-model:7b:countTokens", "premium-model:7b")],
+    [
+        ("/v1beta/models/premium-model:countTokens", "premium-model"),
+        ("/models/premium-model:7b:countTokens", "premium-model:7b"),
+    ],
 )
 def test_get_model_from_request_checks_count_tokens_on_the_url_model_over_proxy_wide_models(
     monkeypatch: pytest.MonkeyPatch, route: str, url_model: str
@@ -1994,6 +2021,38 @@ def _azure_relay_router():
 )
 def test_get_model_from_request_azure_relay_routes_use_the_model_group_in_the_path(route, request_data, expected):
     assert get_model_from_request(request_data=request_data, route=route, llm_router=_azure_relay_router()) == expected
+
+
+def _azure_route_router_with_an_openai_group_named_like_a_path_segment():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {"model_name": "openai", "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"}},
+            {
+                "model_name": "private-azure",
+                "litellm_params": {"model": "azure/gpt-5.4", "api_base": "https://b.openai.azure.com", "api_key": "k"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected",
+    [
+        ("/azure/openai/deployments/private-azure/chat/completions", {}, "private-azure"),
+        ("/azure/openai/deployments/private-azure/chat/completions", {"model": "openai"}, "private-azure"),
+        ("/azure/openai/v1/responses", {"model": "private-azure"}, "private-azure"),
+        ("/azure/openai/v1/responses", {"model": "openai"}, "openai"),
+        ("/azure/openai/deployments/openai/chat/completions", {}, "openai"),
+        ("/azure/openai/deployments/openai/chat/completions", {"model": "private-azure"}, "openai"),
+    ],
+)
+def test_get_model_from_request_azure_routes_authorize_the_group_the_request_is_relayed_to(
+    route, request_data, expected
+):
+    router = _azure_route_router_with_an_openai_group_named_like_a_path_segment()
+    assert get_model_from_request(request_data=request_data, route=route, llm_router=router) == expected
 
 
 def _nvidia_nim_relay_router():
@@ -3131,6 +3190,14 @@ class TestGetEndUserIdDropsMalformedBodyValues:
 
         with patch("litellm.proxy.proxy_server.general_settings", {}):
             result = get_end_user_id_from_request_body(request_body=request_body, request_headers={})
+
+        assert result is None
+
+    def test_metadata_user_dot_id_is_only_a_span_label(self) -> None:
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            result: Final = get_end_user_id_from_request_body(
+                request_body={"metadata": {"user.id": "label"}}, request_headers={}
+            )
 
         assert result is None
 

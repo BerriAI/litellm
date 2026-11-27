@@ -36,13 +36,15 @@ from litellm.repositories.verification_token_repository import (
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
 
 class KeyRotationManager:
     """
     Manages automated key rotation based on individual key rotation schedules.
     """
 
-    def __init__(self, prisma_client: PrismaClient, pod_lock_manager=None):
+    def __init__(self, prisma_client: PrismaClient, pod_lock_manager: "PodLockManager | None" = None):
         self.prisma_client = prisma_client
         self.pod_lock_manager = pod_lock_manager
 

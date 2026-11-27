@@ -157,7 +157,9 @@ pub(super) fn run_inference<R, H>(
 ) -> PyResult<Py<PyAny>>
 where
     R: InferenceRoute,
-    H: PythonBinding<Protocol = R::Protocol> + PythonHostCalls<R::Protocol> + 'static,
+    H: PythonBinding<Protocol = R::Protocol, Decoded = <R::Protocol as Protocol>::Request>
+        + PythonHostCalls<R::Protocol>
+        + 'static,
 {
     let call_type = if asynchronous {
         R::ASYNC_CALL_TYPE

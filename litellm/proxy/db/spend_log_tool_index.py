@@ -25,9 +25,9 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
 
-from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, BridgedToolNames
+from litellm._logging import verbose_proxy_logger
+from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS, TOOL_NAME_MAX_UTF8_BYTES
+from litellm.litellm_core_utils.tool_fields import full_names_by_sent_name, recorded_bridged_tools
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
@@ -52,9 +52,8 @@ _NO_FULL_TOOL_NAMES: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def logged_full_tool_names(call_kwargs: object) -> Mapping[str, str]:
-    fields: Final = as_str_mapping(call_kwargs)
-    logged: Final = None if fields is None else fields.get(BRIDGED_TOOL_NAMES_KWARG)
-    return logged.as_mapping() if isinstance(logged, BridgedToolNames) else _NO_FULL_TOOL_NAMES
+    full_names: Final = full_names_by_sent_name(recorded_bridged_tools(call_kwargs))
+    return full_names if full_names else _NO_FULL_TOOL_NAMES
 
 
 def response_tool_call_names(
@@ -144,6 +143,22 @@ def _executed_tool_names(output_item: object) -> tuple[str | None, ...]:
     return tuple(tool.name for tool in executed)
 
 
+def tool_name_fits_index(tool_name: object, key_alias: str | None) -> bool:
+    if not isinstance(tool_name, str) or not tool_name:
+        return False
+    try:
+        if len(tool_name.encode("utf-8")) <= TOOL_NAME_MAX_UTF8_BYTES:
+            return True
+    except UnicodeEncodeError:
+        pass
+    verbose_proxy_logger.warning(
+        "Skipping tool name that is not valid UTF-8 within %d bytes for key alias %r",
+        TOOL_NAME_MAX_UTF8_BYTES,
+        key_alias,
+    )
+    return False
+
+
 def build_tool_usage_transaction(
     request_id: str,
     start_time_iso: str,
@@ -153,6 +168,8 @@ def build_tool_usage_transaction(
     completion_response: object,
     realtime_tool_calls: object = None,
     full_names: Mapping[str, str] = _NO_FULL_TOOL_NAMES,
+    *,
+    key_alias: str | None = None,
 ) -> ToolUsageTransaction | None:
     """None when the request invoked no tools. Realtime sessions carry invoked
     tools in kwargs["realtime_tool_calls"] (OpenAI tool_calls shape) rather than
@@ -169,7 +186,11 @@ def build_tool_usage_transaction(
         else ()
     )
     tool_names: Final = tuple(
-        dict.fromkeys(mcp_names + response_tool_call_names(completion_response, full_names) + realtime_names)
+        name
+        for name in dict.fromkeys(
+            mcp_names + response_tool_call_names(completion_response, full_names) + realtime_names
+        )
+        if tool_name_fits_index(name, key_alias)
     )
     if not tool_names:
         return None

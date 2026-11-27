@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useController } from "react-hook-form";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { BarChart3, ChevronDown, Lock } from "lucide-react";
@@ -32,6 +33,9 @@ import { useMarginConfig } from "./use_margin_config";
 import { useBlockUnpricedConfig } from "./use_block_unpriced_config";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { addDiscountSchema, addMarginSchema } from "./schema";
+import { discountToAddArgs, emptyDiscount, emptyMargin, marginToAddArgs } from "./mapper";
 
 const DOCS_LINKS: readonly { labelKey: ParseKeys; href: string }[] = [
   {
@@ -72,16 +76,18 @@ const SectionHeader: React.FC<{ title: React.ReactNode; description: string }> =
 
 const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, userRole, accessToken }) => {
   const { t } = useTranslation();
-  const [selectedProvider, setSelectedProvider] = useState<string | undefined>(undefined);
-  const [newDiscount, setNewDiscount] = useState<string>("");
-  const [modelPattern, setModelPattern] = useState<string>("");
+  const discountForm = useZodForm(addDiscountSchema, { defaultValues: emptyDiscount });
+  const { field: discountProvider } = useController({ control: discountForm.control, name: "provider" });
+  const { field: discount } = useController({ control: discountForm.control, name: "discount" });
+  const { field: pattern } = useController({ control: discountForm.control, name: "pattern" });
   const [isFetching, setIsFetching] = useState(true);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isMarginModalVisible, setIsMarginModalVisible] = useState(false);
-  const [selectedMarginProvider, setSelectedMarginProvider] = useState<string | undefined>(undefined);
-  const [marginType, setMarginType] = useState<"percentage" | "fixed">("percentage");
-  const [percentageValue, setPercentageValue] = useState<string>("");
-  const [fixedAmountValue, setFixedAmountValue] = useState<string>("");
+  const marginForm = useZodForm(addMarginSchema, { defaultValues: emptyMargin });
+  const { field: marginProvider } = useController({ control: marginForm.control, name: "provider" });
+  const { field: marginType } = useController({ control: marginForm.control, name: "marginType" });
+  const { field: percentage } = useController({ control: marginForm.control, name: "percentageValue" });
+  const { field: fixedAmount } = useController({ control: marginForm.control, name: "fixedAmountValue" });
   const [models, setModels] = useState<string[]>([]);
   const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
@@ -133,20 +139,17 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   }, [accessToken, fetchDiscountConfig, fetchMarginConfig, fetchBlockUnpriced]);
 
   const handleAddProvider = async () => {
-    const success = await addProvider(selectedProvider, newDiscount, modelPattern);
+    const values = addDiscountSchema.parse(discountForm.getValues());
+    const success = await addProvider(...discountToAddArgs(values));
     if (success) {
-      setSelectedProvider(undefined);
-      setNewDiscount("");
-      setModelPattern("");
+      discountForm.reset();
       setIsModalVisible(false);
     }
   };
 
   const handleModalCancel = () => {
     setIsModalVisible(false);
-    setSelectedProvider(undefined);
-    setNewDiscount("");
-    setModelPattern("");
+    discountForm.reset();
   };
 
   const handleRemoveProvider = (provider: string, providerDisplayName: string) => {
@@ -169,27 +172,17 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   };
 
   const handleAddMargin = async () => {
-    const success = await addMargin({
-      selectedProvider: selectedMarginProvider,
-      marginType,
-      percentageValue,
-      fixedAmountValue,
-    });
+    const values = addMarginSchema.parse(marginForm.getValues());
+    const success = await addMargin(marginToAddArgs(values));
     if (success) {
-      setSelectedMarginProvider(undefined);
-      setPercentageValue("");
-      setFixedAmountValue("");
-      setMarginType("percentage");
+      marginForm.reset();
       setIsMarginModalVisible(false);
     }
   };
 
   const handleMarginModalCancel = () => {
     setIsMarginModalVisible(false);
-    setSelectedMarginProvider(undefined);
-    setPercentageValue("");
-    setFixedAmountValue("");
-    setMarginType("percentage");
+    marginForm.reset();
   };
 
   const handleRemoveMargin = (provider: string, providerDisplayName: string) => {
@@ -429,12 +422,12 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             </p>
             <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
               <AddProviderForm
-                selectedProvider={selectedProvider}
-                newDiscount={newDiscount}
-                modelPattern={modelPattern}
-                onProviderChange={setSelectedProvider}
-                onDiscountChange={setNewDiscount}
-                onModelPatternChange={setModelPattern}
+                selectedProvider={discountProvider.value ?? undefined}
+                newDiscount={discount.value}
+                modelPattern={pattern.value}
+                onProviderChange={(value) => discountProvider.onChange(value ?? null)}
+                onDiscountChange={discount.onChange}
+                onModelPatternChange={pattern.onChange}
                 onAddProvider={handleAddProvider}
               />
             </form>
@@ -456,14 +449,14 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
               <AddMarginForm
                 marginConfig={marginConfig}
-                selectedProvider={selectedMarginProvider}
-                marginType={marginType}
-                percentageValue={percentageValue}
-                fixedAmountValue={fixedAmountValue}
-                onProviderChange={setSelectedMarginProvider}
-                onMarginTypeChange={setMarginType}
-                onPercentageChange={setPercentageValue}
-                onFixedAmountChange={setFixedAmountValue}
+                selectedProvider={marginProvider.value ?? undefined}
+                marginType={marginType.value}
+                percentageValue={percentage.value}
+                fixedAmountValue={fixedAmount.value}
+                onProviderChange={(value) => marginProvider.onChange(value ?? null)}
+                onMarginTypeChange={marginType.onChange}
+                onPercentageChange={percentage.onChange}
+                onFixedAmountChange={fixedAmount.onChange}
                 onAddProvider={handleAddMargin}
               />
             </form>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import enum
 import functools
 import ipaddress
 import json
@@ -12,14 +13,18 @@ import ssl
 import subprocess
 import threading
 import time
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
+import httpcore
+import httpcore._async.http2
+import httpcore._sync.http2
 import httpx
 import pytest
 from cryptography import x509
@@ -28,13 +33,15 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from h2.config import H2Configuration
 from h2.connection import H2Connection
-from h2.events import StreamEnded
+from h2.errors import ErrorCodes
+from h2.events import PingAckReceived, StreamEnded
 from httpx._config import DEFAULT_LIMITS
 from hypercorn.asyncio import (
     serve,  # pyright: ignore[reportUnknownVariableType]  # hypercorn's serve signature passes through untyped worker hooks
 )
 from hypercorn.config import Config
 from hypercorn.typing import ASGIReceiveCallable, ASGISendCallable, HTTPResponseBodyEvent, HTTPResponseStartEvent, Scope
+from hyperframe.frame import GoAwayFrame, PingFrame
 from integration._support.ports import allocate_port
 from integration._support.vertex import service_account_json
 
@@ -42,6 +49,7 @@ STREAM_CHUNKS: Final = 3
 HELD_SEARCHES: Final = 150
 HOLD_SECONDS: Final = 10.0
 PROBED_HEADERS: Final = frozenset({b"te", b"keep-alive", b"connection", b"proxy-connection", b"upgrade", b"x-probe"})
+SEARCHES_IN_FLIGHT: Final = 8
 VERTEX_SERVING_CONFIG_PATH: Final = (
     "/v1/projects/p/locations/global/collections/default_collection/engines/e/servingConfigs/default_search"
 )
@@ -508,12 +516,12 @@ def test_global_http2_toggle_keeps_env_proxies_when_aiohttp_trust_env_is_disable
             asyncio.run(_async_peer_http_version(http2_tls_peer, http2=False))
 
 
-def _answer_or_drain(connection: H2Connection, stream_id: int, drain: bool) -> None:
+def _answer_or_drain(connection: H2Connection, stream_id: int, drain: bool, file_id: str = "answered") -> None:
     if drain:
         connection.close_connection(last_stream_id=stream_id)
         return
     connection.send_headers(stream_id, [(":status", "200"), ("content-type", "application/json")])
-    connection.send_data(stream_id, json.dumps({"results": [{"id": "answered"}]}).encode(), end_stream=True)
+    connection.send_data(stream_id, json.dumps({"results": [{"id": file_id}]}).encode(), end_stream=True)
 
 
 def _reply_to_ended_streams(connection: H2Connection, tls: ssl.SSLSocket, data: bytes, drain: bool) -> bool:
@@ -557,6 +565,97 @@ def _drain_every_other_connection(context: ssl.SSLContext, raw: socket.socket, c
 
 def _answer_every_connection(context: ssl.SSLContext, raw: socket.socket, connection_number: int) -> None:
     _serve_h2(context, raw, drain=False)
+
+
+class _Drain(enum.Enum):
+    GOOGLE_TWO_STEP = "google-two-step"
+    SINGLE_GOAWAY = "single-goaway"
+    REFUSE_THE_LATER_SEARCH = "refuse-the-later-search"
+    HOLD_THE_ACCEPTED_SEARCH = "hold-the-accepted-search"
+    RESET_THE_ACCEPTED_SEARCH = "reset-the-accepted-search"
+
+
+def _graceful_goaway(last_stream_id: int) -> bytes:
+    return GoAwayFrame(stream_id=0, last_stream_id=last_stream_id).serialize()
+
+
+def _ended_streams(connection: H2Connection, tls: ssl.SSLSocket) -> Iterator[int]:
+    while data := tls.recv(65535):
+        events: Final = connection.receive_data(data)
+        tls.sendall(connection.data_to_send())
+        yield from (event.stream_id for event in events if isinstance(event, StreamEnded))
+
+
+def _await_ping_ack(connection: H2Connection, tls: ssl.SSLSocket) -> None:
+    while data := tls.recv(65535):
+        if any(isinstance(event, PingAckReceived) for event in connection.receive_data(data)):
+            return
+
+
+def _answer_streams(
+    connection: H2Connection,
+    tls: ssl.SSLSocket,
+    stream_ids: Iterable[int],
+    answered: queue.SimpleQueue[int],
+    file_id: str = "answered",
+) -> None:
+    for stream_id in stream_ids:
+        _answer_or_drain(connection, stream_id, drain=False, file_id=file_id)
+        tls.sendall(connection.data_to_send())
+        answered.put(stream_id)
+
+
+def _file_id_once_another_connection_answers(answered: queue.SimpleQueue[int]) -> str:
+    deadline: Final = time.monotonic() + HOLD_SECONDS
+    while answered.empty() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return "answered" if not answered.empty() else "answered-after-the-refused-search-waited"
+
+
+def _drain_with_goaway(
+    connection: H2Connection, tls: ssl.SSLSocket, drain: _Drain, searches: int, answered: queue.SimpleQueue[int]
+) -> None:
+    ended: Final = tuple(islice(_ended_streams(connection, tls), searches))
+    match drain:
+        case _Drain.GOOGLE_TWO_STEP:
+            tls.sendall(_graceful_goaway(2**31 - 1) + PingFrame(stream_id=0, opaque_data=b"drain-01").serialize())
+            _await_ping_ack(connection, tls)
+            tls.sendall(_graceful_goaway(max(ended)))
+            _answer_streams(connection, tls, ended, answered)
+        case _Drain.SINGLE_GOAWAY:
+            tls.sendall(_graceful_goaway(max(ended)))
+            _answer_streams(connection, tls, ended, answered)
+        case _Drain.REFUSE_THE_LATER_SEARCH:
+            tls.sendall(_graceful_goaway(min(ended)))
+            _answer_streams(connection, tls, (min(ended),), answered)
+        case _Drain.HOLD_THE_ACCEPTED_SEARCH:
+            tls.sendall(_graceful_goaway(min(ended)))
+            _answer_streams(
+                connection, tls, (min(ended),), answered, _file_id_once_another_connection_answers(answered)
+            )
+        case _Drain.RESET_THE_ACCEPTED_SEARCH:
+            tls.sendall(_graceful_goaway(2**31 - 1))
+            connection.reset_stream(min(ended), ErrorCodes.CANCEL)
+            tls.sendall(connection.data_to_send())
+    _ = tuple(_ended_streams(connection, tls))
+
+
+def _drain_the_first_connection(
+    context: ssl.SSLContext,
+    raw: socket.socket,
+    connection_number: int,
+    drain: _Drain,
+    searches: int,
+    answered: queue.SimpleQueue[int],
+) -> None:
+    with contextlib.suppress(OSError), raw, context.wrap_socket(raw, server_side=True) as tls:
+        connection: Final = H2Connection(config=H2Configuration(client_side=False))
+        connection.initiate_connection()
+        tls.sendall(connection.data_to_send())
+        if connection_number == 1:
+            _drain_with_goaway(connection, tls, drain, searches, answered)
+            return
+        _answer_streams(connection, tls, _ended_streams(connection, tls), answered)
 
 
 @contextmanager
@@ -606,6 +705,105 @@ def test_vertex_search_retries_a_connection_the_server_drains_with_goaway(
         assert asyncio.run(_avertex_search_file_ids(http2_tls_peer, search_url=search_url)) == ["answered"]
         _set_http2(monkeypatch, True)
         assert _vertex_search_file_ids(http2_tls_peer, search_url=search_url) == ["answered"]
+
+
+@contextmanager
+def _draining_peer(
+    peer: TlsPeer, drain: _Drain, searches: int
+) -> Generator[tuple[str, queue.SimpleQueue[int], queue.SimpleQueue[int]]]:
+    answered: Final = queue.SimpleQueue[int]()
+    serve: Final = functools.partial(_drain_the_first_connection, drain=drain, searches=searches, answered=answered)
+    with _raw_tls_peer(peer, "h2", serve) as (search_url, accepted):
+        yield search_url, answered, accepted
+
+
+async def _concurrent_vertex_searches(peer: TlsPeer, search_url: str, searches: int) -> list[list[str | None]]:
+    return await asyncio.gather(*(_avertex_search_file_ids(peer, search_url=search_url) for _ in range(searches)))
+
+
+@pytest.mark.parametrize("drain", [_Drain.GOOGLE_TWO_STEP, _Drain.SINGLE_GOAWAY], ids=lambda drain: drain.value)
+def test_async_vertex_searches_in_flight_at_a_graceful_goaway_are_answered_once(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, drain: _Drain
+) -> None:
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+
+    with _draining_peer(http2_tls_peer, drain, SEARCHES_IN_FLIGHT) as (search_url, answered, accepted):
+        results: Final = asyncio.run(_concurrent_vertex_searches(http2_tls_peer, search_url, SEARCHES_IN_FLIGHT))
+
+        assert results == [["answered"]] * SEARCHES_IN_FLIGHT
+        assert (answered.qsize(), accepted.qsize()) == (SEARCHES_IN_FLIGHT, 1)
+
+
+@pytest.mark.parametrize("drain", [_Drain.GOOGLE_TWO_STEP, _Drain.SINGLE_GOAWAY], ids=lambda drain: drain.value)
+def test_sync_vertex_search_in_flight_at_a_graceful_goaway_is_answered_once(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer, drain: _Drain
+) -> None:
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+    _set_http2(monkeypatch, True)
+
+    with _draining_peer(http2_tls_peer, drain, 1) as (search_url, answered, accepted):
+        assert _vertex_search_file_ids(http2_tls_peer, search_url=search_url) == ["answered"]
+        assert (answered.qsize(), accepted.qsize()) == (1, 1)
+
+
+def test_vertex_search_sends_again_only_the_search_a_graceful_goaway_refused(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+
+    with _draining_peer(http2_tls_peer, _Drain.REFUSE_THE_LATER_SEARCH, 2) as (search_url, answered, accepted):
+        assert asyncio.run(_concurrent_vertex_searches(http2_tls_peer, search_url, 2)) == [["answered"]] * 2
+        assert (answered.qsize(), accepted.qsize()) == (2, 2)
+
+
+def test_vertex_search_a_graceful_goaway_refused_does_not_wait_for_the_accepted_one(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+
+    with _draining_peer(http2_tls_peer, _Drain.HOLD_THE_ACCEPTED_SEARCH, 2) as (search_url, answered, accepted):
+        assert asyncio.run(_concurrent_vertex_searches(http2_tls_peer, search_url, 2)) == [["answered"]] * 2
+        assert (answered.qsize(), accepted.qsize()) == (2, 2)
+
+
+def test_vertex_search_sends_again_a_search_the_server_resets_after_a_graceful_goaway(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+
+    with _draining_peer(http2_tls_peer, _Drain.RESET_THE_ACCEPTED_SEARCH, 1) as (search_url, answered, accepted):
+        assert asyncio.run(_avertex_search_file_ids(http2_tls_peer, search_url=search_url)) == ["answered"]
+        assert (answered.qsize(), accepted.qsize()) == (1, 2)
+
+
+@pytest.fixture
+def stock_http2_connections(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    from litellm.llms.custom_httpx.http2_graceful_goaway import drain_http2_connections_on_graceful_goaway
+
+    monkeypatch.setattr(httpcore._async.http2, "AsyncHTTP2Connection", httpcore.AsyncHTTP2Connection)
+    monkeypatch.setattr(httpcore._sync.http2, "HTTP2Connection", httpcore.HTTP2Connection)
+    drain_http2_connections_on_graceful_goaway.cache_clear()
+    yield
+    drain_http2_connections_on_graceful_goaway.cache_clear()
+
+
+@pytest.mark.usefixtures("stock_http2_connections")
+def test_openai_sync_client_built_first_answers_a_request_in_flight_at_a_graceful_goaway(
+    monkeypatch: pytest.MonkeyPatch, http2_tls_peer: TlsPeer
+) -> None:
+    from litellm.llms.openai.common_utils import BaseOpenAILLM
+
+    _trust_peer_without_global_http2(monkeypatch, http2_tls_peer)
+    _set_http2(monkeypatch, True)
+
+    with _draining_peer(http2_tls_peer, _Drain.SINGLE_GOAWAY, 1) as (url, answered, accepted):
+        client: Final = BaseOpenAILLM.get_sync_http_client()
+        assert client is not None
+        with client:
+            response: Final = client.post(f"{url}/v1/chat/completions", json={})
+
+        assert (response.http_version, response.json()) == ("HTTP/2", {"results": [{"id": "answered"}]})
+        assert (answered.qsize(), accepted.qsize()) == (1, 1)
 
 
 def test_vertex_search_sends_once_when_an_http1_server_hangs_up(

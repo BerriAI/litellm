@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -5,7 +6,7 @@ use futures_util::{FutureExt, StreamExt, TryStreamExt, stream::BoxStream};
 use litellm_host::{
     interceptors::{
         Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, ResponseHead,
-        ResultSource,
+        ResultSource, StreamMeter,
     },
     protocol::UnobservedTail,
 };
@@ -31,6 +32,7 @@ use super::{
         MESSAGES_CONNECT_TIMEOUT_SECS, MESSAGES_HTTP_ERROR_ATTEMPTS,
         MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
     },
+    pricing::{CallPricing, RequestedPricing},
     request::{CallerCredentials, ProviderCall, provider_call, serialize_failure},
     route::Messages,
 };
@@ -64,7 +66,7 @@ pub(super) async fn cached(
         return Ok(None);
     };
     context
-        .result_ready(execution_facts(provider, identity, &output, &source))
+        .result_ready(execution_facts(provider, identity, &output, &source, None))
         .await?;
     Ok(Some(output))
 }
@@ -153,6 +155,8 @@ pub(super) async fn execute(
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
     let caller_keyed = caller_keyed(route).is_some();
+    let pricing_identity = call.shaping.settings.pricing.clone();
+    let inject_stream_cost = call.shaping.settings.inject_stream_cost;
     let request = provider_call(
         CallerCredentials {
             auth: &route.auth,
@@ -164,6 +168,7 @@ pub(super) async fn execute(
         model,
         call,
         secrets.as_ref(),
+        route.transport.is_some(),
         context,
     )
     .boxed()
@@ -178,6 +183,22 @@ pub(super) async fn execute(
         &request.wire,
     );
     let identity = request.identity.clone();
+    let pricing = route
+        .pricing
+        .clone()
+        .zip(pricing_identity)
+        .map(|(pricing, priced)| {
+            Arc::new(CallPricing::new(
+                pricing,
+                priced,
+                identity.provider.clone(),
+                identity.model.clone(),
+                RequestedPricing {
+                    inject_stream_cost,
+                    ..request.requested_pricing.clone()
+                },
+            ))
+        });
     let hit = match caller_keyed {
         true => None,
         false => cache.lookup().await,
@@ -189,14 +210,26 @@ pub(super) async fn execute(
             ResultSource::Provider,
         ),
     };
-    context
-        .result_ready(execution_facts(provider, identity, &output, &source))
-        .await?;
+    let facts = execution_facts(provider, identity, &output, &source, pricing.as_deref());
+    let meter = match &facts.cost {
+        Cost::Metered(meter) => Some(meter.clone()),
+        _ => None,
+    };
+    context.result_ready(facts).await?;
     let output = match source {
         ResultSource::Provider => {
             super::safeguards::stamped(route.safeguards.as_ref(), output).await?
         }
         ResultSource::Cache { .. } | ResultSource::Host => output,
+    };
+    let output = match (output, meter.zip(pricing)) {
+        (MessagesCallResponse::Stream { head, chunks }, Some((meter, pricing))) => {
+            MessagesCallResponse::Stream {
+                head,
+                chunks: pricing.metered_stream(meter, chunks),
+            }
+        }
+        (output, _) => output,
     };
     if !requested_stream && matches!(output, MessagesCallResponse::Stream { .. }) {
         return Ok(output);
@@ -204,11 +237,14 @@ pub(super) async fn execute(
     Ok(cache.finish(output, &source).await)
 }
 
+/// The call's facts. A provider's own figure wins, and otherwise the route prices what it can: a message body now, a
+/// stream through the meter it settles once the stream's usage is final
 fn execution_facts(
     provider: MessagesProvider,
     identity: ProviderIdentity,
     output: &MessagesCallResponse,
     source: &ResultSource,
+    pricing: Option<&CallPricing>,
 ) -> ExecutionFacts {
     let reported = match output {
         MessagesCallResponse::Complete(response) => match response {
@@ -217,9 +253,22 @@ fn execution_facts(
         },
         MessagesCallResponse::Stream { .. } => None,
     };
+    let cost = match (Cost::settle(source, reported), pricing, output) {
+        (
+            Cost::Deferred,
+            Some(pricing),
+            MessagesCallResponse::Complete(MessagesBody::Message(message)),
+        ) if *source == ResultSource::Provider => pricing.message(message),
+        (Cost::Deferred, Some(_), MessagesCallResponse::Stream { .. })
+            if *source == ResultSource::Provider =>
+        {
+            Cost::Metered(StreamMeter::default())
+        }
+        (settled, _, _) => settled,
+    };
     ExecutionFacts {
         provider: identity,
-        cost: Cost::settle(source, reported),
+        cost,
         source: source.clone(),
     }
 }

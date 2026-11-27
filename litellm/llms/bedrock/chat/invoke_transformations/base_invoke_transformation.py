@@ -152,8 +152,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -173,7 +173,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -199,8 +199,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
         request_data: dict,
         api_base: str,
         api_key: str | None = None,
@@ -220,7 +220,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=fake_stream,
         )
 
-    def _apply_config_to_params(self, config: dict, inference_params: dict) -> None:
+    def _apply_config_to_params(self, config: Mapping[str, object], inference_params: dict[str, object]) -> None:
         """Apply config values to inference_params if not already set."""
         for k, v in config.items():
             if k not in inference_params:
@@ -232,7 +232,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         ## SETUP ##
         stream: Final = optional_params.pop("stream", None)
@@ -341,10 +341,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -483,8 +483,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -504,7 +504,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             headers, (*guardrail_headers, *service_tier_headers), metadata_headers, owned_names
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     @track_llm_api_timing()
@@ -514,8 +516,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, object],
+        data: dict[str, object],
         messages: list,
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
@@ -555,8 +557,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, object],
+        data: dict[str, object],
         messages: list,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
@@ -604,7 +606,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         """
         return False
 
-    def convert_messages_to_prompt(self, model: str, messages, provider, custom_prompt_dict) -> tuple[str, list | None]:
+    def convert_messages_to_prompt(
+        self, model: str, messages, provider: object, custom_prompt_dict
+    ) -> tuple[str, list | None]:
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: list | None = None

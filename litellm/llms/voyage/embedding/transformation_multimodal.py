@@ -58,19 +58,19 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         return ensure_api_route(get_voyage_api_base(api_base, api_key), "multimodalembeddings")
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return ["dimensions"]
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -80,14 +80,14 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         resolved_api_key: Final = get_voyage_api_key(api_key)
         if not resolved_api_key:
             raise ValueError(
@@ -129,9 +129,9 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         inputs: Final = input if isinstance(input, list) else [input]
         return {
             "inputs": [self._normalize_input_item(item) for item in inputs],
@@ -146,9 +146,9 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> EmbeddingResponse:
         try:
             raw_response_json: Final = raw_response.json()

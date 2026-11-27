@@ -11,7 +11,7 @@ import pytest
 import litellm
 from litellm.interactions.background_cost_polling import (
     _create_context,
-    _poll_intervals,
+    poll_intervals,
     _rebuild_logging_obj,
     BackgroundInteractionPollContext,
     InMemoryBackgroundSettlementStore,
@@ -124,7 +124,7 @@ def _fetch_sequence(*responses):
     [(0.0, 0.002), (0.001, 0.0), (-1.0, 0.002), (0.0, 0.0)],
 )
 def test_poll_intervals_stops_instead_of_looping_on_a_non_positive_interval(initial, maximum):
-    intervals = list(islice(_poll_intervals(initial=initial, maximum=maximum, timeout=3600.0), 10))
+    intervals = list(islice(poll_intervals(initial=initial, maximum=maximum, timeout=3600.0), 10))
 
     assert len(intervals) < 10
     assert all(interval > 0 for interval in intervals)
@@ -807,7 +807,7 @@ def test_poll_intervals_double_up_to_the_cap_and_stay_inside_the_timeout():
     actually ships, so an off-by-one in the doubling or in the remaining-budget
     check cannot pass green.
     """
-    intervals = list(_poll_intervals(initial=5.0, maximum=60.0, timeout=3600.0))
+    intervals = list(poll_intervals(initial=5.0, maximum=60.0, timeout=3600.0))
 
     assert intervals[:6] == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0]
     assert max(intervals) == 60.0

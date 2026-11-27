@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import base64
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
@@ -258,7 +258,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "n",
             "size",
@@ -332,8 +332,8 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: Mapping[str, object],
+    ) -> tuple[dict[str, object], RequestFiles]:
         op: Final = dict(image_edit_optional_request_params)
         image_b64: Final = _file_types_to_b64(image)
 
@@ -495,7 +495,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         raise NotImplementedError(
             "Nova Canvas image edit URLs are built in BedrockImageEdit._prepare_request "
@@ -505,12 +505,12 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if headers is None:
             headers = {}
         if "Content-Type" not in headers:

@@ -1,5 +1,6 @@
 import base64
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from itertools import chain
 from pathlib import Path
 from typing import Final, Literal, cast
@@ -12,6 +13,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.gemini.transformation import (
     _extract_max_media_resolution_from_messages,
     _get_highest_media_resolution,
@@ -23,6 +25,227 @@ from litellm.responses.litellm_completion_transformation.transformation import L
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolMessage
 from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
+
+
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+@pytest.mark.parametrize(
+    "metadata, expected",
+    [
+        ({}, {}),
+        (
+            {"document_metadata": {"start_page": 2, "end_page": 4, "content_layers": ["PAGE_TEXT"]}},
+            {"document_metadata": {"startPage": 2, "endPage": 4, "contentLayers": ["PAGE_TEXT"]}},
+        ),
+        (
+            {
+                "spreadsheet_metadata": {
+                    "sheet_index": 2,
+                    "visible_cells": "A1:D10",
+                    "content_layers": ["DATA", "VISUAL"],
+                },
+                "resolution": "high",
+            },
+            {
+                "spreadsheet_metadata": {
+                    "sheetIndex": 2,
+                    "visibleCells": "A1:D10",
+                    "contentLayers": ["DATA", "VISUAL"],
+                },
+                "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+            },
+        ),
+    ],
+)
+def test_file_inspection_preserves_slice_and_uri(
+    version: str, metadata: dict[str, object], expected: dict[str, object]
+) -> None:
+    uri = f"https://generativelanguage.googleapis.com/{version}/files/report"
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "file", "file": {"file_id": uri, "format": "application/pdf", **metadata}}],
+        }
+    ]
+    original = deepcopy(messages)
+    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-3.8-flash")
+    assert result == [
+        {
+            "role": "user",
+            "parts": [{"file_data": {"file_uri": uri, "mime_type": "application/pdf"}, **expected}, {"text": " "}],
+        }
+    ]
+    assert messages == original
+
+
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+def test_tool_files_api_reference_is_nested_file_data(version: str) -> None:
+    uri = f"https://generativelanguage.googleapis.com/{version}/files/report"
+    result = gemini_convert_messages_with_history(
+        _responses_tool_media_history({"type": "file", "file": {"file_id": uri, "format": "application/pdf"}}),
+        model="gemini-3.8-flash",
+        custom_llm_provider="gemini",
+    )
+    assert result[-1] == {
+        "role": "user",
+        "parts": [
+            {
+                "function_response": {
+                    "id": "call_media",
+                    "name": "get_media",
+                    "response": {"ok": True},
+                    "parts": [{"file_data": {"file_uri": uri, "mime_type": "application/pdf"}}],
+                }
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(("part_resolution", "nested_media"), [(False, True), (True, False)])
+def test_gemini_tool_file_media_uses_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch, part_resolution: bool, nested_media: bool
+) -> None:
+    model: Final = "gemini-4-argon"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"gemini/{model}",
+        {
+            "supports_part_media_resolution": part_resolution,
+            "supports_media_in_tool_response": nested_media,
+        },
+    )
+    uri: Final = "https://generativelanguage.googleapis.com/v1/files/report"
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_report", "type": "function", "function": {"name": "get_report", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_report",
+            "content": [{"type": "file", "file": {"file_id": uri, "format": "application/pdf", "resolution": "high"}}],
+        },
+    ]
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model=model)
+    file_part: Final = {"file_data": {"file_uri": uri, "mime_type": "application/pdf"}}
+    expected: Final = (
+        [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                    "parts": [file_part],
+                }
+            }
+        ]
+        if nested_media
+        else [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                }
+            },
+            {**file_part, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
+        ]
+    )
+    assert result[-1]["parts"] == expected
+
+
+def test_vertex_media_uses_its_own_cost_map_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    model: Final = "gemini-4-argon"
+    for provider, enabled in (("gemini", True), ("vertex_ai", False)):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"{provider}/{model}",
+            {"supports_part_media_resolution": enabled, "supports_media_in_tool_response": enabled},
+        )
+    file: Final = "data:application/pdf;base64,JVBERg=="
+    media: Final = {"file_data": file, "format": "application/pdf", "resolution": "high"}
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": [{"type": "file", "file": media}]},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_report", "type": "function", "function": {"name": "get_report", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_report", "content": [{"type": "file", "file": media}]},
+    ]
+
+    result: Final = VertexGeminiConfig()._transform_messages(messages, model=model)
+
+    file_part: Final = {"inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"}}
+    assert result[0]["parts"] == [file_part, {"text": " "}]
+    assert result[-1]["parts"] == [
+        {"function_response": {"id": "call_report", "name": "get_report", "response": {"content": ""}}},
+        file_part,
+    ]
+
+
+
+@pytest.mark.parametrize("source", ["inline", "v1", "v1beta"])
+@pytest.mark.parametrize(
+    ("mime_type", "selection", "expected_selection"),
+    [
+        (
+            "application/pdf",
+            {"document_metadata": {"start_page": 3, "end_page": 4}},
+            {"document_metadata": {"startPage": 3, "endPage": 4}},
+        ),
+        (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            {"spreadsheet_metadata": {"sheet_index": 2}},
+            {"spreadsheet_metadata": {"sheetIndex": 2}},
+        ),
+    ],
+)
+def test_chat_tool_file_inspection_preserves_nested_selection(
+    source: str, mime_type: str, selection: dict[str, object], expected_selection: dict[str, object]
+) -> None:
+    if source == "inline":
+        file = {"file_data": f"data:{mime_type};base64,cGRm"}
+        expected_part = {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
+    else:
+        uri = f"https://generativelanguage.googleapis.com/{source}/files/report"
+        file = {"file_id": uri}
+        expected_part = {"file_data": {"file_uri": uri, "mime_type": mime_type}}
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_media", "type": "function", "function": {"name": "get_media", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_media",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {**file, **selection, "format": mime_type, "resolution": "low", "detail": "high"},
+                }
+            ],
+        },
+    ]
+    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
+    assert result[-1]["parts"] == [
+        {
+            "function_response": {
+                "id": "call_media",
+                "name": "get_media",
+                "response": {"content": ""},
+                "parts": [
+                    {**expected_part, **expected_selection, "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"}}
+                ],
+            }
+        }
+    ]
 
 
 def _responses_tool_media_history(content: Mapping[str, object]) -> list[AllMessageValues]:
@@ -106,7 +329,7 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
             "https://generativelanguage.googleapis.com/v1beta/files/clip",
             None,
             True,
-            "inline media",
+            None,
         ),
         ("gemini", "gemini-3.8-flash", "gs://media-test/clip.mp4", None, True, "inline media"),
         ("vertex_ai", "gemini-2.5-flash", "gs://media-test/clip.mp4", None, False, None),
@@ -146,11 +369,20 @@ def test_tool_uri_policy_follows_provider_and_model_placement(
         "file_data": {"file_uri": uri, **({"mime_type": "video/mp4"} if provider.startswith("vertex") else {})}
     }
     response: Final = {"name": "get_media", "response": {"ok": True}}
+    clip: Final = {**file, "video_metadata": {"fps": 2}}
     # Checked 2026-10-26: https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/Content#FunctionResponsePart
     assert result[-1]["parts"] == (
-        [{"function_response": {**response, "id": "call_media", "parts": [file]}}]
+        [
+            {
+                "function_response": {
+                    **response,
+                    "id": "call_media",
+                    "parts": [file if provider.startswith("vertex") else clip],
+                }
+            }
+        ]
         if nested
-        else [{"function_response": response}, {**file, "video_metadata": {"fps": 2}}]
+        else [{"function_response": response}, clip]
     )
 
 
@@ -529,12 +761,7 @@ def test_empty_content_handling():
 
     contents = gemini_convert_messages_with_history(messages=messages)
 
-    # Verify that the content was properly transformed
-    assert len(contents) == 1
-    assert contents[0]["role"] == "user"
-    assert len(contents[0]["parts"]) == 1
-    assert "text" in contents[0]["parts"][0]
-    assert contents[0]["parts"][0]["text"] == ""
+    assert contents == [{"role": "user", "parts": [{"text": " "}]}]
 
 
 def test_transform_request_body_wraps_tool_result_with_json_schema_ref():
@@ -2903,7 +3130,7 @@ WHITE_PNG: Final = (Path(__file__).parents[4] / "white_100x100.png").read_bytes(
 @respx.mock
 @pytest.mark.parametrize("content_type,nested", [("input_image", True), ("image_url", False), ("input_file", True), ("file", True)])
 def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -> None:
-    from litellm.llms.vertex_ai.gemini.transformation import _openai_messages_may_need_sync_media_fetch
+    from litellm.llms.vertex_ai.gemini.transformation import openai_messages_may_need_sync_media_fetch
 
     image_url: Final = "https://8.8.8.8/gemini-tool-response.png"
     respx.get(image_url).mock(return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"}))
@@ -2923,7 +3150,7 @@ def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -
             content,
         ],
     })
-    assert _openai_messages_may_need_sync_media_fetch([tool_message], "vertex_ai", "gemini-3.8-flash")
+    assert openai_messages_may_need_sync_media_fetch([tool_message], "vertex_ai", "gemini-3.8-flash")
     result: Final = convert_to_gemini_tool_call_result(
         tool_message, None, supports_multimodal_function_responses=nested,
         custom_llm_provider="vertex_ai", model="gemini-3.8-flash",
@@ -2955,9 +3182,9 @@ def _assistant_with_image(url: str) -> Message:
 def test_sync_media_fetch_check_reads_pydantic_messages_and_skips_other_objects(
     message: object, needs_fetch: bool
 ) -> None:
-    from litellm.llms.vertex_ai.gemini.transformation import _openai_messages_may_need_sync_media_fetch
+    from litellm.llms.vertex_ai.gemini.transformation import openai_messages_may_need_sync_media_fetch
 
-    assert _openai_messages_may_need_sync_media_fetch([message]) is needs_fetch
+    assert openai_messages_may_need_sync_media_fetch([message]) is needs_fetch
 
 
 CLAUDE_THINKING_SIGNATURE: Final = "EqQBCkYIBxgCKkCfQ2x0b3VkZS1zaWduYXR1cmUtbm90LW1pbnRlZC1ieS1nZW1pbmkSDJ3lXf5sD+QVqpFQmRoM"

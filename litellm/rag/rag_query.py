@@ -134,7 +134,7 @@ class RAGQuery:
                 message = message_view["message"]
                 if message is not None:
                     # Get existing provider_specific_fields or create new dict
-                    provider_fields = getattr(message, "provider_specific_fields", None) or {}
+                    provider_fields = getattr(message, "provider_specific_fields", None) or dict[str, object]()
 
                     # Add search results
                     provider_fields["search_results"] = search_results

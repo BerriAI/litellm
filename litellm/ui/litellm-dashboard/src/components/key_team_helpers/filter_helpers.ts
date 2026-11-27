@@ -1,6 +1,5 @@
-import { teamListCall, organizationListCall, keyListCall } from "../networking";
+import { teamListCall, keyListCall } from "../networking";
 import { Team } from "./key_list";
-import { Organization } from "../networking";
 
 export interface TeamFilterOptions {
   keyAliases: string[];
@@ -147,40 +146,6 @@ export const fetchAllTeams = async (
     return allTeams;
   } catch (error) {
     console.error("Error fetching all teams:", error);
-    return [];
-  }
-};
-
-/**
- * Fetches all organizations across all pages
- * @param accessToken The access token for API authentication
- * @returns Array of all organizations
- */
-export const fetchAllOrganizations = async (accessToken: string | null): Promise<Organization[]> => {
-  if (!accessToken) return [];
-
-  try {
-    let allOrganizations: Organization[] = [];
-    let currentPage = 1;
-    let hasMorePages = true;
-
-    while (hasMorePages) {
-      const response = await organizationListCall(accessToken);
-
-      // Add organizations from this page
-      allOrganizations = [...allOrganizations, ...response];
-
-      // Check if there are more pages
-      if (currentPage < response.total_pages) {
-        currentPage++;
-      } else {
-        hasMorePages = false;
-      }
-    }
-
-    return allOrganizations;
-  } catch (error) {
-    console.error("Error fetching all organizations:", error);
     return [];
   }
 };

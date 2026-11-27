@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from litellm.proxy.control_plane.store.migrate import ADVISORY_LOCK, VERSION_TABLE, engine_for, head_revision
 from litellm.proxy.control_plane.store.models import Entry, Kind
-from litellm.proxy.control_plane.store.schema import dataplanes, roles
+from litellm.proxy.control_plane.store.schema import dataplanes, fleet_teams, roles
 
 
 class Transaction(Protocol):
@@ -103,8 +103,13 @@ class PostgresStore:
             return tuple(result.scalars()) == (head_revision(),)
 
     @asynccontextmanager
-    async def transaction(self) -> AsyncGenerator[Transaction]:
+    async def transaction(self, *, fleet_team_id: str | None = None) -> AsyncGenerator[PostgresTransaction]:
         async with self.engine.begin() as connection:
+            if fleet_team_id is not None:
+                # Wait for the team's reconciler before taking the global configuration lock.
+                await connection.execute(
+                    select(fleet_teams.c.id).where(fleet_teams.c.id == fleet_team_id).with_for_update()
+                )
             await connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ADVISORY_LOCK})
             yield PostgresTransaction(connection)
 

@@ -26,115 +26,16 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
 )
-from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
 from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.key_owners_repository import KeyOwnersRepository
 
 _RowKind: TypeAlias = Literal["user_row", "team_row", "membership_row", "organization_row", "project_row"]
 
 _TEAM_MEMBERSHIP_AUTH_TTL: Final = 5
 _RowValues: Final = TypeAdapter(dict[str, object])
-_NO_ROWS: Final[Mapping[str, object]] = MappingProxyType({})
 _TEAM_BOUND_ROWS: Final = frozenset({"team_row", "membership_row"})
 _REFRESH_STAMPED_ROWS: Final = frozenset({"team_row", "project_row"})
-
-
-def _lists_as_json(alias: str, columns: Sequence[str]) -> str:
-    """Prisma reads a NULL scalar list as ``[]``; ``to_jsonb`` reads it as ``null``, which the models reject."""
-    return ", ".join(f"'{column}', COALESCE(to_jsonb({alias}.{column}), '[]'::jsonb)" for column in columns)
-
-
-_USER_LISTS: Final = _lists_as_json("u", ("teams", "models", "allowed_cache_controls", "policies"))
-_TEAM_LISTS: Final = _lists_as_json(
-    "t",
-    (
-        "admins",
-        "members",
-        "models",
-        "team_member_permissions",
-        "access_group_ids",
-        "policies",
-        "default_team_member_models",
-    ),
-)
-_ORG_LISTS: Final = _lists_as_json("o", ("models",))
-_PROJECT_LISTS: Final = _lists_as_json("p", ("models",))
-_PERMISSION_LISTS: Final = _lists_as_json(
-    "op",
-    (
-        "mcp_servers",
-        "mcp_access_groups",
-        "mcp_toolsets",
-        "blocked_tools",
-        "vector_stores",
-        "agents",
-        "agent_access_groups",
-        "models",
-        "search_tools",
-        "skills",
-    ),
-)
-_BUDGET_LISTS: Final = _lists_as_json("b", ("allowed_models",))
-
-
-def _budget_json(owner_alias: str) -> str:
-    return (
-        f"(SELECT to_jsonb(b) || jsonb_build_object({_BUDGET_LISTS}) "
-        f'FROM "LiteLLM_BudgetTable" b WHERE b.budget_id = {owner_alias}.budget_id)'
-    )
-
-
-def _permission_json(owner_alias: str) -> str:
-    return (
-        f"(SELECT to_jsonb(op) || jsonb_build_object({_PERMISSION_LISTS}) "
-        f'FROM "LiteLLM_ObjectPermissionTable" op WHERE op.object_permission_id = {owner_alias}.object_permission_id)'
-    )
-
-
-_SQL: Final = f"""
-SELECT
-  (
-    SELECT to_jsonb(u) || jsonb_build_object(
-      {_USER_LISTS},
-      'organization_memberships',
-      COALESCE((
-        SELECT jsonb_agg(to_jsonb(om)) FROM "LiteLLM_OrganizationMembership" om WHERE om.user_id = u.user_id
-      ), '[]'::jsonb)
-    )
-    FROM "LiteLLM_UserTable" u WHERE u.user_id = $1
-  ) AS user_row,
-  (
-    SELECT to_jsonb(t) || jsonb_build_object(
-      {_TEAM_LISTS},
-      'litellm_model_table', (
-        SELECT (to_jsonb(m) - 'aliases') || jsonb_build_object('model_aliases', m.aliases)
-        FROM "LiteLLM_ModelTable" m WHERE m.id = t.model_id
-      ),
-      'object_permission', {_permission_json("t")}
-    )
-    FROM "LiteLLM_TeamTable" t WHERE t.team_id = $2
-  ) AS team_row,
-  (
-    SELECT to_jsonb(tm) || jsonb_build_object('litellm_budget_table', {_budget_json("tm")})
-    FROM "LiteLLM_TeamMembership" tm WHERE tm.user_id = $3 AND tm.team_id = $2
-  ) AS membership_row,
-  (
-    SELECT to_jsonb(o) || jsonb_build_object(
-      {_ORG_LISTS},
-      'litellm_budget_table', {_budget_json("o")},
-      'object_permission', {_permission_json("o")}
-    )
-    FROM "LiteLLM_OrganizationTable" o WHERE o.organization_id = $4
-  ) AS organization_row,
-  (
-    SELECT to_jsonb(p) || jsonb_build_object(
-      {_PROJECT_LISTS},
-      'litellm_budget_table', {_budget_json("p")},
-      'object_permission', {_permission_json("p")}
-    )
-    FROM "LiteLLM_ProjectTable" p WHERE p.project_id = $5
-  ) AS project_row
-"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +107,15 @@ def _entries(refs: AuthObjectRefs, cache: UserApiKeyCache) -> tuple[_CacheEntry,
 
 
 def _missing_in_memory(entries: Sequence[_CacheEntry], cache: UserApiKeyCache) -> tuple[_CacheEntry, ...]:
-    return tuple(entry for entry in entries if cache.get_local(entry.cache_key) is None)
+    return tuple(
+        entry
+        for entry in entries
+        if (
+            not cache.has_local_team(entry.cache_key)
+            if entry.row == "team_row"
+            else cache.get_local(entry.cache_key) is None
+        )
+    )
 
 
 def _nothing_to_arm() -> None:
@@ -253,19 +162,15 @@ def _validate_row(
         return None
 
 
-async def _fetch_rows(
-    refs: AuthObjectRefs, kinds: frozenset[_RowKind], prisma_client: PrismaClient
-) -> Mapping[str, object]:
-    async with db_span("prefetch_auth_objects", AUTH_OBJECTS_TARGET):
-        row: Final[object] = await prisma_client.db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
-            _SQL,
-            refs.user_id if "user_row" in kinds else None,
-            refs.team_id if kinds & _TEAM_BOUND_ROWS else None,
-            refs.membership_user_id if "membership_row" in kinds else None,
-            refs.organization_id if "organization_row" in kinds else None,
-            refs.project_id if "project_row" in kinds else None,
+async def _fetch_rows(refs: AuthObjectRefs, kinds: frozenset[_RowKind]) -> Mapping[str, object]:
+    with service_target(AUTH_OBJECTS_TARGET):
+        return await KeyOwnersRepository().find(
+            user_id=refs.user_id if "user_row" in kinds else None,
+            team_id=refs.team_id if kinds & _TEAM_BOUND_ROWS else None,
+            membership_user_id=refs.membership_user_id if "membership_row" in kinds else None,
+            organization_id=refs.organization_id if "organization_row" in kinds else None,
+            project_id=refs.project_id if "project_row" in kinds else None,
         )
-    return _RowValues.validate_python(row) if row is not None else _NO_ROWS
 
 
 async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: UserApiKeyCache) -> None:
@@ -277,15 +182,13 @@ async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: U
         await cache.store.write_back(payloads)
 
 
-async def _fill_from_db(
-    refs: AuthObjectRefs, entries: Sequence[_CacheEntry], cache: UserApiKeyCache, prisma_client: PrismaClient
-) -> None:
+async def _fill_from_db(refs: AuthObjectRefs, entries: Sequence[_CacheEntry], cache: UserApiKeyCache) -> None:
     if not entries:
         return
     model_for: Final[Mapping[_RowKind, type[BaseModel]]] = MappingProxyType(
         {entry.row: entry.model_type for entry in entries}
     )
-    rows: Final = await _fetch_rows(refs, frozenset(model_for), prisma_client)
+    rows: Final = await _fetch_rows(refs, frozenset(model_for))
     refreshed_at: Final = time.time()
     objects: Final[Mapping[_RowKind, BaseModel | None]] = MappingProxyType(
         {row: _validate_row(rows.get(row), model_type, row, refreshed_at) for row, model_type in model_for.items()}
@@ -309,7 +212,7 @@ async def prefetch_auth_objects(
             await _fill_from_redis(missing, user_api_key_cache, before_read)
         if prisma_client is None:
             return
-        await _fill_from_db(refs, _missing_in_memory(missing, user_api_key_cache), user_api_key_cache, prisma_client)
+        await _fill_from_db(refs, _missing_in_memory(missing, user_api_key_cache), user_api_key_cache)
     except Exception as e:  # noqa: BLE001  # warm-up only; the getters enforce and fail closed on their own
         verbose_proxy_logger.warning("auth prefetch skipped, falling back to per-object lookups: %s", e)
 

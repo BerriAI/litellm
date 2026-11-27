@@ -5,6 +5,32 @@ use serde_json::{Map, Value};
 
 use crate::{RouterRedis, RoutingGroupSpec, RoutingStrategy};
 
+/// An `OptionalPreCallChecks` entry in `litellm/types/router.py`. A name the router does not
+/// know is kept, since `add_optional_pre_call_checks` skips it rather than refusing the config.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    strum::EnumString,
+    strum::Display,
+    strum::EnumIter,
+    serde_with::DeserializeFromStr,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum OptionalPreCallCheck {
+    PromptCaching,
+    RouterBudgetLimiting,
+    ResponsesApiDeploymentCheck,
+    DeploymentAffinity,
+    SessionAffinity,
+    ForwardClientHeadersByModelGroup,
+    EnforceModelRateLimits,
+    EncryptedContentAffinity,
+    #[strum(default, transparent)]
+    Other(String),
+}
+
 /// A proxy config's `router_settings`, as written. What each setting means, and its default when
 /// unset, is the router core's.
 #[derive(Clone, Default, Deserialize)]
@@ -17,7 +43,7 @@ pub struct RouterSettings {
     pub model_group_retry_policy: Option<Map<String, Value>>,
     pub allowed_fails_policy: Option<Map<String, Value>>,
     /// Each model group and the affinity checks its callers are pinned by.
-    pub model_group_affinity_config: Option<BTreeMap<String, Vec<String>>>,
+    pub model_group_affinity_config: Option<BTreeMap<String, Vec<OptionalPreCallCheck>>>,
     pub allowed_fails: Option<u32>,
     pub cooldown_time: Option<f64>,
     pub disable_cooldowns: Option<bool>,
@@ -40,7 +66,7 @@ pub struct RouterSettings {
     pub enable_tag_filtering: Option<bool>,
     pub weights: Option<Map<String, Value>>,
     pub tag_routing_prefix: Option<String>,
-    pub optional_pre_call_checks: Option<Vec<String>>,
+    pub optional_pre_call_checks: Option<Vec<OptionalPreCallCheck>>,
     #[serde(flatten)]
     pub redis: RouterRedis,
     #[serde(flatten)]

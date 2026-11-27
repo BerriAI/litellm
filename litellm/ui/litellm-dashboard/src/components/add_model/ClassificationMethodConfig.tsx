@@ -43,7 +43,6 @@ import {
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_RUBRIC,
-  ClassificationRubric,
   effectiveTierDisplayLabel,
   heuristicScoringRole,
   heuristicTuningType,
@@ -314,18 +313,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         ...value.classifier_llm_config,
         model: value.classifier_llm_config?.model ?? "",
         timeout_ms: timeoutMs,
-      },
-    });
-  };
-
-  const handleClassificationRubricChange = (classificationRubric: ClassificationRubric) => {
-    onChange({
-      ...value,
-      classifier_llm_config: {
-        ...value.classifier_llm_config,
-        model: value.classifier_llm_config?.model ?? "",
-        timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
-        classification_rubric: classificationRubric,
       },
     });
   };

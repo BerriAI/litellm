@@ -214,6 +214,20 @@ def is_plain_embedding_text(value: object) -> bool:
     return isinstance(value, str) and not value.startswith("data:")
 
 
+_EMBEDDING_MEDIA_KINDS: Final = frozenset(("image", "video", "audio"))
+
+
+def _is_media_instance(value: object) -> bool:
+    part: Final = as_str_mapping(value)
+    return part is not None and "type" not in part and not _EMBEDDING_MEDIA_KINDS.isdisjoint(part)
+
+
+def embedding_input_holds_media_read_as_text(value: object, input_type: str | None) -> bool:
+    items: Final = cast(Sequence[object], value) if _is_json_array(value) else (value,)  # cast-ok: JSON arrays
+    reads_strings_as_media: Final = input_type in _EMBEDDING_MEDIA_KINDS
+    return any(_is_media_instance(item) or (reads_strings_as_media and is_plain_embedding_text(item)) for item in items)
+
+
 def _is_json_array(value: object) -> bool:
     return isinstance(value, (list, tuple))
 

@@ -84,7 +84,7 @@ export function DashboardCommunityLinks({ className }: { className?: string }) {
 }
 
 export function DashboardResources({ children }: { children?: ReactNode }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const hideBlog = useDisableBlogPosts();
   const hideCommunity = useDisableShowPrompts();
   const { data, isPending, isError, refetch } = useBlogPosts();
@@ -114,7 +114,10 @@ export function DashboardResources({ children }: { children?: ReactNode }) {
             >
               <span className="line-clamp-2">{post.title}</span>
               <time dateTime={post.date} className="shrink-0 text-[11px] text-muted-foreground">
-                {new Date(`${post.date}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                {new Date(`${post.date}T00:00:00`).toLocaleDateString(i18n.language, {
+                  month: "short",
+                  day: "numeric",
+                })}
               </time>
             </a>
           ))}

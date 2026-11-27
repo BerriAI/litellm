@@ -12,9 +12,7 @@ use litellm_gateway_auth::{
     RequireMasterKey, authenticate,
 };
 use litellm_gateway_auth_core::{
-    Caller, KeyHash, Rows,
-    authn::key::KeyRecord,
-    identity::key::{KeyContext, TeamGrant},
+    self as auth_core, Affiliation, Caller, KeyHash, Rows, authn::key::KeyRecord,
 };
 use litellm_secret_value::SecretValue;
 use rstest::rstest;
@@ -39,16 +37,24 @@ impl Rows for Held {
 }
 
 fn stored_key() -> Caller<Held> {
-    Caller::Key(Box::new(KeyContext {
-        key: KeyRecord {
-            token: Some(KeyHash::new("stored")),
-            ..KeyRecord::default()
+    Caller {
+        credential: auth_core::Credential::Key {
+            key: KeyRecord {
+                token: Some(KeyHash::new("stored")),
+                ..KeyRecord::default()
+            },
         },
+        affiliation: Affiliation::nobody(),
         end_user: (),
-        owner: None,
-        team: TeamGrant::NoTeam,
-        project: None,
-    }))
+    }
+}
+
+fn master_key() -> Caller<Held> {
+    Caller {
+        credential: auth_core::Credential::MasterKey,
+        affiliation: Affiliation::nobody(),
+        end_user: (),
+    }
 }
 
 /// Knows [`MASTER_TOKEN`] and [`KEY_TOKEN`], and answers a request that presents no token the way
@@ -71,7 +77,7 @@ impl Authenticator<Held> for Verifier {
                 ))),
                 (None, Credential::Transport) => Err(Error::Unconfigured),
                 (None, Credential::Token(token)) => match token.expose() {
-                    MASTER_TOKEN => Ok(Caller::MasterKey),
+                    MASTER_TOKEN => Ok(master_key()),
                     KEY_TOKEN => Ok(stored_key()),
                     _ => Err(Error::InvalidToken),
                 },
@@ -147,7 +153,7 @@ async fn bearer_extraction_rejects_duplicates_and_does_not_trust_a_preexisting_c
         .unwrap();
     assert_eq!(app.clone().oneshot(duplicate).await.unwrap().status(), 401);
     let forged = Request::get("/protected")
-        .extension(Authenticated::<Held>::from(Caller::MasterKey))
+        .extension(Authenticated::<Held>::from(master_key()))
         .body(Body::empty())
         .unwrap();
     assert_eq!(app.clone().oneshot(forged).await.unwrap().status(), 401);

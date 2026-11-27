@@ -19,7 +19,7 @@ import json
 import re
 import tempfile
 from collections import OrderedDict
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
@@ -617,7 +617,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
     # path skips should_run_check and never sees data["prompt"]).
     use_native_lifecycle_hooks: ClassVar[bool] = True
 
-    def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
+    def __init__(self, detect_secrets_config: Optional[Mapping[str, object]] = None, **kwargs):
         self.user_defined_detect_secrets_config = detect_secrets_config
         self._clean_scans: OrderedDict[bytes, None] = OrderedDict()
         super().__init__(**kwargs)
@@ -718,7 +718,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -731,7 +731,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         _masked_entity_count.set({})
         return {**inputs, "texts": [self.redact_text(text) for text in texts]}
 
-    def _redact_prompt(self, data: dict) -> int:
+    def _redact_prompt(self, data: dict[str, object]) -> int:
         """Redact ``data["prompt"]`` (the text-completion shape, which
         ``walk_user_text`` does not cover) and return how many non-empty
         strings were inspected."""
@@ -791,7 +791,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
         event_type: Optional[GuardrailEventHooks] = None,
-        original_inputs: Optional[dict] = None,
+        original_inputs: Optional[Mapping[str, object]] = None,
     ):
         """Record allow/mask plus the masked-entity tally for a completed run.
 

@@ -18,6 +18,14 @@ _GEMINI_URL: Final = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "gemini-2.5-flash:(?:generateContent|streamGenerateContent).*"
 )
+_GEMINI_3_8_MODEL: Final = "gemini/gemini-3.8-flash"
+_GEMINI_3_8_URL: Final = r"https://generativelanguage\.googleapis\.com/[^/]+/models/gemini-3\.8-flash:generateContent.*"
+_GEMINI_3_8_REPLY: Final = {
+    "candidates": [
+        {"content": {"role": "model", "parts": [{"text": "How can I help?"}]}, "finishReason": "STOP", "index": 0}
+    ],
+    "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 4, "totalTokenCount": 8},
+}
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
@@ -287,6 +295,69 @@ async def test_gemini_streaming_function_call_preserves_thought_signature() -> N
     assert function_calls[0].name == "get_weather"
     assert function_calls[0].provider_specific_fields == {"thought_signature": signature}
     assert len(requests) == 1
+
+
+async def _gemini_contents_for(input_items: list[dict[str, object]], **kwargs: object) -> object:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(url__regex=_GEMINI_3_8_URL).mock(
+            return_value=httpx.Response(status_code=200, json=_GEMINI_3_8_REPLY)
+        )
+        response: Final = await litellm.aresponses(
+            model=_GEMINI_3_8_MODEL, api_key="test-key", input=input_items, **kwargs
+        )
+        requests: Final = tuple(route.calls)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert len(requests) == 1
+    return _JSON_OBJECT.validate_json(requests[0].request.content)["contents"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "empty_user_item",
+    [
+        pytest.param({"role": "user", "content": ""}, id="empty_string"),
+        pytest.param({"role": "user", "content": []}, id="empty_list"),
+        pytest.param({"role": "user", "content": None}, id="null"),
+        pytest.param({"role": "user"}, id="missing"),
+    ],
+)
+async def test_an_empty_trailing_user_item_reaches_gemini_as_a_user_turn(empty_user_item: dict[str, object]) -> None:
+    contents: Final = await _gemini_contents_for(
+        [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_item]
+    )
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "empty_user_item",
+    [
+        pytest.param({"role": "user", "content": ""}, id="empty_string"),
+        pytest.param({"role": "user", "content": []}, id="empty_list"),
+        pytest.param({"role": "user", "content": None}, id="null"),
+        pytest.param({"role": "user"}, id="missing"),
+    ],
+)
+async def test_an_empty_trailing_user_item_reaches_an_alternating_gemini_deployment_as_the_configured_continue_message(
+    empty_user_item: dict[str, object],
+) -> None:
+    contents: Final = await _gemini_contents_for(
+        [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_item],
+        ensure_alternating_roles=True,
+        user_continue_message={"role": "user", "content": "Keep going"},
+    )
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": "Keep going"}]},
+    ]
 
 
 _GEMINI_3_URL: Final = "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3-flash-preview"

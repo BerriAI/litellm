@@ -1,4 +1,5 @@
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -34,10 +35,10 @@ class OobaboogaConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -88,14 +89,14 @@ class OobaboogaConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         headers = {
             "accept": "application/json",
             "content-type": "application/json",

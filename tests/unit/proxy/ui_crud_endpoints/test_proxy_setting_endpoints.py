@@ -6,10 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from litellm.caching.caching import Cache
 
 
 from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
 from litellm.proxy.proxy_server import app
+from litellm.types.caching import LiteLLMCacheType
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
@@ -1774,7 +1776,10 @@ class TestProxySettingEndpoints:
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ],
     )
-    def test_get_ui_settings_allows_internal_roles(self, monkeypatch, user_role):
+    @pytest.mark.parametrize("semantic", [False, True])
+    def test_get_ui_settings_allows_internal_roles(
+        self, monkeypatch: pytest.MonkeyPatch, user_role: LitellmUserRoles, semantic: bool
+    ) -> None:
         """Ensure internal users and viewers can fetch UI settings"""
         from unittest.mock import AsyncMock, MagicMock
 
@@ -1787,6 +1792,13 @@ class TestProxySettingEndpoints:
             return_value=mock_db_record
         )
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        cache: Final = (
+            Cache(type=LiteLLMCacheType.REDIS_SEMANTIC, redis_url="redis://localhost:6379", similarity_threshold=0.8)
+            if semantic
+            else Cache(type=LiteLLMCacheType.LOCAL)
+        )
+        monkeypatch.setattr("litellm.cache", cache)
 
         class MockUser:
             def __init__(self, role):
@@ -1811,6 +1823,7 @@ class TestProxySettingEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["values"]["disable_model_add_for_internal_users"] is False
+        assert data["supports_similarity_threshold"] is semantic
         mock_prisma.db.litellm_uisettings.find_unique.assert_called_once_with(
             where={"id": "ui_settings"}
         )

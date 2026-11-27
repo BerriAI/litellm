@@ -10,6 +10,7 @@ import sys
 import tempfile
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from types import ModuleType
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -381,6 +382,79 @@ def fresh_agent_read_through(monkeypatch):
     )
     monkeypatch.setattr(registry_read_through, "agent_registry_read_through", read_through)
     return read_through
+
+
+@pytest.fixture
+def fresh_vector_store_read_throughs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.common_utils import registry_read_through
+
+    index_table_reload: Final = registry_read_through.ThrottledTableReload(
+        reload=registry_read_through._reload_vector_store_indexes
+    )
+    store_read_through: Final = registry_read_through.RegistryReadThrough(
+        resync=registry_read_through._resync_vector_stores,
+        is_loaded=registry_read_through._vector_store_is_loaded,
+    )
+    monkeypatch.setattr(registry_read_through, "vector_store_index_table_reload", index_table_reload)
+    monkeypatch.setattr(registry_read_through, "vector_store_registry_read_through", store_read_through)
+    monkeypatch.setattr(litellm, "vector_store_index_registry", None)
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+
+
+class FakeVectorStoreIndexRow:
+    def __init__(self, index_name: str, vector_store_name: str = "config-vector-store") -> None:
+        self.index_name: Final = index_name
+        self.vector_store_name: Final = vector_store_name
+
+    def model_dump(self) -> dict[str, object]:
+        return dict(self)
+
+    def __iter__(self) -> Iterator[tuple[str, object]]:
+        return iter(
+            {
+                "id": f"{self.index_name}-id",
+                "index_name": self.index_name,
+                "litellm_params": {"vector_store_index": "physical-index", "vector_store_name": self.vector_store_name},
+                "index_info": None,
+                "created_at": None,
+                "created_by": None,
+                "updated_at": None,
+                "updated_by": None,
+            }.items()
+        )
+
+
+class FakeVectorStoreRow:
+    def __init__(
+        self,
+        vector_store_name: str,
+        custom_llm_provider: str,
+        litellm_params: dict[str, str],
+        vector_store_id: str | None = None,
+        created_at: datetime | None = None,
+    ) -> None:
+        self.vector_store_name: Final = vector_store_name
+        self.custom_llm_provider: Final = custom_llm_provider
+        self.litellm_params: Final = litellm_params
+        self.vector_store_id: Final = vector_store_id or f"{vector_store_name}-id"
+        self.created_at: Final = created_at
+
+    def __iter__(self) -> Iterator[tuple[str, object]]:
+        return iter(
+            {
+                "vector_store_id": self.vector_store_id,
+                "custom_llm_provider": self.custom_llm_provider,
+                "vector_store_name": self.vector_store_name,
+                "vector_store_description": None,
+                "vector_store_metadata": None,
+                "created_at": self.created_at,
+                "updated_at": None,
+                "litellm_credential_name": None,
+                "litellm_params": dict(self.litellm_params),
+                "team_id": None,
+                "user_id": None,
+            }.items()
+        )
 
 
 TOKEN_COUNT_LOG_FIELDS: Final = (

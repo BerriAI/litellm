@@ -355,7 +355,7 @@ class CacheSettingsManager:
 
         # Normalize by removing None values and UI-only fields
         def normalize(params: dict[str, object]) -> dict[str, object]:
-            normalized: Final = {}
+            normalized: Final[dict[str, object]] = {}
             for k, v in params.items():
                 if k == "redis_type":  # Skip UI-only field
                     continue

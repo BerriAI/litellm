@@ -165,6 +165,33 @@ def test_create_hands_back_the_providers_error_and_meters_nothing(
     assert started_sidebands == []
 
 
+@pytest.mark.parametrize(
+    ("upstream_headers", "expected_content_type"),
+    [
+        ({"content-type": "text/plain; charset=utf-8"}, "text/plain; charset=utf-8"),
+        ({}, "application/json"),
+    ],
+    ids=["provider-content-type", "no-content-type"],
+)
+def test_create_hands_back_the_providers_error_with_its_content_type_or_json(
+    live_client: TestClient,
+    started_sidebands: list[_LiveSession],
+    respx_mock: respx.MockRouter,
+    upstream_headers: dict[str, str],
+    expected_content_type: str,
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/live/sessions").mock(
+        return_value=httpx.Response(502, content=b"upstream unavailable", headers=upstream_headers)
+    )
+
+    response: Final = live_client.post("/v1/live/sessions", json=_CREATE_BODY)
+
+    assert response.status_code == 502, response.text
+    assert response.content == b"upstream unavailable"
+    assert response.headers["content-type"] == expected_content_type
+    assert started_sidebands == []
+
+
 def test_create_refuses_a_session_a_guardrail_would_have_to_check(
     live_client: TestClient,
     started_sidebands: list[_LiveSession],

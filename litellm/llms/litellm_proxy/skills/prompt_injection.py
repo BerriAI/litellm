@@ -129,7 +129,7 @@ class SkillPromptInjectionHandler:
 
     def inject_skill_content_to_messages(
         self, data: dict, skill_contents: list[str], use_anthropic_format: bool = False
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Inject skill content into the system prompt.
 
@@ -199,7 +199,7 @@ class SkillPromptInjectionHandler:
             OpenAI-style tool definition
         """
         # Format module list for description
-        module_examples: Final = []
+        module_examples: Final[list[str]] = []
         for mod in skill_modules[:5]:  # Limit to 5 examples
             if mod.endswith(".py"):
                 # Convert path to import: "core/gif_builder.py" -> "from core.gif_builder import ..."

@@ -35,7 +35,7 @@ def test_vertex_gemini_edit_preserves_usage_and_traffic_type(traffic_type: str |
         raw_response=httpx.Response(
             200,
             json={
-                "candidates": [],
+                "candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
                 "usageMetadata": {
                     "promptTokenCount": 1131,
                     "candidatesTokenCount": 0,
@@ -489,6 +489,57 @@ class TestVertexAIImagenImageEditTransformation:
         assert "maskImageConfig" in reference_images[1]
         assert reference_images[1]["maskImageConfig"]["maskMode"] == "MASK_MODE_USER_PROVIDED"
 
+    @pytest.mark.parametrize(
+        ("image", "reason"),
+        [
+            (None, "requires at least one reference image"),
+            ([], "requires at least one reference image"),
+            ([None], "requires at least one reference image"),
+            ("cat.png", "plain string values are not accepted"),
+            (Path("cat.png"), "filesystem paths are not accepted"),
+            (123, "Unsupported image type"),
+        ],
+    )
+    def test_transform_image_edit_request_with_an_unusable_image_is_a_bad_request(
+        self, image: object, reason: str
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError, match=reason) as exc_info:
+            self.config.transform_image_edit_request(
+                model=self.model,
+                prompt=self.prompt,
+                image=image,
+                image_edit_optional_request_params={},
+                litellm_params=MagicMock(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.llm_provider == "vertex_ai"
+
+    def test_transform_image_edit_request_with_an_unusable_mask_is_a_bad_request(self) -> None:
+        with pytest.raises(litellm.BadRequestError, match="plain string values are not accepted") as exc_info:
+            self.config.transform_image_edit_request(
+                model=self.model,
+                prompt=self.prompt,
+                image=BytesIO(b"fake_image"),
+                image_edit_optional_request_params={"mask": "mask.png"},
+                litellm_params=MagicMock(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+
+    def test_transform_image_edit_request_without_prompt_is_a_bad_request(self) -> None:
+        with pytest.raises(litellm.BadRequestError, match="requires a prompt") as exc_info:
+            self.config.transform_image_edit_request(
+                model=self.model,
+                prompt=None,
+                image=BytesIO(b"fake_image"),
+                image_edit_optional_request_params={},
+                litellm_params=MagicMock(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.llm_provider == "vertex_ai"
+
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Imagen"""
         response_payload = {
@@ -519,20 +570,6 @@ class TestVertexAIImagenImageEditTransformation:
         assert len(image_response.data) == 2
         assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
         assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode("utf-8")
-
-    def test_transform_image_edit_request_without_image_raises(self) -> None:
-        """Test that missing image raises ValueError"""
-        optional_params = {}
-
-        with pytest.raises(ValueError, match="requires at least one reference image"):
-            self.config.transform_image_edit_request(
-                model=self.model,
-                prompt=self.prompt,
-                image=[],
-                image_edit_optional_request_params=optional_params,
-                litellm_params=MagicMock(),
-                headers={},
-            )
 
     def test_read_all_bytes_handles_various_types(self) -> None:
         """Test that _read_all_bytes handles different file types"""

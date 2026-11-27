@@ -586,10 +586,12 @@ async def test_bridged_chat_stream_keeps_the_upstream_headers_when_its_output_ca
         ({"store": True, "truncation": "auto"}, {"store": True, "truncation": "auto"}, True),
     ],
 )
+@pytest.mark.parametrize("history", [(), (("earlier", "answer"),)], ids=["first_turn", "continued_turn"])
 async def test_acompletion_system_goes_in_input_unless_truncation_may_cut_it(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
+    history: tuple[tuple[str, str], ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -616,7 +618,11 @@ async def test_acompletion_system_goes_in_input_unless_truncation_may_cut_it(
         )
         await litellm.acompletion(
             model="openai/responses/gpt-6.2-sol",
-            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "hi"}],
+            messages=[
+                {"role": "system", "content": "Stable prefix"},
+                *_chat_history(history),
+                {"role": "user", "content": "hi"},
+            ],
             api_key="sk-test",
             cache={"no-cache": True},
             **request_params,
@@ -631,10 +637,10 @@ async def test_acompletion_system_goes_in_input_unless_truncation_may_cut_it(
     user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
     if preserve_instructions:
         assert request_body["instructions"] == "Stable prefix"
-        assert request_body["input"] == [user_input]
+        assert request_body["input"] == [*_history_input(history), user_input]
     else:
         assert "instructions" not in request_body
-        assert request_body["input"] == [_system_input_item("Stable prefix"), user_input]
+        assert request_body["input"] == [_system_input_item("Stable prefix"), *_history_input(history), user_input]
 
 
 @pytest.mark.parametrize("request_shape", ["system_only", "json_object", "midturn_system", "marked_system"])
@@ -5900,6 +5906,31 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
     assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
 
 
+@pytest.mark.parametrize(
+    ("carried", "expected_middle"),
+    ((None, ()), ("carried", ({"type": "output_text", "text": "carried"},))),
+)
+def test_convert_chat_completion_messages_to_responses_api_sends_only_the_text_a_fallback_block_carries(
+    carried: str | None, expected_middle: tuple[dict[str, str], ...]
+) -> None:
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "first-model"},
+        "to": {"model": "second-model"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+        **({} if carried is None else {"text": carried}),
+    }
+    reply: Final = {"type": "text", "text": "Hello"}
+    sent_reply: Final = {"type": "output_text", "text": "Hello"}
+
+    response, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": [reply, fallback_block, reply]}]
+    )
+
+    assistant_message: Final = next(item for item in response if item.get("role") == "assistant")
+    assert assistant_message["content"] == [sent_reply, *expected_middle, sent_reply]
+
+
 def _litellm_encoded_response_id(upstream_id: str) -> str:
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
@@ -6095,8 +6126,121 @@ def test_streaming_final_chunk_carries_provider_metadata():
     assert all("service_tier" not in chunk for chunk in chunks[:-1])
 
 
+_RESPONSES_BODY_METADATA: Final = {
+    "access_programs": {"cyber": "daybreak_blue"},
+    "prompt_cache_options": {"mode": "implicit", "ttl": "30m"},
+    "prompt_cache_diagnostics": {"type": "cache_hit"},
+}
+_HIDDEN_RESPONSES_FIELDS: Final = {
+    "metadata": {"trace": "abc"},
+    "background": False,
+    "completed_at": 1760144905,
+    "conversation": {"id": "conv_metadata"},
+    "max_tool_calls": 3,
+    "prompt": {"id": "pmpt_metadata"},
+    "prompt_cache_key": "cache-key",
+    "prompt_cache_retention": "24h",
+    "safety_identifier": "user-hash",
+    "top_logprobs": 0,
+}
+
+
+def test_non_stream_response_keeps_provider_metadata_and_hides_responses_fields() -> None:
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    output_message: Final = ResponseOutputMessage(
+        id="msg_metadata",
+        content=[ResponseOutputText(annotations=[], text="hi", type="output_text", logprobs=[])],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    raw_response: Final = ResponsesAPIResponse(
+        id="resp_metadata",
+        created_at=1760144904,
+        model="gpt-5.6-sol",
+        object="response",
+        output=[output_message],
+        status="completed",
+        parallel_tool_calls=True,
+        tool_choice="auto",
+        tools=[],
+        **_RESPONSES_BODY_METADATA,
+        **_HIDDEN_RESPONSES_FIELDS,
+    )
+
+    result: Final = handler.transform_response(
+        model="gpt-5.6-sol",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.6-sol"},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"acompletion": False, "api_key": None},
+        encoding=Mock(),
+        api_key=None,
+        json_mode=None,
+    )
+
+    dumped: Final = result.model_dump()
+    assert {key: dumped.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
+    assert not set(_HIDDEN_RESPONSES_FIELDS) & set(dumped)
+
+
+def test_streaming_final_chunk_keeps_provider_metadata_and_hides_responses_fields() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    iterator.chunk_parser({"type": "response.created", "response": {"id": "resp_metadata", "output": []}})
+
+    final_chunk: Final = iterator.chunk_parser(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_metadata",
+                "output": [{"type": "message"}],
+                "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+                **_RESPONSES_BODY_METADATA,
+                **_HIDDEN_RESPONSES_FIELDS,
+            },
+        }
+    )
+
+    provider_fields: Final = final_chunk.provider_specific_fields or {}
+    assert {key: provider_fields.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
+    assert not set(_HIDDEN_RESPONSES_FIELDS) & set(provider_fields)
+
+
 def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
+
+
+def _chat_history(history: tuple[tuple[str, str], ...]) -> tuple[dict[str, str], ...]:
+    return tuple(
+        itertools.chain.from_iterable(
+            ({"role": "user", "content": question}, {"role": "assistant", "content": answer})
+            for question, answer in history
+        )
+    )
+
+
+def _history_input(history: tuple[tuple[str, str], ...]) -> tuple[dict[str, object], ...]:
+    return tuple(
+        itertools.chain.from_iterable(
+            (
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": question}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": answer}]},
+            )
+            for question, answer in history
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -7667,6 +7811,113 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
+_REFUSAL_TEXT: Final = "I can't help with that."
+_REFUSAL_MESSAGE: Final = MappingProxyType({"type": "message", "role": "assistant", "content": []})
+
+
+def _stream_contents(events: Sequence[Mapping[str, object]], **iterator_options: bool) -> tuple[str, ...]:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(()), sync_stream=True, **iterator_options
+    )
+    return tuple(iterator.chunk_parser(dict(event)).choices[0].delta.content or "" for event in events)
+
+
+def test_stream_refusal_deltas_become_content_once_and_keep_the_terminal_chunk() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    refusal_part: Final = {"type": "refusal", "refusal": _REFUSAL_TEXT}
+    refused_message: Final = {**_REFUSAL_MESSAGE, "content": [refusal_part]}
+    events: Final[tuple[dict[str, object], ...]] = (
+        {"type": "response.created", "response": {"id": "resp_refusal", "output": []}},
+        {"type": "response.output_item.added", "output_index": 0, "item": dict(_REFUSAL_MESSAGE)},
+        {"type": "response.content_part.added", "output_index": 0, "content_index": 0, "part": {"type": "refusal"}},
+        {"type": "response.refusal.delta", "output_index": 0, "content_index": 0, "delta": "I can't "},
+        {"type": "response.refusal.delta", "output_index": 0, "content_index": 0, "delta": "help with that."},
+        {"type": "response.refusal.done", "output_index": 0, "content_index": 0, "refusal": _REFUSAL_TEXT},
+        {"type": "response.content_part.done", "output_index": 0, "content_index": 0, "part": refusal_part},
+        {"type": "response.output_item.done", "output_index": 0, "item": refused_message},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_refusal",
+                "status": "completed",
+                "output": [refused_message],
+                "usage": {"input_tokens": 5, "output_tokens": 4, "total_tokens": 9},
+            },
+        },
+    )
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=iter(()), sync_stream=True)
+
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _REFUSAL_TEXT
+    assert [chunk.choices[0].finish_reason for chunk in chunks] == [None] * (len(events) - 1) + ["stop"]
+    assert chunks[-1].usage.total_tokens == 9
+
+
+@pytest.mark.parametrize(
+    "delta_field",
+    [{"delta": ""}, {"delta": None}, {}, {"delta": 7}, {"delta": ["no"]}, {"delta": {"text": "no"}}],
+    ids=["empty", "null", "missing", "number", "list", "object"],
+)
+def test_stream_refusal_delta_without_text_still_yields_an_empty_chunk(delta_field: Mapping[str, object]) -> None:
+    event: Final = {"type": "response.refusal.delta", "output_index": 0, "content_index": 0, **delta_field}
+
+    assert _stream_contents([event]) == ("",)
+
+
+def test_stream_mixed_text_and_refusal_deltas_keep_their_order() -> None:
+    events: Final = (
+        {"type": "response.output_item.added", "output_index": 0, "item": dict(_REFUSAL_MESSAGE)},
+        {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "Here is part. "},
+        {"type": "response.refusal.delta", "output_index": 0, "content_index": 1, "delta": _REFUSAL_TEXT},
+    )
+
+    assert "".join(_stream_contents(events)) == f"Here is part. {_REFUSAL_TEXT}"
+
+
+@pytest.mark.parametrize(
+    "structured_output, expected_content",
+    [(True, _REFUSAL_TEXT), (False, f"{_REFUSAL_TEXT}Still no.")],
+)
+def test_stream_structured_output_drops_refusal_after_first_message_item(
+    structured_output: bool, expected_content: str
+) -> None:
+    events: Final = (
+        {"type": "response.output_item.added", "output_index": 0, "item": dict(_REFUSAL_MESSAGE)},
+        {"type": "response.refusal.delta", "output_index": 0, "delta": _REFUSAL_TEXT},
+        {"type": "response.output_item.done", "output_index": 0, "item": dict(_REFUSAL_MESSAGE)},
+        {"type": "response.output_item.added", "output_index": 1, "item": dict(_REFUSAL_MESSAGE)},
+        {"type": "response.refusal.delta", "output_index": 1, "delta": "Still no."},
+    )
+
+    assert "".join(_stream_contents(events, structured_output=structured_output)) == expected_content
+
+
+def test_stream_refusal_delta_carries_the_phase_of_its_message_like_text() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(()), sync_stream=True, replays_openai_history=True
+    )
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "output_index": 0, "item": {**_REFUSAL_MESSAGE, "phase": "final_answer"}}
+    )
+
+    text: Final = iterator.chunk_parser({"type": "response.output_text.delta", "output_index": 0, "delta": "a"})
+    refusal: Final = iterator.chunk_parser({"type": "response.refusal.delta", "output_index": 0, "delta": "b"})
+
+    assert refusal.provider_specific_fields == text.provider_specific_fields == {"phase": "final_answer"}
+
+
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider", "forwards"),
     [
@@ -7747,3 +7998,157 @@ async def test_truncation_auto_sends_a_system_prompt_too_long_for_instructions_a
     sent: Final = json.loads(call_sent.request.content)
     expected: Final = (None, [_system_input_item(prompt), _USER_HI]) if moves_to_input else (prompt, [_USER_HI])
     assert (sent.get("instructions"), sent["input"]) == expected
+
+
+
+def _tool_call(call_id: object, kind: Literal["function", "custom"]) -> dict[str, object]:
+    if kind == "custom":
+        return {"id": call_id, "type": "custom", "custom": {"name": "apply_patch", "input": "*** Begin Patch"}}
+    return {"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'}}
+
+
+def _tool_turn(calls: Sequence[tuple[object, Literal["function", "custom"]]]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Use the tools."},
+        {"role": "assistant", "tool_calls": [_tool_call(call_id, kind) for call_id, kind in calls]},
+        *(
+            {"role": "tool", "tool_call_id": call_id, "content": f"result {index}"}
+            for index, (call_id, _) in enumerate(calls)
+        ),
+    ]
+
+
+def _tool_items(input_items: Sequence[Mapping[str, object]]) -> list[tuple[object, object]]:
+    return [(item["type"], item["call_id"]) for item in input_items if "call_id" in item]
+
+
+def test_transform_request_leaves_overlong_tool_call_ids_for_the_dispatch_to_bound() -> None:
+    function_id: Final = "call_" + "a" * 80
+    custom_id: Final = "call_" + "b" * 80
+
+    result: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-6.2-sol",
+        messages=cast(list[AllMessageValues], _tool_turn([(function_id, "function"), (custom_id, "custom")])),
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", "api_base": "https://api.openai.com/v1"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert _tool_items(result["input"]) == [
+        ("function_call", function_id),
+        ("custom_tool_call", custom_id),
+        ("function_call_output", function_id),
+        ("custom_tool_call_output", custom_id),
+    ], "ids are bounded at dispatch, after deployment hooks, so the bridge request keeps the caller's ids"
+
+
+def test_shared_chat_to_responses_converter_keeps_overlong_ids_for_its_other_callers() -> None:
+    call_id: Final = "call_" + "a" * 80
+
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        cast(list[AllMessageValues], _tool_turn([(call_id, "function"), (call_id + "_custom", "custom")]))
+    )
+
+    assert _tool_items(cast(list[Mapping[str, object]], input_items)) == [
+        ("function_call", call_id),
+        ("custom_tool_call", call_id + "_custom"),
+        ("function_call_output", call_id),
+        ("custom_tool_call_output", call_id + "_custom"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        pytest.param({"input": [{"type": "function_call", "call_id": 10**70}]}, id="integer-call-id"),
+        pytest.param({"input": [{"type": "function_call_output", "call_id": None}]}, id="none-call-id"),
+        pytest.param({"input": [{"type": "function_call_output", "output": "x"}]}, id="missing-call-id"),
+        pytest.param({"input": [{"type": "tool_search_call", "call_id": "call_" + "s" * 80}]}, id="other-item-type"),
+        pytest.param({"input": [{"call_id": "call_" + "u" * 80}]}, id="untyped-item"),
+        pytest.param({"input": "a plain prompt"}, id="string-input"),
+        pytest.param({}, id="no-input"),
+    ],
+)
+def test_bounded_call_id_fields_leaves_requests_without_an_overlong_tool_call_id_alone(
+    request_body: Mapping[str, object],
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
+
+    assert bounded_call_id_fields(request_body) == {}
+
+
+def _function_pair(call_id: str) -> tuple[dict[str, object], dict[str, object]]:
+    return (
+        {"type": "function_call", "call_id": call_id, "name": "f", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": call_id, "output": call_id[-8:]},
+    )
+
+
+def _sent_call_ids(request_body: Mapping[str, object]) -> list[object]:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
+
+    sent: Final = bounded_call_id_fields(request_body)["input"]
+    assert isinstance(sent, list), sent
+    return [item["call_id"] for item in sent]
+
+
+def test_bounded_call_id_fields_keeps_thousands_of_overlong_ids_distinct_paired_and_clear_of_short_ids() -> None:
+    import hashlib
+
+    long_ids: Final = tuple(f"call_{index:06d}_" + "x" * 70 for index in range(2000))
+    colliding_short_ids: Final = tuple(hashlib.sha256(call_id.encode()).hexdigest() for call_id in long_ids[::50])
+    pairs: Final = tuple(_function_pair(call_id) for call_id in (*long_ids, *colliding_short_ids))
+    calls: Final = [call for call, _ in pairs]
+    reversed_outputs: Final = [output for _, output in reversed(pairs)]
+
+    sent_ids: Final = _sent_call_ids({"input": [*calls, *reversed_outputs]})
+
+    sent_call_ids: Final = sent_ids[: len(calls)]
+    sent_output_ids: Final = sent_ids[len(calls) :]
+    assert sent_output_ids == sent_call_ids[::-1], "every output keeps the id of its own call"
+    assert sent_call_ids[len(long_ids) :] == list(colliding_short_ids), "short ids are sent unchanged"
+    assert len(set(sent_call_ids)) == len(pairs), "no two calls share an id"
+    assert all(isinstance(call_id, str) and len(call_id) <= 64 for call_id in sent_call_ids)
+
+
+@pytest.mark.parametrize("item_type", ["tool_search_call", "tool_search_output", "computer_call", "mcp_call"])
+def test_bounded_call_id_fields_never_reuses_a_short_id_held_by_another_item_type(item_type: str) -> None:
+    import hashlib
+
+    long_id: Final = "call_" + "r" * 80
+    held_id: Final = hashlib.sha256(long_id.encode()).hexdigest()
+    other_item: Final = {"type": item_type, "call_id": held_id}
+
+    sent_ids: Final = _sent_call_ids({"input": [*_function_pair(long_id), other_item]})
+
+    assert sent_ids[2] == held_id, sent_ids
+    assert sent_ids[0] == sent_ids[1] != held_id, sent_ids
+
+
+def test_bounded_call_id_fields_never_gives_a_later_long_id_a_replacement_already_claimed() -> None:
+    import hashlib
+
+    long_id: Final = "call_" + "a" * 80
+    claims_first: Final = "1:" + long_id
+    short_id: Final = hashlib.sha256(long_id.encode()).hexdigest()
+    pairs: Final = tuple(_function_pair(call_id) for call_id in (long_id, claims_first, short_id))
+    in_order: Final = list(itertools.chain.from_iterable(pairs))
+
+    sent_ids: Final = _sent_call_ids({"input": in_order})
+    sent_reversed_ids: Final = _sent_call_ids({"input": in_order[::-1]})
+
+    assert sent_ids[0::2] == sent_ids[1::2], "each output keeps the id of its own call"
+    assert sent_ids[4] == short_id, sent_ids
+    assert len(set(sent_ids[0::2])) == 3, sent_ids
+    assert sent_reversed_ids == sent_ids[::-1], "the assignment must not depend on item order"
+
+
+def test_bounded_call_id_fields_gives_a_long_id_repeated_across_items_one_replacement() -> None:
+    long_id: Final = "call_" + "m" * 80
+    repeated: Final = [*_function_pair(long_id), *_function_pair(long_id)]
+
+    sent_ids: Final = _sent_call_ids({"input": repeated})
+
+    assert len(set(sent_ids)) == 1 and sent_ids[0] != long_id, sent_ids
+    assert isinstance(sent_ids[0], str) and len(sent_ids[0]) <= 64, sent_ids

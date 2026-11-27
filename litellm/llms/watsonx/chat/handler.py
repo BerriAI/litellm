@@ -35,7 +35,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         acompletion: object = None,
         litellm_params: dict[str, object] = {},
         headers: dict[str, object] | None = None,
-        logger_fn=None,
+        logger_fn: object = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         custom_endpoint: bool | None = None,

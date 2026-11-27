@@ -38,6 +38,8 @@ from litellm.types.utils import (
 from .base import PurviewGuardrailBase
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
@@ -92,7 +94,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         )
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[BaseModel]"] | None:
         return None  # Config model can be added later for UI support
 
     @classmethod
@@ -464,7 +466,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: "UserAPIKeyAuth",
         response: "LLMResponseTypes",
     ) -> "LLMResponseTypes":
@@ -493,7 +495,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         response: AsyncIterable[ModelResponseStream],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Check streaming LLM responses against Purview DLP policies.
 
@@ -612,7 +614,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
     # Logging-only hook — audit without blocking
     # ------------------------------------------------------------------
 
-    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    def logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         """Fire-and-forget async audit logging; returns original (kwargs, result) immediately.
 
         In the proxy's async success path, litellm independently calls both
@@ -660,7 +664,9 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
 
         return kwargs, result
 
-    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         """Send both prompt and response to Purview for audit logging.
 
         Errors are logged but never raised — this mode is non-blocking.

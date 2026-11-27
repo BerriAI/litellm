@@ -5,7 +5,8 @@ Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 """
 
 import copy
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, Protocol
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -20,8 +21,12 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import IBMWatsonXMixin
 
 
+class _HFTemplateFn(Protocol):
+    def __call__(self, *, model: str, messages: list[dict[str, str]]) -> str: ...
+
+
 class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "temperature",  # equivalent to temperature
             "max_tokens",  # equivalent to max_new_tokens
@@ -40,7 +45,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             "reasoning_effort",
         ]
 
-    def is_tool_choice_option(self, tool_choice: str | dict | None) -> bool:
+    def is_tool_choice_option(self, tool_choice: object) -> bool:
         if tool_choice is None:
             return False
         if isinstance(tool_choice, str):
@@ -50,10 +55,10 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         ## TOOLS ##
         _tools = non_default_params.pop("tools", None)
         if _tools is not None:
@@ -86,7 +91,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)
@@ -105,7 +110,9 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         return url
 
     @staticmethod
-    def _apply_prompt_template_core(model: str, messages: list[dict[str, str]], hf_template_fn) -> str | None:
+    def _apply_prompt_template_core(
+        model: str, messages: list[dict[str, str]], hf_template_fn: _HFTemplateFn
+    ) -> str | None:
         """Core logic for applying prompt templates"""
         from litellm.litellm_core_utils.prompt_templates.factory import (
             custom_prompt,

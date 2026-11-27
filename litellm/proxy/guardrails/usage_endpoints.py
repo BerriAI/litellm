@@ -398,18 +398,37 @@ _GuardrailObjectField = Literal["litellm_params", "guardrail_info"]
 
 
 @overload
-def _get_guardrail_field(g: "_DbOrConfigGuardrail", field: _GuardrailStrField) -> str | None: ...
+def _get_guardrail_field(g: "_DbOrConfigGuardrail | None", field: _GuardrailStrField) -> str | None: ...
 
 
 @overload
-def _get_guardrail_field(g: "_DbOrConfigGuardrail", field: _GuardrailObjectField) -> object: ...
+def _get_guardrail_field(g: "_DbOrConfigGuardrail | None", field: _GuardrailObjectField) -> object: ...
 
 
-def _get_guardrail_field(g: "_DbOrConfigGuardrail", field: _GuardrailStrField | _GuardrailObjectField) -> object:
+def _get_guardrail_field(g: "_DbOrConfigGuardrail | None", field: _GuardrailStrField | _GuardrailObjectField) -> object:
     """Read `field` off a guardrail whether it's a Prisma row (attr) or a dict/TypedDict (key)."""
     if isinstance(g, dict):
         return g.get(field)
     return getattr(g, field, None)
+
+
+async def _defined_guardrail(prisma_client: "PrismaClient", id_or_name: str) -> "_DbOrConfigGuardrail | None":
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    find_in_db: Final = _guardrails_table(prisma_client).find_unique
+    return (
+        await find_in_db(where={"guardrail_id": id_or_name})
+        or IN_MEMORY_GUARDRAIL_HANDLER.get_config_guardrail_by_id(guardrail_id=id_or_name)
+        or await find_in_db(where={"guardrail_name": id_or_name})
+        or next(
+            (
+                g
+                for g in IN_MEMORY_GUARDRAIL_HANDLER.list_config_guardrails()
+                if _get_guardrail_field(g, "guardrail_name") == id_or_name
+            ),
+            None,
+        )
+    )
 
 
 def _to_dict(value: object) -> dict[str, Any]:
@@ -637,19 +656,19 @@ async def guardrails_usage_detail(
 
     start, end = _resolve_usage_window(start_date, end_date)
 
-    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-
-    guardrail = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
-    if guardrail is None:
-        guardrail = IN_MEMORY_GUARDRAIL_HANDLER.get_config_guardrail_by_id(guardrail_id=guardrail_id)
-    if guardrail is None:
+    guardrail: Final = await _defined_guardrail(prisma_client, guardrail_id)
+    if (
+        guardrail is None
+        and await _daily_guardrail_metrics_table(prisma_client).find_first(where={"guardrail_id": guardrail_id}) is None
+    ):
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="Guardrail not found")
 
     # Metrics are keyed by logical name (from spend log metadata), not UUID
     logical_id: Final = _get_guardrail_field(guardrail, "guardrail_name")
-    metric_ids: Final = [i for i in (logical_id, guardrail_id) if i]
+    defined_id: Final = _get_guardrail_field(guardrail, "guardrail_id") or guardrail_id
+    metric_ids: Final = list(dict.fromkeys(i for i in (logical_id, defined_id, guardrail_id) if i))
 
     metrics: Final[Sequence[prisma_models.LiteLLM_DailyGuardrailMetrics]] = await _find_daily_guardrail_metrics(
         prisma_client,
@@ -705,7 +724,7 @@ async def guardrails_usage_detail(
     )
 
     return UsageDetailResponse(
-        guardrail_id=guardrail_id,
+        guardrail_id=defined_id,
         guardrail_name=_guardrail_name or guardrail_id,
         type=_field_str(guardrail_info, "type", "Guardrail"),
         provider=_field_str(litellm_params, "guardrail", "Unknown"),
@@ -900,15 +919,13 @@ async def guardrails_usage_logs(
         # Query by both so we match regardless of which was written.
         effective_guardrail_ids: Final[list[str]] = [guardrail_id] if guardrail_id else []
         if guardrail_id:
-            from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-
-            guardrail = await _guardrails_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
-            if guardrail is None:
-                guardrail = IN_MEMORY_GUARDRAIL_HANDLER.get_config_guardrail_by_id(guardrail_id=guardrail_id)
-            if guardrail:
-                logical_name: Final = _get_guardrail_field(guardrail, "guardrail_name")
-                if logical_name and logical_name not in effective_guardrail_ids:
-                    effective_guardrail_ids.append(logical_name)
+            guardrail: Final = await _defined_guardrail(prisma_client, guardrail_id)
+            for stored_under in (
+                _get_guardrail_field(guardrail, "guardrail_name"),
+                _get_guardrail_field(guardrail, "guardrail_id"),
+            ):
+                if stored_under and stored_under not in effective_guardrail_ids:
+                    effective_guardrail_ids.append(stored_under)
 
         where: Final = _build_usage_logs_where(effective_guardrail_ids or None, policy_id, start_date, end_date)
         index_rows: Sequence[prisma_models.LiteLLM_SpendLogGuardrailIndex] = await SpendLogGuardrailIndexRepository(

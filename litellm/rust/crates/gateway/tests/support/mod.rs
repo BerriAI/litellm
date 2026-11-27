@@ -84,7 +84,7 @@ pub async fn served(
     ))
     .unwrap();
     let state = AppState {
-        keys: Some(Arc::new(AuthStore::new(
+        auth_store: Some(Arc::new(AuthStore::new(
             keys::memory_cache(),
             database.database(),
         ))),

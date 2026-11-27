@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import { MemberRoleSelect } from "./MemberRoleSelect";
@@ -88,7 +89,7 @@ export default function UserInfoView({
   initialTab = 0,
   startInEditMode = false,
 }: UserInfoViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const { premiumUser, userId: signedInUserId } = useAuthorized();
   const canViewAutoRouterUsage = hasProxyWideSpendView(userRole);
   const canViewUserUsage = canViewAutoRouterUsage || (Boolean(userId.trim()) && userId === signedInUserId);
@@ -120,7 +121,6 @@ export default function UserInfoView({
   const [allTeams, setAllTeams] = useState<Array<{ team_id: string; team_alias: string }>>([]);
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
   const [selectedRole, setSelectedRole] = useState<string>("user");
-  const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const { data: allMcpServers = [] } = useMCPServers();
   const { data: allMcpToolsets = [] } = useMCPToolsets();
 
@@ -176,7 +176,6 @@ export default function UserInfoView({
 
   const fetchAllTeams = async () => {
     if (!accessToken) return;
-    setIsLoadingTeams(true);
     try {
       const teams = await teamListCall(accessToken, null);
       setAllTeams(
@@ -187,8 +186,6 @@ export default function UserInfoView({
       );
     } catch (error) {
       console.error("Error fetching teams:", error);
-    } finally {
-      setIsLoadingTeams(false);
     }
   };
 
@@ -374,7 +371,7 @@ export default function UserInfoView({
 
   if (isLoading) {
     return (
-      <div className="p-4">
+      <div>
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft />
           {t("users.userInfo.backToUsers")}
@@ -386,7 +383,7 @@ export default function UserInfoView({
 
   if (!userData) {
     return (
-      <div className="p-4">
+      <div>
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft />
           {t("users.userInfo.backToUsers")}
@@ -433,7 +430,7 @@ export default function UserInfoView({
 
   const roleId = userData.user_role;
   return (
-    <div className="p-4">
+    <div>
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button variant="ghost" onClick={onClose} className="mb-4">
@@ -678,12 +675,20 @@ export default function UserInfoView({
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.created")}</p>
-                  <p>{userData.created_at ? new Date(userData.created_at).toLocaleString() : unknownTimestamp}</p>
+                  <p>
+                    {userData.created_at
+                      ? displayTimestamp(new Date(userData.created_at), locale.language)
+                      : unknownTimestamp}
+                  </p>
                 </div>
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.lastUpdated")}</p>
-                  <p>{userData.updated_at ? new Date(userData.updated_at).toLocaleString() : unknownTimestamp}</p>
+                  <p>
+                    {userData.updated_at
+                      ? displayTimestamp(new Date(userData.updated_at), locale.language)
+                      : unknownTimestamp}
+                  </p>
                 </div>
 
                 <div>

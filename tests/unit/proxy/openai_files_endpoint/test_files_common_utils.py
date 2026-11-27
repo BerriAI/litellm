@@ -1244,6 +1244,7 @@ def test_provider_file_id_spellings_unwraps_a_model_encoded_id_and_covers_the_st
         "batch-out1",
         "files/batch-out1",
         "https://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+        "https://generativelanguage.googleapis.com/v1/files/batch-out1",
     )
     for spelling in ("batch-out1", "files%2Fbatch-out1", "batch-out1/"):
         assert set(provider_file_id_spellings(spelling)) >= set(provider_file_id_spellings(wrapped)[1:]), spelling

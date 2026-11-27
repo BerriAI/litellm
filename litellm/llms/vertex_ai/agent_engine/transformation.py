@@ -79,10 +79,10 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Map OpenAI params to Agent Engine params."""
         # Map 'user' to 'user_id' for session management
         if "user" in non_default_params:
@@ -115,7 +115,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         api_key: str | None,
         model: str,
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -188,7 +188,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
@@ -234,14 +234,14 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Validate environment and set up authentication headers."""
         auth_headers: Final = self._get_auth_headers(optional_params, litellm_params)
         headers.update(auth_headers)
@@ -368,7 +368,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: Mapping[str, object],
         messages: Sequence[object],
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
@@ -429,7 +429,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: Mapping[str, object],
         messages: Sequence[object],
         client: Optional["AsyncHTTPHandler"] = None,
@@ -497,7 +497,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """Agent Engine does not allow passing `stream` in the request body."""
         return False
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return VertexAgentEngineError(status_code=status_code, message=error_message)
 
     def should_fake_stream(

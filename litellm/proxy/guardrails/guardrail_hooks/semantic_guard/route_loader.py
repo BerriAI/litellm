@@ -46,7 +46,7 @@ class SemanticGuardRouteLoader:
     @staticmethod
     def list_builtin_templates() -> list[str]:
         """List available built-in template names."""
-        templates: Final = []
+        templates: Final[list[str]] = []
         if os.path.isdir(ROUTE_TEMPLATES_DIR):
             for fname in os.listdir(ROUTE_TEMPLATES_DIR):
                 if fname.endswith(".yaml"):

@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { MCPServerView } from "./mcp_server_view";
 import * as networking from "@/components/networking";
 import { setSecureItem } from "@/utils/secureStorage";
@@ -43,12 +44,18 @@ const baseServer = {
 
 const newQueryClient = () => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
 
-const renderView = (
+interface UrlOptions {
+  searchParams?: string;
+  onUrlUpdate?: OnUrlUpdateFunction;
+}
+
+const viewTree = (
   overrides: Partial<MCPServer> = {},
   props: Record<string, unknown> = {},
   queryClient: QueryClient = newQueryClient(),
-) =>
-  render(
+  { searchParams = "", onUrlUpdate }: UrlOptions = {},
+) => (
+  <NuqsTestingAdapter searchParams={searchParams} onUrlUpdate={onUrlUpdate} hasMemory resetUrlUpdateQueueOnMount>
     <QueryClientProvider client={queryClient}>
       <MCPServerView
         mcpServer={{ ...baseServer, ...overrides } as MCPServer}
@@ -61,8 +68,16 @@ const renderView = (
         availableAccessGroups={[]}
         {...props}
       />
-    </QueryClientProvider>,
-  );
+    </QueryClientProvider>
+  </NuqsTestingAdapter>
+);
+
+const renderView = (...args: Parameters<typeof viewTree>) => render(viewTree(...args));
+
+const renderViewAt = (searchParams: string, props: Record<string, unknown> = {}, onUrlUpdate?: OnUrlUpdateFunction) =>
+  renderView({}, props, newQueryClient(), { searchParams, onUrlUpdate });
+
+const activePanel = () => screen.getByRole("tabpanel");
 
 const openUserCredentials = async (props: Record<string, unknown>) => {
   vi.mocked(networking.fetchMCPServerUserCredentials).mockResolvedValue([
@@ -130,7 +145,7 @@ describe("MCPServerView", () => {
 
     await userEvent.click(screen.getByRole("tab", { name: "MCP Tools" }));
 
-    expect(await screen.findByText("tools viewer")).toBeInTheDocument();
+    expect(within(activePanel()).getByText("tools viewer")).toBeInTheDocument();
   });
 
   it("shows the read-only settings summary before editing", async () => {
@@ -247,10 +262,83 @@ describe("MCPServerView", () => {
     expect(screen.queryByText("stdio is disabled on this proxy")).not.toBeInTheDocument();
   });
 
-  it("opens on the tab named by initialTabIndex", async () => {
-    renderView({}, { initialTabIndex: 1 });
+  it("opens on the server tab named in the URL", () => {
+    renderViewAt("?server=srv-1&server_tab=tools");
 
-    expect(await screen.findByText("tools viewer")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "MCP Tools" })).toHaveAttribute("aria-selected", "true");
+    expect(within(activePanel()).getByText("tools viewer")).toBeInTheDocument();
+  });
+
+  it("opens the settings named in the URL for an admin", () => {
+    renderViewAt("?server_tab=settings");
+
+    expect(within(activePanel()).getByText("MCP Server Settings")).toBeInTheDocument();
+  });
+
+  it("writes the server tab the user picks and drops it for the default tab", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderViewAt("?server=srv-1", {}, onUrlUpdate);
+
+    expect(within(activePanel()).getByText("Host URL")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("server_tab")).toBe("settings");
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("server")).toBe("srv-1");
+    expect(within(activePanel()).getByText("MCP Server Settings")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
+
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("server_tab")).toBe(false);
+    expect(within(activePanel()).getByText("Host URL")).toBeInTheDocument();
+  });
+
+  it("shows the overview for a settings link opened by a non-admin and keeps the link", () => {
+    const queryClient = newQueryClient();
+    const url = { searchParams: "?server=srv-1&server_tab=settings" };
+    const { rerender } = render(viewTree({}, { isProxyAdmin: false }, queryClient, url));
+
+    expect(within(activePanel()).getByText("Host URL")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+
+    rerender(viewTree({}, { isProxyAdmin: true }, queryClient, url));
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it.each([
+    ["Admin", "User Credentials"],
+    ["Internal User", "Overview"],
+  ])("opens a user credentials link for %s on the %s tab", (userRole, tabName) => {
+    renderViewAt("?server=srv-1&server_tab=user-credentials", { userRole });
+
+    expect(screen.getByRole("tab", { name: tabName })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("writes the user credentials tab the user picks", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    vi.mocked(networking.fetchMCPServerUserCredentials).mockResolvedValue([]);
+    renderViewAt("?server=srv-1", {}, onUrlUpdate);
+
+    await userEvent.click(screen.getByRole("tab", { name: "User Credentials" }));
+
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("server_tab")).toBe("user-credentials");
+  });
+
+  it("reopens the edit form when returning from an edit OAuth redirect for this server", () => {
+    setSecureItem(EDIT_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "srv-1" }));
+
+    renderViewAt("?server_tab=settings");
+
+    expect(within(activePanel()).getByText("edit form")).toBeInTheDocument();
+  });
+
+  it("stays read only when the edit OAuth redirect was for another server", () => {
+    setSecureItem(EDIT_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "other" }));
+
+    renderViewAt("?server_tab=settings");
+
+    expect(within(activePanel()).getByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
+    expect(screen.queryByText("edit form")).not.toBeInTheDocument();
   });
 
   it("returns to the server list when Back is pressed", async () => {

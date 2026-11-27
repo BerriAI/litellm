@@ -11,7 +11,7 @@ import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components
 
 import type { Team } from "../../key_team_helpers/key_list";
 import type { LogEntry } from "../types";
-import { CREDENTIAL_LABELS, SPAN_TYPE_LABELS } from "../constants";
+import { CREDENTIAL_LABELS, requestSpanTypeItems } from "../constants";
 import { LOG_FILTER_IDS, LOG_FILTER_LABELS, type LogsWindow } from "./useLogFilterLogic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
@@ -42,7 +42,7 @@ interface RequestLogsTableProps {
 
 const formatFilterValue = (columnId: string, value: unknown, t: TFunction): string => {
   if (columnId === LOG_FILTER_IDS.SPAN_TYPE) {
-    return Object.hasOwn(SPAN_TYPE_LABELS, String(value)) ? t(SPAN_TYPE_LABELS[String(value)]) : String(value);
+    return requestSpanTypeItems(t).find((item) => item.value === String(value))?.label ?? String(value);
   }
   if (columnId === LOG_FILTER_IDS.CREDENTIAL) {
     return Object.hasOwn(CREDENTIAL_LABELS, String(value)) ? t(CREDENTIAL_LABELS[String(value)]) : String(value);

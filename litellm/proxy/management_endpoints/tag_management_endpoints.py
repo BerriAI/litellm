@@ -12,7 +12,7 @@ All /tag management endpoints
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
 
@@ -172,7 +172,7 @@ async def _get_internal_user_api_keys(
     if user_role is None or not user_role.is_internal_user_role:
         return []
 
-    user_api_keys: Final = set()
+    user_api_keys: Final[set[str]] = set()
     if user_api_key_dict.api_key and user_api_key_dict.impersonated_by is None:
         user_api_keys.add(user_api_key_dict.api_key)
 
@@ -332,7 +332,7 @@ async def new_tag(
 
         # Update models with new tag
         if tag.models:
-            tasks: Final = []
+            tasks: Final[list[Awaitable[object]]] = []
             for model in tag.models:
                 deployments = await get_deployments_by_model(model, llm_router)
                 tasks.extend(
@@ -568,7 +568,7 @@ async def info_tag(
             raise HTTPException(status_code=404, detail=f"Tags not found: {missing_tags}")
 
         # Build response
-        requested_tags: Final = {}
+        requested_tags: Final[dict[str, Mapping[str, object]]] = {}
         for tag_record in tag_records:
             # Parse model_info from JSON
             model_info: object = {}
@@ -689,8 +689,8 @@ async def list_tags(
             include={"litellm_budget_table": True},
         )
 
-        stored_tag_names: Final = set()
-        list_of_tags: Final = []
+        stored_tag_names: Final[set[str]] = set()
+        list_of_tags: Final[list[Mapping[str, object]]] = []
         for tag_record in tag_records:
             stored_tag_names.add(tag_record.tag_name)
             # Parse model_info from JSON

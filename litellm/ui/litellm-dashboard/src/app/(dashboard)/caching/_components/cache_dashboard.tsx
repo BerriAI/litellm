@@ -1,10 +1,11 @@
 import { PageContent } from "@/components/shared/Page";
-import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import type { TFunction } from "i18next";
 import React, { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
+import { formatDateWithEnglishPattern } from "@/i18n/formats";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { BarChart } from "@/components/shared/charts";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,15 @@ const REQUEST_SERIES = {
   cacheHits: "caching.dashboard.series.cacheHits",
   failed: "caching.dashboard.series.failed",
 } as const;
+
+const REFRESH_DATE_TIME: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+};
 
 const UNKNOWN_CALL_TYPE = "Unknown";
 
@@ -85,7 +95,7 @@ interface CachePageProps {
 // Helper function to deep-parse a JSON string if possible
 
 const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole, userID, premiumUser }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const anchor1 = useComboboxAnchor();
   const anchor2 = useComboboxAnchor();
   const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
@@ -97,7 +107,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
     to: new Date(),
   });
 
-  const [lastRefreshed, setLastRefreshed] = useState("");
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [healthCheckResponse, setHealthCheckResponse] = useState<any>("");
 
   const {
@@ -113,7 +123,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   });
 
   useEffect(() => {
-    setLastRefreshed(new Date().toLocaleString());
+    setLastRefreshed(new Date());
   }, []);
 
   const uniqueApiKeys = activity?.filter_options.key_aliases ?? [];
@@ -124,7 +134,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
   const handleRefreshClick = () => {
     refetch();
-    setLastRefreshed(new Date().toLocaleString());
+    setLastRefreshed(new Date());
   };
 
   const runCachingHealthCheck = async () => {
@@ -177,38 +187,50 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           {t("shell.nav.items.responseCache")}
         </PageHeaderTitle>
         <PageHeaderDescription>{t("shell.pageDescriptions.caching")}</PageHeaderDescription>
-        <PageHeaderControls className="flex-wrap">
-          <Button
-            variant="outline"
-            size="icon-sm"
-            onClick={handleRefreshClick}
-            aria-label={t("caching.dashboard.refresh")}
-          >
-            <RefreshCw />
-          </Button>
-          {lastRefreshed && (
-            <p className="text-sm text-muted-foreground">
-              {t("caching.dashboard.lastRefreshed")}
-              {lastRefreshed}
-            </p>
-          )}
-        </PageHeaderControls>
       </PageHeader>
-      <Tabs defaultValue="analytics" className="w-full gap-6">
-        <TabsList variant="line" className="h-auto max-w-full justify-start overflow-x-auto rounded-none p-0">
-          <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.analytics")}
-          </TabsTrigger>
-          <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.health")}
-          </TabsTrigger>
-          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.settings")}
-          </TabsTrigger>
-          <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
-            {t("caching.dashboard.tabs.coordination")}
-          </TabsTrigger>
-        </TabsList>
+      <Tabs defaultValue="analytics" className="w-full gap-2">
+        <div className="@container w-full border-b">
+          <div className="flex flex-col-reverse gap-2 @3xl:flex-row @3xl:items-center @3xl:justify-between">
+            <div className="-mb-1.5 min-w-0 overflow-x-auto pb-1.5">
+              <TabsList variant="line" className="h-auto rounded-none p-0">
+                <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.analytics")}
+                </TabsTrigger>
+                <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.health")}
+                </TabsTrigger>
+                <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.settings")}
+                </TabsTrigger>
+                <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
+                  {t("caching.dashboard.tabs.coordination")}
+                </TabsTrigger>
+              </TabsList>
+            </div>
+
+            <div className="flex shrink-0 items-center justify-end space-x-2">
+              {lastRefreshed && (
+                <p className="text-sm text-muted-foreground">
+                  {t("caching.dashboard.lastRefreshed")}
+                  {formatDateWithEnglishPattern(
+                    lastRefreshed,
+                    i18n.language,
+                    lastRefreshed.toLocaleString(),
+                    REFRESH_DATE_TIME,
+                  )}
+                </p>
+              )}
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={handleRefreshClick}
+                aria-label={t("caching.dashboard.refresh")}
+              >
+                <RefreshCw />
+              </Button>
+            </div>
+          </div>
+        </div>
 
         <TabsContent value="analytics" keepMounted>
           <Card>

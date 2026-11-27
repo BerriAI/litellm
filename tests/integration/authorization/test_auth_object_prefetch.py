@@ -3,6 +3,7 @@ team and hand the getters rows they validate. The per-regime round-trip counts a
 tests/unit/proxy/auth/test_auth_object_prefetch.py."""
 
 import json
+import os
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -21,6 +22,7 @@ from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient
 from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.database import Database
 from tests.integration._support.prisma_clients import connected_proxy_prisma
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
@@ -29,8 +31,16 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def prisma() -> AsyncIterator[PrismaClient]:
+    """The prefetch reads its owner rows through the rust repository, so the fixture opens the database the way
+    proxy startup does."""
     async with connected_proxy_prisma() as client:
-        yield client
+        database = await Database.open(
+            client, os.environ["DATABASE_URL"], None, writer_connections=2, reader_connections=0
+        )
+        try:
+            yield client
+        finally:
+            await database.aclose()
 
 
 def _frozen_cache() -> UserApiKeyCache:

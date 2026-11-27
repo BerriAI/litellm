@@ -14,6 +14,7 @@ from litellm.llms.gemini.common_utils import (
     get_gemini_image_web_search_requests,
     map_gemini_image_tools_params,
 )
+from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, pop_vertex_request_labels
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
@@ -83,11 +84,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         requested: Final = _JSON_OBJECT.validate_python(non_default_params)
         params: Final = {key: value for key, value in requested.items() if key not in optional_params}
         image_params: Final = map_vertex_gemini_image_params(params, model, drop_params)
@@ -130,8 +131,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -161,14 +162,14 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         headers = headers or {}
 
         # If a custom api_base is provided, skip credential validation
@@ -192,10 +193,10 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict[str, str],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the image generation request to Gemini format
 
@@ -237,9 +238,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -303,5 +304,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         web_search_requests: Final = get_gemini_image_web_search_requests(response_object)
         if web_search_requests and model_response.usage is not None:
             setattr(model_response.usage, "web_search_requests", web_search_requests)
+
+        if not model_response.data:
+            raise empty_image_response_error(response_object, model, "vertex_ai", raw_response, model_response)
 
         return model_response

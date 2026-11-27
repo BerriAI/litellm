@@ -14,7 +14,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar
 from urllib.parse import urlparse
 
 import litellm
@@ -104,6 +104,7 @@ class _VertexCredentialsObject(Protocol):
 
 
 _VertexCredentialCacheKey = tuple[str | None, str | None]
+_HeaderValue = TypeVar("_HeaderValue")
 _KEY_FILE_VERSION_SEPARATOR: Final = "\0"
 
 
@@ -1322,8 +1323,10 @@ class VertexBase:
     ) -> tuple[str, str]:
         return await self._ensure_access_token_async(credentials, project_id, custom_llm_provider)
 
-    def set_headers(self, auth_header: str | None, extra_headers: dict | None) -> dict:
-        headers: Final = {
+    def set_headers(
+        self, auth_header: str | None, extra_headers: Mapping[str, _HeaderValue] | None
+    ) -> dict[str, _HeaderValue | str]:
+        headers: Final[dict[str, _HeaderValue | str]] = {
             "Content-Type": "application/json",
         }
         if auth_header is not None:

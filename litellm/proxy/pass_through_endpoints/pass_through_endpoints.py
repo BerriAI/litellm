@@ -38,6 +38,7 @@ from fastapi import (
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
+    params,
     status,
 )
 from fastapi.responses import StreamingResponse
@@ -63,6 +64,7 @@ from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
     REDACTED_BY_LITELLM,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
@@ -88,10 +90,12 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import valida
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages_async
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.socket_logging import SocketLogging
 from litellm.llms.anthropic.common_utils import (
     anthropic_accepts_user_id,
     anthropic_upstream_user_id_limit,
@@ -155,6 +159,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import ResponsesWebSocketClose
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
     ROUTER_RESERVED_METADATA_FIELDS,
     LiteLLMProxyRequestSetup,
@@ -236,7 +241,7 @@ def _is_mergeable_client_metadata(key: str, value: object) -> bool:
     return (
         not key.startswith("user_api_key_")
         and key not in ROUTER_RESERVED_METADATA_FIELDS
-        and key not in ("used_client_oauth_token", "claude_subscription_usage")
+        and key not in ("used_client_oauth_token", "claude_subscription_usage", SESSION_ID_INHERITED_METADATA_KEY)
         and (key != "model_info" or isinstance(value, Mapping))
     )
 
@@ -268,7 +273,7 @@ def get_response_body(response: httpx.Response) -> dict | None:
         return None
 
 
-async def set_env_variables_in_header(custom_headers: dict | None) -> dict | None:
+async def set_env_variables_in_header(custom_headers: Mapping[str, object] | None) -> dict[str, object] | None:
     """
     checks if any headers on config.yaml are defined as os.environ/COHERE_API_KEY etc
 
@@ -280,7 +285,7 @@ async def set_env_variables_in_header(custom_headers: dict | None) -> dict | Non
     """
     if custom_headers is None:
         return None
-    headers: Final = {}
+    headers: Final[dict[str, object]] = {}
     for key, value in custom_headers.items():
         # langfuse Api requires base64 encoded headers - it's simpleer to just ask litellm users to set their langfuse public and secret keys
         # we can then get the b64 encoded keys here
@@ -505,7 +510,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         headers: httpx.Headers,
         litellm_call_id: str | None = None,
         custom_headers: Mapping[str, str] | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         # Exclude headers that uvicorn writes itself (server, date) and
         # encoding/length headers that don't survive re-serialization.
         # If we forward the upstream's Server header, uvicorn adds its
@@ -538,9 +543,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         parsed_url: Final = urlparse(url)
         if custom_llm_provider == "chatgpt":
             return EndpointType.OPENAI
-        if custom_llm_provider in ("typesafe", "eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix(
-            "/"
-        ).endswith("/v1/systemone"):
+        if custom_llm_provider in ("eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
+            "/v1/systemone"
+        ):
             return EndpointType.DECISIONS
         if (
             ("generateContent") in url
@@ -566,9 +571,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         request: Request,
         async_client: httpx.AsyncClient,
         url: str,
-        headers: dict,
+        headers: Mapping[str, str],
         requested_query_params: dict | None = None,
-        custom_body: dict | None = None,
+        custom_body: dict[str, object] | None = None,
     ) -> httpx.Response:
         """
         Make a non-streaming HTTP request
@@ -766,7 +771,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         user_api_key_dict: UserAPIKeyAuth,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         logging_obj: LiteLLMLoggingObj,
-        _parsed_body: dict | None = None,
+        _parsed_body: dict[str, object] | None = None,
         litellm_call_id: str | None = None,
         customer_usage: ResolvedCustomerUsage | None = None,
     ) -> dict:
@@ -996,7 +1001,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     _update_stream_param_based_on_request_body = update_stream_param_based_on_request_body
 
 
-def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | None) -> None:
+def _carry_guardrail_logging_info(request_data: dict[str, object], guardrail_data: dict | None) -> None:
     """Copy guardrail logging entries from ``guardrail_data`` onto ``request_data``.
 
     Post-call guardrails run against a throwaway ``hook_data`` dict (its
@@ -1050,15 +1055,15 @@ def _passthrough_google_model(url_route: str, google_provider: str | None) -> st
 
 
 def _build_passthrough_failure_request_payload(
-    parsed_body: dict | None,
-    kwargs: dict | None,
+    parsed_body: dict[str, object] | None,
+    kwargs: Mapping[str, object] | None,
     logging_obj: LiteLLMLoggingObj | None,
     custom_llm_provider: str | None,
     upstream_usage: UpstreamReportedUsage | None = None,
     url: httpx.URL | None = None,
     upstream_model: str | None = None,
     builtin_provider_route: bool = False,
-) -> dict:
+) -> dict[str, object]:
     """Build the ``request_data`` dict passed to ``post_call_failure_hook``.
 
     Shared by the outer exception handler (LiteLLM-internal failures) and
@@ -1103,17 +1108,17 @@ def _build_passthrough_failure_request_payload(
 
 
 @dataclass(frozen=True, slots=True)
-class _TeamCallbackWiring:
+class TeamCallbackWiring:
     success_callbacks: "list[str | Callable[..., object] | CustomLogger] | None" = None  # mutable-ok: Logging init arg
     failure_callbacks: "list[str | Callable[..., object] | CustomLogger] | None" = None  # mutable-ok: Logging init arg
     logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ arg
 
 
-def _resolve_team_callback_wiring(
+def resolve_team_callback_wiring(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_config: "ProxyConfig",
     route_description: str,
-) -> _TeamCallbackWiring:
+) -> TeamCallbackWiring:
     """Resolve key/team dynamic logging callbacks for a passthrough request.
 
     Mirrors add_litellm_data_to_request: callback_vars are unpacked top-level
@@ -1140,9 +1145,9 @@ def _resolve_team_callback_wiring(
             "%s: failed to resolve team logging callbacks, continuing without them",
             route_description,
         )
-        return _TeamCallbackWiring()
+        return TeamCallbackWiring()
     if callback_settings_obj is None:
-        return _TeamCallbackWiring()
+        return TeamCallbackWiring()
     callback_vars: Final = callback_settings_obj.callback_vars
     success_callbacks: Final = callback_settings_obj.success_callback
     failure_callbacks: Final = callback_settings_obj.failure_callback
@@ -1156,7 +1161,7 @@ def _resolve_team_callback_wiring(
             "model_info": {},
         }
     )
-    return _TeamCallbackWiring(
+    return TeamCallbackWiring(
         success_callbacks=None if success_callbacks is None else [*success_callbacks],
         failure_callbacks=None if failure_callbacks is None else [*failure_callbacks],
         logging_kwargs=logging_kwargs,
@@ -1243,7 +1248,7 @@ async def _error_body_preview_and_relay(response: httpx.Response) -> tuple[str, 
 async def _log_passthrough_upstream_failure(
     response: httpx.Response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_payload: dict,
+    request_payload: dict[str, object],
     logging_obj: LiteLLMLoggingObj,
     inspect_body: bool = True,
 ) -> httpx.Response:
@@ -1301,7 +1306,7 @@ async def _relay_reporting_failures(
     stream: AsyncGenerator[bytes, None],
     upstream_status: int,
     user_api_key_dict: UserAPIKeyAuth,
-    request_payload: dict,  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
+    request_payload: dict[str, object],  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
     logging_obj: LiteLLMLoggingObj | None = None,
 ) -> AsyncGenerator[bytes, None]:
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -1619,12 +1624,12 @@ async def _opaque_passthrough_response(
 async def pass_through_request(
     request: Request,
     target: str,
-    custom_headers: dict,
+    custom_headers: dict[str, str],  # mutable-ok: forwarding adds aliases
     user_api_key_dict: UserAPIKeyAuth,
-    custom_body: dict | None = None,
+    custom_body: Mapping[str, object] | None = None,
     forward_headers: bool | None = False,
     merge_query_params: bool | None = False,
-    query_params: dict | None = None,
+    query_params: dict[str, object] | None = None,
     default_query_params: dict | None = None,
     stream: bool | None = None,
     cost_per_request: float | None = None,
@@ -1637,6 +1642,8 @@ async def pass_through_request(
     keep_target_query: bool = False,
     raw_response: bool = False,
     response_owner: AsyncExitStack | None = None,
+    *,
+    preserve_trace_context: bool = False,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1664,6 +1671,7 @@ async def pass_through_request(
         keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
         raw_response: Relay opaque response bytes without parsing, buffering or following redirects
         response_owner: Request-scoped owner that closes the upstream even if streaming never starts
+        preserve_trace_context: Relay the caller trace context without injecting the proxy span
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1687,19 +1695,18 @@ async def pass_through_request(
     logging_obj: Logging | None = None
     # the dict post-call guardrails wrote their logging info into; the failure
     # handler reuses it so a guardrail block still surfaces its span/logs
-    post_call_guardrail_data: dict | None = None
+    post_call_guardrail_data: dict[str, object] | None = None
 
     #########################################################
     try:
         url = httpx.URL(target)
-        forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
-            request_headers=safe_get_request_headers(request).copy(),
-            headers=custom_headers,
-            forward_headers=forward_headers,
-        )
-        upstream_headers: Final = _with_trace_context(
-            upstream_headers_filter(forwarded_headers),
-            parent_span=user_api_key_dict.parent_otel_span,
+        upstream_headers: Final = _relay_request_headers(
+            request,
+            custom_headers,
+            forward_headers,
+            preserve_trace_context,
+            upstream_headers_filter,
+            user_api_key_dict.parent_otel_span,
         )
 
         requested_query_params: dict | None = (
@@ -1761,15 +1768,16 @@ async def pass_through_request(
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
         passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
         start_time: Final = datetime.now()
-        team_callbacks: Final = _resolve_team_callback_wiring(
+        team_callbacks: Final = resolve_team_callback_wiring(
             user_api_key_dict=user_api_key_dict,
             proxy_config=proxy_config,
             route_description="pass_through_endpoint",
         )
         litellm_trace_id: Final[str | None] = get_chain_id_from_headers(dict(request.headers))
+        received_body_for_logging: Final = safe_dumps(await truncate_base64_in_messages_async(_parsed_body))
         logging_obj = Logging(
             model=passthrough_model,
-            messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            messages=[{"role": "user", "content": received_body_for_logging}],
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
@@ -2019,8 +2027,9 @@ async def pass_through_request(
             _with_anthropic_user_id(outgoing_body, client_user_id),
             _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
         )
+        hooked_body_for_logging: Final = safe_dumps(await truncate_base64_in_messages_async(_parsed_body))
         logging_obj.pre_call(
-            input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            input=[{"role": "user", "content": hooked_body_for_logging}],
             api_key="",
             additional_args={
                 "complete_input_dict": upstream_body,
@@ -2033,6 +2042,9 @@ async def pass_through_request(
             stream=stream,
         )
         forwarded_json_body: Final = _forwarded_json_body(upstream_body, request.method, request_sent_body(request))
+        await pass_through_endpoint_logging.settle_background_response_before_delete(
+            request.method, str(url), outbound_headers
+        )
 
         if stream:
             logging_obj.stream = True
@@ -2605,14 +2617,14 @@ def _apply_key_team_project_controls(
 _METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
-def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
+def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict[str, object]:
     """
     If tags are in the request headers, add them to the metadata
 
     Used for google and vertex JS SDKs, and Azure passthrough
     Checks both 'tags' and 'x-litellm-tags' headers
     """
-    tags_to_add: Final = []
+    tags_to_add: Final[list[str]] = []
 
     # Check for 'tags' header first
     _tags = request.headers.get("tags")
@@ -2708,18 +2720,18 @@ async def _parse_request_data_by_content_type(
 
 
 def create_pass_through_route(
-    endpoint,
+    endpoint: object,
     target: str,
     custom_headers: Mapping[str, object] | None = None,
     _forward_headers: bool | None = False,
     _merge_query_params: bool | None = False,
-    dependencies: list | None = None,
+    dependencies: Sequence[params.Depends] | None = None,
     include_subpath: bool | None = False,
     cost_per_request: float | None = None,
     custom_llm_provider: str | None = None,
     is_streaming_request: bool | None = False,
     query_params: dict | None = None,
-    default_query_params: dict | None = None,
+    default_query_params: dict[str, object] | None = None,
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
@@ -2865,7 +2877,7 @@ def create_pass_through_route(
                     return await pass_through_request(
                         request=request,
                         target=full_target,
-                        custom_headers=headers_dict,
+                        custom_headers=cast(dict[str, str], headers_dict),  # cast-ok: registry erases header types
                         user_api_key_dict=user_api_key_dict,
                         forward_headers=cast(bool | None, param_forward_headers),
                         merge_query_params=cast(bool | None, param_merge_query_params),
@@ -2881,6 +2893,7 @@ def create_pass_through_route(
                         upstream_request_filter=upstream_request_filter,
                         operation=operation,
                         keep_target_query=keep_target_query,
+                        preserve_trace_context=target_params.get("preserve_trace_context") is True,
                     )
                 finally:
                     _clear_pass_through_request_state(request.state)
@@ -2900,9 +2913,9 @@ def create_pass_through_route(
 def create_websocket_passthrough_route(
     endpoint: str,
     target: str,
-    custom_headers: dict | None = None,
+    custom_headers: dict[str, object] | None = None,
     _forward_headers: bool | None = False,
-    dependencies: list | None = None,
+    dependencies: Sequence[params.Depends] | None = None,
     cost_per_request: float | None = None,
 ):
     """
@@ -2923,7 +2936,7 @@ def create_websocket_passthrough_route(
     async def websocket_endpoint_func(
         websocket: WebSocket,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
-        **kwargs,  # For additional query parameters
+        **kwargs: object,  # For additional query parameters
     ):
         """
         WebSocket passthrough endpoint function.
@@ -3061,6 +3074,47 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
 
 
 _WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("x-goog-user-project",))
+
+
+def _relay_request_headers(
+    request: Request,
+    custom_headers: dict[str, str],  # mutable-ok: the forwarding helper adds x-pass aliases in place
+    forward_headers: bool | None,
+    preserve_trace_context: bool,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]],
+    parent_span: object,
+) -> Mapping[str, str]:
+    cached: Final = cast(Mapping[str, str], safe_get_request_headers(request))  # cast-ok: cached Starlette headers
+    tracestate: Final = request.headers.getlist("tracestate") if preserve_trace_context else ()
+    request_headers: Final = {**cached, "tracestate": ",".join(tracestate)} if len(tracestate) > 1 else dict(cached)
+    relay_headers: Final = (
+        _with_caller_trace_headers(custom_headers, request_headers)
+        if preserve_trace_context and forward_headers is not True
+        else custom_headers
+    )
+    forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+        request_headers=request_headers,
+        headers=relay_headers,
+        forward_headers=forward_headers,
+    )
+    filtered_headers: Final = upstream_headers_filter(forwarded_headers)
+    return (
+        filtered_headers if preserve_trace_context else _with_trace_context(filtered_headers, parent_span=parent_span)
+    )
+
+
+def _with_caller_trace_headers(
+    configured: Mapping[str, str], incoming: Mapping[str, str]
+) -> dict[str, str]:  # mutable-ok: the header forwarding helper adds x-pass aliases in place
+    configured_names: Final = frozenset(name.lower() for name in configured)
+    return {
+        **{
+            name: incoming[name]
+            for name in ("traceparent", "tracestate")
+            if name in incoming and name not in configured_names
+        },
+        **configured,
+    }
 
 
 def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict[str, str]:
@@ -3379,6 +3433,14 @@ def _turn_in_flight(
     )
 
 
+def _passthrough_close(
+    upstream_frame_kind: WebsocketUpstreamFrameClassifier | None, turn_cut: bool
+) -> ResponsesWebSocketClose:
+    if upstream_frame_kind is None:
+        return "settled_by_its_log"
+    return "turn_unfinished" if turn_cut else "turns_finished"
+
+
 def _turn_owed(
     upstream_frame_kind: WebsocketUpstreamFrameClassifier | None,
     unlogged_frames: Sequence[Mapping[str, object]],
@@ -3521,7 +3583,7 @@ async def websocket_passthrough_request(
     upstream_headers: Final = _with_trace_context(forwarded_headers, parent_span=user_api_key_dict.parent_otel_span)
 
     # Initialize logging object similar to HTTP passthrough
-    team_callbacks: Final = _resolve_team_callback_wiring(
+    team_callbacks: Final = resolve_team_callback_wiring(
         user_api_key_dict=user_api_key_dict,
         proxy_config=proxy_config,
         route_description="websocket_passthrough",
@@ -3555,7 +3617,7 @@ async def websocket_passthrough_request(
     # Create a dummy request object for WebSocket connections to maintain compatibility
     # with the existing _init_kwargs_for_pass_through_endpoint function
     class DummyRequest:
-        def __init__(self, url: str, method: str = "WEBSOCKET", headers: dict | None = None):
+        def __init__(self, url: str, method: str = "WEBSOCKET", headers: dict[str, str] | None = None):
             self.url = httpx.URL(url)
             self.scope = websocket.scope
             self.query_params = websocket.query_params
@@ -3628,6 +3690,7 @@ async def websocket_passthrough_request(
         ),
         started=start_time,
     )
+    socket_logging: Final = SocketLogging()
 
     def log_frames(
         call_logging: LiteLLMLoggingObj,
@@ -3660,20 +3723,22 @@ async def websocket_passthrough_request(
         }
         custom_llm_provider: Final = call_kwargs.get("custom_llm_provider")
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
-                httpx_response=MockWebSocketResponse(target),
-                response_body=frames,
-                url_route=endpoint or "",
-                result="websocket_connection_successful",
-                start_time=ledger.started,
-                end_time=end_time,
-                logging_obj=call_logging,
-                cache_hit=False,
-                request_body={},
-                passthrough_logging_payload=logged_payload,
-                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-                finalize_before_dispatch=False,
-                **success_kwargs,
+            async_coroutine=socket_logging.tracked(
+                pass_through_endpoint_logging.pass_through_async_success_handler(
+                    httpx_response=MockWebSocketResponse(target),
+                    response_body=frames,
+                    url_route=endpoint or "",
+                    result="websocket_connection_successful",
+                    start_time=ledger.started,
+                    end_time=end_time,
+                    logging_obj=call_logging,
+                    cache_hit=False,
+                    request_body={},
+                    passthrough_logging_payload=logged_payload,
+                    custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                    finalize_before_dispatch=False,
+                    **success_kwargs,
+                )
             )
         )
         bind_budget_reservation_to_callbacks(call_logging.litellm_params)
@@ -3702,12 +3767,19 @@ async def websocket_passthrough_request(
     websocket_hook_data: Final = guardrail_request_data_with_streaming(
         MappingProxyType({"litellm_call_id": litellm_call_id}), is_streaming=True
     )
-    await proxy_logging_obj.pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        data=websocket_hook_data,
-        call_type="pass_through_endpoint",
-    )
+    try:
+        await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=websocket_hook_data,
+            call_type="pass_through_endpoint",
+        )
+    except Exception:
+        await proxy_logging_obj.arelease_refused_responses_websocket_slot(user_api_key_dict)
+        raise
+    if upstream_frame_kind is not None:
+        proxy_logging_obj.leave_responses_websocket_reservation_to_close()
 
+    unfinished_turn: Final = asyncio.Event()
     try:
         verbose_proxy_logger.debug(
             "WebSocket passthrough (%s): Establishing upstream connection to %s", endpoint, target
@@ -3920,6 +3992,8 @@ async def websocket_passthrough_request(
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if client_task.done() and _turn_owed(upstream_frame_kind, websocket_messages, ledger):
                 await asyncio.wait((upstream_task,), timeout=walkout_turn_drain_seconds)
+            if _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                unfinished_turn.set()
             done: Final = tuple(task for task in tasks if task.done())
             pending: Final = tuple(task for task in tasks if not task.done())
 
@@ -4012,9 +4086,18 @@ async def websocket_passthrough_request(
         if _client_socket_is_open(websocket):
             await websocket.close(code=1011, reason="WebSocket passthrough error")
     finally:
-        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
-        if _client_socket_is_open(websocket):
-            await websocket.close()
+        try:
+            if _client_socket_is_open(websocket):
+                await websocket.close()
+        finally:
+            await proxy_logging_obj.arelease_responses_websocket_slot(
+                user_api_key_dict,
+                _passthrough_close(
+                    upstream_frame_kind,
+                    unfinished_turn.is_set() or _turn_owed(upstream_frame_kind, websocket_messages, ledger),
+                ),
+                socket_logging.finished,
+            )
 
 
 def _content_type_header(response: httpx.Response) -> str:
@@ -4085,7 +4168,7 @@ def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
 
 async def _relay_passthrough_response_bytes(
     response: httpx.Response,
-    request_body: dict,
+    request_body: dict[str, object],
     url_route: str,
     start_time: datetime,
     logging_obj: LiteLLMLoggingObj,
@@ -4239,7 +4322,7 @@ class SafeRouteAdder:
         path: str,
         endpoint: Callable[..., object],
         methods: list[str],
-        dependencies: list | None = None,
+        dependencies: Sequence[params.Depends] | None = None,
     ) -> bool:
         """
         Add an API route to the app only if it doesn't already exist.
@@ -4296,18 +4379,20 @@ class InitPassThroughEndpointHelpers:
         app: FastAPI,
         path: str,
         target: str,
-        custom_headers: dict | None,
+        custom_headers: Mapping[str, object] | None,
         forward_headers: bool | None,
         merge_query_params: bool | None,
-        dependencies: list | None,
+        dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
-        guardrails: dict | None = None,
+        guardrails: dict[str, object] | None = None,
         methods: list[str] | None = None,
-        default_query_params: dict | None = None,
+        default_query_params: dict[str, object] | None = None,
         config_file_path: str | None = None,
         auth: bool = False,
         timeout: float | None = None,
+        *,
+        preserve_trace_context: bool = False,
     ):
         """Add exact path route for pass-through endpoint"""
         # Default to all methods if none specified (backward compatibility)
@@ -4366,6 +4451,7 @@ class InitPassThroughEndpointHelpers:
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": forward_headers,
+                "preserve_trace_context": preserve_trace_context,
                 "merge_query_params": merge_query_params,
                 "default_query_params": default_query_params,
                 "dependencies": dependencies,
@@ -4380,18 +4466,20 @@ class InitPassThroughEndpointHelpers:
         app: FastAPI,
         path: str,
         target: str,
-        custom_headers: dict | None,
+        custom_headers: Mapping[str, object] | None,
         forward_headers: bool | None,
         merge_query_params: bool | None,
-        dependencies: list | None,
+        dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
-        guardrails: dict | None = None,
+        guardrails: dict[str, object] | None = None,
         methods: list[str] | None = None,
-        default_query_params: dict | None = None,
+        default_query_params: dict[str, object] | None = None,
         config_file_path: str | None = None,
         auth: bool = False,
         timeout: float | None = None,
+        *,
+        preserve_trace_context: bool = False,
     ):
         """Add wildcard route for sub-paths"""
         # Default to all methods if none specified (backward compatibility)
@@ -4451,6 +4539,7 @@ class InitPassThroughEndpointHelpers:
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": forward_headers,
+                "preserve_trace_context": preserve_trace_context,
                 "merge_query_params": merge_query_params,
                 "default_query_params": default_query_params,
                 "dependencies": dependencies,
@@ -4655,8 +4744,8 @@ class YieldsToConfiguredPassThroughRoute(APIRoute):
 
 
 def _get_combined_pass_through_endpoints(
-    pass_through_endpoints: list[dict] | list[PassThroughGenericEndpoint],
-    config_pass_through_endpoints: list[dict],
+    pass_through_endpoints: list[dict[str, object]] | list[PassThroughGenericEndpoint],
+    config_pass_through_endpoints: list[dict[str, object]],
 ):
     """Get combined pass-through endpoints from db + config"""
     return pass_through_endpoints + config_pass_through_endpoints
@@ -4686,6 +4775,7 @@ async def _register_pass_through_endpoint(
 
     custom_headers: Final = await set_env_variables_in_header(custom_headers=endpoint_data.get("headers"))
     forward_headers: Final = endpoint_data.get("forward_headers")
+    preserve_trace_context: Final = endpoint_data.get("preserve_trace_context") is True
     merge_query_params: Final = endpoint_data.get("merge_query_params")
     default_query_params: Final = endpoint_data.get("default_query_params")
     auth: Final[bool | str | None] = endpoint_data.get("auth")
@@ -4716,6 +4806,7 @@ async def _register_pass_through_endpoint(
         target=target,
         custom_headers=custom_headers,
         forward_headers=forward_headers,
+        preserve_trace_context=preserve_trace_context,
         merge_query_params=merge_query_params,
         dependencies=dependencies,
         cost_per_request=cost_per_request,
@@ -4743,6 +4834,7 @@ async def _register_pass_through_endpoint(
             target=target,
             custom_headers=custom_headers,
             forward_headers=forward_headers,
+            preserve_trace_context=preserve_trace_context,
             merge_query_params=merge_query_params,
             dependencies=dependencies,
             cost_per_request=cost_per_request,
@@ -4790,7 +4882,7 @@ async def initialize_pass_through_endpoints(
     )
 
     ## get combined pass-through endpoints from db + config
-    combined_pass_through_endpoints: list[dict | PassThroughGenericEndpoint]
+    combined_pass_through_endpoints: list[dict[str, object] | PassThroughGenericEndpoint]
 
     if config_passthrough_endpoints is not None:
         combined_pass_through_endpoints = _get_combined_pass_through_endpoints(
@@ -4933,7 +5025,7 @@ async def _get_pass_through_endpoints_from_db(
 async def _filter_endpoints_by_team_allowed_routes(
     team_id: str,
     pass_through_endpoints: list[PassThroughGenericEndpoint],
-    prisma_client,
+    prisma_client: object,
 ) -> list[PassThroughGenericEndpoint]:
     """
     Filter pass-through endpoints based on team's allowed_passthrough_routes and
@@ -5133,7 +5225,7 @@ async def update_pass_through_endpoints(
     await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)
 
     # Re-register the route with updated headers
-    _custom_headers: dict | None = updated_endpoint.headers or {}
+    _custom_headers: dict[str, object] | None = updated_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     route_app: Final = _request_app(request)
@@ -5153,6 +5245,7 @@ async def update_pass_through_endpoints(
             default_query_params=updated_endpoint.default_query_params,
             auth=updated_endpoint.auth,
             timeout=updated_endpoint.timeout,
+            preserve_trace_context=updated_endpoint.preserve_trace_context,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -5170,6 +5263,7 @@ async def update_pass_through_endpoints(
             default_query_params=updated_endpoint.default_query_params,
             auth=updated_endpoint.auth,
             timeout=updated_endpoint.timeout,
+            preserve_trace_context=updated_endpoint.preserve_trace_context,
         )
     InitPassThroughEndpointHelpers.drop_llm_api_routes(
         replaced_llm_api_routes - InitPassThroughEndpointHelpers.auth_enforced_llm_api_routes()
@@ -5230,7 +5324,7 @@ async def create_pass_through_endpoints(
     created_endpoint: Final = PassThroughGenericEndpoint.model_validate(data_dict)
 
     # Register the new route
-    _custom_headers: dict | None = created_endpoint.headers or {}
+    _custom_headers: dict[str, object] | None = created_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     route_app: Final = _request_app(request)
@@ -5250,6 +5344,7 @@ async def create_pass_through_endpoints(
             default_query_params=created_endpoint.default_query_params,
             auth=created_endpoint.auth,
             timeout=created_endpoint.timeout,
+            preserve_trace_context=created_endpoint.preserve_trace_context,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -5267,6 +5362,7 @@ async def create_pass_through_endpoints(
             default_query_params=created_endpoint.default_query_params,
             auth=created_endpoint.auth,
             timeout=created_endpoint.timeout,
+            preserve_trace_context=created_endpoint.preserve_trace_context,
         )
 
     return PassThroughEndpointResponse(endpoints=[created_endpoint])

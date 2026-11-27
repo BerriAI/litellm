@@ -157,7 +157,7 @@ class BaseTranslation(ABC):
     @abstractmethod
     async def process_input_messages(
         self,
-        data: dict,
+        data: dict[str, object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> Any:
@@ -174,7 +174,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> Any:
         """
         Process output response with guardrails.
@@ -192,7 +192,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> object:
@@ -285,7 +285,9 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list["AllMessageValues"] | None:
+    def get_structured_messages(
+        self, data: dict[str, object], *, keep_tool_errors: bool = False
+    ) -> list["AllMessageValues"] | None:
         """
         Convert request data to OpenAI-spec structured messages.
 
@@ -296,7 +298,7 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def extract_request_tool_names(self, data: dict) -> list[str]:
+    def extract_request_tool_names(self, data: dict[str, object]) -> list[str]:
         """
         Extract tool names from the request body for allowlist/policy checks.
         Override in tool-capable handlers; default returns [].

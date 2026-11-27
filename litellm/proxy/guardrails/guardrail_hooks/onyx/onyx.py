@@ -28,6 +28,8 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -103,7 +105,7 @@ class OnyxGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -146,7 +148,7 @@ class OnyxGuardrail(CustomGuardrail):
             return inputs
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.onyx import (
             OnyxGuardrailConfigModel,
         )

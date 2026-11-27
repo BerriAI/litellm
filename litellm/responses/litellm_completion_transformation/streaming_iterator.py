@@ -200,7 +200,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: str | None = None,
-        litellm_metadata: dict | None = None,
+        litellm_metadata: dict[str, object] | None = None,
         tool_call_provider_fields: bool = False,
         compaction_summary: CompactionSummaryStream | None = None,
     ):
@@ -265,7 +265,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         request_tools: Final = self.responses_api_request.get("tools")
         self._custom_tool_names: set[str] = extract_custom_tool_names(request_tools)
         self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
-            LiteLLMCompletionResponsesConfig.request_tools(self.responses_api_request)
+            LiteLLMCompletionResponsesConfig.request_tools(self.responses_api_request), request_input
         )
         self._web_search_calls: dict[str, object] = {}  # mutable-ok: latest call by provider id
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
@@ -280,6 +280,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     async def aclose(self) -> None:
         await self.litellm_custom_stream_wrapper.aclose()
+
+    def outlive_consumer_until_settled(self) -> None:
+        """A bridged stream has no provider Responses stream to read on; its cut is billed from what already arrived."""
+
+    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+        return False
 
     def _tool_search_execution(self, call_id: str, fn_name: str) -> ToolSearchExecution | None:
         known: Final = self._tool_search_executions.get(call_id)
@@ -461,10 +467,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _responses_namespace_tool_call_fields(self, fn_name: str) -> tuple[str, str | None]:
         mapped: Final = self._namespace_tool_names.get(fn_name)
-        if mapped:
-            namespace, tool_name = mapped
-            return tool_name, namespace
-        return fn_name, None
+        if mapped is None:
+            return fn_name, None
+        return mapped.name, mapped.returned_namespace
 
     def _tool_call_item_kwargs(self, call_id: str, fn_name: str, arguments: str, status: str) -> dict[str, str]:
         item_kwargs: Final = build_tool_call_item_kwargs(call_id, fn_name, arguments, status, self._custom_tool_names)
@@ -853,22 +858,24 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._cached_response_id is None:
             self._cached_response_id = f"resp_{uuid.uuid4()}"
 
-        response_created_event_data: Final = {
-            "id": self._cached_response_id,
-            "object": "response",
-            "created_at": int(time.time()),
-            "status": "in_progress",
-            "error": None,
-            "incomplete_details": None,
-            "instructions": self.responses_api_request.get("instructions", None),
-            "max_output_tokens": None,
-            "model": self.model,
-            "output": [],
-            "parallel_tool_calls": True,
-            "previous_response_id": None,
-            "reasoning": {"effort": None, "summary": None},
-            "store": True,
-        }
+        response_created_event_data: Final = dict[str, object](
+            {
+                "id": self._cached_response_id,
+                "object": "response",
+                "created_at": int(time.time()),
+                "status": "in_progress",
+                "error": None,
+                "incomplete_details": None,
+                "instructions": self.responses_api_request.get("instructions", None),
+                "max_output_tokens": None,
+                "model": self.model,
+                "output": [],
+                "parallel_tool_calls": True,
+                "previous_response_id": None,
+                "reasoning": {"effort": None, "summary": None},
+                "store": True,
+            }
+        )
         if "temperature" in self.responses_api_request:
             response_created_event_data["temperature"] = self.responses_api_request["temperature"]
         if "text" in self.responses_api_request:
@@ -1003,7 +1010,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         self._pending_response_events.extend(events)
 
-    def _merge_provider_specific_fields(self, src: dict) -> None:
+    def _merge_provider_specific_fields(self, src: Mapping[str, object]) -> None:
         """Merge provider_specific_fields using last-value-wins for lists.
 
         List-valued keys (web_search_results, tool_results,

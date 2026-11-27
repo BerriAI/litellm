@@ -4,7 +4,7 @@ import { cn } from "@/lib/cva.config";
 
 export function CustomerDetailLayout({ children, label }: { children: ReactNode; label?: string }) {
   return (
-    <main className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6" aria-label={label}>
+    <main className="mx-auto w-full max-w-[1552px] space-y-6" aria-label={label}>
       {children}
     </main>
   );

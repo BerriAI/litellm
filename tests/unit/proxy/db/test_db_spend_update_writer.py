@@ -297,6 +297,16 @@ def test_enqueue_tool_registry_upsert_reads_every_choice():
     assert enqueued == ["tool_alpha", "tool_beta"]
 
 
+def test_tool_discovery_enqueues_only_names_that_fit_the_index() -> None:
+    db_writer = DBSpendUpdateWriter()
+    db_writer._enqueue_tool_registry_upsert(
+        kwargs={"tools": [{"function": {"name": "é" * 257}}, {"function": {"name": "healthy_tool"}}]},
+        completion_response=None,
+    )
+
+    assert tuple(item["tool_name"] for item in db_writer.tool_discovery_queue.flush()) == ("healthy_tool",)
+
+
 class _LoggedSuccesses(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -3926,6 +3936,7 @@ _REQUEUE_SAFETY_CASES: Final = [
             id="statement never reached the database",
         ),
         pytest.param(_postgres_rejection("22021"), False, id="postgres refused the data itself"),
+        pytest.param(_postgres_rejection("54000"), False, id="postgres refused a program limit violation"),
         pytest.param(
             _postgres_rejection("23502"),
             False,

@@ -854,7 +854,7 @@ async def invoke_agent_a2a(
             # downstream via ``get_forward_metadata``. Stripping it here would
             # collide with litellm's spend-tracking ``metadata`` kwarg and
             # silently drop the caller's A2A request-level metadata.
-            params_to_remove: Final = []
+            params_to_remove: Final[list[str]] = []
             for key, value in params.items():
                 if key in all_litellm_params and key not in {"id", "metadata"}:
                     params_to_remove.append(key)
@@ -1027,7 +1027,7 @@ async def invoke_agent_a2a(
         if _agent_guardrails:
             if not isinstance(_agent_guardrails, list):
                 _agent_guardrails = [_agent_guardrails]
-            _existing_guardrails: list = data.get("guardrails") or []
+            _existing_guardrails: list[object] = data.get("guardrails") or []
             if not isinstance(_existing_guardrails, list):
                 _existing_guardrails = [_existing_guardrails]
             data["guardrails"] = _existing_guardrails + [g for g in _agent_guardrails if g not in _existing_guardrails]

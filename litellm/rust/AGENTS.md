@@ -10,11 +10,15 @@ For error types, error variants and conversions between crate errors, follow [.a
 
 For where config.yaml values, environment layering and kwargs from Python become typed Rust, follow [.agents/skills/rust-python-boundary/SKILL.md](.agents/skills/rust-python-boundary/SKILL.md)
 
-The process-wide rustls `CryptoProvider` (ring) is installed once by the host. rust-proxy does it at the top of `main` through `litellm_gateway::install_crypto_provider`, and python-bridge must do the same in its module init before it builds any rustls config. Library crates never install it. The AWS SDK links aws-lc-rs next to ring, so without an installed default the first rustls config a library builds, such as redis-rs TLS, panics
+The process-wide rustls `CryptoProvider` (aws-lc-rs, or its FIPS provider when the host is built with `--features fips`) is installed once by the host. rust-proxy does it at the top of `main` through `litellm_gateway::install_crypto_provider`, and python-bridge must do the same in its module init before it builds any rustls config. Library crates never install it and never pick ring, so no build links ring. Without an installed default the first rustls config a library builds, such as redis-rs TLS, panics
 
 For fieldless enums, derive `strum::VariantArray` and use `VARIANTS` instead of a hand-listed `ALL` array. Derive Strum string conversions instead of hand-written variant-to-string matches
 
 Use the derived conversions directly (`<&'static str>::from(x)` / `.into()`, `str::parse`) with no `as_str`/`parse` wrapper that only delegates, and spell each variant with explicit `#[strum(serialize = "...")]` instead of `serialize_all`
+
+Production code spawns through `litellm_call_scope`, never `tokio::spawn`, `Handle::spawn` or `Runtime::spawn`, which clippy refuses. Use `spawn_in_call` for work done for the call that spawns it, so the task keeps the call's record, and `spawn_detached` for a task that outlives any call, such as a process-wide listener or a loop the first request starts, so it does not keep that call alive. Test code may spawn directly
+
+Run clippy with `make lint-rust-clippy`, not `cargo clippy --all-targets`. It lints production targets and test targets in two passes, with `disallowed_methods` allowed in the second, as CI does
 
 ## Porting from Python
 

@@ -37,7 +37,7 @@ interface ScopedSavingsTabProps {
 }
 
 const ScopedSavingsTab = ({ accessToken, scope, activity, entityType, scopeNote }: ScopedSavingsTabProps) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { dateValue, onDateChange, results, loading, failed } = useScopedDailyActivityRange(
     accessToken,
     scope,
@@ -48,16 +48,16 @@ const ScopedSavingsTab = ({ accessToken, scope, activity, entityType, scopeNote 
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
-  const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results), [results]);
+  const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results, i18n.language), [results, i18n.language]);
 
   const overTime = useMemo(() => {
     if (accumulation !== "cumulative") return perInterval;
-    const startLabel = startTime ? shortDate(localIsoDay(startTime)) : "";
+    const startLabel = startTime ? shortDate(localIsoDay(startTime), i18n.language) : "";
     return withStartAnchor(toCumulative(perInterval), startLabel);
-  }, [accumulation, perInterval, startTime]);
+  }, [accumulation, perInterval, startTime, i18n.language]);
 
   const intervalLabel = t("shared.scopedSavingsTab.perDay");
-  const rangeLabel = formatRangeLabel(startTime, endTime);
+  const rangeLabel = formatRangeLabel(startTime, endTime, i18n.language);
   const savingsSubtitle = [
     accumulation === "cumulative"
       ? t("shared.scopedSavingsTab.runningTotal")

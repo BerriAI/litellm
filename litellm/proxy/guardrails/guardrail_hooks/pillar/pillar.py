@@ -42,7 +42,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import LLMResponseTypes
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.pillar import PillarGuardrailConfigModel
 
 MAX_PILLAR_HEADER_VALUE_BYTES: Final = 8 * 1024
 
@@ -325,7 +325,7 @@ class PillarGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: Literal[
             "completion",
             "text_completion",
@@ -370,7 +370,7 @@ class PillarGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
@@ -466,7 +466,9 @@ class PillarGuardrail(CustomGuardrail):
     # CORE LOGIC METHOD
     # =========================================================================
 
-    async def run_pillar_guardrail(self, data: dict, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
+    async def run_pillar_guardrail(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth
+    ) -> dict[str, object]:
         """
         Core method to run the Pillar guardrail scan.
 
@@ -850,7 +852,7 @@ class PillarGuardrail(CustomGuardrail):
     # =========================================================================
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["PillarGuardrailConfigModel"] | None:
         """
         Get the configuration model for this guardrail.
 

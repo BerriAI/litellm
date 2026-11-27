@@ -4,6 +4,12 @@ templates:
   - gateway/hpa.yaml
   - gateway/deployment.yaml
   - gateway/configmap.yaml
+  - backend/keda.yaml
+  - backend/hpa.yaml
+  - backend/deployment.yaml
+  - ui/keda.yaml
+  - ui/hpa.yaml
+  - ui/deployment.yaml
 values:
   - ./values/required.yaml
 release:
@@ -264,3 +270,275 @@ tests:
     asserts:
       - notExists:
           path: metadata.annotations
+
+  - it: renders no backend ScaledObject by default
+    template: backend/keda.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a backend ScaledObject targeting the backend Deployment
+    set:
+      backend.hpa.enabled: false
+      backend.keda.enabled: true
+      backend.keda.minReplicaCount: 2
+      backend.keda.maxReplicaCount: 6
+      backend.keda.pollingInterval: 15
+      backend.keda.cooldownPeriod: 120
+      backend.keda.advanced:
+        restoreToOriginalReplicaCount: true
+      backend.keda.scaledObject.annotations:
+        autoscaling.keda.sh/paused-replicas: "2"
+      backend.keda.triggers:
+        - type: cpu
+          metricType: Utilization
+          metadata:
+            value: "60"
+    templates:
+      - backend/keda.yaml
+      - backend/hpa.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: backend/hpa.yaml
+      - isKind:
+          of: ScaledObject
+        template: backend/keda.yaml
+      - equal:
+          path: metadata.name
+          value: rel-litellm-backend
+        template: backend/keda.yaml
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: backend
+        template: backend/keda.yaml
+      - equal:
+          path: metadata.annotations
+          value:
+            autoscaling.keda.sh/paused-replicas: "2"
+        template: backend/keda.yaml
+      - equal:
+          path: spec.scaleTargetRef
+          value:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: rel-litellm-backend
+        template: backend/keda.yaml
+      - equal:
+          path: spec.minReplicaCount
+          value: 2
+        template: backend/keda.yaml
+      - equal:
+          path: spec.maxReplicaCount
+          value: 6
+        template: backend/keda.yaml
+      - equal:
+          path: spec.pollingInterval
+          value: 15
+        template: backend/keda.yaml
+      - equal:
+          path: spec.cooldownPeriod
+          value: 120
+        template: backend/keda.yaml
+      - equal:
+          path: spec.advanced.restoreToOriginalReplicaCount
+          value: true
+        template: backend/keda.yaml
+      - equal:
+          path: spec.triggers
+          value:
+            - type: cpu
+              metricType: Utilization
+              metadata:
+                value: "60"
+        template: backend/keda.yaml
+
+  - it: fills a partial backend fallback with the backend maxReplicaCount
+    set:
+      backend.hpa.enabled: false
+      backend.keda.enabled: true
+      backend.keda.maxReplicaCount: 7
+      backend.keda.fallback:
+        failureThreshold: 0
+    template: backend/keda.yaml
+    asserts:
+      - equal:
+          path: spec.fallback
+          value:
+            failureThreshold: 0
+            replicas: 7
+
+  - it: leaves spec.replicas off the backend Deployment so KEDA owns the replica count
+    set:
+      backend.hpa.enabled: false
+      backend.keda.enabled: true
+      backend.replicaCount: 3
+    template: backend/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.replicas
+
+  - it: refuses to run the backend HPA and KEDA against the same Deployment
+    set:
+      backend.hpa.enabled: true
+      backend.keda.enabled: true
+    template: backend/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: backend.hpa.enabled and backend.keda.enabled are mutually exclusive
+
+  - it: renders no backend ScaledObject in monolith mode
+    set:
+      monolith.enabled: true
+      backend.hpa.enabled: false
+      backend.keda.enabled: true
+    template: backend/keda.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no backend ScaledObject when the backend is disabled
+    set:
+      backend.enabled: false
+      backend.hpa.enabled: false
+      backend.keda.enabled: true
+    template: backend/keda.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no ui ScaledObject by default
+    template: ui/keda.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a ui ScaledObject targeting the ui Deployment
+    set:
+      ui.hpa.enabled: false
+      ui.keda.enabled: true
+      ui.keda.minReplicaCount: 2
+      ui.keda.maxReplicaCount: 6
+      ui.keda.pollingInterval: 15
+      ui.keda.cooldownPeriod: 120
+      ui.keda.advanced:
+        restoreToOriginalReplicaCount: true
+      ui.keda.scaledObject.annotations:
+        autoscaling.keda.sh/paused-replicas: "2"
+      ui.keda.triggers:
+        - type: cpu
+          metricType: Utilization
+          metadata:
+            value: "60"
+    templates:
+      - ui/keda.yaml
+      - ui/hpa.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: ui/hpa.yaml
+      - isKind:
+          of: ScaledObject
+        template: ui/keda.yaml
+      - equal:
+          path: metadata.name
+          value: rel-litellm-ui
+        template: ui/keda.yaml
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: ui
+        template: ui/keda.yaml
+      - equal:
+          path: metadata.annotations
+          value:
+            autoscaling.keda.sh/paused-replicas: "2"
+        template: ui/keda.yaml
+      - equal:
+          path: spec.scaleTargetRef
+          value:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: rel-litellm-ui
+        template: ui/keda.yaml
+      - equal:
+          path: spec.minReplicaCount
+          value: 2
+        template: ui/keda.yaml
+      - equal:
+          path: spec.maxReplicaCount
+          value: 6
+        template: ui/keda.yaml
+      - equal:
+          path: spec.pollingInterval
+          value: 15
+        template: ui/keda.yaml
+      - equal:
+          path: spec.cooldownPeriod
+          value: 120
+        template: ui/keda.yaml
+      - equal:
+          path: spec.advanced.restoreToOriginalReplicaCount
+          value: true
+        template: ui/keda.yaml
+      - equal:
+          path: spec.triggers
+          value:
+            - type: cpu
+              metricType: Utilization
+              metadata:
+                value: "60"
+        template: ui/keda.yaml
+
+  - it: fills a partial ui fallback with the ui maxReplicaCount
+    set:
+      ui.hpa.enabled: false
+      ui.keda.enabled: true
+      ui.keda.maxReplicaCount: 7
+      ui.keda.fallback:
+        failureThreshold: 0
+    template: ui/keda.yaml
+    asserts:
+      - equal:
+          path: spec.fallback
+          value:
+            failureThreshold: 0
+            replicas: 7
+
+  - it: leaves spec.replicas off the ui Deployment so KEDA owns the replica count
+    set:
+      ui.hpa.enabled: false
+      ui.keda.enabled: true
+      ui.replicaCount: 3
+    template: ui/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.replicas
+
+  - it: refuses to run the ui HPA and KEDA against the same Deployment
+    set:
+      ui.hpa.enabled: true
+      ui.keda.enabled: true
+    template: ui/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: ui.hpa.enabled and ui.keda.enabled are mutually exclusive
+
+  - it: renders no ui ScaledObject in monolith mode
+    set:
+      monolith.enabled: true
+      ui.hpa.enabled: false
+      ui.keda.enabled: true
+    template: ui/keda.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no ui ScaledObject when the ui is disabled
+    set:
+      ui.enabled: false
+      ui.hpa.enabled: false
+      ui.keda.enabled: true
+    template: ui/keda.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

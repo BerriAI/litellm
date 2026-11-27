@@ -23,6 +23,7 @@ const TREATMENT_BY_ASSET: Readonly<Record<string, LogoTreatment>> = {
   "ollama.svg": "invert",
   "openrouter.svg": "invert",
   "promptguard.svg": "invert",
+  "reco.png": "invert",
   "recraft.svg": "invert",
   "replicate.svg": "invert",
   "runway.png": "invert",

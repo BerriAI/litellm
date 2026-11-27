@@ -30,7 +30,7 @@ from litellm.harness.types import (
     ToolCall,
     ToolResult,
 )
-from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.core_helpers import as_object_list, iter_items
 from litellm.llms.base_llm.harness.transformation import (
     BaseCLIHarnessConfig,
     HarnessSessionSetup,
@@ -148,8 +148,9 @@ def stringify_tool_output(content: object) -> str:
         return ""
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
-        return "\n".join(_stringify_block(block) for block in content)
+    listed: Final = as_object_list(content)
+    if listed is not None:
+        return "\n".join(_stringify_block(block) for block in listed)
     return json.dumps(content, ensure_ascii=False)
 
 
@@ -166,7 +167,8 @@ def _message_blocks(event: Mapping[str, object]) -> Sequence[object]:
     content: Final = message.get("content") if isinstance(message, Mapping) else None
     if isinstance(content, str):
         return ({"type": "text", "text": content},)  # mutable-ok: JSON content block, like the stream's
-    return content if isinstance(content, list) else ()
+    listed: Final = as_object_list(content)
+    return listed if listed is not None else ()
 
 
 def _str_field(block: Mapping[str, object], key: str) -> str:
@@ -268,7 +270,7 @@ def build_system_prompt(instructions: str | None, output_schema: Mapping[str, ob
     return "\n\n".join(parts) if parts else None
 
 
-class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
+class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig[ClaudeCodeOptions, ClaudeCodeStreamState]):
     harness = Harness.CLAUDE_CODE
     options_type = ClaudeCodeOptions
     capabilities = Capabilities(
@@ -306,7 +308,7 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
         options: ClaudeCodeOptions = self.get_options(ctx)
         model = ctx.model
         # Background calls (titles, summaries) use the same model group, like OpenCode.
-        model_env: Final = (
+        model_env: Final[Mapping[str, str]] = (
             MappingProxyType({"ANTHROPIC_MODEL": model, "ANTHROPIC_SMALL_FAST_MODEL": model})
             if model
             else MappingProxyType({})

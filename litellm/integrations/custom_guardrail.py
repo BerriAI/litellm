@@ -5,11 +5,11 @@ import hashlib
 import json
 import os
 import secrets
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeAlias, cast, get_args
 
 import httpx
 from pydantic import BaseModel, TypeAdapter
@@ -55,6 +55,7 @@ dc: Final = DualCache()
 
 
 from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH,
     GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
     LOGS_GUARDRAIL_INFORMATION_MARKER,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
@@ -90,6 +91,16 @@ DEFAULT_ADVISORY_MESSAGE: Final = (
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
 )
+
+ScannedTextScope: TypeAlias = Literal["texts", "tool_calls"]
+
+
+async def _scan_failure(scan: Awaitable[object]) -> Exception | None:
+    try:
+        await scan
+    except Exception as error:  # noqa: BLE001  # returned so the next scan still runs and logs its entry
+        return error
+    return None
 
 
 def is_guardrail_intervention(e: Exception) -> bool:
@@ -330,8 +341,27 @@ _RESPONSE_METADATA_KEYS: Final = frozenset(
 )
 
 
+_TOKEN_DATA_KEYS: Final = frozenset({"token_ids", "logprobs"})
+_TOKEN_DATA_HOLDERS: Final = frozenset({"choices", "output"})
+_RESPONSE_ITEMS: Final = TypeAdapter(list[object])
+
+
+def _without_token_data(value: object, depth: int = 0) -> object:
+    match value:
+        case list() if depth < DEFAULT_MAX_RECURSE_DEPTH:
+            return [_without_token_data(item, depth + 1) for item in _RESPONSE_ITEMS.validate_python(value)]
+        case dict() if depth < DEFAULT_MAX_RECURSE_DEPTH:
+            return {
+                key: _without_token_data(item, depth + 1)
+                for key, item in _REQUEST_FIELDS.validate_python(value).items()
+                if key not in _TOKEN_DATA_KEYS
+            }
+        case _:
+            return value
+
+
 def _response_fingerprint(response: object) -> str | None:
-    """Digest of everything but metadata set between layers, so an unknown field counts as content."""
+    """Digest of everything but layer metadata and token data a rewrite drops, so an unknown field counts as content."""
     try:
         fields: Final[Mapping[str, object]] = (
             response.model_dump(mode="json")
@@ -341,8 +371,11 @@ def _response_fingerprint(response: object) -> str | None:
         content: Final = {key: value for key, value in fields.items() if key not in _RESPONSE_METADATA_KEYS}
         if not content:
             return None
+        hashed: Final = {
+            key: _without_token_data(value) if key in _TOKEN_DATA_HOLDERS else value for key, value in content.items()
+        }
         return hashlib.sha256(
-            json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            json.dumps(hashed, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         ).hexdigest()
     except (TypeError, ValueError):
         return None
@@ -712,8 +745,8 @@ class CustomGuardrail(CustomLogger):
         """
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    def _scanned_texts_cache_key(self, session_id: str) -> str:
-        return f"guardrail_scanned_texts:{self.guardrail_name}:{session_id}"
+    def _scanned_texts_cache_key(self, session_id: str, cache_scope: ScannedTextScope) -> str:
+        return f"guardrail_scanned_{cache_scope}:{self.guardrail_name}:{session_id}"
 
     @with_service_target(GUARDRAIL_SESSIONS_TARGET)
     async def filter_new_texts_for_session(
@@ -721,6 +754,7 @@ class CustomGuardrail(CustomLogger):
         texts: list[str] | None,
         request_data: dict[str, object],
         cache: DualCache,
+        cache_scope: ScannedTextScope = "texts",
     ) -> list[str] | None:
         """Return only the text segments not already scanned earlier in this session.
 
@@ -748,7 +782,9 @@ class CustomGuardrail(CustomLogger):
             return None
 
         try:
-            cached: Final[object] = await cache.async_get_cache(key=self._scanned_texts_cache_key(session_id))
+            cached: Final[object] = await cache.async_get_cache(
+                key=self._scanned_texts_cache_key(session_id, cache_scope)
+            )
         except Exception as e:  # noqa: BLE001  # cache is best-effort; any failure must fall back to a full scan
             verbose_logger.warning(
                 "Guardrail %s: failed to read scanned-message cache (%s); scanning full context.",
@@ -766,6 +802,7 @@ class CustomGuardrail(CustomLogger):
         texts: list[str] | None,
         request_data: dict[str, object],
         cache: DualCache,
+        cache_scope: ScannedTextScope = "texts",
     ) -> None:
         """Record the hashes of all text segments present on a successful (non-blocked) scan.
 
@@ -780,7 +817,7 @@ class CustomGuardrail(CustomLogger):
         if not session_id:
             return
 
-        cache_key: Final = self._scanned_texts_cache_key(session_id)
+        cache_key: Final = self._scanned_texts_cache_key(session_id, cache_scope)
         current_hashes: Final = [self._scanned_text_hash(text) for text in texts]
         try:
             existing: Final[object] = await cache.async_get_cache(key=cache_key)
@@ -1245,7 +1282,7 @@ class CustomGuardrail(CustomLogger):
         kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
+    ) -> tuple[dict[str, object], object]:  # mutable-ok: CustomLogger.async_logging_hook contract
         """logging_only: scan copies of the logged request and/or response according to logging_only_scope."""
         from litellm.llms import get_guardrail_translation_mapping
 
@@ -1336,17 +1373,45 @@ class CustomGuardrail(CustomLogger):
         if self.logging_only_scope != "output" and scratch_fields is not None:
             if self.logging_only_continue_on_input_failure:
                 try:
-                    await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+                    await self._scan_logged_request(translation, scratch_request)
                 except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
                     verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
             else:
                 with contextlib.suppress(UnappliableRequestRewrite):
-                    await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+                    await self._scan_logged_request(translation, scratch_request)
         if response is None or self.logging_only_scope == "input":
             return
         await output_translation.process_output_response(
             response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
+
+    async def _scan_logged_request(
+        self,
+        translation: "BaseTranslation",
+        scratch_request: dict[str, object],  # mutable-ok: the translation masks the scratch copy in place
+    ) -> None:
+        text_failure: Final = await _scan_failure(
+            translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+        )
+        descriptions_failure: Final = await _scan_failure(self._scan_logged_tool_descriptions(scratch_request))
+        failures: Final = sorted(
+            (failure for failure in (text_failure, descriptions_failure) if failure is not None),
+            key=lambda failure: isinstance(failure, UnappliableRequestRewrite),
+        )
+        if failures:
+            raise failures[0]
+
+    async def _scan_logged_tool_descriptions(
+        self,
+        scratch_request: dict[str, object],  # mutable-ok: scanned_request_tools takes the hook's request dict
+    ) -> None:
+        if self.scan_tool_descriptions_as_text is not True:
+            return
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.tool_descriptions import (
+            scanned_request_tools,
+        )
+
+        await scanned_request_tools(self, scratch_request, None)
 
     def supports_scan_tool_descriptions_as_text(self) -> bool:
         return False
@@ -1529,7 +1594,7 @@ class CustomGuardrail(CustomLogger):
             return False
         return self.event_hook == event_type.value
 
-    def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:
+    def get_guardrail_dynamic_request_body_params(self, request_data: dict[str, object]) -> dict:
         """
         Returns `extra_body` to be added to the request body for the Guardrail API call
 
@@ -1661,7 +1726,7 @@ class CustomGuardrail(CustomLogger):
             **(tracing_detail or {}),
         )
 
-        def _append_guardrail_info(container: dict) -> None:
+        def _append_guardrail_info(container: dict[str, object]) -> None:
             key: Final = "standard_logging_guardrail_information"
             existing: Final = container.get(key)
             if existing is None:
@@ -1691,7 +1756,7 @@ class CustomGuardrail(CustomLogger):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -1720,13 +1785,13 @@ class CustomGuardrail(CustomLogger):
 
     def _process_response(
         self,
-        response: dict | None,
-        request_data: dict,
+        response: dict[str, object] | None,
+        request_data: dict[str, object],
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
         event_type: GuardrailEventHooks | None = None,
-        original_inputs: dict | None = None,
+        original_inputs: dict[str, object] | None = None,
     ):
         """
         Add StandardLoggingGuardrailInformation to the request data
@@ -1788,7 +1853,7 @@ class CustomGuardrail(CustomLogger):
     def _process_error(
         self,
         e: Exception,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
@@ -1879,6 +1944,7 @@ class CustomGuardrail(CustomLogger):
         if call_type == CallTypes.responses.value or call_type == CallTypes.aresponses.value:
             from typing import cast
 
+            from litellm.litellm_core_utils.tool_fields import qualified_member_name
             from litellm.responses.litellm_completion_transformation.transformation import (
                 LiteLLMCompletionResponsesConfig,
             )
@@ -1890,6 +1956,7 @@ class CustomGuardrail(CustomLogger):
             messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input_data,
                 responses_api_request=data,
+                member_name=qualified_member_name,
             )
             return cast(list[AllMessageValues], messages)
         return None
@@ -2095,7 +2162,7 @@ def log_guardrail_information(func):
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: object, **kwargs: object):
         if inspect.iscoroutinefunction(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)

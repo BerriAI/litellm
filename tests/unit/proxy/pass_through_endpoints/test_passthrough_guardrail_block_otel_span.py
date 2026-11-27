@@ -131,6 +131,7 @@ async def _drive(response_text: str):
     mock_async_client_obj.client = AsyncMock()
     mock_pt_logging = MagicMock()
     mock_pt_logging.pass_through_async_success_handler = AsyncMock()
+    mock_pt_logging.settle_background_response_before_delete = AsyncMock()
 
     patches = [
         patch(

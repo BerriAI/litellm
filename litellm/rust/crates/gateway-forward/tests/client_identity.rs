@@ -1,14 +1,27 @@
 mod support;
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
-use axum::{body::Body, http::StatusCode, response::Response};
+use axum::{
+    Router,
+    body::Body,
+    extract::{ConnectInfo, Request},
+    http::StatusCode,
+    response::Response,
+    routing::post,
+};
 use litellm_gateway_forward::PEER_HEADER;
 use rstest::rstest;
-use support::{Gateway, Raw, UVICORN_KEEPALIVE, raw_upstream, recording, serve_on, within};
+use support::{
+    Gateway, Raw, UVICORN_KEEPALIVE, raw_upstream, recording, serve_on, unreachable_upstream,
+    within,
+};
 use tokio::net::{TcpListener, TcpStream};
 
 fn ok() -> Response {
@@ -216,4 +229,38 @@ async fn each_request_carries_its_own_peer_over_a_shared_upstream_connection() {
         assert_eq!(peer, raw.local_address().to_string().into_bytes());
     }
     assert_eq!(connections.load(Ordering::SeqCst), 1);
+}
+
+/// The native app reads the client's address the way axum hands it over standalone.
+#[rstest]
+#[tokio::test]
+async fn the_native_app_sees_the_tcp_peer_as_connect_info() {
+    async fn admit(request: Request) -> Result<Request, (Box<Request>, &'static str)> {
+        Ok(request)
+    }
+    let native = Router::new().route(
+        "/v1/messages",
+        post(|ConnectInfo(peer): ConnectInfo<SocketAddr>| async move { peer.to_string() }),
+    );
+    let public = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = public.local_addr().unwrap();
+    tokio::spawn(litellm_gateway_forward::serve(
+        public,
+        format!("http://{}", unreachable_upstream())
+            .parse()
+            .unwrap(),
+        UVICORN_KEEPALIVE,
+        UVICORN_KEEPALIVE,
+        native,
+        admit,
+        std::future::pending(),
+    ));
+    let mut raw = Raw::new(TcpStream::connect(address).await.unwrap());
+
+    raw.send("POST /v1/messages HTTP/1.1\r\nhost: public.example\r\ncontent-length: 0\r\n\r\n")
+        .await;
+
+    let head = within(raw.response_head()).await.unwrap();
+    let peer = raw.body(head.content_length().unwrap()).await;
+    assert_eq!(peer, raw.local_address().to_string().into_bytes());
 }

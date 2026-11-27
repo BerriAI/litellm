@@ -7,13 +7,17 @@ regardless of the routing strategy being used.
 
 import asyncio
 from collections.abc import Callable
+from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import Router
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import CounterIncrement, CounterKind, RouterUsage, RouterUsageStore, UsageCounter
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
@@ -676,14 +680,54 @@ class TestDailyLimits:
 
         assert served == ["a", "b", "b", "b"]
 
+    @pytest.mark.asyncio
+    async def test_router_counts_a_streamed_response_against_the_deployment_tpm(self):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "streamed-group",
+                    "litellm_params": {
+                        "model": "openai/gpt-4.1-mini",
+                        "api_key": "k",
+                        "mock_response": "streamed answer",
+                        "tpm": 1,
+                    },
+                    "model_info": {"id": "streamed-deployment"},
+                },
+            ],
+            num_retries=0,
+        )
+        usage: Final = _memory_usage()
+        check: Final = _check(usage=usage, clock=Clock(DAY_ONE))
+        router.optional_callbacks = [check]
+        litellm.logging_callback_manager.add_litellm_callback(check)
+        tpm_counter: Final = UsageCounter.for_deployment(
+            "streamed-deployment", "openai/gpt-4.1-mini", "tpm", DAY_ONE.strftime("%H-%M")
+        )
+        try:
+            stream: Final = await router.acompletion(
+                model="streamed-group", messages=[{"role": "user", "content": "hi"}], stream=True
+            )
+            async for _ in stream:
+                pass
+            logged_tokens: Final = await _tokens_once_logged(usage, tpm_counter)
+            with pytest.raises(litellm.RateLimitError):
+                await router.acompletion(
+                    model="streamed-group", messages=[{"role": "user", "content": "hi"}], stream=True
+                )
+        finally:
+            router.discard()
 
-async def _tpd_tokens_once_logged(usage: RouterUsage, counter: UsageCounter) -> int:
+        assert logged_tokens >= 1
+
+
+async def _tokens_once_logged(usage: RouterUsage, counter: UsageCounter) -> int:
     for _ in range(200):
         logged: Final = usage.get_local(counter)
         if logged is not None:
             return int(logged)
         await asyncio.sleep(0.01)
-    pytest.fail(f"the success callback never logged tpd tokens under {counter}")
+    pytest.fail(f"the success callback never logged tokens under {counter}")
 
 
 RESET_AT_EIGHT = datetime(2026, 10, 28, 8, 0, 0, tzinfo=timezone.utc)
@@ -818,7 +862,7 @@ class TestDailyResetTime:
             await router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion kwargs are untyped
                 model="daily-group", messages=[{"role": "user", "content": "hi"}], daily_reset_time="08:00"
             )
-            logged = await _tpd_tokens_once_logged(
+            logged = await _tokens_once_logged(
                 usage, UsageCounter.for_deployment("daily-test-id", "openai/gpt-4.1-mini", "tpd", "2026-10-28")
             )
         finally:
@@ -829,3 +873,254 @@ class TestDailyResetTime:
             UsageCounter.for_deployment("daily-test-id", "openai/gpt-4.1-mini", "tpd", "2026-10-27")
         )
         assert day_before is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limit,answer",
+    [
+        pytest.param(
+            {"tpm": 1000}, {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}, id="tpm-refusal"
+        ),
+        pytest.param({"tpm": 1000}, {"finishReason": "STOP", "content": {"parts": [{"text": "a dot"}]}}, id="tpm-no_image"),
+        pytest.param(
+            {"itpm": 700}, {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}, id="itpm-refusal"
+        ),
+        pytest.param(
+            {"tpm": 1000, "input_cost_per_token": 0, "output_cost_per_token": 0},
+            {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}},
+            id="tpm-zero_priced_refusal",
+        ),
+    ],
+)
+async def test_an_image_answer_without_an_image_counts_its_answered_tokens_toward_the_deployment_limits(
+    limit: dict[str, int], answer: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "image",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://image.invalid/v1",
+                    **limit,
+                },
+                "model_info": {"id": "image"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+    billed: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(url__startswith="https://").mock(
+                return_value=httpx.Response(200, json={"candidates": [answer], "usageMetadata": billed})
+            )
+            with pytest.raises((litellm.ContentPolicyViolationError, litellm.UnprocessableEntityError)):
+                await router.aimage_generation(model="image", prompt="a single small red dot")
+            with pytest.raises(litellm.RateLimitError, match="Model rate limit exceeded"):
+                await router.aimage_generation(model="image", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert route.call_count == 1
+
+
+_IMAGE_REFUSAL: Final = {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}
+_BILLED_REFUSAL_USAGE: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+
+
+def _gemini_image_deployment(name: str, limit: dict[str, int]) -> dict[str, object]:
+    return {
+        "model_name": name,
+        "litellm_params": {
+            "model": "gemini/gemini-3.1-flash-image",
+            "api_key": "test-key",
+            "api_base": f"https://{name}.invalid/v1",
+            **limit,
+        },
+        "model_info": {"id": name},
+    }
+
+
+@pytest.mark.parametrize("limit", [pytest.param({"tpm": 1000}, id="tpm"), pytest.param({"itpm": 700}, id="itpm")])
+def test_a_sync_image_refusal_counts_its_answered_tokens_toward_the_deployment_limits(
+    limit: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("image", limit)],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(url__startswith="https://image.invalid").mock(
+                return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+            )
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                router.image_generation(model="image", prompt="a single small red dot")
+            with pytest.raises(litellm.RateLimitError, match="Model rate limit exceeded"):
+                router.image_generation(model="image", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_unbilled_image_recitations_give_back_their_output_token_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("image", {"otpm": 100})],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+    recitation: Final = {"finishReason": "IMAGE_RECITATION", "content": {"role": "model"}}
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(url__startswith="https://image.invalid").mock(
+                return_value=httpx.Response(200, json={"candidates": [recitation], "usageMetadata": _BILLED_REFUSAL_USAGE})
+            )
+            for _ in range(5):
+                with pytest.raises(litellm.ContentPolicyViolationError):
+                    await router.aimage_generation(model="image", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert route.call_count == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [pytest.param({"tpm": 1000}, id="tpm"), pytest.param({"itpm": 700}, id="itpm")])
+async def test_an_image_refusal_from_a_fallback_counts_its_answered_tokens_toward_the_fallback_limits(
+    limit: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("outage", {}), _gemini_image_deployment("image", limit)],
+        fallbacks=[{"outage": ["image"]}],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="outage",
+        prompt="a single small red dot",
+        litellm_call_id="image-refusal-from-a-fallback",
+    )
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://outage.invalid").mock(
+                return_value=httpx.Response(500, json={"error": {"code": 500, "message": "scripted outage"}})
+            )
+            refusing = upstream.post(url__startswith="https://image.invalid").mock(
+                return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+            )
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+            with pytest.raises(litellm.RateLimitError, match="Model rate limit exceeded"):
+                await router.aimage_generation(model="image", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert refusing.call_count == 1
+
+
+_SERVED_IMAGE: Final = {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}]}}
+_SERVED_USAGE: Final = {"promptTokenCount": 200, "candidatesTokenCount": 100, "totalTokenCount": 300}
+
+
+def _refuser_with_a_backup() -> Router:
+    return Router(
+        model_list=[_gemini_image_deployment("refuser", {}), _gemini_image_deployment("backup", {"tpm": 599})],
+        fallbacks=[{"refuser": ["backup"]}],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+
+
+def _mock_refuser_and_backup(upstream: respx.MockRouter) -> respx.Route:
+    upstream.post(url__startswith="https://refuser.invalid").mock(
+        return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+    )
+    return upstream.post(url__startswith="https://backup.invalid").mock(
+        return_value=httpx.Response(200, json={"candidates": [_SERVED_IMAGE], "usageMetadata": _SERVED_USAGE})
+    )
+
+
+def _refused_request_on_a_shared_logging_object(function: str) -> dict[str, object]:
+    logging_obj, request = litellm.utils.function_setup(
+        original_function=function,
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="refuser",
+        prompt="a single small red dot",
+        litellm_call_id=f"{function}-refused-then-served-by-a-fallback",
+    )
+    return {**request, "litellm_logging_obj": logging_obj}
+
+
+class _InlineExecutor:
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> Future[object]:
+        future: Final = Future[object]()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
+async def _served_image_from(router: Router, request: dict[str, object]) -> None:
+    await router.aimage_generation(**request)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_serving_a_refused_image_counts_only_its_own_tokens_toward_its_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _refuser_with_a_backup()
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            serving = _mock_refuser_and_backup(upstream)
+            await _served_image_from(router, _refused_request_on_a_shared_logging_object("aimage_generation"))
+            await _served_image_from(router, {"model": "backup", "prompt": "a single small red dot"})
+            with pytest.raises(litellm.RateLimitError, match="current usage=600"):
+                await router.aimage_generation(model="backup", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert serving.call_count == 2
+
+
+def test_a_sync_fallback_serving_a_refused_image_counts_only_its_own_tokens_toward_its_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr("litellm.utils.executor", _InlineExecutor())
+    router: Final = _refuser_with_a_backup()
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            serving = _mock_refuser_and_backup(upstream)
+            router.image_generation(**_refused_request_on_a_shared_logging_object("image_generation"))
+            router.image_generation(model="backup", prompt="a single small red dot")
+            with pytest.raises(litellm.RateLimitError, match="current usage=600"):
+                router.image_generation(model="backup", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert serving.call_count == 2

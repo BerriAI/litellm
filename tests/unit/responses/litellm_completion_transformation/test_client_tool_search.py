@@ -1,6 +1,6 @@
 from typing import Final
 
-from litellm.litellm_core_utils.tool_fields import chat_member_name
+from litellm.litellm_core_utils.tool_fields import DeferredTopLevelTool, chat_member_name
 from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
@@ -100,7 +100,7 @@ def test_a_loaded_deferred_tool_keeps_its_deferral_so_its_calls_read_back_as_nam
     assert bridged.tools == (_CODEX_TOOL_SEARCH, _SHELL, {**loaded_plain, "defer_loading": True})
     assert LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
         LiteLLMCompletionResponsesConfig.request_tools({"tools": list(bridged.tools)})
-    ) == {"deploy": ("deploy", "deploy")}
+    ) == {"deploy": DeferredTopLevelTool("deploy")}
 
 
 def test_a_loaded_tool_that_was_never_deferred_stays_undeferred() -> None:

@@ -77,8 +77,11 @@ locals {
     "/ui/*",
   ]
 
-  proxy_config_enabled = var.create_runtime && length(keys(var.proxy_config)) > 0
-  proxy_config_yaml    = local.proxy_config_enabled ? yamlencode(var.proxy_config) : ""
+  proxy_config = merge(var.proxy_config, var.turn_off_message_logging ? {
+    litellm_settings = merge(try(var.proxy_config.litellm_settings, null), { turn_off_message_logging = true })
+  } : {})
+  proxy_config_enabled = var.create_runtime && length(keys(local.proxy_config)) > 0
+  proxy_config_yaml    = local.proxy_config_enabled ? yamlencode(local.proxy_config) : ""
 
   proxy_config_mount_path = "/etc/litellm"
   proxy_config_file_name  = "config.yaml"

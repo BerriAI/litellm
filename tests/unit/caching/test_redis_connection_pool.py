@@ -1,8 +1,12 @@
+import asyncio
 from importlib import import_module
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from redis.asyncio import Redis
 
+import litellm
 from litellm._redis import (
     _coerce_redis_kwargs_types,
     _get_redis_client_logic,
@@ -10,6 +14,8 @@ from litellm._redis import (
     get_redis_async_client,
     get_redis_connection_pool,
 )
+from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.caching.redis_cache import RedisCache
 
 
 def test_url_config_uses_passed_pool():
@@ -126,6 +132,34 @@ async def test_disconnect_idempotent():
 
     await cache.disconnect()
     await cache.disconnect()  # should not raise
+
+
+@pytest.fixture
+def redis_cache_for_rotation(monkeypatch: pytest.MonkeyPatch) -> RedisCache:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache(default_ttl=-1))
+    with patch("redis.Redis.from_url", return_value=MagicMock()):
+        return RedisCache(url="redis://127.0.0.1:6379/0")
+
+
+@pytest.mark.asyncio
+async def test_expired_async_client_reuses_its_pool(redis_cache_for_rotation: RedisCache) -> None:
+    first: Final = redis_cache_for_rotation.init_async_client()
+    replacement: Final = redis_cache_for_rotation.init_async_client()
+
+    assert isinstance(first, Redis) and isinstance(replacement, Redis)
+    assert first is not replacement
+    assert replacement.connection_pool is first.connection_pool
+
+
+def test_async_client_uses_a_separate_pool_on_a_new_event_loop(redis_cache_for_rotation: RedisCache) -> None:
+    async def get_client() -> object:
+        return redis_cache_for_rotation.init_async_client()
+
+    first: Final = asyncio.run(get_client())
+    second: Final = asyncio.run(get_client())
+
+    assert isinstance(first, Redis) and isinstance(second, Redis)
+    assert second.connection_pool is not first.connection_pool
 
 
 def test_coerce_redis_kwargs_types_int():

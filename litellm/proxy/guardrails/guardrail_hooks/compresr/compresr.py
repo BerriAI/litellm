@@ -21,6 +21,7 @@ import ipaddress
 import json
 import time
 from collections import Counter, OrderedDict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, TypeGuard
 from urllib.parse import urlparse
@@ -216,19 +217,19 @@ def _query_for_target(messages: list[dict[str, object]], target_idx: int, fallba
         if prev.get("role") != "assistant":
             continue
         tool_calls = prev.get("tool_calls")
-        if isinstance(tool_calls, list):
+        if _is_object_list(tool_calls):
             for tc in tool_calls:
-                if not isinstance(tc, dict):
+                if not _is_str_object_dict(tc):
                     continue
                 if tool_call_id and tc.get("id") == tool_call_id:
                     fn = tc.get("function")
-                    intent = _render_tool_intent(fn if isinstance(fn, dict) else {})
+                    intent = _render_tool_intent(fn if _is_str_object_dict(fn) else {})
                     if intent:
                         return intent
         # Legacy function_call fallback: require a name match, else an earlier
         # function_call turn would attribute the wrong intent.
         fc = prev.get("function_call")
-        if isinstance(fc, dict) and fn_name and fc.get("name") == fn_name:
+        if _is_str_object_dict(fc) and fn_name and fc.get("name") == fn_name:
             intent = _render_tool_intent(fc)
             if intent:
                 return intent
@@ -322,11 +323,11 @@ def _merge_retrieve_tool(existing_tools: object) -> list[object] | None:
     """The request's tools plus the retrieve tool, or None when the incoming
     shape is not a list (leave the caller's tools untouched; markers stay
     inert text)."""
-    if existing_tools is not None and not isinstance(existing_tools, list):
+    if existing_tools is None:
+        return [_build_compresr_retrieve_tool()]
+    if not _is_object_list(existing_tools):
         return None
     retrieve_tool: Final = _build_compresr_retrieve_tool()
-    if existing_tools is None:
-        return [retrieve_tool]
     if has_compresr_retrieve_tool(existing_tools):
         return list(existing_tools)
     return list(existing_tools) + [retrieve_tool]
@@ -604,7 +605,7 @@ class CompresrGuardrail(CustomGuardrail):
             timeout=timeout,
         )
 
-    def _should_bypass(self, request_data: dict) -> bool:
+    def _should_bypass(self, request_data: Mapping[str, object]) -> bool:
         if not self.allow_bypass_header:
             return False
         psr: Final = request_data.get("proxy_server_request")
@@ -716,7 +717,7 @@ class CompresrGuardrail(CustomGuardrail):
         resolved_any = False
         for idx, tc in enumerate(tool_calls):
             arguments = tc.get("arguments", {})
-            hash_value = str(arguments.get("hash", "")) if isinstance(arguments, dict) else ""
+            hash_value = str(arguments.get("hash", "")) if _is_str_object_dict(arguments) else ""
             if idx >= _MAX_RETRIEVALS_PER_LOOP:
                 result = "[compresr: retrieval limit reached for this turn]"
             elif hash_value in seen:
@@ -947,7 +948,7 @@ class CompresrGuardrail(CustomGuardrail):
         target. Anything else is left uncompressed rather than risk a wrong or
         out-of-policy replacement. Returns None when nothing safe applies.
         """
-        if not applied.text_replacements or not isinstance(input_texts, list):
+        if not applied.text_replacements or not _is_object_list(input_texts):
             return None
         counts: Final = Counter(text for text in input_texts if isinstance(text, str))
         safe: Final = {
@@ -963,7 +964,7 @@ class CompresrGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -1073,12 +1074,12 @@ class CompresrGuardrail(CustomGuardrail):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         if not has_compresr_retrieve_tool(tools):
             return False, {}
         tool_calls: Final = _extract_compresr_tool_calls(response)
@@ -1088,9 +1089,9 @@ class CompresrGuardrail(CustomGuardrail):
 
     async def async_build_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         response: object,
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None,
         anthropic_messages_optional_request_params: dict,
@@ -1148,7 +1149,7 @@ class CompresrGuardrail(CustomGuardrail):
             metadata={"tool_type": "compresr_retrieve"},
         )
 
-    def _sanitized_follow_up_kwargs(self, kwargs: dict) -> dict[str, object]:
+    def _sanitized_follow_up_kwargs(self, kwargs: Mapping[str, object]) -> dict[str, object]:
         """Copy of the request kwargs for the retrieval follow-up with other
         guardrails' pre-call-executed markers stripped, so input guardrails
         re-inspect the restored originals; only this guardrail's own marker is
@@ -1159,10 +1160,10 @@ class CompresrGuardrail(CustomGuardrail):
         own_marker: Final = self._pre_call_marker()
         for meta_key in ("metadata", "litellm_metadata"):
             meta = out.get(meta_key)
-            if not isinstance(meta, dict):
+            if not _is_str_object_dict(meta):
                 continue
             executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
-            if not isinstance(executed, list):
+            if not _is_object_list(executed):
                 continue
             kept = [m for m in executed if own_marker is not None and m == own_marker]
             out[meta_key] = (

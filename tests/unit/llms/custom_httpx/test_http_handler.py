@@ -31,6 +31,7 @@ from litellm.llms.base_llm.auth.types import MintedToken, TokenExchangeSpec
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
+    _STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS,
     _prepare_request_data_and_content,
     AsyncHTTPHandler,
     HTTPHandler,
@@ -83,7 +84,7 @@ async def test_async_post_streaming_status_error_should_not_wait_forever_for_bod
                     "https://vertex.example/streamRawPredict",
                     stream=True,
                 ),
-                timeout=0.2,
+                timeout=_STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS / 2,
             )
 
         assert exc_info.value.status_code == 400

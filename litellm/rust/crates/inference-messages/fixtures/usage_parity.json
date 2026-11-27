@@ -1,0 +1,1038 @@
+[
+ {
+  "name": "anthropic_plain",
+  "provider": "anthropic",
+  "body": {
+   "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+   "type": "message",
+   "role": "assistant",
+   "model": "claude-opus-5-5",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello! How can I help?"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 1000,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 100,
+    "service_tier": "standard"
+   }
+  },
+  "expected": {
+   "usage": {
+    "prompt_tokens": 1000,
+    "input": {
+     "text": 1000,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 0,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 100,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": "standard",
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "anthropic_cache_ttl_fast_geo_priority",
+  "provider": "anthropic",
+  "body": {
+   "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+   "type": "message",
+   "role": "assistant",
+   "model": "claude-opus-5-5",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello! How can I help?"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 1200,
+    "cache_creation_input_tokens": 600,
+    "cache_read_input_tokens": 400,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 300,
+     "ephemeral_1h_input_tokens": 200
+    },
+    "output_tokens": 250,
+    "server_tool_use": {
+     "web_search_requests": 0
+    },
+    "service_tier": "priority",
+    "inference_geo": "us",
+    "speed": "fast"
+   }
+  },
+  "expected": {
+   "usage": {
+    "prompt_tokens": 2200,
+    "input": {
+     "text": 1200,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 400,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 400,
+     "one_hour": 200,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 250,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": {
+     "requests": 0,
+     "context": null
+    },
+    "speed": "fast",
+    "inference_geo": "us"
+   },
+   "served_tier": "priority",
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "anthropic_requested_fast",
+  "provider": "anthropic",
+  "requested_speed": "fast",
+  "body": {
+   "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+   "type": "message",
+   "role": "assistant",
+   "model": "claude-opus-5-5",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello! How can I help?"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 1000,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 100,
+    "service_tier": "standard"
+   }
+  },
+  "expected": {
+   "usage": {
+    "prompt_tokens": 1000,
+    "input": {
+     "text": 1000,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 0,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 100,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": "fast",
+    "inference_geo": null
+   },
+   "served_tier": "standard",
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "anthropic_iterations",
+  "provider": "anthropic",
+  "body": {
+   "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+   "type": "message",
+   "role": "assistant",
+   "model": "claude-opus-5-5",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello! How can I help?"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 50,
+    "output_tokens": 20,
+    "cache_creation_input_tokens": 10,
+    "cache_read_input_tokens": 5,
+    "iterations": [
+     {
+      "type": "compaction",
+      "input_tokens": 700,
+      "output_tokens": 80,
+      "cache_creation_input_tokens": 40,
+      "cache_read_input_tokens": 0,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 30,
+       "ephemeral_1h_input_tokens": 0
+      }
+     },
+     {
+      "type": "message",
+      "input_tokens": 300,
+      "output_tokens": 120,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 900
+     }
+    ]
+   }
+  },
+  "expected": {
+   "usage": {
+    "prompt_tokens": 1940,
+    "input": {
+     "text": 1000,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 900,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 40,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 200,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "anthropic_thinking_without_counts",
+  "provider": "anthropic",
+  "body": {
+   "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+   "type": "message",
+   "role": "assistant",
+   "model": "claude-opus-5-5",
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "Let me work this out.",
+     "signature": "EqQBCgIYAhIM"
+    },
+    {
+     "type": "text",
+     "text": "42"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 1000,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 100,
+    "service_tier": "standard"
+   }
+  },
+  "expected": null
+ },
+ {
+  "name": "anthropic_web_search",
+  "provider": "anthropic",
+  "body": {
+   "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+   "type": "message",
+   "role": "assistant",
+   "model": "claude-opus-5-5",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello! How can I help?"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2100,
+    "output_tokens": 310,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "server_tool_use": {
+     "web_search_requests": 2
+    }
+   }
+  },
+  "expected": null
+ },
+ {
+  "name": "bedrock_invoke",
+  "provider": "bedrock",
+  "body": {
+   "id": "msg_bdrk_01Tyu3t9vPrWAKr1oSm2D3uK",
+   "type": "message",
+   "role": "assistant",
+   "model": "claude-opus-5-5-20261101",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello! How can I help?"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 812,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 1024,
+    "output_tokens": 77
+   }
+  },
+  "expected": {
+   "usage": {
+    "prompt_tokens": 1836,
+    "input": {
+     "text": 812,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 1024,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 77,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "claude-opus-5-5-20261101"
+  }
+ },
+ {
+  "name": "bedrock_claude_platform_geo",
+  "provider": "bedrock",
+  "body": {
+   "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+   "type": "message",
+   "role": "assistant",
+   "model": "claude-opus-5-5",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello! How can I help?"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 1000,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 100,
+    "service_tier": "standard",
+    "inference_geo": "us"
+   }
+  },
+  "expected": {
+   "usage": {
+    "prompt_tokens": 1000,
+    "input": {
+     "text": 1000,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 0,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 100,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": "us"
+   },
+   "served_tier": "standard",
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "bedrock_mantle",
+  "provider": "bedrock_mantle",
+  "body": {
+   "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+   "type": "message",
+   "role": "assistant",
+   "model": "anthropic.claude-opus-5-5",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello! How can I help?"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 640,
+    "output_tokens": 32,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 128
+   }
+  },
+  "expected": {
+   "usage": {
+    "prompt_tokens": 768,
+    "input": {
+     "text": 640,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 128,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 32,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "anthropic.claude-opus-5-5"
+  }
+ },
+ {
+  "name": "vertex_ai",
+  "provider": "vertex_ai",
+  "body": {
+   "id": "msg_vrtx_01AD1bjwmQf8bqnbhSXMzD9u",
+   "type": "message",
+   "role": "assistant",
+   "model": "claude-opus-5-5",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello! How can I help?"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 1500,
+    "cache_creation_input_tokens": 120,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 64
+   }
+  },
+  "expected": {
+   "usage": {
+    "prompt_tokens": 1620,
+    "input": {
+     "text": 1500,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 0,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 120,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 64,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "azure_ai",
+  "provider": "azure_ai",
+  "body": {
+   "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+   "type": "message",
+   "role": "assistant",
+   "model": "claude-opus-5-5",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello! How can I help?"
+    }
+   ],
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 333,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 44,
+    "service_tier": "standard"
+   }
+  },
+  "expected": {
+   "usage": {
+    "prompt_tokens": 333,
+    "input": {
+     "text": 333,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 0,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 44,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": "standard",
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "anthropic_stream",
+  "provider": "anthropic",
+  "sse": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_01S\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-opus-5-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 1000, \"cache_creation_input_tokens\": 200, \"cache_read_input_tokens\": 300, \"output_tokens\": 1, \"service_tier\": \"standard\"}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \" there\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 120}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n\n",
+  "expected": {
+   "usage": {
+    "prompt_tokens": 1500,
+    "input": {
+     "text": 1000,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 300,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 200,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 120,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "anthropic_stream_cumulative_delta",
+  "provider": "anthropic",
+  "sse": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_01S\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-opus-5-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 1000, \"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 0, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \" there\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"input_tokens\": 1000, \"cache_creation_input_tokens\": 50, \"cache_creation\": {\"ephemeral_5m_input_tokens\": 0, \"ephemeral_1h_input_tokens\": 50}, \"cache_read_input_tokens\": 0, \"output_tokens\": 90, \"server_tool_use\": {\"web_search_requests\": 0}}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n\n",
+  "expected": {
+   "usage": {
+    "prompt_tokens": 1050,
+    "input": {
+     "text": 1000,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 0,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 50,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 90,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": {
+     "requests": 0,
+     "context": null
+    },
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "anthropic_stream_requested_fast",
+  "provider": "anthropic",
+  "requested_speed": "fast",
+  "sse": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_01S\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-opus-5-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 10, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \" there\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 9}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n\n",
+  "expected": {
+   "usage": {
+    "prompt_tokens": 10,
+    "input": {
+     "text": 10,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 0,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 9,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": "fast",
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "anthropic_stream_geo_speed_tier",
+  "provider": "anthropic",
+  "sse": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_01S\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-opus-5-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 400, \"output_tokens\": 1, \"service_tier\": \"priority\", \"inference_geo\": \"us\", \"speed\": \"fast\"}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \" there\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 40, \"server_tool_use\": {\"web_search_requests\": 0}}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n\n",
+  "expected": {
+   "usage": {
+    "prompt_tokens": 400,
+    "input": {
+     "text": 400,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 0,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 40,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": {
+     "requests": 0,
+     "context": null
+    },
+    "speed": "fast",
+    "inference_geo": "us"
+   },
+   "served_tier": null,
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "anthropic_stream_thinking",
+  "provider": "anthropic",
+  "sse": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_01S\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-opus-5-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 10, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"thinking\", \"thinking\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"Let me think.\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 1, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \" there\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 1}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 30}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n\n",
+  "expected": null
+ },
+ {
+  "name": "anthropic_stream_interrupted",
+  "provider": "anthropic",
+  "sse": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_01S\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-opus-5-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 10, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \" there\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n",
+  "expected": null
+ },
+ {
+  "name": "bedrock_invoke_stream_metrics_folded",
+  "provider": "bedrock",
+  "sse": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_bdrk_01S\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-opus-5-5-20261101\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 812, \"cache_creation_input_tokens\": 0, \"cache_read_input_tokens\": 1024, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \" there\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 77, \"input_tokens\": 812, \"cache_read_input_tokens\": 1024, \"cache_creation_input_tokens\": 0}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\", \"usage\": {\"input_tokens\": 812, \"output_tokens\": 77, \"cache_read_input_tokens\": 1024, \"cache_creation_input_tokens\": 0}}\n\n",
+  "expected": {
+   "usage": {
+    "prompt_tokens": 1836,
+    "input": {
+     "text": 812,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 1024,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 77,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "claude-opus-5-5-20261101"
+  }
+ },
+ {
+  "name": "bedrock_mantle_stream",
+  "provider": "bedrock_mantle",
+  "sse": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_01S\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"anthropic.claude-opus-5-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 640, \"cache_read_input_tokens\": 128, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \" there\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 32}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n\n",
+  "expected": {
+   "usage": {
+    "prompt_tokens": 768,
+    "input": {
+     "text": 640,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 128,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 32,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "anthropic.claude-opus-5-5"
+  }
+ },
+ {
+  "name": "vertex_ai_stream",
+  "provider": "vertex_ai",
+  "sse": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_vrtx_01S\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-opus-5-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 1500, \"cache_creation_input_tokens\": 120, \"cache_read_input_tokens\": 0, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \" there\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 64}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n\n",
+  "expected": {
+   "usage": {
+    "prompt_tokens": 1620,
+    "input": {
+     "text": 1500,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 0,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 120,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 64,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "claude-opus-5-5"
+  }
+ },
+ {
+  "name": "azure_ai_stream",
+  "provider": "azure_ai",
+  "sse": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_01S\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-opus-5-5\", \"content\": [], \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 333, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \" there\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 44}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n\n",
+  "expected": {
+   "usage": {
+    "prompt_tokens": 333,
+    "input": {
+     "text": 333,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "cache_read": {
+     "text": 0,
+     "audio": 0,
+     "image": 0,
+     "explicit": false
+    },
+    "cache_write": {
+     "default": 0,
+     "one_hour": 0,
+     "twelve_hours": 0
+    },
+    "output": {
+     "text": 44,
+     "audio": 0,
+     "image": 0,
+     "video": 0
+    },
+    "reasoning": 0,
+    "input_characters": 0,
+    "input_images": 0,
+    "input_audio_seconds": 0.0,
+    "input_video_seconds": 0.0,
+    "queries": 0,
+    "web_search": null,
+    "speed": null,
+    "inference_geo": null
+   },
+   "served_tier": null,
+   "response_model": "claude-opus-5-5"
+  }
+ }
+]

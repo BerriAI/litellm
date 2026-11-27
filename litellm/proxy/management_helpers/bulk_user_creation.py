@@ -45,6 +45,7 @@ from litellm.proxy.management_endpoints.common_utils import validate_budget_dura
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _update_internal_new_user_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # /user/new defaults; result validated below
     check_if_default_team_set,
+    enforce_user_semantic_cache_admin,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
     _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -219,6 +220,7 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
             f"Attempted to create user with role: {item.user_role}. Your role: {user_api_key_dict.user_role}"
         )
     try:
+        enforce_user_semantic_cache_admin(user_api_key_dict, item.metadata, None)
         validate_budget_duration(item.budget_duration)
         check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
         if item.auto_create_key:

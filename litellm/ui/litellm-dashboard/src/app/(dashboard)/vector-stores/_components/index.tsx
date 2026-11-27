@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { useTranslation } from "react-i18next";
+import { displayTimestamp } from "@/i18n/displayDate";
 import { Database, RefreshCw } from "lucide-react";
 import {
   vectorStoreListCall,
@@ -31,13 +32,13 @@ interface VectorStoreProps {
 }
 
 const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID, userRole, isViewOnly }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [vectorStores, setVectorStores] = useState<VectorStore[]>([]);
   const [isLoadingVectorStores, setIsLoadingVectorStores] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [vectorStoreToDelete, setVectorStoreToDelete] = useState<string | null>(null);
-  const [lastRefreshed, setLastRefreshed] = useState("");
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
   const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | null>(null);
   const [editVectorStore, setEditVectorStore] = useState(false);
@@ -77,8 +78,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   const handleRefreshClick = () => {
     fetchVectorStores();
     fetchCredentials();
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
+    setLastRefreshed(new Date());
   };
 
   const handleDelete = async (vectorStoreId: string) => {
@@ -144,30 +144,35 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
     />
   ) : (
     <PageContent>
-      <PageHeader>
+      <PageHeader
+        aside={
+          <>
+            {lastRefreshed && (
+              <p className="text-sm text-muted-foreground">
+                {t("vectorStores.page.lastRefreshed", { time: displayTimestamp(lastRefreshed, i18n.language) })}
+              </p>
+            )}
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label={t("vectorStores.page.refresh")}
+              onClick={handleRefreshClick}
+            >
+              <RefreshCw className="size-4" />
+            </Button>
+          </>
+        }
+      >
         <PageHeaderTitle>
           <Database />
           {t("vectorStores.page.title")}
         </PageHeaderTitle>
         <PageHeaderDescription>{t("vectorStores.page.description")}</PageHeaderDescription>
-        <PageHeaderControls className="flex-wrap">
-          {activeTab === "manage" && canCreateVectorStores && (
+        {activeTab === "manage" && canCreateVectorStores && (
+          <PageHeaderControls>
             <Button onClick={() => setIsCreateModalVisible(true)}>{t("vectorStores.page.addVectorStore")}</Button>
-          )}
-          {lastRefreshed && (
-            <p className="text-sm text-muted-foreground">
-              {t("vectorStores.page.lastRefreshed", { time: lastRefreshed })}
-            </p>
-          )}
-          <Button
-            variant="outline"
-            size="icon-sm"
-            aria-label={t("vectorStores.page.refresh")}
-            onClick={handleRefreshClick}
-          >
-            <RefreshCw className="size-4" />
-          </Button>
-        </PageHeaderControls>
+          </PageHeaderControls>
+        )}
       </PageHeader>
 
       <Tabs
@@ -176,26 +181,27 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           setActiveTab(value);
           onTabChange(value);
         }}
-        className="gap-6"
       >
-        <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none p-0">
-          {canCreateVectorStores && (
-            <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
-              {t("vectorStores.page.tabs.create")}
+        <div className="mb-4.5 overflow-x-auto pb-1.5">
+          <TabsList variant="line" className="h-auto w-full justify-start rounded-none p-0">
+            {canCreateVectorStores && (
+              <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
+                {t("vectorStores.page.tabs.create")}
+              </TabsTrigger>
+            )}
+            <TabsTrigger value="manage" className="flex-none rounded-none px-4 py-2">
+              {t("vectorStores.page.tabs.manage")}
             </TabsTrigger>
-          )}
-          <TabsTrigger value="manage" className="flex-none rounded-none px-4 py-2">
-            {t("vectorStores.page.tabs.manage")}
-          </TabsTrigger>
-          <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
-            {t("vectorStores.page.tabs.test")}
-          </TabsTrigger>
-          {isProxyAdminRole(userRole || "") && (
-            <TabsTrigger value="indexes" className="flex-none rounded-none px-4 py-2">
-              {t("vectorStores.page.tabs.indexes")}
+            <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
+              {t("vectorStores.page.tabs.test")}
             </TabsTrigger>
-          )}
-        </TabsList>
+            {isProxyAdminRole(userRole || "") && (
+              <TabsTrigger value="indexes" className="flex-none rounded-none px-4 py-2">
+                {t("vectorStores.page.tabs.indexes")}
+              </TabsTrigger>
+            )}
+          </TabsList>
+        </div>
 
         {canCreateVectorStores && (
           <TabsContent keepMounted={hasVisited("create")} value="create">

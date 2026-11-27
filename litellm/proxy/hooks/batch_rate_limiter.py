@@ -210,7 +210,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self._deployment_model_name: Final = deployment_model_name
         self._warned_unsupported_model_skip = False
 
-    def _get_file_bound_batch_model(self, data: dict) -> str | None:
+    def _get_file_bound_batch_model(self, data: Mapping[str, object]) -> str | None:
         """Resolve the model bound to the batch input file ID.
 
         ``create_batch`` routes a file-bound id (model-embedded ``file-...`` or
@@ -241,7 +241,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return None
 
-    def _get_batch_routing_model(self, data: dict) -> str | None:
+    def _get_batch_routing_model(self, data: Mapping[str, object]) -> str | None:
         """Resolve the deployment/model used for this batch from request data.
 
         Mirrors ``create_batch`` routing precedence: a model bound to the input
@@ -320,7 +320,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     async def _create_batch_rate_limit_descriptors(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        data: dict,
+        data: Mapping[str, object],
     ) -> list["RateLimitDescriptor"]:
         """Build the standard key/user/team/model descriptor list a batch is charged against.
 
@@ -423,7 +423,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
     async def _should_skip_batch_input_file_processing(
         self,
-        data: dict,
+        data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         has_enqueued_scopes: bool = False,
     ) -> tuple[bool, list["RateLimitDescriptor"] | None]:
@@ -488,7 +488,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return False, descriptors
 
-    def _warn_if_unsupported_model_skip_configured(self, general_settings: dict) -> None:
+    def _warn_if_unsupported_model_skip_configured(self, general_settings: Mapping[str, object]) -> None:
         """Warn once that ``skip_batch_input_file_rate_limiting_for_models`` is a no-op.
 
         A per-model skip is intentionally not honored because the model a batch
@@ -592,7 +592,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         file_id: str,
         custom_llm_provider: str,
-        data: dict,
+        data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> tuple[str, dict[str, object]]:
         """
@@ -977,7 +977,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         file_id: str,
         custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
         user_api_key_dict: UserAPIKeyAuth | None = None,
-        data: dict | None = None,
+        data: Mapping[str, object] | None = None,
         descriptors: Sequence["RateLimitDescriptor"] | None = None,
     ) -> BatchFileUsage:
         """
@@ -1082,7 +1082,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             #      can't be evaded by sending uncountable rows.
             # Counting stays best-effort, so a legitimate (e.g. multimodal) row
             # the counter can't measure is estimated, not hard-rejected.
-            models: Final[set] = set()
+            models: Final[set[str]] = set()
             # Keyed by the models each row is charged to, so the project ITPM/OTPM
             # quota for that model is charged with only its own rows' tokens,
             # never the whole batch's -- see `_create_project_io_descriptors_for_models`.

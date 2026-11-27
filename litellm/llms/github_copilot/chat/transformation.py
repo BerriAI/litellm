@@ -76,9 +76,9 @@ class GithubCopilotConfig(OpenAIConfig):
 
     def _transform_messages(
         self,
-        messages,
+        messages: list[AllMessageValues],
         model: str,
-    ):
+    ) -> list[AllMessageValues]:
         import litellm
 
         # Check if system-to-assistant conversion is disabled
@@ -88,7 +88,7 @@ class GithubCopilotConfig(OpenAIConfig):
             return messages
 
         # Default behavior: convert system messages to assistant for compatibility
-        transformed_messages: Final = []
+        transformed_messages: Final[list[AllMessageValues]] = []
         for message in messages:
             if message.get("role") == "system":
                 # Convert system message to assistant message
@@ -110,7 +110,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
@@ -142,7 +142,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         return validated_headers
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get supported OpenAI parameters for GitHub Copilot.
 
@@ -224,7 +224,7 @@ class GithubCopilotConfig(OpenAIConfig):
         return text_content, tool_calls, thinking_blocks
 
     @staticmethod
-    def _normalize_anthropic_usage(usage: dict) -> dict:
+    def _normalize_anthropic_usage(usage: dict) -> dict[str, object]:
         normalized: Final = dict(usage)
         if "input_tokens" in usage and "prompt_tokens" not in usage:
             normalized["prompt_tokens"] = usage["input_tokens"]
@@ -274,7 +274,7 @@ class GithubCopilotConfig(OpenAIConfig):
         else:
             finish_reason = "length"
 
-        message: Final[dict] = {
+        message: Final[dict[str, object]] = {
             "role": "assistant",
             "content": content if content or not tool_calls else None,
         }
@@ -292,7 +292,7 @@ class GithubCopilotConfig(OpenAIConfig):
             synthesized["usage"] = cls._normalize_anthropic_usage(usage)
         return synthesized
 
-    def transform_parsed_response_dict(self, parsed_response: dict) -> dict:
+    def transform_parsed_response_dict(self, parsed_response: dict[str, object]) -> dict[str, object]:
         """
         Repair the OpenAI-SDK-parsed response on the handler path that bypasses
         transform_response. See: https://github.com/BerriAI/litellm/issues/30927
@@ -305,10 +305,10 @@ class GithubCopilotConfig(OpenAIConfig):
         raw_response: httpx.Response,
         model_response: "ModelResponse",
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

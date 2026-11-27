@@ -41,9 +41,9 @@ impl Counts {
         )
     }
 
-    /// The input plus the output.
+    /// The input plus the output, the input with the cache tokens Anthropic reports beside it.
     pub(crate) fn total(self) -> u64 {
-        self.input_tokens.unwrap_or(0) + self.output_tokens.unwrap_or(0)
+        self.messages_usage().total_tokens
     }
 }
 

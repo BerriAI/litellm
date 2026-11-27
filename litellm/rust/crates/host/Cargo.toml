@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 bytes.workspace = true
+litellm-cost.workspace = true
 litellm-secret-value.workspace = true
 futures-util.workspace = true
 litellm-coroutine.workspace = true
@@ -16,4 +17,5 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 
 [dev-dependencies]
+litellm-cost = { workspace = true, features = ["test-support"] }
 rstest.workspace = true

@@ -7,6 +7,7 @@ No external dependencies — uses only stdlib.
 import math
 import re
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 
@@ -15,7 +16,7 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9_]+", text.lower())
 
 
-def _extract_content(message: dict) -> str:
+def _extract_content(message: Mapping[str, object]) -> str:
     """Extract text content from a message dict."""
     content: Final = message.get("content", "")
     if isinstance(content, str):
@@ -33,7 +34,7 @@ def _extract_content(message: dict) -> str:
 
 def bm25_score_messages(
     query: str,
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     k1: float = 1.5,
     b: float = 0.75,
 ) -> list[float]:
@@ -84,7 +85,7 @@ def bm25_score_messages(
     # document tokens that start with that term (min 4 chars match).  This lets
     # "cook" match "cooking" and "auth" match "authentication" without a full
     # stemmer dependency.
-    def _expand_tf(query_term: str, tf_counts: Counter) -> int:
+    def _expand_tf(query_term: str, tf_counts: Counter[str]) -> int:
         """Sum TF across all doc tokens that are prefixed by query_term."""
         exact: Final = tf_counts.get(query_term, 0)
         if exact:
