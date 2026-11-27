@@ -2139,7 +2139,7 @@
     },
     "hubris": {
       "display_name": "Hubris (`hubris`)",
-      "url": "https://hubris.pw/docs",
+      "url": "https://hubris.pro/docs",
       "endpoints": {
         "chat_completions": true,
         "messages": true,

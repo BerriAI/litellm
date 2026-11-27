@@ -1091,7 +1091,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.cognition.ai/v1",
     "https://inference.coralbricks.ai/v1",
     "https://api.cortecs.ai/v1",
-    "https://api.hubris.pw/v1",
+    "https://api.hubris.pro/v1",
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",

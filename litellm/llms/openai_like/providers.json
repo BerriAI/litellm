@@ -316,7 +316,7 @@
     }
   },
   "hubris": {
-    "base_url": "https://api.hubris.pw/v1",
+    "base_url": "https://api.hubris.pro/v1",
     "api_key_env": "HUBRIS_API_KEY",
     "api_base_env": "HUBRIS_API_BASE",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]

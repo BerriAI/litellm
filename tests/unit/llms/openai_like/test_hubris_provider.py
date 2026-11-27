@@ -1,7 +1,7 @@
 """
 Tests for the Hubris provider.
 
-Hubris (https://hubris.pw) is an OpenAI-compatible LLM gateway registered purely
+Hubris (https://hubris.pro) is an OpenAI-compatible LLM gateway registered purely
 via the JSON provider registry (``litellm/llms/openai_like/providers.json``);
 it has no hand-written transformation class. Model ids on Hubris always use the
 full ``vendor/model`` form (e.g. ``anthropic/claude-sonnet-5``), which LiteLLM
@@ -17,7 +17,7 @@ from litellm import completion
 from litellm.llms.openai_like.dynamic_config import create_config_class
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-API_BASE = "https://api.hubris.pw/v1"
+API_BASE = "https://api.hubris.pro/v1"
 CHAT_URL = f"{API_BASE}/chat/completions"
 MODEL = "hubris/anthropic/claude-sonnet-5"
 BARE_MODEL = "anthropic/claude-sonnet-5"
