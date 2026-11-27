@@ -140,16 +140,24 @@ async def test_stream_labels_the_audio_with_its_output_media_type(config: Mappin
     (("application/json", b"{}", "non-SSE"), ("text/event-stream", _COMPLETE, "without sending audio")),
 )
 async def test_invalid_upstream_success_is_reported_as_a_gateway_error(mime: str, content: bytes, message: str) -> None:
-    upstream: Final = httpx.Response(200, headers={"content-type": mime}, content=content)
+    async def events() -> AsyncIterator[bytes]:
+        yield content
+
+    upstream: Final = httpx.Response(200, headers={"content-type": mime}, content=events())
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: upstream)) as client:
-        with pytest.raises(litellm.BadGatewayError, match=message):
-            result: Final = await aspeech(
-                model=_MODEL,
-                input="Hello",
-                voice="Shivani",
-                api_key="key",
-                stream=True,
-                client=AsyncHTTPHandler(client=client),
-            )
-            await result.aread()
+        request: Final = aspeech(
+            model=_MODEL,
+            input="Hello",
+            voice="Shivani",
+            api_key="key",
+            stream=True,
+            client=AsyncHTTPHandler(client=client),
+        )
+        if mime == "text/event-stream":
+            result: Final = await request
+            with pytest.raises(litellm.BadGatewayError, match=message):
+                await result.aread()
+        else:
+            with pytest.raises(litellm.BadGatewayError, match=message):
+                await request
         assert upstream.is_closed
