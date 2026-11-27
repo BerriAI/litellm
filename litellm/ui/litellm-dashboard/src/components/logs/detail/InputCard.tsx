@@ -38,14 +38,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
   };
 
   return (
-    <div
-      style={{
-        border: "1px solid var(--color-border)",
-        borderRadius: 6,
-        marginBottom: 8,
-        overflow: "hidden",
-      }}
-    >
+    <div className="mb-2 overflow-hidden rounded-[6px] border border-border">
       {/* Datadog-style Header */}
       <SectionHeader
         type="input"
@@ -58,14 +51,10 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
 
       {/* Content */}
       <div
-        style={{
-          maxHeight: isCollapsed ? "0px" : "10000px",
-          overflow: "hidden",
-          transition: "max-height 0.3s ease-out, opacity 0.3s ease-out",
-          opacity: isCollapsed ? 0 : 1,
-        }}
+        className="overflow-hidden transition-[max-height,opacity] duration-300 ease-[ease-out]"
+        style={{ maxHeight: isCollapsed ? "0px" : "10000px", opacity: isCollapsed ? 0 : 1 }}
       >
-        <div style={{ padding: "12px 16px" }}>
+        <div className="px-4 py-3">
           {/* System Message - Collapsible with arrow */}
           {systemMessage && (
             <CollapsibleMessage
