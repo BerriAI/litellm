@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -33,9 +34,10 @@ from claude_code.cli_driver import (
 
 
 ANTHROPIC_MODELS = [
-    "claude-haiku-4-5",
-    "claude-sonnet-4-5",
-    "claude-opus-4-7",
+    "claude-haiku-5-5",
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    "claude-fable-5-2",
 ]
 
 # Smallest valid PDF that renders a single visible word ("PONG"). Built
@@ -106,6 +108,16 @@ def _build_minimal_pdf(marker: str) -> bytes:
 
 
 @pytest.mark.covers("llm.messages.anthropic.pdf_input.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.ANTHROPIC,),
+        models=tuple(ANTHROPIC_MODELS),
+        capabilities=(Capability.PDF_INPUT,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_pdf_input_anthropic(compat_result, tmp_path):
     """Drive the `claude` CLI against the LiteLLM proxy with a PDF
     attached via the Read tool and assert the reply references it."""

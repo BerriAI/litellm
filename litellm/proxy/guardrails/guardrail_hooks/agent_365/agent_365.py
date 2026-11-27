@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 
 import httpx
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -35,6 +35,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     AGENT_365_PROD_API_BASE,
     AGENT_365_PROD_RESOURCE_APP_ID,
@@ -49,7 +50,8 @@ if TYPE_CHECKING:
     from litellm.types.utils import GuardrailStatus
 
 TOKEN_ENDPOINT_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-EVALUATE_PATH: Final = "/agents/tool-evaluation/evaluate"
+EVALUATE_URL: Final = f"{AGENT_365_PROD_API_BASE}/agents/tool-evaluation/evaluate"
+OBO_SCOPE: Final = f"{AGENT_365_PROD_RESOURCE_APP_ID}/{AGENT_365_SCOPE_NAME}"
 MCP_SESSION_ID_HEADER: Final = "mcp-session-id"
 DEFENDER_STATUS_EVALUATED: Final = "Evaluated"
 _GATEWAY_OWNED_TOKEN_ERRORS: Final = frozenset(
@@ -60,6 +62,8 @@ _GATEWAY_OWNED_TOKEN_ERRORS: Final = frozenset(
 _INVALID_ASSERTION_AADSTS_PREFIX: Final = "50027"
 _AADSTS_CODES_ADAPTER: Final = TypeAdapter(tuple[int, ...])
 _MCP_CALL_TYPES: Final[tuple[str, ...]] = ("mcp_call", "call_mcp_tool")
+_TOOL_INPUT_SCHEMA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 _OBO_CACHE_MAX_ENTRIES: Final = 1000
 _DEFAULT_TOKEN_TTL_SECONDS: Final = 3599.0
 _TOKEN_EXPIRY_SLACK_SECONDS: Final = 60.0
@@ -81,6 +85,13 @@ def _parse_aadsts_codes(raw: object) -> tuple[int, ...]:
         return ()
 
 
+def _parse_tool_input_schema(raw: object) -> Mapping[str, object] | None:
+    try:
+        return _TOOL_INPUT_SCHEMA_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return None
+
+
 def entra_assertion(value: object) -> str | None:
     """``value`` when it is a compact JWS, the only bearer shape the OBO exchange accepts as its assertion.
     A LiteLLM virtual key, session bearer, or opaque upstream token in ``Authorization`` yields ``None``."""
@@ -93,10 +104,26 @@ class _DefenderResult(TypedDict, total=False):
     message: ReadOnly[str | None]
 
 
+def _as_mapping(value: object) -> Mapping[object, object] | None:
+    """Return ``value`` when it is a mapping, else ``None``."""
+    if not isinstance(value, Mapping):
+        return None
+    mapping: Final[Mapping[object, object]] = value
+    return mapping
+
+
 class _EvaluateResponse(TypedDict, total=False):
     allowed: ReadOnly[bool]
     defender: ReadOnly[_DefenderResult]
     correlationId: ReadOnly[str]
+
+
+class _ToolReference(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    description: str | None = None
+    input_schema: Mapping[str, object] | None = Field(default=None, serialization_alias="inputSchema")
 
 
 class _UnavailableDetail(TypedDict):
@@ -153,9 +180,6 @@ class Agent365Guardrail(CustomGuardrail):
         tenant_id: str,
         client_id: str,
         client_secret: str,
-        api_base: str = AGENT_365_PROD_API_BASE,
-        resource_app_id: str = AGENT_365_PROD_RESOURCE_APP_ID,
-        agent_id: str | None = None,
         request_timeout: float = 10.0,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         async_handler: AsyncHTTPHandler | None = None,
@@ -171,9 +195,6 @@ class Agent365Guardrail(CustomGuardrail):
         self.tenant_id = tenant_id
         self.client_id = client_id
         self.client_secret = client_secret
-        self.api_base = api_base.rstrip("/")
-        self.resource_app_id = resource_app_id
-        self.agent_id = agent_id
         self.request_timeout = request_timeout
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
@@ -191,7 +212,7 @@ class Agent365Guardrail(CustomGuardrail):
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail contract
-        return [GuardrailEventHooks.pre_mcp_call]  # mutable-ok: CustomGuardrail contract expects a list
+        return [GuardrailEventHooks.pre_mcp_call]
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -200,7 +221,7 @@ class Agent365Guardrail(CustomGuardrail):
         cache: "DualCache",
         data: dict,  # mutable-ok: hook contract; guardrail logging appends into the request metadata in place
         call_type: str,
-    ) -> Exception | str | dict | None:  # mutable-ok: CustomGuardrail.async_pre_call_hook contract
+    ) -> Exception | str | dict[str, object] | None:  # mutable-ok: CustomGuardrail.async_pre_call_hook contract
         if call_type not in _MCP_CALL_TYPES:
             return data
         if "mcp_tool_name" not in data:
@@ -230,7 +251,7 @@ class Agent365Guardrail(CustomGuardrail):
                     tool_name=tool_name,
                     reason=(
                         f"Entra rejected the gateway's own Agent 365 credentials ({exc.error_code}); "
-                        "check the guardrail's client_id, client_secret and resource_app_id"
+                        "check the guardrail's client_id and client_secret"
                     ),
                 )
             self._handle_caller_fault(
@@ -262,9 +283,9 @@ class Agent365Guardrail(CustomGuardrail):
         start: Final = time.perf_counter()
         try:
             response: Final = await self._post_allowing_error_status(
-                url=f"{self.api_base}{EVALUATE_PATH}",
+                url=EVALUATE_URL,
                 json=self._build_evaluate_payload(data=data, user_api_key_dict=user_api_key_dict),
-                headers={"Authorization": f"Bearer {obo_token}"},  # mutable-ok: httpx header dict
+                headers={"Authorization": f"Bearer {obo_token}"},
             )
         except (httpx.HTTPError, LitellmTimeout, TimeoutError) as exc:
             return self._handle_unavailable(
@@ -282,12 +303,12 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_evaluate_error(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         assertion: str,
         response: httpx.Response,
         latency_ms: float,
-    ) -> dict | None:  # mutable-ok: returns the request data dict per hook contract on fail_open
+    ) -> dict[str, object] | None:  # mutable-ok: returns the request data dict per hook contract on fail_open
         if response.status_code in (408, 429):
             self._handle_throttled(
                 data=data,
@@ -325,13 +346,13 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _enforce_verdict(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         response: httpx.Response,
         latency_ms: float,
-    ) -> dict:  # mutable-ok: returns the request data dict per hook contract
+    ) -> dict[str, object]:  # mutable-ok: returns the request data dict per hook contract
         try:
-            parsed_verdict: Final = response.json()
+            parsed_verdict: Final = _DECODED_JSON.validate_python(response.json())
         except ValueError:
             return self._handle_unavailable(
                 data=data,
@@ -396,9 +417,15 @@ class Agent365Guardrail(CustomGuardrail):
         tool_name: Final = str(data.get("mcp_tool_name") or "")
         arguments: Final = data.get("mcp_arguments")
         server_name: Final = str(data.get("mcp_server_name") or "litellm")
-        agent_id: Final = self.agent_id or user_api_key_dict.key_alias
+        agent_id: Final = user_api_key_dict.key_alias
+        description: Final = data.get("mcp_tool_description")
+        tool_reference: Final = _ToolReference(
+            name=tool_name,
+            description=description if isinstance(description, str) and description else None,
+            input_schema=_parse_tool_input_schema(data.get("mcp_input_schema")),
+        )
         payload: Final[dict[str, object]] = {  # mutable-ok: JSON body with optional fields added below
-            "tool": {"name": tool_name},
+            "tool": tool_reference.model_dump(by_alias=True, exclude_none=True),
             "serverName": server_name,
             "conversationId": self._resolve_conversation_id(data),
         }
@@ -416,17 +443,22 @@ class Agent365Guardrail(CustomGuardrail):
         logging_obj: Final = raw_logging_obj if isinstance(raw_logging_obj, LiteLLMLoggingObj) else None
         if logging_obj is not None:
             tool_call_metadata: Final = logging_obj.model_call_details.get("mcp_tool_call_metadata")
+            tool_call_mapping: Final = _as_mapping(tool_call_metadata)
             session_from_logging: Final = (
-                tool_call_metadata.get("mcp_session_id") if isinstance(tool_call_metadata, Mapping) else None
+                tool_call_mapping.get("mcp_session_id") if tool_call_mapping is not None else None
             )
             if isinstance(session_from_logging, str) and session_from_logging:
                 return session_from_logging
         metadata: Final = next(
-            (m for m in (data.get("metadata"), data.get("litellm_metadata")) if isinstance(m, Mapping)),
+            (
+                m
+                for m in (_as_mapping(data.get("metadata")), _as_mapping(data.get("litellm_metadata")))
+                if m is not None
+            ),
             None,
         )
-        headers: Final = metadata.get("headers") if isinstance(metadata, Mapping) else None
-        if isinstance(headers, Mapping):
+        headers: Final = _as_mapping(metadata.get("headers")) if metadata is not None else None
+        if headers is not None:
             session_id: Final = next(
                 (value for name, value in headers.items() if str(name).lower() == MCP_SESSION_ID_HEADER),
                 None,
@@ -449,15 +481,15 @@ class Agent365Guardrail(CustomGuardrail):
 
         response: Final = await self._post_allowing_error_status(
             url=TOKEN_ENDPOINT_TEMPLATE.format(tenant_id=self.tenant_id),
-            data={  # mutable-ok: OAuth form body; AsyncHTTPHandler.post requires dict
+            data={
                 "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
                 "assertion": assertion,
-                "scope": f"{self.resource_app_id}/{AGENT_365_SCOPE_NAME}",
+                "scope": OBO_SCOPE,
                 "requested_token_use": "on_behalf_of",
             },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},  # mutable-ok: httpx header dict
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         if response.status_code in (408, 429):
             raise Agent365ThrottledError(status_code=response.status_code)
@@ -468,7 +500,7 @@ class Agent365Guardrail(CustomGuardrail):
                 response=response,
             )
         try:
-            parsed_body: Final = response.json()
+            parsed_body: Final = _DECODED_JSON.validate_python(response.json())
         except ValueError as exc:
             raise Agent365MalformedResponseError("the Entra token endpoint returned a non-JSON body") from exc
         if not isinstance(parsed_body, dict):
@@ -515,7 +547,7 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_caller_fault(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         status_code: int,
         reason: str,
@@ -538,7 +570,7 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_throttled(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         reason: str,
         latency_ms: float | None,
@@ -567,15 +599,15 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_unavailable(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         reason: str,
         defender_status: str | None = None,
         correlation_id: str | None = None,
         latency_ms: float | None = None,
-    ) -> dict:  # mutable-ok: returns the request data dict per hook contract
+    ) -> dict[str, object]:  # mutable-ok: returns the request data dict per hook contract
         if self.unreachable_fallback == "fail_open":
-            verbose_proxy_logger.warning(
+            verbose_proxy_logger.error(
                 "Agent 365 guardrail (%s): %s; unreachable_fallback='fail_open', allowing tool call '%s' unscanned",
                 self.guardrail_name,
                 reason,

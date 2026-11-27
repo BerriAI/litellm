@@ -2,10 +2,12 @@
 ## Log success + failure events to Braintrust
 
 import os
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -14,6 +16,7 @@ from litellm.integrations.braintrust_mock_client import (
     should_use_braintrust_mock,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import json_contains, require_attributes, require_get, set_item
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -24,6 +27,18 @@ from litellm.utils import print_verbose
 API_BASE: Final = "https://api.braintrustdata.com/v1"
 
 
+class _BraintrustProjectBody(TypedDict):
+    id: ReadOnly[str]
+
+
+class _BraintrustProjectResponse(Protocol):
+    def json(self) -> _BraintrustProjectBody: ...
+
+
+def _project_id(response: _BraintrustProjectResponse) -> str:
+    return response.json()["id"]
+
+
 def get_utc_datetime():
     import datetime as dt
 
@@ -31,6 +46,10 @@ def get_utc_datetime():
         return datetime.now(dt.UTC)
     else:
         return datetime.utcnow()
+
+
+def _dict_or_none(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
 
 
 class BraintrustLogger(CustomLogger):
@@ -48,7 +67,7 @@ class BraintrustLogger(CustomLogger):
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
         }
-        self._project_id_cache: dict[str, str] = {}  # Cache mapping project names to IDs
+        self._project_id_cache: dict[object, str] = {}  # Cache mapping project names to IDs
         self.global_braintrust_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.global_braintrust_sync_http_handler = HTTPHandler()
 
@@ -59,14 +78,14 @@ class BraintrustLogger(CustomLogger):
 
         in the environment
         """
-        missing_keys: Final = []
+        missing_keys: Final[list[str]] = []
         if api_key is None and os.getenv("BRAINTRUST_API_KEY", None) is None:
             missing_keys.append("BRAINTRUST_API_KEY")
 
         if len(missing_keys) > 0:
             raise Exception(f"Missing keys={missing_keys} in environment.")
 
-    def get_project_id_sync(self, project_name: str) -> str:
+    def get_project_id_sync(self, project_name: object) -> str:
         """
         Get project ID from name, using cache if available.
         If project doesn't exist, creates it.
@@ -80,14 +99,13 @@ class BraintrustLogger(CustomLogger):
                 headers=self.headers,
                 json={"name": project_name},
             )
-            project_dict: Final = response.json()
-            project_id: Final = project_dict["id"]
+            project_id: Final = _project_id(response)
             self._project_id_cache[project_name] = project_id
             return project_id
         except httpx.HTTPStatusError as e:
             raise Exception(f"Failed to register project: {e.response.text}")
 
-    async def get_project_id_async(self, project_name: str) -> str:
+    async def get_project_id_async(self, project_name: object) -> str:
         """
         Async version of get_project_id_sync
         """
@@ -100,8 +118,7 @@ class BraintrustLogger(CustomLogger):
                 headers=self.headers,
                 json={"name": project_name},
             )
-            project_dict: Final = response.json()
-            project_id: Final = project_dict["id"]
+            project_id: Final = _project_id(response)
             self._project_id_cache[project_name] = project_id
             return project_id
         except httpx.HTTPStatusError as e:
@@ -112,20 +129,18 @@ class BraintrustLogger(CustomLogger):
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
         )
 
-        project_dict: Final = project.json()
-
-        self.default_project_id = project_dict["id"]
+        self.default_project_id = _project_id(project)
 
     def create_sync_default_project_and_experiment(self):
         project: Final = self.global_braintrust_sync_http_handler.post(
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
         )
 
-        project_dict: Final = project.json()
+        self.default_project_id = _project_id(project)
 
-        self.default_project_id = project_dict["id"]
-
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id: Final = kwargs.get("litellm_call_id")
@@ -139,16 +154,16 @@ class BraintrustLogger(CustomLogger):
             ):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
-                output = response_obj["choices"][0]["message"].json()
+                output = response_obj.choices[0].message.json()
                 choices = response_obj["choices"]
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
-                output = response_obj["data"]
+                output = response_obj.data
 
-            litellm_params: Final = kwargs.get("litellm_params", {}) or {}
-            dynamic_metadata: Final = litellm_params.get("metadata", {}) or {}
+            litellm_params: Final = require_get(kwargs.get("litellm_params", {}) or {})
+            dynamic_metadata: Final = require_get(litellm_params.get("metadata", {}) or {})
 
             # Get project_id from metadata or create default if needed
             project_id = dynamic_metadata.get("project_id")
@@ -161,10 +176,11 @@ class BraintrustLogger(CustomLogger):
                     self.create_sync_default_project_and_experiment()
                 project_id = self.default_project_id
 
-            tags: Final = []
+            tags: Final[list[str]] = []
 
-            if isinstance(dynamic_metadata, dict):
-                for key, value in dynamic_metadata.items():
+            metadata_entries: Final = _dict_or_none(dynamic_metadata)
+            if metadata_entries is not None:
+                for key, value in metadata_entries.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
                     if (
                         litellm.langfuse_default_tags is not None
@@ -173,14 +189,14 @@ class BraintrustLogger(CustomLogger):
                     ):
                         tags.append(f"{key}:{value}")
 
-                    if (
-                        isinstance(value, str) and key not in standard_logging_object
+                    if isinstance(value, str) and not json_contains(
+                        standard_logging_object, key
                     ):  # support logging dynamic metadata to braintrust
-                        standard_logging_object[key] = value
+                        set_item(standard_logging_object, key, value)
 
             cost: Final = kwargs.get("response_cost", None)
 
-            metrics: dict | None = None
+            metrics: dict[str, object] | None = None
             usage_obj: Final = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
                 litellm.utils.get_logging_id(start_time, response_obj)
@@ -202,7 +218,9 @@ class BraintrustLogger(CustomLogger):
 
             # Convert comma-separated string to list if present
             if span_parents:
-                span_parents = [s.strip() for s in span_parents.split(",") if s.strip()]
+                span_parents = [
+                    s.strip() for s in require_attributes(span_parents, str, "split").split(",") if s.strip()
+                ]
 
             # Add optional span attributes only if present
             span_attributes: Final = {
@@ -251,7 +269,9 @@ class BraintrustLogger(CustomLogger):
         except Exception as e:
             raise e  # don't use verbose_logger.exception, if exception is raised
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id: Final = kwargs.get("litellm_call_id")
@@ -264,16 +284,16 @@ class BraintrustLogger(CustomLogger):
             ):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
-                output = response_obj["choices"][0]["message"].json()
-                choices = response_obj["choices"]
+                output = response_obj.choices[0].message.json()
+                choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
-                output = response_obj["data"]
+                output = response_obj.data
 
-            litellm_params: Final = kwargs.get("litellm_params", {})
-            dynamic_metadata: Final = litellm_params.get("metadata", {}) or {}
+            litellm_params: Final = require_get(kwargs.get("litellm_params", {}))
+            dynamic_metadata: Final = require_get(litellm_params.get("metadata", {}) or {})
 
             # Get project_id from metadata or create default if needed
             project_id = dynamic_metadata.get("project_id")
@@ -286,10 +306,11 @@ class BraintrustLogger(CustomLogger):
                     await self.create_default_project_and_experiment()
                 project_id = self.default_project_id
 
-            tags: Final = []
+            tags: Final[list[str]] = []
 
-            if isinstance(dynamic_metadata, dict):
-                for key, value in dynamic_metadata.items():
+            metadata_entries: Final = _dict_or_none(dynamic_metadata)
+            if metadata_entries is not None:
+                for key, value in metadata_entries.items():
                     # generate langfuse tags - Default Tags sent to Langfuse from LiteLLM Proxy
                     if (
                         litellm.langfuse_default_tags is not None
@@ -298,14 +319,14 @@ class BraintrustLogger(CustomLogger):
                     ):
                         tags.append(f"{key}:{value}")
 
-                    if (
-                        isinstance(value, str) and key not in standard_logging_object
+                    if isinstance(value, str) and not json_contains(
+                        standard_logging_object, key
                     ):  # support logging dynamic metadata to braintrust
-                        standard_logging_object[key] = value
+                        set_item(standard_logging_object, key, value)
 
             cost: Final = kwargs.get("response_cost", None)
 
-            metrics: dict | None = None
+            metrics: dict[str, object] | None = None
             usage_obj: Final = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
                 litellm.utils.get_logging_id(start_time, response_obj)
@@ -322,7 +343,10 @@ class BraintrustLogger(CustomLogger):
                 completion_start_time: Final = kwargs.get("completion_start_time")
 
                 if api_call_start_time is not None and completion_start_time is not None:
-                    metrics["time_to_first_token"] = completion_start_time.timestamp() - api_call_start_time.timestamp()
+                    metrics["time_to_first_token"] = (
+                        require_attributes(completion_start_time, datetime, "timestamp").timestamp()
+                        - require_attributes(api_call_start_time, datetime, "timestamp").timestamp()
+                    )
 
             # Allow metadata override for span name
             span_name: Final = dynamic_metadata.get("span_name", "Chat Completion")
@@ -332,7 +356,9 @@ class BraintrustLogger(CustomLogger):
 
             # Convert comma-separated string to list if present
             if span_parents:
-                span_parents = [s.strip() for s in span_parents.split(",") if s.strip()]
+                span_parents = [
+                    s.strip() for s in require_attributes(span_parents, str, "split").split(",") if s.strip()
+                ]
 
             # Add optional span attributes only if present
             span_attributes: Final = {
@@ -341,7 +367,7 @@ class BraintrustLogger(CustomLogger):
                 "span_parents": span_parents,
             }
 
-            request_data: Final = {
+            request_data: Final[dict[str, object]] = {  # mutable-ok: built here, sent as is
                 "id": litellm_call_id,
                 "input": prompt["messages"],
                 "output": output,
@@ -358,10 +384,7 @@ class BraintrustLogger(CustomLogger):
                 if value:
                     request_data[key] = value
 
-            if choices is not None:
-                request_data["output"] = [choice.dict() for choice in choices]
-            else:
-                request_data["output"] = output
+            request_data["output"] = [choice.dict() for choice in choices]
 
             if metrics is not None:
                 request_data["metrics"] = metrics
@@ -379,5 +402,5 @@ class BraintrustLogger(CustomLogger):
         except Exception as e:
             raise e  # don't use verbose_logger.exception, if exception is raised
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         return super().log_failure_event(kwargs, response_obj, start_time, end_time)

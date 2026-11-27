@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -12,10 +13,10 @@ from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec, 
 from .gitlab_prompt_manager import GitLabPromptCache, GitLabPromptManager
 
 # Global instances
-global_gitlab_config: Final[dict | None] = None
+global_gitlab_config: Final[Mapping[str, object] | None] = None
 
 
-def set_global_gitlab_config(config: dict) -> None:
+def set_global_gitlab_config(config: Mapping[str, object]) -> None:
     """
     Set the global gitlab configuration for prompt management.
 
@@ -66,7 +67,7 @@ def _gitlab_prompt_initializer(
     # You can store arbitrary integration-specific config on PromptLiteLLMParams.
     # If your dataclass doesn't have these attributes, add them or put inside
     # `litellm_params.extra` and pull them from there.
-    gitlab_config: Final[dict[str, Any]] = getattr(litellm_params, "gitlab_config", None) or {}
+    gitlab_config: Final[dict[str, object]] = getattr(litellm_params, "gitlab_config", None) or {}
     git_ref: Final[str | None] = getattr(litellm_params, "git_ref", None)
 
     if not gitlab_config:

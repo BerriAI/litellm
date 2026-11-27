@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.secret_managers.main import get_secret_str
@@ -5,15 +6,23 @@ from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 
 from .transformation import FalAIBaseConfig
 
+_BARE_APP_MARKERS: Final = ("nano-banana", "gemini-25-flash-image")
+
 
 class FalAINanoBananaConfig(FalAIBaseConfig):
     """
-    Configuration for Fal AI's Nano Banana / Gemini 2.5 Flash Image models.
+    Configuration for Fal AI's Nano Banana family (Gemini Flash / Pro Image models).
 
-    Serves the imagen4 deprecation migration path. The same underlying model is
-    exposed under two endpoints that share an identical schema:
+    Serves the imagen4 deprecation migration path. Every endpoint shares the same
+    request schema, so one config covers all of them:
     - fal-ai/nano-banana
     - fal-ai/gemini-25-flash-image
+    - fal-ai/nano-banana-2
+    - fal-ai/nano-banana-pro
+    - google/nano-banana-2.1
+
+    Provider-specific params such as ``resolution`` ("0.5K", "1K", "2K", "4K") are
+    forwarded as-is and drive the per-resolution price in the cost map.
 
     Documentation: https://fal.ai/models/fal-ai/nano-banana
     """
@@ -36,12 +45,14 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         base_url: Final[str] = (api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL).rstrip("/")
-        endpoint: Final = model if model.startswith("fal-ai/") else f"fal-ai/{model}"
+        app: Final = model.partition("/")[0].lower()
+        is_bare_app: Final = any(marker in app for marker in _BARE_APP_MARKERS)
+        endpoint: Final = f"fal-ai/{model}" if is_bare_app else model
         return f"{base_url}/{endpoint}"
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
@@ -49,11 +60,11 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         for key, value in non_default_params.items():
             if key == "response_format":
@@ -72,7 +83,7 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
                 )
         return optional_params
 
-    def _map_aspect_ratio(self, size: str) -> str:
+    def _map_aspect_ratio(self, size: object) -> str:
         if not isinstance(size, str) or "x" not in size:
             return "1:1"
         try:
@@ -94,8 +105,8 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         return {"prompt": prompt, **optional_params}

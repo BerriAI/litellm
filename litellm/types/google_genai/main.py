@@ -17,11 +17,19 @@ if TYPE_CHECKING:
     ToolConfigDict = _genai_types.ToolConfigDict
 
     class GenerateContentRequestDict(GenerateContentRequestParametersDict):
-        generationConfig: Any | None
+        generationConfig: object | None
         tools: ToolConfigDict | None
 
     class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):
-        _hidden_params: dict = {}
+        _hidden_params: dict[str, object] = {}
+
+        @property
+        def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+            return self._hidden_params
+
+        @hidden_params.setter
+        def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+            self._hidden_params = hidden_params
 
 else:
     # Fallback types when google.genai is not available
@@ -33,23 +41,31 @@ else:
 
     # Create a proper fallback class that can be instantiated
     class GenerateContentConfigDict(dict):
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: object) -> None:
             super().__init__(**kwargs)
 
     class GenerateContentRequestParametersDict(dict):
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: object) -> None:
             super().__init__(**kwargs)
 
     ToolConfigDict = dict[str, Any]
 
     class GenerateContentRequestDict(GenerateContentRequestParametersDict):
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: object) -> None:
             # Extract specific fields
             self.generationConfig = kwargs.get("generationConfig")
             self.tools = kwargs.get("tools")
             super().__init__(**kwargs)
 
     class GenerateContentResponse(BaseLiteLLMOpenAIResponseObject):
-        def __init__(self, **kwargs) -> None:
+        @property
+        def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+            return self._hidden_params
+
+        @hidden_params.setter
+        def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+            self._hidden_params = hidden_params
+
+        def __init__(self, **kwargs: object) -> None:
             super().__init__(**kwargs)
             self._hidden_params = kwargs.get("_hidden_params", {})

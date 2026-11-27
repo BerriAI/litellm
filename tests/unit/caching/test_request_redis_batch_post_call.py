@@ -1,0 +1,222 @@
+"""The post-call writes of a request: spend counters, rate-limit token scripts and slot releases and deployment TPM
+all ride the native post-call batch, which goes out once the success/failure callbacks have run (or at the deadline
+when no callback phase closes it). The response-cache SET stays direct so the next identical request can hit it while
+the callbacks are still running."""
+
+from __future__ import annotations
+
+import datetime
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Final
+
+import pytest
+
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+import litellm
+from litellm.caching.caching import Cache
+from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_batch import (
+    active_request_redis_batches,
+    flush_post_call_redis_batches,
+    request_redis_batch_scope,
+)
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
+from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.types.utils import ModelResponse
+from tests.unit.redis.stores.router_usage_double import FakeUsageHandle, usage_store
+
+from .redis_batch_double import FakeNatives, FakeRedisCache, fake_send
+
+
+async def _script_outside_the_pipeline(keys: Sequence[str], args: Sequence[object]) -> object:
+    raise AssertionError("post-call scripts must ride the post-call pipeline")
+
+
+class PostCallFakeRedisCache(FakeRedisCache):
+    """Records the direct (non-pipelined) writes an owner falls back to."""
+
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[object]]:
+        return _script_outside_the_pipeline
+
+    async def async_delete_cache(self, key: str, **kwargs: object) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # the fake drops RedisCache's unused kwargs
+        self.alone.append(("DEL", key))
+        self.store.pop(key, None)
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.alone.append(("SET", key, dict(kwargs)))
+        self.store[key] = value
+
+
+def _response_cache(redis_cache: FakeRedisCache) -> Cache:
+    cache = Cache(type="local")
+    cache.type = "redis"  # pyright: ignore[reportAttributeAccessIssue]  # the fake stands in for the Redis backend
+    cache.cache = redis_cache
+    return cache
+
+
+def _tpm_selector(handle: FakeUsageHandle) -> LowestTPMLoggingHandler_v2:
+    selector: Final = LowestTPMLoggingHandler_v2(usage=usage_store(handle), routing_args={"ttl": 60})
+    selector.cancel_sync_task()
+    return selector
+
+
+def _tpm_kwargs() -> Mapping[str, object]:
+    return {
+        "standard_logging_object": {
+            "model_group": "gpt",
+            "model_id": "dep-a",
+            "hidden_params": {"litellm_model_name": "openai/gpt-4o-mini"},
+            "total_tokens": 42,
+        },
+        "litellm_params": {"metadata": {}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_outside_a_request_the_tpm_increment_goes_out_on_its_own_pipeline():
+    usage = FakeUsageHandle(redis={})
+
+    await _tpm_selector(usage).async_log_success_event(_tpm_kwargs(), None, None, None)
+
+    assert [name for name, _ in usage.calls] == ["pipeline"]
+    assert usage.local == usage.redis == {next(iter(usage.local)): 42}
+
+
+@pytest.mark.asyncio
+async def test_the_response_cache_set_reaches_redis_before_the_post_call_pipeline_goes_out():
+    redis_cache = PostCallFakeRedisCache()
+    response_cache = _response_cache(redis_cache)
+    kwargs = {"messages": [{"role": "user", "content": "hi"}], "model": "gpt", "ttl": 120}
+    cache_key = response_cache.get_cache_key(**kwargs)
+
+    with request_redis_batch_scope():
+        await response_cache.async_add_cache({"id": "resp"}, **kwargs)
+        assert redis_cache.store[cache_key]["response"] == {"id": "resp"}
+        await flush_post_call_redis_batches()
+
+    (direct_set,) = redis_cache.alone
+    assert (direct_set[0], direct_set[1], direct_set[2]["ttl"]) == ("SET", cache_key, 120)
+
+
+@pytest.mark.asyncio
+async def test_a_chat_response_written_through_the_handler_dual_cache_is_in_memory_and_redis_at_once():
+    redis_cache = PostCallFakeRedisCache()
+    response_cache = _response_cache(redis_cache)
+    handler_cache = DualCache(redis_cache=redis_cache, in_memory_cache=InMemoryCache())
+    kwargs = {"messages": [{"role": "user", "content": "hi"}], "model": "gpt", "ttl": 120}
+    cache_key = response_cache.get_cache_key(**kwargs)
+
+    with request_redis_batch_scope():
+        await response_cache.async_add_cache('{"id": "resp"}', dynamic_cache_object=handler_cache, **kwargs)
+        in_memory = await handler_cache.in_memory_cache.async_get_cache(cache_key)
+        assert in_memory["response"] == '{"id": "resp"}'
+        assert redis_cache.store[cache_key]["response"] == '{"id": "resp"}'
+        await flush_post_call_redis_batches()
+
+    (direct_set,) = redis_cache.alone
+    assert (direct_set[0], direct_set[1], direct_set[2]["ttl"]) == ("SET", cache_key, 120)
+
+
+@pytest.mark.asyncio
+async def test_outside_a_request_scope_the_response_cache_writes_directly():
+    redis_cache = PostCallFakeRedisCache()
+    response_cache = _response_cache(redis_cache)
+
+    await response_cache.async_add_cache({"id": "resp"}, messages=[{"role": "user", "content": "hi"}], model="gpt")
+
+    (direct_set,) = redis_cache.alone
+    assert direct_set[0] == "SET"
+
+
+@pytest.mark.asyncio
+async def test_a_set_with_options_keeps_the_direct_path():
+    redis_cache = PostCallFakeRedisCache()
+    response_cache = _response_cache(redis_cache)
+
+    with request_redis_batch_scope():
+        await response_cache.async_add_cache(
+            {"id": "r"}, messages=[{"role": "user", "content": "hi"}], model="gpt", nx=True
+        )
+        await flush_post_call_redis_batches()
+
+    (direct_set,) = redis_cache.alone
+    assert direct_set[0] == "SET" and direct_set[2]["nx"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_success_handler_closes_the_post_call_batch_after_the_last_callback(monkeypatch):
+    natives: Final = FakeNatives()
+    flushes_seen_by_callbacks: list[int] = []
+
+    class Counter(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            request = active_request_redis_batches()
+            assert request is not None
+            request.native()
+            flushes_seen_by_callbacks.append(natives.built[0].events.count("flush_post"))
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    logging_obj = LitellmLogging(
+        model="test-model",
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="post-call",
+        function_id="post-call",
+        dynamic_async_success_callbacks=[Counter(), Counter()],
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    payload = {
+        "id": "post-call",
+        "call_type": "completion",
+        "metadata": {},
+        "model_group": "test-model",
+        "model_parameters": {},
+    }
+
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        await logging_obj.async_success_handler(result=ModelResponse(), standard_logging_object=payload)
+
+    assert flushes_seen_by_callbacks == [0, 0]
+    assert natives.built[0].events == ["flush_post"]
+
+
+@pytest.mark.asyncio
+async def test_spend_counter_increments_ride_the_native_post_call_batch(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    natives = FakeNatives()
+    spend = FakeSpendCounters(redis={"spend:key:k1": 7.0})
+    monkeypatch.setattr(proxy_server, "spend_counter_store", spend.store())
+    pending = [PendingSpendIncrement("spend:key:k1", 0.5), PendingSpendIncrement("spend:team:t1", 0.5)]
+
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        await proxy_server._apply_spend_counter_increments(pending)
+        declared = list(spend.post_call)
+        assert natives.built[0].events == []
+        await flush_post_call_redis_batches()
+
+    assert declared == [(natives.built[0], (("spend:key:k1", 0.5), ("spend:team:t1", 0.5)))]
+    assert natives.built[0].events == ["flush_post"]
+    assert spend.commands == []
+
+
+@pytest.mark.asyncio
+async def test_native_post_call_ops_go_out_with_the_post_call_flush_not_the_request_boundary():
+    natives = FakeNatives()
+
+    with request_redis_batch_scope(
+        post_call_deadline=60, native_factory=natives, native_send_factory=fake_send
+    ) as request:  # pyright: ignore[reportArgumentType]  # test double
+        request.native()
+        await request.flush_pre_call()
+        at_the_boundary = list(natives.built[0].events)
+        await flush_post_call_redis_batches()
+
+    assert at_the_boundary == ["flush_pre"]
+    assert natives.built[0].events == ["flush_pre", "flush_post"]

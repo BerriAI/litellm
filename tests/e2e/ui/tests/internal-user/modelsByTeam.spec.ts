@@ -17,7 +17,7 @@ import { CHAT_MODEL_A, CHAT_MODEL_B, masterKey } from "../../helpers/traffic";
 
 const MOCK_LLM_BASE = `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`;
 const CURRENT_TEAM_VIEW = "Current Team Models";
-const ALL_MODELS_VIEW = "All Available Models";
+const ALL_PROXY_MODELS_VIEW = "All Proxy Models";
 const PERSONAL_TEAM = "Personal";
 
 const teamSelector = (page: PlaywrightPage): Locator =>
@@ -174,10 +174,10 @@ test.describe("Models and Endpoints for an internal user", () => {
       `${ungrantedModelName} is granted to no team and must not leak into ${E2E_TEAM_ORG_ALIAS}`,
     ).toHaveCount(0);
 
-    await chooseOption(page, viewSelector(page), ALL_MODELS_VIEW);
+    await chooseOption(page, viewSelector(page), ALL_PROXY_MODELS_VIEW);
     await expect(
       modelRow(page, CHAT_MODEL_A),
-      `switching to ${ALL_MODELS_VIEW} leaves the table populated rather than blanking it`,
+      `switching to ${ALL_PROXY_MODELS_VIEW} leaves the table populated rather than blanking it`,
     ).toHaveCount(1, { timeout: 15_000 });
 
     await expect(page).toHaveURL((url) =>
@@ -192,7 +192,7 @@ test.describe("Models and Endpoints for an internal user", () => {
     await expect(
       viewSelector(page),
       "the selected view is restored from the URL after a reload",
-    ).toContainText(ALL_MODELS_VIEW, { timeout: 15_000 });
+    ).toContainText(ALL_PROXY_MODELS_VIEW, { timeout: 15_000 });
     await expect(modelRow(page, CHAT_MODEL_A)).toHaveCount(1, { timeout: 15_000 });
     await expect(page.getByTestId("pagination-range")).toHaveText("Showing 1-1 of 1");
     await expect(modelRow(page, CHAT_MODEL_B)).toHaveCount(0);

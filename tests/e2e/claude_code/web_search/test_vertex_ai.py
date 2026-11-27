@@ -31,6 +31,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -40,9 +41,9 @@ from claude_code.cli_driver import (
 
 
 VERTEX_AI_MODELS = [
-    "claude-haiku-4-5-vertex",
-    "claude-sonnet-4-5-vertex",
-    "claude-opus-4-7-vertex",
+    "claude-haiku-5-5-vertex",
+    "claude-sonnet-5-5-vertex",
+    "claude-opus-5-5-vertex",
 ]
 
 # A prompt the model cannot answer from training data alone — it forces
@@ -85,6 +86,16 @@ def _has_web_search_tool_use(events: Sequence[Mapping[str, Any]]) -> bool:
 
 
 @pytest.mark.covers("llm.messages.vertex.web_search.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.VERTEX_AI,),
+        models=tuple(VERTEX_AI_MODELS),
+        capabilities=(Capability.WEB_SEARCH,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_web_search_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
     upstream emitted a `tool_use` block calling `WebSearch`, proving

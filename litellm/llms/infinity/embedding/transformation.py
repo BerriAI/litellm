@@ -1,8 +1,12 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
@@ -10,6 +14,10 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..common_utils import InfinityError
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_INT: Final = TypeAdapter(int)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class InfinityEmbeddingConfig(BaseEmbeddingConfig):
@@ -25,28 +33,24 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Infinity embeddings")
-        # Remove trailing slashes and ensure clean base URL
-        api_base = api_base.rstrip("/")
-        if not api_base.endswith("/embeddings"):
-            api_base = f"{api_base}/embeddings"
-        return api_base
+        return ensure_api_route(api_base, "embeddings")
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key is None:
             api_key = get_secret_str("INFINITY_API_KEY")
 
@@ -63,7 +67,7 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         # Merge other headers, overriding any default ones except Authorization
         return {**default_headers, **headers}
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "encoding_format",
             "modality",
@@ -72,8 +76,8 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -94,9 +98,9 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         return {
             "input": input,
             "model": model,
@@ -110,9 +114,9 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> EmbeddingResponse:
         try:
             raw_response_json: Final = raw_response.json()
@@ -124,12 +128,16 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
+        response_body: Final = require_get(_DECODED_JSON.validate_python(raw_response_json))
+        usage_payload: Final = _JSON_OBJECT.validate_python(response_body.get("usage", {}))
         usage: Final = Usage(
-            prompt_tokens=raw_response_json.get("usage", {}).get("prompt_tokens", 0),
-            total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
+            prompt_tokens=_INT.validate_python(usage_payload.get("prompt_tokens", 0) or 0),
+            total_tokens=_INT.validate_python(usage_payload.get("total_tokens", 0) or 0),
         )
         model_response.usage = usage
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return InfinityError(message=error_message, status_code=status_code, headers=headers)

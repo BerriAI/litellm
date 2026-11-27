@@ -6,12 +6,17 @@ so this config enables direct routing instead of falling back to
 the chat completions → responses conversion pipeline.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.openai.responses.instruction_items import SystemItemPlacement
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.utils import declares_system_first, deployment_model_info
 
 
 class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -30,10 +35,10 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key: Final = (
             litellm_params.api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
@@ -48,7 +53,7 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
 
@@ -64,9 +69,21 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # If api_base already ends with /v1, append /responses
         # Otherwise append /v1/responses
         if api_base.endswith("/v1"):
-            return f"{api_base}/responses"
+            return join_api_base(api_base, "responses")
 
-        return f"{api_base}/v1/responses"
+        return join_api_base(api_base, "v1/responses")
+
+    def _system_item_placement(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> SystemItemPlacement | None:
+        declared_system_first: Final = declares_system_first(
+            model, self.custom_llm_provider.value, deployment_model_info(litellm_params)
+        )
+        return "instruction_items_into_instructions" if declared_system_first else None
 
     def supports_native_websocket(self) -> bool:
         """Hosted vLLM does not support native WebSocket for Responses API"""

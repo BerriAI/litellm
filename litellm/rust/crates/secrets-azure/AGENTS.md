@@ -1,0 +1,1 @@
+- https://learn.microsoft.com/en-us/rest/api/keyvault/secrets/get-secret/get-secret

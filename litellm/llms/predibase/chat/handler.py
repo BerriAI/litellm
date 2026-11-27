@@ -2,9 +2,9 @@
 ## Controller file for Predibase Integration - https://predibase.com/
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -14,19 +14,24 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import CustomStreamWrapper, ModelResponse
 
 from ..common_utils import PredibaseError
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 async def make_call(
     client: AsyncHTTPHandler,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     model: str,
-    messages: list,
-    logging_obj,
+    messages: Sequence[object],
+    logging_obj: LiteLLMLoggingObj,
     timeout: float | httpx.Timeout | None,
 ):
     response: Final = await client.post(api_base, headers=headers, data=data, stream=True, timeout=timeout)
@@ -34,7 +39,7 @@ async def make_call(
     if response.status_code != 200:
         raise PredibaseError(status_code=response.status_code, message=response.text)
 
-    completion_stream: Final = response.aiter_lines()
+    completion_stream: Final = aiter_sse_lines(response.aiter_text())
     # LOGGING
     logging_obj.post_call(
         input=messages,
@@ -53,21 +58,21 @@ class PredibaseChatCompletion:
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
+        print_verbose: Callable[..., object],
+        encoding: "Tokenizer",
         api_key: str,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         tenant_id: str,
         timeout: float | httpx.Timeout,
-        acompletion=None,
-        logger_fn=None,
-        headers: dict = {},
+        acompletion: bool | None = None,
+        logger_fn: object = None,
+        headers: dict[str, object] = {},
     ) -> ModelResponse | CustomStreamWrapper:
         predibase_config: Final = litellm.PredibaseConfig()
         headers = predibase_config.validate_environment(
@@ -163,7 +168,7 @@ class PredibaseChatCompletion:
                 timeout=timeout,
             )
             _response: Final = CustomStreamWrapper(
-                response.iter_lines(),
+                iter_sse_lines(response.iter_text()),
                 model,
                 custom_llm_provider="predibase",
                 logging_obj=logging_obj,
@@ -193,21 +198,21 @@ class PredibaseChatCompletion:
     async def async_completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
-        logging_obj,
-        stream,
-        data: dict,
-        optional_params: dict,
+        print_verbose: Callable[..., object],
+        encoding: "Tokenizer",
+        api_key: str,
+        logging_obj: LiteLLMLoggingObj,
+        stream: bool,
+        data: dict[str, object],
+        optional_params: dict[str, object],
         timeout: float | httpx.Timeout,
-        litellm_params=None,
-        logger_fn=None,
-        headers={},
-        predibase_config=None,
+        litellm_params: Mapping[str, object] | None = None,
+        logger_fn: object = None,
+        headers: dict[str, object] = {},
+        predibase_config: "litellm.PredibaseConfig | None" = None,
     ) -> ModelResponse:
         if predibase_config is None:
             predibase_config = litellm.PredibaseConfig()
@@ -245,19 +250,19 @@ class PredibaseChatCompletion:
     async def async_streaming(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         api_base: str,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
+        print_verbose: Callable[..., object],
+        encoding: object,
+        api_key: object,
         logging_obj: LiteLLMLoggingObj,
-        data: dict,
+        data: dict[str, object],
         timeout: float | httpx.Timeout,
-        optional_params=None,
-        litellm_params=None,
-        logger_fn=None,
-        headers={},
+        optional_params: object = None,
+        litellm_params: object = None,
+        logger_fn: object = None,
+        headers: dict[str, object] = {},
     ) -> CustomStreamWrapper:
         data["stream"] = True
 
@@ -279,5 +284,5 @@ class PredibaseChatCompletion:
         )
         return streamwrapper
 
-    def embedding(self, *args, **kwargs):
+    def embedding(self, *args: object, **kwargs: object) -> None:
         pass

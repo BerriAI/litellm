@@ -2,10 +2,11 @@
 MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's Anthropic-compatible API
 """
 
-from typing import Any, Final  # noqa: TID251  # override below must mirror the legacy base signature
+from collections.abc import Sequence
 
 import litellm
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -51,11 +52,11 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
 
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the legacy base override signature
+        headers: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
         model: str,
-        messages: list[Any],  # mutable-ok: mirrors the legacy base override signature
-        optional_params: dict,  # mutable-ok: mirrors the legacy base override signature
-        litellm_params: dict,  # mutable-ok: mirrors the legacy base override signature
+        messages: Sequence[object],
+        optional_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the legacy base override signature
@@ -74,23 +75,12 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for MiniMax API.
         Override to ensure we use MiniMax's endpoint, not Anthropic's.
         """
-        # Get the base URL (either provided or default MiniMax endpoint)
-        base_url: Final = self.get_api_base(api_base=api_base)
-
-        # If the base URL already includes the full path, return it
-        if base_url.endswith("/v1/messages"):
-            return base_url
-
-        # Otherwise append the messages endpoint
-        if base_url.endswith("/"):
-            return f"{base_url}v1/messages"
-        else:
-            return f"{base_url}/v1/messages"
+        return ensure_api_route(self.get_api_base(api_base=api_base), "v1/messages")

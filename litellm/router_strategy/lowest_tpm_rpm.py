@@ -1,13 +1,20 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import traceback
+from collections.abc import Mapping
 from datetime import datetime
+from functools import partial
 from typing import Final
 
-from litellm import token_counter
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.core_helpers import require_get, subscript
+from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
+from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 from litellm.types.utils import LiteLLMPydanticObjectBase
 from litellm.utils import print_verbose
 
@@ -26,19 +33,25 @@ class LowestTPMLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target(ROUTER_USAGE_TARGET)
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj, start_time: object, end_time: object
+    ) -> None:
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update TPM/RPM usage on success
             """
             if "litellm_params" not in kwargs or kwargs["litellm_params"] is None:
                 return
-            if kwargs["litellm_params"].get("metadata") is None:
+            litellm_params: Final = kwargs["litellm_params"]
+            if require_get(litellm_params).get("metadata") is None:
                 pass
             else:
-                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = require_get(subscript(litellm_params, "metadata")).get("model_group", None)
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                id = require_get(require_get(litellm_params).get("model_info", {})).get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
@@ -78,19 +91,25 @@ class LowestTPMLoggingHandler(CustomLogger):
             )
             verbose_router_logger.debug(traceback.format_exc())
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target(ROUTER_USAGE_TARGET)
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj, start_time: object, end_time: object
+    ) -> None:
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update TPM/RPM usage on success
             """
             if "litellm_params" not in kwargs or kwargs["litellm_params"] is None:
                 return
-            if kwargs["litellm_params"].get("metadata") is None:
+            litellm_params: Final = kwargs["litellm_params"]
+            if require_get(litellm_params).get("metadata") is None:
                 pass
             else:
-                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = require_get(subscript(litellm_params, "metadata")).get("model_group", None)
 
-                model_info: Final = kwargs["litellm_params"].get("model_info")
+                model_info: Final = require_get(litellm_params).get("model_info")
                 id = None
                 if model_info is not None and isinstance(model_info, dict):
                     id = model_info.get("id", None)
@@ -140,12 +159,13 @@ class LowestTPMLoggingHandler(CustomLogger):
             )
             verbose_router_logger.debug(traceback.format_exc())
 
+    @with_service_target(ROUTER_USAGE_TARGET)
     def get_available_deployments(
         self,
         model_group: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[str] | None = None,
     ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
@@ -165,7 +185,9 @@ class LowestTPMLoggingHandler(CustomLogger):
 
         verbose_router_logger.debug("tpm_key=%s, tpm_dict: %s, rpm_dict: %s", tpm_key, tpm_dict, rpm_dict)
         try:
-            input_tokens = token_counter(messages=messages, text=input)
+            input_tokens = embedding_aware_token_count(
+                messages, input, partial(deployment_backend_models, healthy_deployments)
+            )
         except Exception:
             input_tokens = 0
         verbose_router_logger.debug("input_tokens=%s", input_tokens)

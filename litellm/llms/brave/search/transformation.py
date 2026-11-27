@@ -6,15 +6,20 @@ Documentation: https://api-dashboard.search.brave.com/app/documentation/web-sear
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Final, Literal, TypedDict
 
 import httpx
 from dateutil import parser
+from pydantic import ConfigDict, TypeAdapter
 
 _ISO_YMD: Final = re.compile(r"^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*$")
 _UNIX_TIMESTAMP: Final = re.compile(r"^\s*-?\d+(\.\d+)?\s*$")
 BRAVE_SECTIONS: Final = ["web", "discussions", "faqs", "faq", "news", "videos"]
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -26,7 +31,7 @@ from litellm.secret_managers.main import get_secret_str
 
 
 def to_yyyy_mm_dd(
-    s: str | float | None,
+    s: object,
     *,
     dayfirst: bool = False,
     yearfirst: bool = False,
@@ -108,11 +113,11 @@ class BraveSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """
@@ -137,9 +142,9 @@ class BraveSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         data: dict | list[dict] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint with query parameters.
@@ -165,8 +170,8 @@ class BraveSearchConfig(BaseSearchConfig):
         optional_params: dict,
         api_key: str | None = None,
         search_engine_id: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, dict[str, object]]:
         """
         Transform Search request to Brave Search API format.
 
@@ -241,12 +246,12 @@ class BraveSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj | None,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform Brave Search API response to LiteLLM unified SearchResponse format.
         """
-        response_json: Final = raw_response.json()
+        response_body: Final = _JSON_VALUE.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         results: Final[list[SearchResult]] = []
@@ -254,9 +259,11 @@ class BraveSearchConfig(BaseSearchConfig):
         query_params: Final = raw_response.request.url.params if raw_response.request else {}
         sections_to_process: Final = self._sections_from_params(dict(query_params))
         max_results: Final = max(1, min(int(query_params.get("count", 20)), 20))
+        response_json: Final = _JSON_OBJECT.validate_python(response_body)
 
         for section in sections_to_process:
-            for result in response_json.get(section, {}).get("results", []):
+            section_json = _JSON_OBJECT.validate_python(response_json.get(section, {}))
+            for raw_result in _JSON_VALUES.validate_python(section_json.get("results", [])):
                 # Because the `max_results`/`count` parameters do not affect
                 # the number of "discussion", "faq", "news", or "videos"
                 # results, we need to manually limit the number of results
@@ -264,18 +271,21 @@ class BraveSearchConfig(BaseSearchConfig):
                 if len(results) >= max_results:
                     break
 
+                result = _JSON_OBJECT.validate_python(raw_result)
                 title = result.get("title", "")
                 url = result.get("url", "")
                 snippet = result.get("description", "")
                 date = to_yyyy_mm_dd(result.get("page_age") or result.get("age"))
                 last_updated = to_yyyy_mm_dd(result.get("fetched_content_timestamp", ""))
 
-                search_result = SearchResult(
-                    title=title,
-                    url=url,
-                    snippet=snippet,
-                    date=date,
-                    last_updated=last_updated,
+                search_result = SearchResult.model_validate(
+                    {
+                        "title": title,
+                        "url": url,
+                        "snippet": snippet,
+                        "date": date,
+                        "last_updated": last_updated,
+                    }
                 )
 
                 results.append(search_result)
@@ -286,7 +296,7 @@ class BraveSearchConfig(BaseSearchConfig):
         )
 
     @staticmethod
-    def _sections_from_params(query_params: dict) -> list[str]:
+    def _sections_from_params(query_params: Mapping[str, object]) -> list[str]:
         """
         Returns a list of sections the user has requested via the Brave Search
         API's `result_filter` parameter. If no `result_filter` parameter is

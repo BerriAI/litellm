@@ -4,6 +4,7 @@ Nebius AI Studio Chat Completions API - Transformation
 This is OpenAI compatible - no translation needed / occurs
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -12,11 +13,11 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 class NebiusConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         map max_completion_tokens param to max_tokens
         """

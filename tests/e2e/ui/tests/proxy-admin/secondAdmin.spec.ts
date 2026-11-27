@@ -28,7 +28,7 @@ test.describe("Second proxy admin", () => {
         await dialog.getByLabel("User Email").fill(email);
 
         await dialog.getByLabel(/Global Proxy Role/).click();
-        await adminPage.getByRole("option", { name: /Admin \(All Permissions\)/ }).click();
+        await adminPage.getByRole("option", { name: /^Admin\b/ }).click();
 
         const createdResponse = adminPage.waitForResponse(
           (res) => res.url().includes("/user/new") && res.request().method() === "POST",
@@ -69,7 +69,7 @@ test.describe("Second proxy admin", () => {
       await page.getByRole("button", { name: "Create Key", exact: true }).click();
 
       await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
-      const apiKey = (await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").innerText()).trim();
+      const apiKey = (await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").filter({ hasText: /^sk-/ }).innerText()).trim();
       expect(apiKey).toMatch(/^sk-/);
       await page.keyboard.press("Escape");
 

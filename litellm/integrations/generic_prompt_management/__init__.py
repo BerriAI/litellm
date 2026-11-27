@@ -1,6 +1,9 @@
 """Generic prompt management integration for LiteLLM."""
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
+
+from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -8,15 +11,21 @@ if TYPE_CHECKING:
 
     from .generic_prompt_manager import GenericPromptManager
 
+from litellm.litellm_core_utils.core_helpers import keyword_arguments
 from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
 
 from .generic_prompt_manager import GenericPromptManager
+
+
+class _GenericPromptManagerFields(TypedDict, total=False, extra_items=object):
+    pass
+
 
 # Global instances
 global_generic_prompt_config: Final[dict | None] = None
 
 
-def set_global_generic_prompt_config(config: dict) -> None:
+def set_global_generic_prompt_config(config: Mapping[str, object]) -> None:
     """
     Set the global generic prompt configuration.
 
@@ -50,14 +59,19 @@ def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "Prom
             api_key=api_key,
             prompt_id=prompt_id,
             additional_provider_specific_query_params=provider_specific_query_params,
-            **litellm_params.model_dump(
-                exclude_none=True,
-                exclude={
-                    "prompt_id",
-                    "api_key",
-                    "provider_specific_query_params",
-                    "api_base",
-                },
+            **_GenericPromptManagerFields(
+                **keyword_arguments(
+                    litellm_params.model_dump(
+                        exclude_none=True,
+                        exclude={
+                            "prompt_id",
+                            "api_key",
+                            "provider_specific_query_params",
+                            "api_base",
+                        },
+                    ),
+                    GenericPromptManager,
+                )
             ),
         )
 

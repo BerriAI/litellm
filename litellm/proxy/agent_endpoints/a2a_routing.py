@@ -5,17 +5,130 @@ Handles routing for A2A agents (models with "a2a/<agent-name>" prefix).
 Looks up agents in the registry and injects their API base URL.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+    agent_completion_kwargs,
+    bridge_model_name,
+)
+from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, callable_of
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.databricks_oauth import (
+    resolve_databricks_backend_auth,
+)
+from litellm.proxy.agent_endpoints.utils import merge_agent_headers
+from litellm.types.agents import AgentResponse
+from litellm.types.utils import CustomPricingLiteLLMParams
+from litellm.utils import get_base_model_from_metadata
+
+_HEADERS: Final = TypeAdapter(Mapping[str, str])
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_ROUTE_ENDPOINT: Final = TypeAdapter(object)
+_AGENT_PINNED_KWARGS: Final = ("api_base", "api_key")
+_AGENT_LAYERED_KWARGS: Final = ("custom_inputs", "extra_body")
+_CLIENT_TARGET_KWARGS: Final = ("api_base", "base_url")
+_CUSTOM_PRICING_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
+_PER_SECOND_PRICES: Final = frozenset({"cost_per_second", "input_cost_per_second", "output_cost_per_second"})
+_PROXY_HEADER_PREFIX: Final = "x-litellm-"
+_REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
+
+
+def _agent_extra_headers(agent_kwargs: Mapping[str, object]) -> Mapping[str, str] | None:
+    extra_headers: Final = agent_kwargs.get("extra_headers")
+    return None if extra_headers is None else _HEADERS.validate_python(extra_headers)
+
+
+def _drop_params_enabled(data: Mapping[str, object], litellm_params: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or data.get("drop_params") is True or litellm_params.get("drop_params") is True
+
+
+def _client_extra_headers(data: Mapping[str, object], litellm_params: Mapping[str, object]) -> Mapping[str, str] | None:
+    extra_headers: Final = data.get("extra_headers")
+    if not extra_headers:
+        return None
+    try:
+        headers: Final = _HEADERS.validate_python(extra_headers)
+    except ValidationError as e:
+        if _drop_params_enabled(data, litellm_params):
+            return None
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "extra_headers must be an object mapping header names to string values, "
+                "or set drop_params: true to drop it"
+            ),
+        ) from e
+    return {name: value for name, value in headers.items() if not name.lower().startswith(_PROXY_HEADER_PREFIX)}
+
+
+def _mappings(client_value: object, agent_value: object) -> tuple[Mapping[str, object], Mapping[str, object]] | None:
+    try:
+        return _OBJECT_MAPPING.validate_python(client_value), _OBJECT_MAPPING.validate_python(agent_value)
+    except ValidationError:
+        return None
+
+
+def _agent_entries_over_client(client_value: object, agent_value: object) -> object:
+    mappings: Final = _mappings(client_value, agent_value)
+    return agent_value if mappings is None else {**mappings[0], **mappings[1]}
+
+
+def _agent_keys_over_client(client_value: object, agent_value: object) -> object:
+    mappings: Final = _mappings(client_value, agent_value)
+    if mappings is None:
+        return agent_value
+    client, agent = mappings
+    return {**client, **{key: _agent_entries_over_client(client.get(key), value) for key, value in agent.items()}}
+
+
+def _with_headers(data: Mapping[str, object], extra_headers: Mapping[str, str] | None) -> Mapping[str, object]:
+    request: Final = {key: value for key, value in data.items() if key != "extra_headers"}
+    return {**request, **({"extra_headers": extra_headers} if extra_headers else {})}
+
+
+def _bridge_request_data(
+    data: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    static_headers: Mapping[str, str] | None,
+) -> Mapping[str, object]:
+    agent_kwargs: Final = agent_completion_kwargs(litellm_params)
+    pinned: Final = {key: agent_kwargs[key] for key in _AGENT_PINNED_KWARGS if key in agent_kwargs}
+    agent_headers: Final = merge_agent_headers(
+        dynamic_headers=static_headers,
+        static_headers=_agent_extra_headers(agent_kwargs),
+    )
+    extra_headers: Final = merge_agent_headers(
+        dynamic_headers=_client_extra_headers(data, litellm_params),
+        static_headers=agent_headers,
+    )
+    layered: Final = {
+        key: _agent_keys_over_client(data[key], agent_kwargs[key])
+        for key in _AGENT_LAYERED_KWARGS
+        if key in data and key in agent_kwargs
+    }
+    return _with_headers(
+        {
+            **agent_kwargs,
+            **data,
+            **layered,
+            **pinned,
+            "model": bridge_model_name(litellm_params),
+            "custom_llm_provider": agent_kwargs.get("custom_llm_provider"),
+        },
+        extra_headers,
+    )
 
 
 async def route_a2a_agent_request(
-    data: dict,
+    data: dict[str, object],  # mutable-ok: the URL agent path writes api_base into the caller's request
     route_type: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> Any | None:
@@ -57,7 +170,7 @@ async def route_a2a_agent_request(
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
-    if not is_admin:
+    if not is_admin or agent.identity_managed:
         is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
             agent_id=agent.agent_id,
             user_api_key_auth=user_api_key_dict,
@@ -68,14 +181,92 @@ async def route_a2a_agent_request(
                 detail=f"Agent '{agent_name}' is not allowed for your key/team. Contact proxy admin for access.",
             )
 
+    litellm_params: Final = agent.litellm_params or {}
+
+    if litellm_params.get("custom_llm_provider") in A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS:
+        _bill_as_agent(data, agent, litellm_params)
+        bridge_auth: Final = await resolve_databricks_backend_auth(litellm_params)
+        return _call_route(
+            route_type,
+            _bridge_agent_request(data, agent, _agent_params_under_client_prices(bridge_auth.litellm_params, data)),
+        )
+
     # Get API base URL from agent config
-    if not agent.agent_card_params or "url" not in agent.agent_card_params:
+    card_params: Final = as_str_mapping(agent.agent_card_params)
+    if not card_params or "url" not in card_params:
         verbose_proxy_logger.error("[A2A] Agent '%s' has no URL configured", agent_name)
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
-    # Inject API base and route to litellm
-    data["api_base"] = agent.agent_card_params["url"]
+    _bill_as_agent(data, agent, litellm_params)
+    data["api_base"] = card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
+    return _call_route(route_type, {**data, **_agent_prices_the_client_left_unset(litellm_params, data)})
 
-    return getattr(litellm, f"{route_type}")(**data)
+
+def _bridge_agent_request(
+    data: Mapping[str, object],
+    agent: AgentResponse,
+    litellm_params: Mapping[str, object],
+) -> Mapping[str, object]:
+    card_url: Final[object] = (agent.agent_card_params or {}).get("url")
+    api_base: Final = {"api_base": card_url} if card_url else {}
+    request: Final = {key: value for key, value in data.items() if key not in _CLIENT_TARGET_KWARGS}
+    return _bridge_request_data({**request, **api_base}, litellm_params, agent.static_headers)
+
+
+def _client_sets_price(data: Mapping[str, object]) -> bool:
+    return (
+        any(data.get(key) is not None for key in _CUSTOM_PRICING_PARAMS)
+        or get_base_model_from_metadata(model_call_details={"litellm_params": data}) is not None
+    )
+
+
+def _caller_names_an_agent(data: Mapping[str, object]) -> bool:
+    return any(
+        _OBJECT_MAPPING.validate_python(data[key]).get("agent_id")
+        for key in _REQUEST_METADATA_KEYS
+        if isinstance(data.get(key), Mapping)
+    )
+
+
+def _bill_as_agent(data: Mapping[str, object], agent: AgentResponse, litellm_params: Mapping[str, object]) -> None:
+    logging_obj: Final = data.get("litellm_logging_obj")
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return
+    logging_obj.bill_as_a2a_agent(
+        agent_id=None if _caller_names_an_agent(data) else agent.agent_id,
+        cost_per_query=None if _client_sets_price(data) else litellm_params.get("cost_per_query"),
+    )
+
+
+def _agent_prices_the_client_left_unset(
+    litellm_params: Mapping[str, object], data: Mapping[str, object]
+) -> Mapping[str, object]:
+    if any(data.get(key) is not None for key in _PER_SECOND_PRICES):
+        return {}
+    return _numeric_prices(
+        {key: value for key, value in litellm_params.items() if key in _CUSTOM_PRICING_PARAMS and data.get(key) is None}
+    )
+
+
+def _numeric_prices(prices: Mapping[str, object]) -> Mapping[str, object]:
+    try:
+        CustomPricingLiteLLMParams.model_validate(prices)
+    except ValidationError as e:
+        unusable: Final = frozenset(str(error["loc"][0]) for error in e.errors() if error["loc"])
+        verbose_proxy_logger.warning("A2A agent prices %s are not numbers, so they are not billed", sorted(unusable))
+        return {key: value for key, value in prices.items() if key not in unusable}
+    return prices
+
+
+def _agent_params_under_client_prices(
+    litellm_params: Mapping[str, object], data: Mapping[str, object]
+) -> Mapping[str, object]:
+    unpriced: Final = {key: value for key, value in litellm_params.items() if key not in _CUSTOM_PRICING_PARAMS}
+    return {**unpriced, **_agent_prices_the_client_left_unset(litellm_params, data)}
+
+
+def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
+    endpoint: Final = _ROUTE_ENDPOINT.validate_python(getattr(litellm, route_type))
+    return callable_of(endpoint)(**request_data)

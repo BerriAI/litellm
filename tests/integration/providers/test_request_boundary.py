@@ -3,13 +3,13 @@ from typing import Final
 import httpx
 import pytest
 
-from integration._support.client import Gateway, JSON_OBJECT, object_value
+from tests.integration._support.client import Gateway, JSON_OBJECT, object_value
 
 
 @pytest.mark.covers("other.provider_wire.internal_parameters_filtered")
 def test_internal_request_state_does_not_reach_provider(gateway: Gateway) -> None:
     with gateway.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, trust_env=False) as upstream:
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         model: Final = scenario.model()
         key: Final = scenario.key(models=[model], tpm_limit=10000, rpm_limit=100)
         result: Final = gateway.post(

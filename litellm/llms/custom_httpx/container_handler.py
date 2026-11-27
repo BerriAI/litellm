@@ -5,21 +5,24 @@ This module provides a single generic handler that can process any container fil
 endpoint defined in endpoints.json, eliminating the need for individual handler methods.
 """
 
+import asyncio
 import json
 from collections.abc import Coroutine, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import str_param
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.containers.main import (
     ContainerFileListResponse,
@@ -27,6 +30,7 @@ from litellm.types.containers.main import (
     DeleteContainerFileResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import FileTypes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -53,6 +57,10 @@ class EndpointsConfig(TypedDict):
     endpoints: ReadOnly[Sequence[EndpointConfig]]
 
 
+_ENDPOINTS_CONFIG: Final = TypeAdapter(EndpointsConfig)
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 class ContainerErrorDetail(TypedDict, total=False):
     """The ``error`` object of a container API error body."""
 
@@ -63,6 +71,10 @@ class ContainerResponseBody(TypedDict, total=False):
     """The fields this handler reads off a container API JSON body."""
 
     error: ReadOnly[ContainerErrorDetail]
+
+
+class _ContainerRequestKwargs(TypedDict, total=False, extra_items=object):
+    file: ReadOnly[FileTypes]
 
 
 _ContainerResponseModel = ContainerFileListResponse | ContainerFileObject | DeleteContainerFileResponse
@@ -81,7 +93,7 @@ def _load_endpoints_config() -> EndpointsConfig:
     """Load the endpoints configuration from JSON file."""
     config_path: Final = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
     with open(config_path) as f:
-        return json.load(f)
+        return _ENDPOINTS_CONFIG.validate_python(json.load(f))
 
 
 def _get_endpoint_config(endpoint_name: str) -> EndpointConfig | None:
@@ -141,7 +153,7 @@ def _build_query_params(
 
 def error_message_from_response(response: httpx.Response) -> str:
     try:
-        body: Final[object] = response.json()
+        body: Final = _DECODED_JSON.validate_python(response.json())
     except ValueError:
         return response.text
 
@@ -195,7 +207,7 @@ def _transform_response(
 
 
 def _prepare_multipart_file_upload(
-    file: Any,
+    file: FileTypes,
     headers: dict[str, object],
 ) -> tuple[dict[str, tuple[str, bytes, str]], dict[str, object]]:
     """
@@ -204,7 +216,7 @@ def _prepare_multipart_file_upload(
     Returns:
         Tuple of (files_dict, headers_without_content_type)
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -230,7 +242,8 @@ def _request_headers(
     """The provider auth headers for a container request."""
     return container_provider_config.validate_environment(
         headers=extra_headers or {},
-        api_key=litellm_params.get("api_key", None),
+        api_key=str_param(litellm_params, "api_key"),
+        litellm_params=litellm_params,
     )
 
 
@@ -240,7 +253,7 @@ def _request_api_base(
 ) -> str:
     """The provider base URL for a container request."""
     return container_provider_config.get_complete_url(
-        api_base=litellm_params.get("api_base", None),
+        api_base=str_param(litellm_params, "api_base"),
         litellm_params=dict(litellm_params),
     )
 
@@ -251,7 +264,7 @@ def _sync_http_client(
 ) -> HTTPHandler:
     """The sync HTTP client for a container request, reusing the caller's when usable."""
     if client is None or not isinstance(client, HTTPHandler):
-        return _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+        return get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
     return client
 
 
@@ -287,7 +300,7 @@ class GenericContainerHandler:
         timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: Unpack[_ContainerRequestKwargs],
     ) -> Any | Coroutine[object, object, Any]:
         """
         Generic handler for any container file endpoint.
@@ -339,7 +352,7 @@ class GenericContainerHandler:
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: Unpack[_ContainerRequestKwargs],
     ) -> ContainerEndpointResponse:
         """Synchronous request handler."""
         endpoint_config: Final = _get_endpoint_config(endpoint_name)
@@ -419,7 +432,7 @@ class GenericContainerHandler:
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: Unpack[_ContainerRequestKwargs],
     ) -> ContainerEndpointResponse:
         """Asynchronous request handler."""
         endpoint_config: Final = _get_endpoint_config(endpoint_name)
@@ -430,7 +443,7 @@ class GenericContainerHandler:
         http_client: Final = _async_http_client(client, litellm_params)
 
         # Build request
-        headers = _request_headers(container_provider_config, extra_headers, litellm_params)
+        headers = await asyncio.to_thread(_request_headers, container_provider_config, extra_headers, litellm_params)
         if extra_headers:
             headers.update(extra_headers)
 

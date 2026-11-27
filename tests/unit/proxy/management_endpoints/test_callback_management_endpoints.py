@@ -1,0 +1,668 @@
+import json
+import os
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+from typing import Final, cast
+
+from fastapi import FastAPI, HTTPException
+
+import litellm
+from litellm.integrations.datadog.datadog import DataDogLogger
+from litellm.integrations.langfuse.langfuse import LangFuseLogger
+from litellm.proxy._types import AddTeamCallback
+from litellm.proxy.management_endpoints.callback_management_endpoints import router
+from litellm.proxy.proxy_server import app
+
+
+@pytest.fixture(autouse=True, scope="session")
+def clear_existing_callbacks():
+    litellm.logging_callback_manager._reset_all_callbacks()
+
+
+class TestCallbackManagementEndpoints:
+    """Test suite for callback management endpoints"""
+
+    @pytest.fixture(autouse=True)
+    def setup_and_teardown(self):
+        """Setup and teardown for each test"""
+        # Reset callbacks before each test
+        litellm.success_callback = []
+        litellm.failure_callback = []
+        litellm._async_success_callback = []
+        litellm._async_failure_callback = []
+        litellm.callbacks = []
+
+        yield
+
+        # Clean up after each test
+        litellm.success_callback = []
+        litellm.failure_callback = []
+        litellm._async_success_callback = []
+        litellm._async_failure_callback = []
+        litellm.callbacks = []
+
+    def test_alist_callbacks_no_active_callbacks(self):
+        """Test /callbacks/list endpoint with no active callbacks"""
+        # Setup test client
+        client = TestClient(app)
+
+        # Make request to list callbacks endpoint
+        response = client.get(
+            "/callbacks/list", headers={"Authorization": "Bearer sk-9876"}
+        )
+
+        # Verify response
+        assert response.status_code == 200
+
+        response_data = response.json()
+        assert "success" in response_data
+        assert "failure" in response_data
+        assert "success_and_failure" in response_data
+
+        # All lists should be empty
+        assert response_data["success"] == []
+        assert response_data["failure"] == []
+        assert response_data["success_and_failure"] == []
+
+    @patch.dict(
+        os.environ,
+        {
+            "LANGFUSE_PUBLIC_KEY": "test_public_key",
+            "LANGFUSE_SECRET_KEY": "test_secret_key",
+            "LANGFUSE_HOST": "https://test.langfuse.com",
+        },
+    )
+    def test_alist_callbacks_with_langfuse_logger(self):
+        """Test /callbacks/list endpoint with real Langfuse logger initialized"""
+        # Setup test client
+        client = TestClient(app)
+
+        # Add string representation to callback lists (this is how the system typically works)
+        litellm.success_callback.append("langfuse")
+        litellm._async_success_callback.append("langfuse")
+
+        # Make request to list callbacks endpoint
+        response = client.get(
+            "/callbacks/list", headers={"Authorization": "Bearer sk-9876"}
+        )
+
+        # Verify response
+        assert response.status_code == 200
+
+        response_data = response.json()
+
+        # Verify langfuse appears in success callbacks
+        assert "langfuse" in response_data["success"]
+        assert response_data["failure"] == []
+        assert response_data["success_and_failure"] == []
+
+        # Verify the response structure is correct
+        assert isinstance(response_data["success"], list)
+        assert isinstance(response_data["failure"], list)
+        assert isinstance(response_data["success_and_failure"], list)
+
+    def test_alist_callbacks_with_datadog_logger(self):
+        """Test /callbacks/list endpoint with DataDog logger configuration"""
+        # Setup test client
+        client = TestClient(app)
+
+        # Test with datadog callbacks added directly (without initializing the logger to avoid async issues)
+        # Add string representations to different callback types to test comprehensive categorization
+        litellm.success_callback.append("datadog")
+        litellm.failure_callback.append("datadog")
+        litellm.callbacks.append("datadog")
+
+        # Make request to list callbacks endpoint
+        response = client.get(
+            "/callbacks/list", headers={"Authorization": "Bearer sk-9876"}
+        )
+
+        # Verify response
+        assert response.status_code == 200
+
+        response_data = response.json()
+
+        # Verify datadog appears in the correct categorization
+        # Since datadog is in both success and failure, it should appear in success_and_failure
+        assert "datadog" in response_data["success_and_failure"]
+
+        # The categorization logic should deduplicate properly
+        assert len([cb for cb in response_data["success"] if cb == "datadog"]) <= 1
+        assert len([cb for cb in response_data["failure"] if cb == "datadog"]) <= 1
+        assert (
+            len([cb for cb in response_data["success_and_failure"] if cb == "datadog"])
+            <= 1
+        )
+
+        # Verify the response structure is correct
+        assert isinstance(response_data["success"], list)
+        assert isinstance(response_data["failure"], list)
+        assert isinstance(response_data["success_and_failure"], list)
+
+    def test_alist_callbacks_mixed_callback_types(self):
+        """Test /callbacks/list endpoint with mixed callback types (string and logger instances)"""
+        # Setup test client
+        client = TestClient(app)
+
+        # Setup mixed callbacks
+        litellm.success_callback.append("langfuse")
+        litellm.failure_callback.append("datadog")
+        litellm.callbacks.append("prometheus")
+
+        # Make request to list callbacks endpoint
+        response = client.get(
+            "/callbacks/list", headers={"Authorization": "Bearer sk-9876"}
+        )
+
+        # Verify response
+        assert response.status_code == 200
+
+        response_data = response.json()
+
+        # Filter out any proxy-specific callbacks that might be present from parallel test runs
+        # These are internal callbacks that can persist when tests run in parallel
+        proxy_internal_callbacks = ["_PROXY_VirtualKeyModelMaxBudgetLimiter"]
+
+        response_data["success_and_failure"] = [
+            cb
+            for cb in response_data["success_and_failure"]
+            if cb not in proxy_internal_callbacks
+        ]
+
+        # Verify callbacks are properly categorized
+        assert (
+            "prometheus" in response_data["success_and_failure"]
+        )  # callbacks list items go to success_and_failure
+        assert "langfuse" in response_data["success"]
+        assert "datadog" in response_data["failure"]
+
+        # Verify no duplicates
+        all_callbacks = (
+            response_data["success"]
+            + response_data["failure"]
+            + response_data["success_and_failure"]
+        )
+        assert len(set(all_callbacks)) == len(all_callbacks)
+
+    def test_alist_callbacks_empty_response_structure(self):
+        """Test that response always has correct structure even with no callbacks"""
+        # Setup test client
+        client = TestClient(app)
+
+        # Make request to list callbacks endpoint
+        response = client.get(
+            "/callbacks/list", headers={"Authorization": "Bearer sk-9876"}
+        )
+
+        # Verify response structure
+        assert response.status_code == 200
+        response_data = response.json()
+
+        # Verify all required keys are present
+        required_keys = ["success", "failure", "success_and_failure"]
+        for key in required_keys:
+            assert key in response_data
+            assert isinstance(response_data[key], list)
+
+    def test_get_callback_configs(self):
+        """Test /callbacks/configs endpoint returns callback configuration JSON"""
+        # Setup test client
+        client = TestClient(app)
+
+        # Make request to get callback configs endpoint
+        response = client.get(
+            "/callbacks/configs", headers={"Authorization": "Bearer sk-9876"}
+        )
+
+        # Verify response
+        assert response.status_code == 200
+
+        response_data = response.json()
+
+        # Verify response is a list
+        assert isinstance(response_data, list)
+
+        # Verify it contains callback configurations
+        assert len(response_data) > 0
+
+        # Verify structure of first callback config
+        first_config = response_data[0]
+        assert "id" in first_config
+        assert "displayName" in first_config
+        assert "logo" in first_config
+        assert "supports_key_team_logging" in first_config
+        assert "dynamic_params" in first_config
+        assert "description" in first_config
+
+        # Verify dynamic_params structure
+        assert isinstance(first_config["dynamic_params"], dict)
+
+        # Check if at least one callback has detailed parameter configuration
+        has_detailed_params = any(
+            config.get("dynamic_params") and len(config.get("dynamic_params", {})) > 0
+            for config in response_data
+        )
+        assert (
+            has_detailed_params
+        ), "Expected at least one callback to have detailed parameter configuration"
+
+        galileo_config = next(
+            (config for config in response_data if config.get("id") == "galileo"),
+            None,
+        )
+        assert galileo_config is not None
+        assert galileo_config["displayName"] == "Galileo"
+        assert "GALILEO_API_KEY" in galileo_config["dynamic_params"]
+        assert "GALILEO_PROJECT_ID" in galileo_config["dynamic_params"]
+
+
+class TestNewRelicCallbackConfig:
+    def test_newrelic_entry_supports_team_logging_with_dynamic_params(self):
+        client = TestClient(app)
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-9876"})
+        assert response.status_code == 200
+        newrelic = next(
+            (config for config in response.json() if config.get("id") == "newrelic"),
+            None,
+        )
+        assert newrelic is not None
+        assert newrelic["supports_key_team_logging"] is True
+        params = newrelic["dynamic_params"]
+        assert params["newrelic_api_key"]["type"] == "password"
+        assert "newrelic_region" in params
+        # The operator-only agent env flag must not appear as a team-configurable
+        # field: it is not a StandardCallbackDynamicParams key and would be rejected.
+        assert "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED" not in params
+
+
+class TestLangfuseOtelCallbackConfig:
+    def test_span_scope_is_a_select_over_exactly_the_scopes_the_validator_accepts(self):
+        from litellm.types.utils import OTEL_SPAN_SCOPES
+
+        client = TestClient(app)
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-9876"})
+        assert response.status_code == 200
+        langfuse_otel = next(config for config in response.json() if config.get("id") == "langfuse_otel")
+        scope = langfuse_otel["dynamic_params"]["langfuse_span_scope"]
+        assert scope["type"] == "select"
+        assert frozenset(scope["options"]) == OTEL_SPAN_SCOPES
+        assert scope["required"] is False
+
+
+class TestNewRelicTeamCallbackValidation:
+    def _data(self, callback_vars):
+        from litellm.proxy._types import AddTeamCallback
+
+        return AddTeamCallback(callback_name="newrelic", callback_type="success", callback_vars=callback_vars)
+
+    def test_rejects_when_otel_v2_off(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_team_callback
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._data({"newrelic_api_key": "k"}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_rejects_unknown_region_and_region_without_key(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_team_callback
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._data({"newrelic_api_key": "k", "newrelic_region": "mars"}))
+            assert "Unknown newrelic_region" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._data({"newrelic_region": "eu"}))
+            assert "requires newrelic_api_key" in str(exc.value.detail)
+            _validate_team_callback(self._data({"newrelic_api_key": "k", "newrelic_region": "EU"}))
+            # A JSON-null key is str()-coerced to "None" upstream; it must not
+            # slip past the region-requires-key guard.
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._data({"newrelic_api_key": None, "newrelic_region": "eu"}))
+            assert "requires newrelic_api_key" in str(exc.value.detail)
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_ignores_other_callbacks_and_bare_newrelic(self, monkeypatch):
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy._types import AddTeamCallback
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_team_callback
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            assert _validate_team_callback(self._data({})) is None
+            assert (
+                _validate_team_callback(
+                    AddTeamCallback(
+                        callback_name="langfuse",
+                        callback_type="success",
+                        callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+                    )
+                )
+                is None
+            )
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+
+class TestArizeOtlpProtocolValidation:
+    def test_valid_protocols_are_accepted(self):
+        from litellm.proxy._types import AddTeamCallback
+
+        for protocol in ("grpc", "http/protobuf"):
+            data = AddTeamCallback(
+                callback_name="arize",
+                callback_type="success",
+                callback_vars={"arize_api_key": "k", "arize_space_id": "s", "arize_otlp_protocol": protocol},
+            )
+            assert data.callback_vars["arize_otlp_protocol"] == protocol
+
+    def test_an_invalid_protocol_is_rejected_at_model_validation(self):
+        from pydantic import ValidationError
+
+        from litellm.proxy._types import AddTeamCallback
+
+        with pytest.raises(ValidationError, match="arize_otlp_protocol"):
+            AddTeamCallback(
+                callback_name="arize",
+                callback_type="success",
+                callback_vars={"arize_otlp_protocol": "otlp_grpc"},
+            )
+
+    def test_a_failure_only_team_callback_rejects_the_protocol(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy._types import AddTeamCallback
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_team_callback
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(
+                    AddTeamCallback(
+                        callback_name="arize",
+                        callback_type="failure",
+                        callback_vars={
+                            "arize_api_key": "k",
+                            "arize_space_id": "s",
+                            "arize_otlp_protocol": "http/protobuf",
+                        },
+                    )
+                )
+            assert exc.value.status_code == 400
+            assert "arize_otlp_protocol" in str(exc.value.detail)
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_the_raw_otlp_env_var_name_stays_rejected(self):
+        from pydantic import ValidationError
+
+        from litellm.proxy._types import AddTeamCallback
+
+        with pytest.raises(ValidationError, match="Invalid callback variable"):
+            AddTeamCallback(
+                callback_name="arize",
+                callback_type="success",
+                callback_vars={"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
+            )
+
+
+class TestNewRelicKeyLoggingValidation:
+    """Key-level logging is written through key metadata, not /team/callback."""
+
+    def _metadata(self, callback_vars):
+        return {"logging": [{"callback_name": "newrelic", "callback_type": "success", "callback_vars": callback_vars}]}
+
+    def test_rejects_same_configs_as_team_endpoint(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_invalid_key_logging_config,
+        )
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(self._metadata({"newrelic_api_key": "k"}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+
+            monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+            is_otel_v2_enabled.cache_clear()
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(
+                    self._metadata({"newrelic_api_key": "k", "newrelic_region": "mars"})
+                )
+            assert "Unknown newrelic_region" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(self._metadata({"newrelic_region": "eu"}))
+            assert "requires newrelic_api_key" in str(exc.value.detail)
+            raise_on_invalid_key_logging_config(self._metadata({"newrelic_api_key": "k", "newrelic_region": "EU"}))
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_ignores_metadata_without_newrelic_logging(self, monkeypatch):
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_invalid_key_logging_config,
+        )
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            assert raise_on_invalid_key_logging_config(None) is None
+            with pytest.raises(HTTPException) as error:
+                raise_on_invalid_key_logging_config({"logging": "not-a-list"})
+            assert error.value.status_code == 400
+            assert raise_on_invalid_key_logging_config({"tags": ["a"]}) is None
+            assert raise_on_invalid_key_logging_config(self._metadata({})) is None
+            assert (
+                raise_on_invalid_key_logging_config(
+                    {"logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}]}
+                )
+                is None
+            )
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+
+class TestMixpanelCallbackValidation:
+    def _team_data(self, callback_vars: dict[str, str]) -> AddTeamCallback:
+        return AddTeamCallback(callback_name="mixpanel", callback_type="success", callback_vars=callback_vars)
+
+    def _key_metadata(self, callback_vars: dict[str, str]) -> dict[str, object]:
+        return {"logging": [{"callback_name": "mixpanel", "callback_type": "success", "callback_vars": callback_vars}]}
+
+    def test_mixpanel_entry_in_callbacks_configs(self) -> None:
+        from litellm.proxy.common_utils.callback_utils import is_sensitive_callback_key
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _redact_callback_secrets
+
+        client: Final = TestClient(app)
+        response: Final = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-9876"})
+        assert response.status_code == 200
+        mixpanel: Final = next((config for config in response.json() if config.get("id") == "mixpanel"), None)
+        assert mixpanel is not None
+        assert mixpanel["supports_key_team_logging"] is True
+        params: Final = mixpanel["dynamic_params"]
+        assert params["mixpanel_project_token"]["type"] == "password"
+        assert "mixpanel_region" in params
+        assert is_sensitive_callback_key("mixpanel_project_token") is True
+        assert is_sensitive_callback_key("mixpanel_region") is False
+
+        raw_metadata: Final = {
+            "logging": [
+                {
+                    "callback_name": "mixpanel",
+                    "callback_type": "success",
+                    "callback_vars": {"mixpanel_project_token": "mp-secret-tok", "mixpanel_region": "eu"},
+                }
+            ]
+        }
+        redacted: Final = _redact_callback_secrets(raw_metadata)
+        assert redacted["logging"][0]["callback_vars"]["mixpanel_project_token"] == "***REDACTED***"
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"logging": [{"callback_name": "mixpanel", "callback_vars": {"mixpanel_project_token": "***REDACTED***"}}]},
+            {"logging": [{"callback_name": "mixpanel", "callback_vars": {"mixpanel_region": "eu"}}]},
+            {"callback_settings": {"callback_vars": {"mixpanel_project_token": "   "}}},
+            {"logging": json.dumps([{"callback_name": "mixpanel", "callback_vars": {"mixpanel_project_token": ""}}])},
+        ],
+        ids=["masked-logging-entry", "region-without-token", "blank-callback-settings", "json-string-logging"],
+    )
+    @pytest.mark.asyncio
+    async def test_team_writers_refuse_a_mixpanel_token_they_could_never_send(
+        self, metadata: dict[str, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi import Request
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy._types import NewTeamRequest, ProxyException, UpdateTeamRequest, UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.team_endpoints import new_team, update_team
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        admin: Final = UserAPIKeyAuth(user_role="proxy_admin")
+        request: Final = MagicMock(spec=Request)
+        try:
+            with pytest.raises(ProxyException) as created:
+                await new_team(data=NewTeamRequest(metadata=metadata), http_request=request, user_api_key_dict=admin)
+            with pytest.raises(ProxyException) as updated:
+                await update_team(
+                    data=UpdateTeamRequest(team_id="team", metadata=metadata),
+                    http_request=request,
+                    user_api_key_dict=admin,
+                )
+        finally:
+            monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+            is_otel_v2_enabled.cache_clear()
+
+        for refusal in (created.value, updated.value):
+            assert str(refusal.code) == "400"
+            assert "mixpanel_project_token must be" in refusal.message
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            None,
+            {},
+            {"logging": "not-a-list"},
+            {"logging": [{"callback_name": "newrelic", "callback_vars": {"newrelic_license_key": ""}}]},
+            {"callback_settings": {"callback_vars": {"langfuse_public_key": "pk"}}},
+        ],
+        ids=["none", "empty", "not-a-list", "another-callback", "another-callback-settings"],
+    )
+    @pytest.mark.parametrize("otel_v2", ["true", "false"])
+    def test_the_team_check_leaves_other_callbacks_alone(
+        self, metadata: dict[str, object] | None, otel_v2: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.common_utils.callback_config_validation import mixpanel_logging_metadata_error
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", otel_v2)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            assert mixpanel_logging_metadata_error(metadata) is None
+        finally:
+            monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+            is_otel_v2_enabled.cache_clear()
+
+    def test_the_team_check_accepts_a_real_mixpanel_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.common_utils.callback_config_validation import mixpanel_logging_metadata_error
+
+        real_token: Final = {
+            "logging": [{"callback_name": "mixpanel", "callback_vars": {"mixpanel_project_token": "real"}}],
+            "callback_settings": {"callback_vars": {"mixpanel_project_token": "real"}},
+        }
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        try:
+            assert mixpanel_logging_metadata_error(real_token) is None
+        finally:
+            monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+            is_otel_v2_enabled.cache_clear()
+
+    def test_team_and_key_validation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.common_utils.callback_config_validation import callback_config_error
+        from litellm.proxy.management_endpoints.key_management_endpoints import raise_on_invalid_key_logging_config
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_team_callback
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._team_data({"mixpanel_project_token": "tok"}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._team_data({}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(self._key_metadata({}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+            without_vars: Final = {"logging": [{"callback_name": "mixpanel", "callback_type": "success"}]}
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(without_vars)
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+            raise_on_invalid_key_logging_config({"logging": [{"callback_name": "langfuse", "callback_type": "success"}]})
+            assert callback_config_error("langfuse", {}) is None
+
+            monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+            is_otel_v2_enabled.cache_clear()
+            _validate_team_callback(self._team_data({}))
+            raise_on_invalid_key_logging_config(self._key_metadata({}))
+            raise_on_invalid_key_logging_config(without_vars)
+            for no_region in ("", "   ", "None"):
+                _validate_team_callback(self._team_data({"mixpanel_project_token": "tok", "mixpanel_region": no_region}))
+                raise_on_invalid_key_logging_config(
+                    self._key_metadata({"mixpanel_project_token": "tok", "mixpanel_region": no_region})
+                )
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._team_data({"mixpanel_project_token": "tok", "mixpanel_region": "mars"}))
+            assert "Unknown mixpanel_region" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(self._key_metadata({"mixpanel_region": "eu"}))
+            assert "mixpanel_project_token must be" in str(exc.value.detail)
+            for unsendable in ("", "   ", "None", " None ", "***REDACTED***", " ***REDACTED*** "):
+                with pytest.raises(HTTPException) as exc:
+                    _validate_team_callback(self._team_data({"mixpanel_project_token": unsendable}))
+                assert "mixpanel_project_token must be" in str(exc.value.detail)
+                with pytest.raises(HTTPException) as exc:
+                    raise_on_invalid_key_logging_config(self._key_metadata({"mixpanel_project_token": unsendable}))
+                assert "mixpanel_project_token must be" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(
+                    self._key_metadata({"mixpanel_project_token": "tok", "mixpanel_foo": "bar"})
+                )
+            assert "mixpanel_foo" in str(exc.value.detail)
+            _validate_team_callback(self._team_data({"capture_message_content": "span_only"}))
+            _validate_team_callback(self._team_data({"mixpanel_project_token": "tok", "mixpanel_region": "in"}))
+            raise_on_invalid_key_logging_config(
+                self._key_metadata({"mixpanel_project_token": "tok", "mixpanel_region": "EU"})
+            )
+        finally:
+            is_otel_v2_enabled.cache_clear()

@@ -7,10 +7,12 @@ OpenRouter is OpenAI-compatible and supports embeddings via the /v1/embeddings e
 Docs: https://openrouter.ai/docs
 """
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
@@ -35,14 +37,14 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
-        messages: list,
-        optional_params: dict,
-        litellm_params: dict,
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for OpenRouter API.
 
@@ -77,30 +79,22 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for OpenRouter Embedding API endpoint.
         """
-        # api_base is already set to https://openrouter.ai/api/v1 in main.py
-        # Remove trailing slashes
-        if api_base:
-            api_base = api_base.rstrip("/")
-        else:
-            api_base = "https://openrouter.ai/api/v1"
-
-        # Return the embeddings endpoint
-        return f"{api_base}/embeddings"
+        return join_api_base(api_base or "https://openrouter.ai/api/v1", "embeddings")
 
     def transform_embedding_request(
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform embedding request to OpenRouter format (OpenAI-compatible).
         """
@@ -126,9 +120,9 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         """
         Transform embedding response from OpenRouter format (OpenAI-compatible).
@@ -144,7 +138,7 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
             response_type="embedding",
         )
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get list of supported OpenAI parameters for OpenRouter embeddings.
         """
@@ -157,11 +151,11 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to OpenRouter format.
         """
@@ -170,7 +164,9 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> OpenRouterException:
         """
         Get the error class for OpenRouter errors.
         """

@@ -76,7 +76,7 @@ def without_repeated_version_prefix(api_base: str, native_endpoint: str) -> str:
 
 
 class NvidiaNimPassthroughConfig(BasePassthroughConfig):
-    def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
+    def is_streaming_request(self, endpoint: str, request_data: Mapping[str, object]) -> bool:
         return bool(request_data.get("stream", False))
 
     def get_complete_url(
@@ -85,8 +85,8 @@ class NvidiaNimPassthroughConfig(BasePassthroughConfig):
         api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: dict | None,
-        litellm_params: dict,
+        request_query_params: Mapping[str, object] | None,
+        litellm_params: Mapping[str, object],
     ) -> tuple[URL, str]:
         base_target_url: Final = self.get_api_base(api_base)
         if base_target_url is None:
@@ -106,11 +106,11 @@ class NvidiaNimPassthroughConfig(BasePassthroughConfig):
         api_base: str | None = None,
     ) -> dict[str, str]:  # mutable-ok: base class contract returns dict for httpx
         if api_key is None:
-            return dict(headers)  # mutable-ok: base class contract returns dict for httpx
+            return dict(headers)
         return {
             **headers,
             "Authorization": f"Bearer {api_key}",
-        }  # mutable-ok: base class contract returns dict for httpx
+        }
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:

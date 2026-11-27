@@ -1,24 +1,36 @@
 """Read-through recovery for in-memory registries in multi-replica deployments.
 
-A management write (POST /model/new, /guardrails, /v1/agents) lands on one
-replica and reaches Postgres, but sibling replicas only refresh their in-memory
-registries on the periodic config reload, so a request using the new object
-immediately can land on a sibling that has never heard of it and fail 400/404.
+A management write (POST /model/new, /guardrails, /v1/agents, /vector_store/new,
+/v1/indexes) lands on one replica and reaches Postgres, but sibling replicas only
+refresh their in-memory registries on the periodic config reload, so a request
+using the new object immediately can land on a sibling that has never heard of it
+and fail 400/404.
 On a registry miss, callers here fetch the missing row from the DB and load it
 into the local registry before giving up. A short negative-result TTL per key
 plus a global resync budget per window bound the DB load from lookups of
-genuinely unknown names.
+genuinely unknown names. Vector store indexes instead reload their whole table,
+at most once per TTL, because the Azure passthrough looks up every index name it
+relays, so a burst of unknown names must neither cost a DB read each nor use up
+a budget that a real index created on a sibling then misses. An auto router's
+tiers are deployment rows of their own, so a miss on an auto router reconciles
+every row instead of just its own, or the first routed request on this replica
+would pick a tier it has not loaded.
 """
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Final
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
     from prisma.types import (
         LiteLLM_AgentsTableInclude,
         LiteLLM_AgentsTableWhereUniqueInput,
@@ -27,15 +39,26 @@ if TYPE_CHECKING:
     )
 
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.agents import AgentResponse
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
+
+    _ModelTable: TypeAlias = TableActions[prisma_models.LiteLLM_ProxyModelTable]
+    _ModelRows: TypeAlias = Sequence[prisma_models.LiteLLM_ProxyModelTable]
+
+ModelLoadOutcome: TypeAlias = Literal["loaded", "missing", "no_router", "auto_router"]
 
 READ_THROUGH_MISS_TTL_SECONDS: Final = 2.0
 READ_THROUGH_RESYNC_WINDOW_SECONDS: Final = 5.0
 READ_THROUGH_MAX_RESYNCS_PER_WINDOW: Final = 20
+READ_THROUGH_MAX_WAIT_SECONDS: Final = 1.0
+
+VectorStoreIndexLookup: TypeAlias = Literal["managed", "unmanaged", "unknown"]
 
 
 class RegistryReadThrough:
     __slots__ = (
+        "_is_loaded",
         "_lock",
         "_max_resyncs_per_window",
         "_miss_ttl_seconds",
@@ -49,11 +72,13 @@ class RegistryReadThrough:
     def __init__(
         self,
         resync: Callable[[str], Awaitable[bool]],
+        is_loaded: Callable[[str], bool],
         miss_ttl_seconds: float = READ_THROUGH_MISS_TTL_SECONDS,
         max_resyncs_per_window: int = READ_THROUGH_MAX_RESYNCS_PER_WINDOW,
         resync_window_seconds: float = READ_THROUGH_RESYNC_WINDOW_SECONDS,
     ) -> None:
         self._resync = resync
+        self._is_loaded = is_loaded
         self._miss_ttl_seconds = miss_ttl_seconds
         self._max_resyncs_per_window = max_resyncs_per_window
         self._resync_window_seconds = resync_window_seconds
@@ -78,6 +103,8 @@ class RegistryReadThrough:
         async with self._lock:
             if self._recent_misses.get_cache(key) is not None:
                 return False
+            if self._is_loaded(key):
+                return True
             if not self._consume_resync_budget():
                 verbose_proxy_logger.warning(
                     "registry read-through for %r skipped: resync budget of %s per %ss exhausted",
@@ -96,6 +123,58 @@ class RegistryReadThrough:
             return found
 
 
+class ThrottledTableReload:
+    __slots__ = (
+        "_clock",
+        "_finished_at",
+        "_max_wait_seconds",
+        "_min_interval_seconds",
+        "_reload",
+        "_started_at",
+        "_succeeded",
+        "_task",
+    )
+
+    def __init__(
+        self,
+        reload: Callable[[], Awaitable[None]],
+        min_interval_seconds: float = READ_THROUGH_MISS_TTL_SECONDS,
+        max_wait_seconds: float = READ_THROUGH_MAX_WAIT_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._reload = reload
+        self._clock = clock
+        self._min_interval_seconds = min_interval_seconds
+        self._max_wait_seconds = max_wait_seconds
+        self._task: asyncio.Task[bool] | None = None
+        self._started_at = float("-inf")
+        self._finished_at = float("-inf")
+        self._succeeded = False
+
+    async def reload_if_stale(self) -> bool:
+        if self._task is None and self._clock() - self._finished_at >= self._min_interval_seconds:
+            self._started_at = self._clock()
+            self._task = asyncio.create_task(self._run())
+        task: Final = self._task
+        if task is None:
+            return self._succeeded
+        wait_seconds: Final = max(self._started_at + self._max_wait_seconds - self._clock(), 0.0)
+        done, _ = await asyncio.wait((task,), timeout=wait_seconds)
+        return task in done and not task.cancelled() and task.result()
+
+    async def _run(self) -> bool:
+        try:
+            await self._reload()
+            self._succeeded = True
+        except Exception as e:  # noqa: BLE001  # a failed reload must answer "unknown" to callers, not a 500
+            verbose_proxy_logger.warning("registry table reload failed: %s", e)
+            self._succeeded = False
+        finally:
+            self._finished_at = self._clock()
+            self._task = None
+        return self._succeeded
+
+
 def _db_backed_registries_enabled(object_type: str) -> bool:
     from litellm.proxy import proxy_server
 
@@ -112,23 +191,114 @@ async def _resync_model_deployments(model_name: str) -> bool:
         return False
     prisma_client: Final = proxy_server.prisma_client
     assert prisma_client is not None
-    table: Final = ModelRepository(prisma_client).table
-    name_filter: Final[LiteLLM_ProxyModelTableWhereInput] = {"model_name": model_name}
-    id_filter: Final[LiteLLM_ProxyModelTableWhereInput] = {"model_id": model_name}
-    rows: Final = await table.find_many(where=name_filter) or await table.find_many(where=id_filter)
+    rows: Final = await _find_rows_by_name_or_id(model_name, ModelRepository(prisma_client).table)
     if not rows:
         return False
+    async with proxy_server.DB_RECONCILE_LOCK:
+        outcome: Final = await _install_model_rows(rows, _always)
+    if outcome in ("no_router", "auto_router"):
+        await _reload_every_model()
+    return outcome == "loaded" or _model_is_loaded(model_name)
+
+
+async def resync_model_deployments_by_ids(model_ids: tuple[str, ...]) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+    from litellm.repositories.model_repository import ModelRepository
+
+    if not _db_backed_registries_enabled("models"):
+        return
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    writer_table: Final = ModelRepository(WriterPinnedClient(prisma_client.db)).table
+    async with proxy_server.DB_RECONCILE_LOCK:
+        rows: Final = await _find_rows_by_ids(model_ids, writer_table)
+        _ = await _install_model_rows(_without_auto_routers(rows), _names_an_unloaded_credential)
+
+
+async def _find_rows_by_name_or_id(model_name: str, table: "_ModelTable") -> "_ModelRows":
+    name_filter: Final[LiteLLM_ProxyModelTableWhereInput] = {"model_name": model_name}
+    id_filter: Final[LiteLLM_ProxyModelTableWhereInput] = {"model_id": model_name}
+    return await table.find_many(where=name_filter) or await table.find_many(where=id_filter)
+
+
+async def _find_rows_by_ids(model_ids: tuple[str, ...], table: "_ModelTable") -> "_ModelRows":
+    from litellm.repositories.chunked_in import find_many_in
+
+    return list(await find_many_in(table, "model_id", model_ids))
+
+
+async def _install_model_rows(
+    rows: "_ModelRows",
+    needs_credentials: Callable[["_ModelRows"], bool],
+) -> ModelLoadOutcome:
+    from litellm.proxy import proxy_server
+
     router: Final = proxy_server.llm_router
+    if not rows:
+        return "missing"
     if router is None:
-        await proxy_server.proxy_config.add_deployment(
-            prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
-        )
-        return proxy_server.llm_router is not None
-    async with proxy_server.MODEL_RECONCILE_LOCK:
+        return "no_router"
+    if _holds_an_auto_router(rows):
+        return "auto_router"
+    if needs_credentials(rows):
+        prisma_client: Final = proxy_server.prisma_client
+        assert prisma_client is not None
         await proxy_server.proxy_config.get_credentials(prisma_client=prisma_client)
-        proxy_server.proxy_config._add_deployment(db_models=rows)
-        proxy_server.llm_model_list = router.get_model_list()
+    proxy_server.proxy_config.add_deployments_and_refresh_model_info(db_models=rows)
+    proxy_server.llm_model_list = router.registry().deployments()
+    return "loaded"
+
+
+async def _reload_every_model() -> None:
+    from litellm.proxy import proxy_server
+
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    await proxy_server.proxy_config.add_deployment(
+        prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
+    )
+
+
+def _always(rows: "_ModelRows") -> bool:
     return True
+
+
+def _holds_an_auto_router(rows: "_ModelRows") -> bool:
+    return any(_names_an_auto_router(row.litellm_params) for row in rows)
+
+
+def _without_auto_routers(rows: "_ModelRows") -> "_ModelRows":
+    return list(row for row in rows if not _names_an_auto_router(row.litellm_params))
+
+
+def _names_an_unloaded_credential(rows: "_ModelRows") -> bool:
+    return any(_names_an_unloaded_credential_param(row.litellm_params) for row in rows)
+
+
+_STORED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _decrypted_param(stored_litellm_params: object, key: str) -> str | None:
+    try:
+        params: Final = _STORED_LITELLM_PARAMS.validate_python(stored_litellm_params)
+    except ValidationError:
+        return None
+    stored_value: Final = params.get(key)
+    if not isinstance(stored_value, str):
+        return None
+    value: Final = decrypt_value_helper(value=stored_value, key=key, return_original_value=True)
+    return value if isinstance(value, str) else None
+
+
+def _names_an_auto_router(stored_litellm_params: object) -> bool:
+    model: Final = _decrypted_param(stored_litellm_params, "model")
+    return model is not None and model.startswith("auto_router/")
+
+
+def _names_an_unloaded_credential_param(stored_litellm_params: object) -> bool:
+    credential_name: Final = _decrypted_param(stored_litellm_params, "litellm_credential_name")
+    return credential_name is not None and CredentialAccessor.find_credential(credential_name) is None
 
 
 async def _resync_guardrails(guardrail_name: str) -> bool:
@@ -136,9 +306,9 @@ async def _resync_guardrails(guardrail_name: str) -> bool:
     from litellm.proxy.guardrails.guardrail_registry import (
         GUARDRAIL_RECONCILE_LOCK,
         IN_MEMORY_GUARDRAIL_HANDLER,
+        guardrail_from_db_row,
     )
     from litellm.repositories.table_repositories import GuardrailsRepository
-    from litellm.types.guardrails import Guardrail
 
     if not _db_backed_registries_enabled("guardrails"):
         return False
@@ -152,7 +322,7 @@ async def _resync_guardrails(guardrail_name: str) -> bool:
     if row is None:
         return False
     async with GUARDRAIL_RECONCILE_LOCK:
-        IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=Guardrail(**dict(row)))
+        IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=guardrail_from_db_row(row))
     return _initialized_guardrail(guardrail_name) is not None
 
 
@@ -174,7 +344,10 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
     table: Final = agents_table(prisma_client)
     id_filter: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": agent_id_or_name}
     name_filter: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_name": agent_id_or_name}
-    include_permission: Final[LiteLLM_AgentsTableInclude] = {"object_permission": True}
+    include_permission: Final[LiteLLM_AgentsTableInclude] = {
+        "object_permission": True,
+        "identity": True,
+    }
     async with AGENT_RECONCILE_LOCK:
         if _agent_from_registry(agent_id_or_name) is not None:
             return True
@@ -187,9 +360,134 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
         return True
 
 
-model_registry_read_through: Final = RegistryReadThrough(resync=_resync_model_deployments)
-guardrail_registry_read_through: Final = RegistryReadThrough(resync=_resync_guardrails)
-agent_registry_read_through: Final = RegistryReadThrough(resync=_resync_agents)
+async def _reload_vector_store_indexes() -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    _load_missing_vector_store_indexes(
+        await VectorStoreIndexRegistry.get_vector_store_indexes_from_db_writer(WriterPinnedClient(prisma_client.db))
+    )
+
+
+def _load_missing_vector_store_indexes(indexes: "Sequence[LiteLLM_ManagedVectorStoreIndex]") -> None:
+    import litellm
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+    if not indexes:
+        return
+    registry: Final = litellm.vector_store_index_registry
+    if registry is None:
+        litellm.vector_store_index_registry = VectorStoreIndexRegistry(vector_store_indexes=list(indexes))
+        return
+    loaded_names: Final = frozenset(index.index_name for index in registry.vector_store_indexes)
+    for index in tuple(index for index in indexes if index.index_name not in loaded_names):
+        registry.upsert_vector_store_index(vector_store_index=index)
+
+
+def register_created_vector_store_index(row: "Iterable[tuple[str, object]]") -> None:
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+    if _db_backed_registries_enabled("vector_store_indexes"):
+        _load_missing_vector_store_indexes((VectorStoreIndexRegistry.index_from_db_row(row),))
+
+
+async def _resync_vector_stores(vector_store_name: str) -> bool:
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    if not _db_backed_registries_enabled("vector_stores"):
+        return False
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    stores: Final = await VectorStoreRegistry.get_vector_stores_by_name_from_db(
+        WriterPinnedClient(prisma_client.db), vector_store_name
+    )
+    if not stores:
+        return False
+    if litellm.vector_store_registry is None:
+        litellm.vector_store_registry = VectorStoreRegistry(vector_stores=list(stores))
+        return True
+    registry: Final = litellm.vector_store_registry
+    for store in stores:
+        if (vector_store_id := store.get("vector_store_id")) is None:
+            continue
+        if registry.is_config_vector_store(vector_store_id):
+            continue
+        registry.delete_vector_store_from_registry(vector_store_id)
+        registry.add_vector_store_to_registry(store)
+    return _vector_store_is_loaded(vector_store_name)
+
+
+def _model_is_loaded(model_name_or_id: str) -> bool:
+    from litellm.proxy import proxy_server
+
+    router: Final = proxy_server.llm_router
+    if router is None:
+        return False
+    registry: Final = router.registry()
+    return model_name_or_id in registry.names(kind="group_set") or registry.has_deployment(model_name_or_id)
+
+
+def _guardrail_is_loaded(guardrail_name: str) -> bool:
+    return _initialized_guardrail(guardrail_name) is not None
+
+
+def _agent_is_loaded(agent_id_or_name: str) -> bool:
+    return _agent_from_registry(agent_id_or_name) is not None
+
+
+def _vector_store_index_is_loaded(index_name: str) -> bool:
+    import litellm
+
+    registry: Final = litellm.vector_store_index_registry
+    return registry is not None and registry.is_vector_store_index(vector_store_index_name=index_name)
+
+
+def _vector_store_from_registry(vector_store_name: str) -> "LiteLLM_ManagedVectorStore | None":
+    import litellm
+
+    registry: Final = litellm.vector_store_registry
+    if registry is None:
+        return None
+    return registry.get_litellm_managed_vector_store_from_registry_by_name(vector_store_name=vector_store_name)
+
+
+def _vector_store_is_loaded(vector_store_name: str) -> bool:
+    return _vector_store_from_registry(vector_store_name) is not None
+
+
+model_registry_read_through: Final = RegistryReadThrough(resync=_resync_model_deployments, is_loaded=_model_is_loaded)
+guardrail_registry_read_through: Final = RegistryReadThrough(resync=_resync_guardrails, is_loaded=_guardrail_is_loaded)
+agent_registry_read_through: Final = RegistryReadThrough(resync=_resync_agents, is_loaded=_agent_is_loaded)
+vector_store_index_table_reload: Final = ThrottledTableReload(reload=_reload_vector_store_indexes)
+vector_store_registry_read_through: Final = RegistryReadThrough(
+    resync=_resync_vector_stores, is_loaded=_vector_store_is_loaded
+)
+
+
+async def lookup_vector_store_index(index_name: str) -> VectorStoreIndexLookup:
+    if _vector_store_index_is_loaded(index_name):
+        return "managed"
+    if not _db_backed_registries_enabled("vector_store_indexes"):
+        return "unmanaged"
+    reloaded: Final = await vector_store_index_table_reload.reload_if_stale()
+    if _vector_store_index_is_loaded(index_name):
+        return "managed"
+    return "unmanaged" if reloaded else "unknown"
+
+
+async def get_vector_store_with_read_through(vector_store_name: str) -> "LiteLLM_ManagedVectorStore | None":
+    vector_store: Final = _vector_store_from_registry(vector_store_name)
+    if vector_store is not None:
+        return vector_store
+    if not await vector_store_registry_read_through.attempt(vector_store_name):
+        return None
+    return _vector_store_from_registry(vector_store_name)
 
 
 def _agent_from_registry(agent_id_or_name: str) -> "AgentResponse | None":

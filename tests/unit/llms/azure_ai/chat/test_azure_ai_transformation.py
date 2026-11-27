@@ -1,0 +1,2800 @@
+import json
+import logging
+import traceback
+from collections.abc import Callable, Iterator, Mapping
+from types import MappingProxyType
+from typing import Final
+from unittest.mock import MagicMock, patch
+
+import pytest
+import respx
+from httpx import Response
+
+import litellm
+from litellm import Router
+from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    ModelCostMapReloaded,
+    get_model_cost_map,
+    install_model_cost_map,
+)
+from litellm.llms.azure_ai.azure_model_router.transformation import (
+    AzureModelRouterConfig,
+)
+from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+from litellm.llms.azure_ai.common_utils import AZURE_AI_AGENTS_SCOPE
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+
+@pytest.mark.asyncio
+async def test_get_openai_compatible_provider_info():
+    """
+    Test that Azure AI requests are formatted correctly with the proper endpoint and parameters
+    for both synchronous and asynchronous calls
+    """
+    config = AzureAIStudioConfig()
+
+    (
+        api_base,
+        dynamic_api_key,
+        custom_llm_provider,
+    ) = config.get_openai_compatible_provider_info(
+        model="azure_ai/gpt-4o-mini",
+        api_base="https://my-base",
+        api_key="my-key",
+        custom_llm_provider="azure_ai",
+    )
+
+    assert custom_llm_provider == "azure"
+
+
+@pytest.mark.parametrize(
+    "model, api_base, expected_provider",
+    [
+        ("azure_ai/gpt-4o", "https://my-resource.services.ai.azure.com", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://my-resource.services.ai.azure.com/models", "azure_ai"),
+        ("azure_ai/gpt-5.4-nano", "https://my-resource.services.ai.azure.com", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com", "azure"),
+        (
+            "azure_ai/gpt-4o",
+            "https://my-resource.services.ai.azure.com/openai/deployments/gpt-4o/chat/completions"
+            "?api-version=2024-08-01-preview",
+            "azure",
+        ),
+        ("azure_ai/mistral-large-latest", "https://my-resource.services.ai.azure.com", "azure_ai"),
+        ("azure_ai/mistral-large-latest", "https://my-resource.openai.azure.com", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1", "azure"),
+        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1/", "azure"),
+        ("azure_ai/gpt-4o", "https://my-resource.cognitiveservices.azure.com/openai/v1", "azure"),
+        ("azure_ai/gpt-4o", "https://apim.example.com/team/openai/v1", "azure"),
+        ("azure_ai/gpt-4o", "https://my-resource.services.ai.azure.com/openai/v1", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://apim.example.com/api/projects/p", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p/openai/v1", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p/models", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://gw.example.com/api/projects/team-x/azure-openai", "azure"),
+        ("azure_ai/gpt-4o", "https://gateway.example.com/v1", "azure"),
+        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1/extra", "azure"),
+    ],
+)
+def test_foundry_base_keeps_azure_ai_provider(model: str, api_base: str, expected_provider: str):
+    """Regression for #38276: a Foundry .services.ai.azure.com base must not be reclassified as azure."""
+    config = AzureAIStudioConfig()
+    (
+        _,
+        _,
+        custom_llm_provider,
+    ) = config.get_openai_compatible_provider_info(
+        model=model,
+        api_base=api_base,
+        api_key="my-key",
+        custom_llm_provider="azure_ai",
+    )
+    assert custom_llm_provider == expected_provider
+
+
+def test_is_azure_openai_model_without_api_base_keeps_azure_ai():
+    """Metadata lookups (get_model_info, supports_* checks) carry no api_base and must not flip the provider."""
+    config = AzureAIStudioConfig()
+    assert config._is_azure_openai_model(model="azure_ai/gpt-4o", api_base=None) is False
+    assert config._is_azure_openai_model(model="azure_ai/gpt-4o", api_base="https://my-res.openai.azure.com") is True
+
+
+def test_azure_ai_validate_environment():
+    config = AzureAIStudioConfig()
+    headers = config.validate_environment(
+        headers={},
+        model="azure_ai/gpt-4o-mini",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+    )
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_azure_ai_validate_environment_with_api_key():
+    """
+    Test that when api_key is provided, it is set in the api-key header
+    for Azure Foundry endpoints (.services.ai.azure.com).
+    """
+    config = AzureAIStudioConfig()
+    headers = config.validate_environment(
+        headers={},
+        model="Kimi-K2.5",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://my-endpoint.services.ai.azure.com",
+    )
+    assert headers["api-key"] == "test-api-key"
+    assert headers["Content-Type"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_acompletion_posts_the_conversation_to_the_models_endpoint(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.post("https://example-resource.services.ai.azure.com/models/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-azure-ai",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi!"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 2, "total_tokens": 22},
+            },
+        )
+    )
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "Hello! How can I assist you today?"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    response: Final = await litellm.acompletion(
+        custom_llm_provider="azure_ai",
+        api_key="azure-ai-test-key",
+        api_base="https://example-resource.services.ai.azure.com/models",
+        model="azure_ai/gpt-4.1-mini",
+        messages=messages,
+    )
+
+    assert route.calls.last.request.headers["api-key"] == "azure-ai-test-key"
+    assert json.loads(route.calls.last.request.content) == {"model": "gpt-4.1-mini", "messages": messages}
+    assert response.choices[0].message.content == "Hi!"
+
+
+FOUNDRY_RESOURCE_BASE: Final = "https://example-resource.services.ai.azure.com"
+FOUNDRY_PROJECT_BASE: Final = f"{FOUNDRY_RESOURCE_BASE}/api/projects/example-project"
+FOUNDRY_PROJECT_CHAT_PATH: Final = "/api/projects/example-project/openai/v1/chat/completions"
+CHAT_COMPLETION_PAYLOAD: Final = {
+    "id": "chatcmpl-azure-ai",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-4.1-mini",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 14, "completion_tokens": 1, "total_tokens": 15},
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "max_tokens", "max_completion_tokens", "wire_limit"),
+    (
+        pytest.param("gpt-5-chat", 256, None, {"max_completion_tokens": 256}, id="gpt-5-chat"),
+        pytest.param("gpt-5-chat-latest", 64, None, {"max_completion_tokens": 64}, id="gpt-5-chat-suffix"),
+        pytest.param("gpt-5-chat", 32, 64, {"max_completion_tokens": 64}, id="explicit-limit-wins"),
+        pytest.param("gpt-5-chat", None, 64, {"max_completion_tokens": 64}, id="explicit-limit-only"),
+        pytest.param("gpt-5-chat", None, None, {}, id="no-limit"),
+        pytest.param("gpt-4o", 256, None, {"max_tokens": 256}, id="legacy-model"),
+        pytest.param("gpt-5", 256, None, {"max_completion_tokens": 256}, id="reasoning-model"),
+    ),
+)
+def test_foundry_chat_sends_the_expected_token_limit(
+    respx_mock: respx.MockRouter,
+    model: str,
+    max_tokens: int | None,
+    max_completion_tokens: int | None,
+    wire_limit: Mapping[str, int],
+) -> None:
+    route: Final = respx_mock.post(f"{FOUNDRY_RESOURCE_BASE}/models/chat/completions").mock(
+        return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
+    )
+    messages: Final = [{"role": "user", "content": "Reply with 42."}]
+    temperature: Final = {} if model == "gpt-5" else {"temperature": 0.25}
+
+    litellm.completion(
+        model=f"azure_ai/{model}",
+        messages=messages,
+        api_key="azure-ai-test-key",
+        api_base=FOUNDRY_RESOURCE_BASE,
+        max_tokens=max_tokens,
+        max_completion_tokens=max_completion_tokens,
+        **temperature,
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": model,
+        "messages": messages,
+        **temperature,
+        **wire_limit,
+    }
+
+
+@pytest.mark.parametrize(
+    ("api_base", "api_version", "expected_path", "expected_query"),
+    [
+        pytest.param(FOUNDRY_RESOURCE_BASE, None, "/models/chat/completions", b"", id="resource-root"),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/", None, "/openai/v1/chat/completions", b"", id="resource-openai-base"
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai",
+            "preview",
+            "/openai/v1/chat/completions",
+            b"api-version=preview",
+            id="resource-openai-base-preview",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/",
+            "2024-10-21",
+            "/openai/deployments/gpt-4.1-mini/chat/completions",
+            b"api-version=2024-10-21",
+            id="resource-openai-base-dated-version",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2023-03-15-preview",
+            None,
+            "/openai/deployments/gpt-4.1-mini/chat/completions",
+            None,
+            id="full-deployment-url",
+        ),
+        pytest.param(FOUNDRY_PROJECT_BASE, None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project"),
+        pytest.param(FOUNDRY_PROJECT_BASE, "preview", FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-drops-api-version"),
+        pytest.param(
+            f"{FOUNDRY_PROJECT_BASE}?api-version=2024-05-01-preview&subscription-key=gateway-key",
+            None,
+            FOUNDRY_PROJECT_CHAT_PATH,
+            b"subscription-key=gateway-key",
+            id="project-drops-base-api-version-keeps-other-query",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/gateway{FOUNDRY_PROJECT_BASE.removeprefix(FOUNDRY_RESOURCE_BASE)}",
+            None,
+            f"/gateway{FOUNDRY_PROJECT_CHAT_PATH}",
+            b"",
+            id="prefixed-project",
+        ),
+        pytest.param(
+            f"{FOUNDRY_PROJECT_BASE}/openai/v1/", None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-openai-v1"
+        ),
+        pytest.param(f"{FOUNDRY_PROJECT_BASE}/models", None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-models"),
+        pytest.param(f"{FOUNDRY_PROJECT_BASE}/v1", None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-v1"),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/v1",
+            "preview",
+            "/openai/v1/chat/completions",
+            b"api-version=preview",
+            id="resource-openai-v1-keeps-api-version",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/v1?api-version=preview&subscription-key=gateway-key",
+            "2024-05-01-preview",
+            "/openai/v1/chat/completions",
+            b"api-version=preview&subscription-key=gateway-key",
+            id="resource-openai-v1-keeps-base-query",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/gateway/openai/v1/chat/completions",
+            None,
+            "/gateway/openai/v1/chat/completions",
+            b"",
+            id="prefixed-openai-v1-chat-url",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/v1/responses",
+            None,
+            "/openai/v1/chat/completions",
+            b"",
+            id="openai-v1-responses-url",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/gateway/api/projects/team-x/azure-openai",
+            None,
+            "/gateway/api/projects/team-x/azure-openai/models/chat/completions",
+            b"",
+            id="projects-segment-in-a-non-project-path",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/v1/tenant-x",
+            None,
+            "/openai/v1/tenant-x/models/chat/completions",
+            b"",
+            id="path-after-openai-v1",
+        ),
+    ],
+)
+def test_azure_ai_completion_routes_flexible_api_base(
+    respx_mock: respx.MockRouter,
+    api_base: str,
+    api_version: str | None,
+    expected_path: str,
+    expected_query: bytes | None,
+) -> None:
+    route: Final = respx_mock.post(host="example-resource.services.ai.azure.com", path=expected_path).mock(
+        return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
+    )
+    messages: Final = [{"role": "user", "content": "What is the meaning of life?"}]
+
+    response: Final = litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        api_base=api_base,
+        api_version=api_version,
+        api_key="azure-ai-test-key",
+        messages=messages,
+    )
+
+    assert route.calls.last.request.url.path == expected_path
+    assert expected_query is None or route.calls.last.request.url.query == expected_query
+    assert json.loads(route.calls.last.request.content) == {"model": "gpt-4.1-mini", "messages": messages}
+    assert response.choices[0].message.content == "42"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected_headers"),
+    [
+        pytest.param(FOUNDRY_PROJECT_BASE, {"Authorization": "Bearer azure-ai-test-key"}, id="project-bearer"),
+        pytest.param(f"{FOUNDRY_RESOURCE_BASE}/openai/v1", {"api-key": "azure-ai-test-key"}, id="resource-api-key"),
+    ],
+)
+def test_azure_ai_completion_sends_the_key_in_the_header_the_base_accepts(
+    respx_mock: respx.MockRouter, api_base: str, expected_headers: Mapping[str, str]
+) -> None:
+    route: Final = respx_mock.post(
+        host="example-resource.services.ai.azure.com", path__regex=r"/openai/v1/chat/completions$"
+    ).mock(return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD))
+
+    litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        api_base=api_base,
+        api_key="azure-ai-test-key",
+        messages=[{"role": "user", "content": "What is 2+2?"}],
+    )
+
+    sent: Final = route.calls.last.request.headers
+    assert {name: sent.get(name) for name in ("Authorization", "api-key")} == {
+        "Authorization": None,
+        "api-key": None,
+        **expected_headers,
+    }
+
+
+AZURE_OPENAI_RESOURCE_HOST: Final = "example-resource.openai.azure.com"
+AZURE_COGNITIVE_SERVICES_HOST: Final = "example-resource.cognitiveservices.azure.com"
+API_KEY_HEADER: Final = ("api-key", "azure-ai-test-key")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("host", "base_path", "api_version", "expected_path", "expected_query", "expected_auth"),
+    [
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST, "", None, "/openai/v1/chat/completions", b"", API_KEY_HEADER, id="resource-root"
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
+            "/openai/",
+            None,
+            "/openai/v1/chat/completions",
+            b"",
+            API_KEY_HEADER,
+            id="openai-base",
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
+            "/openai/v1?api-version=v1",
+            None,
+            "/openai/v1/chat/completions",
+            b"api-version=v1",
+            API_KEY_HEADER,
+            id="explicit-v1-base",
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
+            "?api-version=preview",
+            None,
+            "/openai/v1/chat/completions",
+            b"api-version=preview",
+            API_KEY_HEADER,
+            id="preview-version-in-base",
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
+            "/openai",
+            "latest",
+            "/openai/v1/chat/completions",
+            b"api-version=latest",
+            API_KEY_HEADER,
+            id="latest-version-param",
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
+            "/openai/",
+            "v1",
+            "/openai/v1/chat/completions",
+            b"api-version=v1",
+            API_KEY_HEADER,
+            id="v1-version-param",
+        ),
+        pytest.param(
+            AZURE_OPENAI_RESOURCE_HOST,
+            "/openai?api-version=2024-10-21",
+            None,
+            "/openai/deployments/chat-deployment/chat/completions",
+            b"api-version=2024-10-21",
+            API_KEY_HEADER,
+            id="dated-version-in-base",
+        ),
+        pytest.param(
+            AZURE_COGNITIVE_SERVICES_HOST,
+            "",
+            "2024-10-21",
+            "/openai/deployments/chat-deployment/chat/completions",
+            b"api-version=2024-10-21",
+            ("authorization", "Bearer azure-ai-test-key"),
+            id="cognitive-services-dated-version",
+        ),
+        pytest.param(
+            AZURE_COGNITIVE_SERVICES_HOST,
+            "",
+            None,
+            "/openai/v1/chat/completions",
+            b"",
+            ("authorization", "Bearer azure-ai-test-key"),
+            id="cognitive-services-root",
+        ),
+    ],
+)
+async def test_azure_ai_chat_health_check_routes_openai_resource_base(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    host: str,
+    base_path: str,
+    api_version: str | None,
+    expected_path: str,
+    expected_query: bytes,
+    expected_auth: tuple[str, str],
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    deployment: Final = "chat-deployment"
+    route: Final = respx_mock.post(host=host).mock(
+        return_value=Response(200, json={**CHAT_COMPLETION_PAYLOAD, "model": deployment})
+    )
+
+    result: Final = await litellm.ahealth_check(
+        model_params={
+            "model": deployment,
+            "custom_llm_provider": "azure_ai",
+            "api_base": f"https://{host}{base_path}",
+            "api_version": api_version,
+            "api_key": "azure-ai-test-key",
+            "max_retries": 0,
+        },
+        mode="chat",
+        prompt="Reply with OK",
+    )
+
+    assert "error" not in result, result
+    assert route.call_count == 1
+    request: Final = route.calls.last.request
+    assert request.url.path == expected_path
+    assert request.url.query == expected_query
+    assert request.headers[expected_auth[0]] == expected_auth[1]
+    assert json.loads(request.content)["model"] == deployment
+
+
+@pytest.mark.parametrize("api_version", ["preview", None])
+@pytest.mark.parametrize("host", ["example-resource.openai.azure.com", "example-resource.cognitiveservices.azure.com"])
+def test_azure_ai_openai_model_on_resource_v1_base_is_served_and_billed_as_azure(
+    respx_mock: respx.MockRouter, host: str, api_version: str | None
+) -> None:
+    route: Final = respx_mock.post(host=host, path="/openai/v1/chat/completions").mock(
+        return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        api_base=f"https://{host}/openai/v1",
+        api_version=api_version,
+        api_key="azure-ai-test-key",
+        messages=[{"role": "user", "content": "What is the meaning of life?"}],
+    )
+
+    assert route.called
+    assert response.choices[0].message.content == "42"
+    assert response._hidden_params["custom_llm_provider"] == "azure"
+
+
+def test_azure_openai_v1_base_ignores_the_dated_azure_api_version_the_proxy_cli_sets(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
+    route: Final = respx_mock.post(host="example-resource.openai.azure.com", path="/openai/v1/chat/completions").mock(
+        return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        api_base="https://example-resource.openai.azure.com/openai/v1",
+        api_key="azure-ai-test-key",
+        messages=[{"role": "user", "content": "What is the meaning of life?"}],
+    )
+
+    assert response.choices[0].message.content == "42"
+    assert route.calls.last.request.url.query == b""
+
+
+@pytest.mark.parametrize(
+    ("api_base", "configured_scope", "env_scope", "expected_scope"),
+    [
+        pytest.param(FOUNDRY_PROJECT_BASE, None, None, AZURE_AI_AGENTS_SCOPE, id="project-default"),
+        pytest.param(
+            FOUNDRY_PROJECT_BASE,
+            "api://custom-app/.default",
+            "https://ai.azure.us/.default",
+            "api://custom-app/.default",
+            id="project-configured-scope",
+        ),
+        pytest.param(
+            FOUNDRY_PROJECT_BASE, None, "https://ai.azure.us/.default", "https://ai.azure.us/.default", id="project-env"
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/v1",
+            None,
+            None,
+            "https://cognitiveservices.azure.com/.default",
+            id="resource-openai-v1-default",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/gateway{FOUNDRY_PROJECT_BASE.removeprefix(FOUNDRY_RESOURCE_BASE)}",
+            None,
+            None,
+            AZURE_AI_AGENTS_SCOPE,
+            id="prefixed-project-default",
+        ),
+    ],
+)
+def test_azure_ai_completion_mints_the_service_principal_token_for_the_base_scope(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    api_base: str,
+    configured_scope: str | None,
+    env_scope: str | None,
+    expected_scope: str,
+) -> None:
+    for env_var in ("AZURE_AI_API_KEY", "AZURE_API_KEY", "AZURE_OPENAI_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+    if env_scope is None:
+        monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    else:
+        monkeypatch.setenv("AZURE_SCOPE", env_scope)
+    route: Final = respx_mock.post(
+        host="example-resource.services.ai.azure.com", path__regex=r"/openai/v1/chat/completions$"
+    ).mock(return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD))
+
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:
+        mock_entra_id.return_value = lambda: "foundry-sp-token"
+        litellm.completion(
+            model="azure_ai/gpt-4.1-mini",
+            api_base=api_base,
+            tenant_id="tenant",
+            client_id="client",
+            client_secret="secret",
+            azure_scope=configured_scope,
+            messages=[{"role": "user", "content": "What is 2+2?"}],
+        )
+
+    mock_entra_id.assert_called_once_with(
+        tenant_id="tenant", client_id="client", client_secret="secret", scope=expected_scope
+    )
+    assert route.calls.last.request.headers["Authorization"] == "Bearer foundry-sp-token"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_model_router_stream_chunks_report_selected_model(respx_mock: respx.MockRouter) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    stream_body: Final = (
+        'data: {"id":"chatcmpl-router","object":"chat.completion.chunk","created":1700000000,'
+        '"model":"gpt-4.1-nano-2025-04-14","choices":[{"index":0,"delta":{"role":"assistant",'
+        '"content":"hello"},"finish_reason":null}]}\n\n'
+        'data: {"id":"chatcmpl-router","object":"chat.completion.chunk","created":1700000000,'
+        '"model":"gpt-4.1-nano-2025-04-14","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(
+            200,
+            text=stream_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    chunks: Final = tuple(
+        litellm.completion(
+            model="azure_ai/model_router/test-router",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base="https://example-resource.services.ai.azure.com/models",
+            api_key="azure-ai-test-key",
+            api_version="2024-05-01-preview",
+            stream=True,
+        )
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert route.call_count == 1
+    assert request_body["model"] == "test-router"
+    assert [chunk.model for chunk in chunks] == ["gpt-4.1-nano-2025-04-14", "gpt-4.1-nano-2025-04-14"]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_model_router_dated_version_on_resource_base_calls_router_deployment(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://example-resource.openai.azure.com/openai/deployments/test-router/chat/completions",
+        params={"api-version": "2024-10-21"},
+    ).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-router",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4.1-nano-2025-04-14",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/model_router/test-router",
+        messages=[{"role": "user", "content": "hello"}],
+        api_base="https://example-resource.openai.azure.com/openai/",
+        api_key="azure-ai-test-key",
+        api_version="2024-10-21",
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["model"] == "test-router"
+    assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.parametrize("deployment", ["public-test/../private", "..", "public%2F..%2Fprivate", "model_router/../private"])
+@pytest.mark.respx(assert_all_called=False)
+def test_azure_ai_dated_version_rejects_deployment_names_that_leave_their_path_segment(
+    respx_mock: respx.MockRouter, deployment: str
+) -> None:
+    upstream: Final = respx_mock.route(host="example-resource.openai.azure.com").mock(return_value=Response(200))
+
+    with pytest.raises(litellm.BadRequestError, match="one URL path segment"):
+        litellm.completion(
+            model=f"azure_ai/{deployment}",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base="https://example-resource.openai.azure.com/openai/",
+            api_key="azure-ai-test-key",
+            api_version="2024-10-21",
+        )
+
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize("model", ["gpt-4.1-mini", "DeepSeek-V4.1-Flash-1017"])
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRouter, model: str) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    response_body: Final = {
+        "id": "chatcmpl-azure-ai",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14},
+    }
+    route: Final = respx_mock.post(url__startswith=api_url).mock(return_value=Response(200, json=response_body))
+    messages: Final = [{"role": "user", "content": "hello"}]
+    response: Final = litellm.completion(
+        model=f"azure_ai/{model}",
+        messages=messages,
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+        api_version="2024-05-01-preview",
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")
+    expected_cost: Final = 11 * model_info["input_cost_per_token"] + 3 * model_info["output_cost_per_token"]
+
+    assert route.call_count == 1
+    assert request_body == {"model": model, "messages": messages}
+    assert response.choices[0].message.content == "hello"
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost, rel=1e-9)
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(expected_cost, rel=1e-9)
+
+
+def test_azure_ai_validate_environment_with_azure_ad_token():
+    """
+    Test that when no api_key is provided but Azure AD credentials are available,
+    the Authorization header is set with a Bearer token.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20759
+    """
+    import litellm
+
+    config = AzureAIStudioConfig()
+    with (
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token",
+            return_value="fake-azure-ad-token",
+        ),
+        patch(
+            "litellm.llms.azure.common_utils.get_secret_str",
+            return_value=None,
+        ),
+        patch.object(litellm, "api_key", None),
+        patch.object(litellm, "azure_key", None),
+    ):
+        headers = config.validate_environment(
+            headers={},
+            model="Kimi-K2.5",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base="https://my-endpoint.services.ai.azure.com",
+        )
+    assert headers.get("Authorization") == "Bearer fake-azure-ad-token"
+    assert "api-key" not in headers
+    assert headers["Content-Type"] == "application/json"
+
+
+@pytest.fixture
+def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+
+
+def test_foundry_gpt_6_sol_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
+    """gpt-6-sol's Foundry row still says none, so the sampling params that ride on it stay. gpt-6-astra
+    used to be the model here until its row turned none off (a live Foundry deployment answered none
+    with a 400 naming low through xhigh on 2026-10-01); the test below pins that flip."""
+    optional_params = AzureAIStudioConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9},
+        optional_params={},
+        model="gpt-6-sol",
+        drop_params=False,
+    )
+
+    assert optional_params == {"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9}
+
+
+def test_foundry_gpt_6_astra_refuses_reasoning_effort_none_before_the_call(_local_model_cost_map):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        AzureAIStudioConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model="gpt-6-astra",
+            drop_params=False,
+        )
+
+
+_FOUNDRY_HOST: Final = "qa-reasoning.services.ai.azure.com"
+_FOUNDRY_MESSAGES: Final = ({"role": "user", "content": "Say hi."},)
+
+
+def _foundry_row(**capabilities: object) -> Mapping[str, object]:
+    return {
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        **capabilities,
+    }
+
+
+_DECLARED_LEVELS: Final = ("none", "high", "max")
+_FOUNDRY_ROWS: Final = MappingProxyType(
+    {
+        "azure_ai/qa-reasoner": _foundry_row(supports_reasoning=True, reasoning_effort_levels=list(_DECLARED_LEVELS)),
+        "azure_ai/qa-unleveled": _foundry_row(supports_reasoning=True),
+        "azure_ai/qa-chat-only": _foundry_row(supports_reasoning=False),
+        "azure_ai/QA-Cased-Up": _foundry_row(supports_reasoning=True, reasoning_effort_levels=list(_DECLARED_LEVELS)),
+        "azure_ai/qa-cased-down": _foundry_row(supports_reasoning=True, reasoning_effort_levels=list(_DECLARED_LEVELS)),
+        "qa-bare-only": {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 0,
+            "output_cost_per_token": 0,
+            "supports_reasoning": True,
+            "reasoning_effort_levels": ["low", "high"],
+        },
+    }
+)
+
+
+@pytest.fixture
+def foundry_catalog(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    catalog: Final = {**GetModelCostMap.load_local_model_cost_map(), **_FOUNDRY_ROWS}
+    assert isinstance(install_model_cost_map(json.dumps(catalog).encode()), ModelCostMapReloaded)
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+def _mock_foundry_chat(respx_mock: respx.MockRouter, model: str) -> respx.Route:
+    return respx_mock.post(host=_FOUNDRY_HOST, path="/models/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-foundry",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            },
+        )
+    )
+
+
+def _foundry_request_body(respx_mock: respx.MockRouter, model: str, **params: object) -> dict[str, object]:
+    route: Final = _mock_foundry_chat(respx_mock, model)
+    litellm.completion(
+        model=f"azure_ai/{model}",
+        api_base=f"https://{_FOUNDRY_HOST}",
+        api_key="azure-ai-test-key",
+        messages=list(_FOUNDRY_MESSAGES),
+        **params,
+    )
+    return json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize(
+    ("requested", "sent"),
+    [
+        pytest.param("max", "max", id="level"),
+        pytest.param({"effort": "high", "summary": "auto"}, "high", id="effort-with-summary"),
+    ],
+)
+def test_azure_ai_sends_reasoning_effort_to_a_foundry_reasoning_model(
+    respx_mock: respx.MockRouter, requested: object, sent: str
+) -> None:
+    body: Final = _foundry_request_body(respx_mock, "qa-reasoner", reasoning_effort=requested)
+
+    assert body == {"model": "qa-reasoner", "messages": list(_FOUNDRY_MESSAGES), "reasoning_effort": sent}
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize(
+    "model", ["qa-reasoner", "qa-unleveled"], ids=["catalog-declares-other-levels", "catalog-declares-none"]
+)
+def test_azure_ai_sends_a_level_the_deployment_declares_whatever_the_catalog_says(
+    respx_mock: respx.MockRouter, model: str
+) -> None:
+    body: Final = _foundry_request_body(
+        respx_mock, model, reasoning_effort="low", model_info={"reasoning_effort_levels": ["low", "high"]}
+    )
+
+    assert body["reasoning_effort"] == "low"
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize(
+    "requested",
+    [
+        pytest.param("auto", id="auto"),
+        pytest.param("default", id="default"),
+        pytest.param({"effort": "high", "summary": "auto"}, id="effort-with-summary"),
+    ],
+)
+def test_azure_ai_sends_reasoning_effort_unchanged_for_a_model_the_catalog_lists_no_levels_for(
+    respx_mock: respx.MockRouter, requested: object
+) -> None:
+    body: Final = _foundry_request_body(respx_mock, "o3-mini", reasoning_effort=requested)
+
+    assert body["reasoning_effort"] == requested
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+def test_azure_ai_refuses_reasoning_effort_for_a_foundry_model_without_reasoning(respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError):
+        _foundry_request_body(respx_mock, "qa-chat-only", reasoning_effort="high")
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+def test_azure_ai_sends_a_level_the_foundry_model_declares(respx_mock: respx.MockRouter) -> None:
+    body: Final = _foundry_request_body(respx_mock, "qa-reasoner", reasoning_effort="none", drop_params=True)
+
+    assert body["reasoning_effort"] == "none"
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize(
+    ("model", "requested"),
+    [
+        pytest.param("qa-reasoner", "low", id="undeclared"),
+        pytest.param("qa-reasoner", {"summary": "auto"}, id="no-level"),
+        pytest.param("qa-unleveled", "high", id="catalog-declares-no-levels"),
+    ],
+)
+@pytest.mark.parametrize("drop_params_global", [False, True], ids=["per-request", "global"])
+def test_azure_ai_drops_a_reasoning_effort_the_foundry_model_cannot_take_under_drop_params(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    model: str,
+    requested: object,
+    drop_params_global: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_params_global)
+    drop_params: Final = {} if drop_params_global else {"drop_params": True}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        body: Final = _foundry_request_body(respx_mock, model, reasoning_effort=requested, **drop_params)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert "reasoning_effort" not in body
+    assert len(drop_warnings) == 1
+    assert "reasoning_effort=" in drop_warnings[0]
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize(
+    ("requested", "named"),
+    [
+        pytest.param("low", "['none', 'high', 'max']", id="undeclared"),
+        pytest.param({"summary": "auto"}, "no level", id="no-level"),
+    ],
+)
+def test_azure_ai_refuses_a_reasoning_effort_the_foundry_model_cannot_take_without_drop_params(
+    respx_mock: respx.MockRouter, requested: object, named: str
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as refused:
+        _foundry_request_body(respx_mock, "qa-reasoner", reasoning_effort=requested)
+
+    assert refused.value.status_code == 400
+    assert named in str(refused.value)
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize("drop_params", [{}, {"drop_params": True}], ids=["strict", "drop-params"])
+def test_azure_ai_sends_any_level_when_the_request_allows_reasoning_effort(
+    respx_mock: respx.MockRouter, drop_params: dict[str, object]
+) -> None:
+    body: Final = _foundry_request_body(
+        respx_mock, "qa-reasoner", reasoning_effort="medium", allowed_openai_params=["reasoning_effort"], **drop_params
+    )
+
+    assert body["reasoning_effort"] == "medium"
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize("base_model", ["azure_ai/qa-reasoner", "qa-reasoner"], ids=["prefixed", "bare"])
+@pytest.mark.parametrize(("requested", "sent"), [("max", "max"), ("low", None)], ids=["declared", "undeclared"])
+def test_azure_ai_checks_levels_against_the_base_model_row(
+    respx_mock: respx.MockRouter, base_model: str, requested: str, sent: str | None
+) -> None:
+    body: Final = _foundry_request_body(
+        respx_mock, "qa-custom-deployment", reasoning_effort=requested, drop_params=True, base_model=base_model
+    )
+
+    assert body.get("reasoning_effort") == sent
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+def test_azure_ai_checks_levels_against_the_catalog_not_a_sibling_deployments_model_info(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = _mock_foundry_chat(respx_mock, "qa-reasoner")
+    deployment: Final = {"model": "azure_ai/qa-reasoner", "api_base": f"https://{_FOUNDRY_HOST}", "api_key": "k"}
+    router: Final = Router(
+        model_list=[
+            {"model_name": "narrow", "litellm_params": deployment, "model_info": {"reasoning_effort_levels": ["none"]}},
+            {"model_name": "plain", "litellm_params": deployment},
+        ]
+    )
+
+    router.completion(model="plain", messages=list(_FOUNDRY_MESSAGES), reasoning_effort="max")
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "max"
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+def test_azure_ai_reads_no_levels_from_a_row_that_does_not_describe_the_foundry_model(
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="does not support"):
+        _foundry_request_body(respx_mock, "qa-bare-only", reasoning_effort="low")
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize(
+    "requested_as",
+    [pytest.param("qa-cased-up", id="catalog-mixed-case"), pytest.param("QA-Cased-Down", id="request-mixed-case")],
+)
+def test_azure_ai_checks_declared_levels_whatever_the_model_name_casing(
+    respx_mock: respx.MockRouter, requested_as: str
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError):
+        _foundry_request_body(respx_mock, requested_as, reasoning_effort="low")
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize("model", ["qa-registered", "qa-reasoner"], ids=["new-row", "over-catalog-row"])
+@pytest.mark.parametrize(("requested", "sent"), [("low", "low"), ("max", None)], ids=["declared", "undeclared"])
+def test_azure_ai_checks_levels_against_a_register_model_registration(
+    respx_mock: respx.MockRouter, model: str, requested: str, sent: str | None
+) -> None:
+    litellm.register_model(
+        {f"azure_ai/{model}": _foundry_row(supports_reasoning=True, reasoning_effort_levels=["low", "high"])}
+    )
+
+    body: Final = _foundry_request_body(respx_mock, model, reasoning_effort=requested, drop_params=True)
+
+    assert body.get("reasoning_effort") == sent
+
+
+@pytest.mark.usefixtures("foundry_catalog")
+@pytest.mark.parametrize(("requested", "sent"), [("max", "max"), ("low", None)], ids=["declared", "undeclared"])
+def test_azure_ai_keeps_catalog_levels_under_a_pricing_registration_spelled_in_another_case(
+    respx_mock: respx.MockRouter, requested: str, sent: str | None
+) -> None:
+    litellm.register_model({"azure_ai/qa-cased-up": _foundry_row(input_cost_per_token=1e-6)})
+
+    body: Final = _foundry_request_body(respx_mock, "qa-cased-up", reasoning_effort=requested, drop_params=True)
+
+    assert body.get("reasoning_effort") == sent
+
+
+FOUNDRY_MODELS_CHAT_URL: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+FOUNDRY_CHAT_COMPLETION: Final = MappingProxyType(
+    {
+        "id": "chatcmpl-foundry",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "FW-Reasoner",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "391"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+    }
+)
+
+
+@pytest.fixture
+def foundry_reasoner(monkeypatch: pytest.MonkeyPatch) -> str:
+    model: Final = "FW-Reasoner"
+    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+    catalog: Final = {
+        **GetModelCostMap.load_local_model_cost_map(),
+        f"azure_ai/{model}": {
+            "litellm_provider": "azure_ai",
+            "mode": "chat",
+            "supports_reasoning": True,
+            "reasoning_effort_levels": ["low", "high", "max"],
+        },
+    }
+    assert isinstance(install_model_cost_map(json.dumps(catalog).encode()), ModelCostMapReloaded)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    return model
+
+
+@pytest.mark.parametrize(
+    ("model", "requested", "sent"),
+    [
+        pytest.param("FW-Reasoner", "high", "high", id="declared-level"),
+        pytest.param("FW-Reasoner", {"effort": "low", "summary": "detailed"}, "low", id="effort-with-summary"),
+        pytest.param("fw-reasoner", "high", "high", id="model-named-in-another-case"),
+    ],
+)
+@pytest.mark.usefixtures("foundry_reasoner")
+@pytest.mark.asyncio
+async def test_foundry_model_declaring_reasoning_efforts_sends_the_level_as_a_string(
+    respx_mock: respx.MockRouter, model: str, requested: object, sent: str
+) -> None:
+    route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
+        return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
+    )
+
+    await litellm.acompletion(
+        model=f"azure_ai/{model}",
+        api_key="azure-ai-test-key",
+        api_base="https://example-resource.services.ai.azure.com",
+        messages=[{"role": "user", "content": "What is 17*23?"}],
+        reasoning_effort=requested,
+    )
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == sent
+
+
+@pytest.mark.usefixtures("foundry_reasoner")
+@pytest.mark.asyncio
+async def test_a_renamed_foundry_deployment_sends_the_level_its_base_model_declares(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
+        return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
+    )
+
+    await litellm.acompletion(
+        model="azure_ai/reasoner-prod",
+        base_model="FW-Reasoner",
+        api_key="azure-ai-test-key",
+        api_base="https://example-resource.services.ai.azure.com",
+        messages=[{"role": "user", "content": "What is 17*23?"}],
+        reasoning_effort="high",
+    )
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "high"
+
+
+@pytest.mark.usefixtures("foundry_reasoner")
+@pytest.mark.asyncio
+async def test_a_renamed_foundry_deployment_refuses_a_level_its_base_model_does_not_take(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
+        return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        await litellm.acompletion(
+            model="azure_ai/reasoner-prod",
+            base_model="FW-Reasoner",
+            api_key="azure-ai-test-key",
+            api_base="https://example-resource.services.ai.azure.com",
+            messages=[{"role": "user", "content": "What is 17*23?"}],
+            reasoning_effort="bogus",
+        )
+    assert not route.called
+
+
+def test_a_foundry_reasoner_named_with_its_provider_prefix_advertises_reasoning_effort(foundry_reasoner: str) -> None:
+    assert "reasoning_effort" in AzureAIStudioConfig().get_supported_openai_params(f"azure_ai/{foundry_reasoner}")
+
+
+@pytest.mark.parametrize(
+    "request_options",
+    [
+        pytest.param(MappingProxyType({}), id="checked"),
+        pytest.param(MappingProxyType({"drop_params": True}), id="drop-params"),
+        pytest.param(MappingProxyType({"allowed_openai_params": ["reasoning_effort"]}), id="check-waived"),
+    ],
+)
+@pytest.mark.parametrize("requested", ["default", "auto"])
+@pytest.mark.usefixtures("foundry_reasoner")
+@pytest.mark.asyncio
+async def test_foundry_reasoning_effort_default_or_auto_leaves_the_level_to_the_model(
+    respx_mock: respx.MockRouter, request_options: Mapping[str, object], requested: str
+) -> None:
+    route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
+        return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
+    )
+
+    await litellm.acompletion(
+        model="azure_ai/FW-Reasoner",
+        api_key="azure-ai-test-key",
+        api_base="https://example-resource.services.ai.azure.com",
+        messages=[{"role": "user", "content": "What is 17*23?"}],
+        reasoning_effort=requested,
+        **request_options,
+    )
+
+    assert "reasoning_effort" not in json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.parametrize(
+    ("requested", "warns"),
+    [
+        pytest.param({"effort": "low"}, False, id="effort-only"),
+        pytest.param({"effort": "low", "summary": "detailed"}, True, id="effort-with-summary"),
+    ],
+)
+def test_foundry_reasoning_effort_object_sends_its_level_and_warns_about_the_rest(
+    foundry_reasoner: str, caplog: pytest.LogCaptureFixture, requested: object, warns: bool
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = AzureAIStudioConfig().map_openai_params(
+            non_default_params={"reasoning_effort": requested},
+            optional_params={},
+            model=foundry_reasoner,
+            drop_params=False,
+        )
+
+    assert optional_params == {"reasoning_effort": "low"}
+    warnings: Final = tuple(record.getMessage() for record in caplog.records if "Dropping" in record.getMessage())
+    assert any("summary" in message and "'effort'" not in message for message in warnings) is warns
+
+
+UNSENDABLE_FOUNDRY_EFFORT: Final = (
+    pytest.param("medium", id="level-the-row-does-not-list"),
+    pytest.param("none", id="none-the-row-does-not-list"),
+    pytest.param("High", id="level-in-another-case"),
+    pytest.param("ultra", id="unknown-level"),
+    pytest.param({"summary": "detailed"}, id="object-without-a-level"),
+)
+
+
+@pytest.mark.parametrize("requested", UNSENDABLE_FOUNDRY_EFFORT)
+def test_foundry_reasoning_effort_the_row_does_not_take_is_refused_without_drop_params(
+    foundry_reasoner: str, requested: object
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError):
+        AzureAIStudioConfig().map_openai_params(
+            non_default_params={"reasoning_effort": requested},
+            optional_params={},
+            model=foundry_reasoner,
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize("requested", UNSENDABLE_FOUNDRY_EFFORT)
+@pytest.mark.parametrize(
+    ("request_drop_params", "global_drop_params"),
+    (pytest.param(True, False, id="request-drop-params"), pytest.param(False, True, id="global-drop-params")),
+)
+def test_foundry_reasoning_effort_the_row_does_not_take_is_dropped_with_a_warning_under_drop_params(
+    foundry_reasoner: str,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    requested: object,
+    request_drop_params: bool,
+    global_drop_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        optional_params: Final = AzureAIStudioConfig().map_openai_params(
+            non_default_params={"reasoning_effort": requested, "temperature": 0.2},
+            optional_params={},
+            model=foundry_reasoner,
+            drop_params=request_drop_params,
+        )
+
+    assert optional_params == {"temperature": 0.2}
+    assert any(
+        "reasoning_effort" in record.getMessage() and "drop_params=True" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_thinking_reaches_a_foundry_reasoner_as_reasoning_effort(
+    respx_mock: respx.MockRouter, foundry_reasoner: str
+) -> None:
+    route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
+        return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
+    )
+    earlier_thinking: Final = "I will pick the code word ZEBRAFINCH-42 and look up the weather."
+
+    await litellm.anthropic.messages.acreate(
+        model=f"azure_ai/{foundry_reasoner}",
+        api_key="azure-ai-test-key",
+        api_base="https://example-resource.services.ai.azure.com",
+        max_tokens=1024,
+        thinking={"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET},
+        messages=[
+            {"role": "user", "content": "What is the weather in SF?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": earlier_thinking, "signature": "sig-abc"},
+                    {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "SF"}},
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "72F"}]},
+        ],
+        tools=[
+            {
+                "name": "get_weather",
+                "description": "Get weather",
+                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            }
+        ],
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["reasoning_effort"] == "high"
+    assert sent["messages"][1]["reasoning_content"] == earlier_thinking
+    assert not _find_key_anywhere(sent["messages"], "thinking_blocks")
+
+
+@pytest.mark.parametrize(
+    "registered_at_runtime",
+    [
+        pytest.param({}, id="no-row"),
+        pytest.param(
+            {
+                "azure_ai/FW-Undeclared": {
+                    "litellm_provider": "azure_ai",
+                    "mode": "chat",
+                    "reasoning_effort_levels": ["low", "high"],
+                }
+            },
+            id="levels-a-router-deployment-registered-on-the-shared-row",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_foundry_model_without_declared_reasoning_efforts_still_refuses_reasoning_effort(
+    respx_mock: respx.MockRouter, foundry_reasoner: str, registered_at_runtime: dict[str, dict[str, object]]
+) -> None:
+    litellm.register_model(registered_at_runtime, persist_across_reloads=False)
+    route: Final = respx_mock.post(FOUNDRY_MODELS_CHAT_URL).mock(
+        return_value=Response(200, json=dict(FOUNDRY_CHAT_COMPLETION))
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        await litellm.acompletion(
+            model="azure_ai/FW-Undeclared",
+            api_key="azure-ai-test-key",
+            api_base="https://example-resource.services.ai.azure.com",
+            messages=[{"role": "user", "content": "What is 17*23?"}],
+            reasoning_effort="high",
+        )
+
+    assert not route.called
+
+
+def test_azure_ai_grok_stop_parameter_handling():
+    """
+    Test that Grok models properly handle stop parameter filtering in Azure AI Studio.
+    """
+    config = AzureAIStudioConfig()
+
+    # Test Grok model detection
+    assert config._supports_stop_reason("grok-4-fast") is False
+    assert config._supports_stop_reason("grok-4.3") is False
+    assert config._supports_stop_reason("grok-4") is False
+    assert config._supports_stop_reason("grok-3-mini") is False
+    assert config._supports_stop_reason("grok-code-fast") is False
+    assert config._supports_stop_reason("gpt-4") is True
+
+    # Test supported parameters for Grok models
+    for model in ("grok-4-fast", "grok-4.3"):
+        grok_params = config.get_supported_openai_params(model)
+        assert (
+            "stop" not in grok_params
+        ), "Grok models should not support stop parameter"
+
+    # Test supported parameters for non-Grok models
+    gpt_params = config.get_supported_openai_params("gpt-4")
+    assert "stop" in gpt_params, "GPT models should support stop parameter"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_grok_bills_reasoning_tokens_reported_outside_completion_tokens(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-grok",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "grok-4.7",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 14,
+                    "completion_tokens": 10,
+                    "total_tokens": 336,
+                    "completion_tokens_details": {"reasoning_tokens": 312},
+                },
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/grok-4.7",
+        messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+    )
+    model_info: Final = litellm.get_model_info(model="grok-4.7", custom_llm_provider="azure_ai")
+    expected_cost: Final = 14 * model_info["input_cost_per_token"] + 322 * model_info["output_cost_per_token"]
+
+    assert route.call_count == 1
+    assert response.usage.completion_tokens == 322
+    assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost, rel=1e-9)
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("upstream_model", "usage", "expected_completion_tokens"),
+    [
+        pytest.param(
+            "grok-4.7",
+            {
+                "prompt_tokens": 14,
+                "completion_tokens": 10,
+                "total_tokens": 336,
+                "completion_tokens_details": {"reasoning_tokens": 312},
+            },
+            322,
+            id="grok-reports-reasoning-outside-completion",
+        ),
+        pytest.param(
+            "gpt-5.4-mini",
+            {
+                "prompt_tokens": 14,
+                "completion_tokens": 322,
+                "total_tokens": 336,
+                "completion_tokens_details": {"reasoning_tokens": 312},
+            },
+            322,
+            id="reasoning-already-inside-completion",
+        ),
+    ],
+)
+def test_azure_ai_counts_reasoning_tokens_once_whatever_the_deployment_is_named(
+    respx_mock: respx.MockRouter,
+    upstream_model: str,
+    usage: dict[str, object],
+    expected_completion_tokens: int,
+) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-x",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": upstream_model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
+                "usage": usage,
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/team-reasoner",
+        messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+    )
+
+    assert response.usage.completion_tokens == expected_completion_tokens
+    assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_grok_stream_folds_reasoning_tokens_into_the_usage_chunk(respx_mock: respx.MockRouter) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    stream_body: Final = (
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.7",'
+        '"choices":[{"index":0,"delta":{"role":"assistant","content":"42"},"finish_reason":null}]}\n\n'
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.7",'
+        '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.7",'
+        '"choices":[],"usage":{"prompt_tokens":14,"completion_tokens":10,"total_tokens":336,'
+        '"completion_tokens_details":{"reasoning_tokens":312}}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    chunks: Final = tuple(
+        litellm.completion(
+            model="azure_ai/grok-4.7",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            api_base="https://example-resource.services.ai.azure.com/models",
+            api_key="azure-ai-test-key",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    )
+    usage_chunks: Final = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+
+    assert route.call_count == 1
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].completion_tokens == 322
+    assert usage_chunks[0].total_tokens == usage_chunks[0].prompt_tokens + usage_chunks[0].completion_tokens
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("completion_tokens", "expected_completion_tokens"),
+    [
+        pytest.param(10, 322, id="reasoning-outside-completion"),
+        pytest.param(322, 322, id="reasoning-already-inside-completion"),
+    ],
+)
+def test_azure_ai_stream_counts_reasoning_tokens_once_whatever_the_chunks_call_the_model(
+    respx_mock: respx.MockRouter,
+    completion_tokens: int,
+    expected_completion_tokens: int,
+) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    chunk_base: Final = {
+        "id": "chatcmpl-x",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "team-reasoner",
+    }
+    chunks_sent: Final = (
+        {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "42"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 14,
+                "completion_tokens": completion_tokens,
+                "total_tokens": 336,
+                "completion_tokens_details": {"reasoning_tokens": 312},
+            },
+        },
+    )
+    stream_body: Final = "".join(f"data: {json.dumps({**chunk_base, **chunk})}\n\n" for chunk in chunks_sent)
+    respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(200, text=f"{stream_body}data: [DONE]\n\n", headers={"content-type": "text/event-stream"})
+    )
+
+    chunks: Final = tuple(
+        litellm.completion(
+            model="azure_ai/team-reasoner",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            api_base="https://example-resource.services.ai.azure.com/models",
+            api_key="azure-ai-test-key",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    )
+    usage_chunks: Final = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].completion_tokens == expected_completion_tokens
+    assert usage_chunks[0].total_tokens == usage_chunks[0].prompt_tokens + usage_chunks[0].completion_tokens
+
+
+def test_azure_model_router_response_shows_actual_model():
+    """
+    Test that Azure Model Router returns the actual model used in the response,
+    not the router model.
+
+    According to the documentation, when using Azure Model Router, the response
+    should show the actual model that handled the request (e.g., gpt-5-nano-2025-08-07)
+    rather than the router model (e.g., model-router).
+
+    Regression test for: Azure Model Router should show actual model in response
+    """
+    from httpx import Response
+
+    from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse
+
+    config = AzureModelRouterConfig()
+
+    # Mock raw response from Azure that includes the actual model used
+    raw_response_json = {
+        "id": "chatcmpl-test123",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gpt-5-nano-2025-08-07",  # Actual model used by the router
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+    }
+
+    # Create mock Response object
+    mock_response = MagicMock(spec=Response)
+    mock_response.json.return_value = raw_response_json
+    mock_response.text = json.dumps(raw_response_json)
+    mock_response.headers = {}
+
+    # Create ModelResponse object
+    model_response = ModelResponse()
+
+    # Create mock logging object with required methods
+    logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj.post_call = MagicMock()
+    logging_obj.model_call_details = {}
+
+    # Call transform_response with router model
+    result = config.transform_response(
+        model="model-router",  # This is the router model (without prefix)
+        raw_response=mock_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={"model": "azure_ai/model-router"},  # Original request model
+        encoding=None,
+        api_key="test-key",
+        json_mode=False,
+    )
+
+    # Verify that the response contains the actual model used, not the router model
+    assert result.model == "azure_ai/gpt-5-nano-2025-08-07", (
+        f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), "
+        f"but got '{result.model}'"
+    )
+
+
+def test_azure_model_router_stamps_selected_model_on_hidden_params():
+    """
+    The selected model must be stamped on _hidden_params, not left for downstream code to
+    re-derive by looking for "model-router" in the model string. Deployments whose alias
+    does not contain that text are invisible to the string check.
+    """
+    from httpx import Response
+
+    from litellm.llms.azure_ai.common_utils import (
+        AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
+        AzureFoundryModelInfo,
+    )
+    from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse
+
+    raw_response_json = {
+        "id": "chatcmpl-test456",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "grok-4-1-fast-reasoning",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "pong"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+    mock_response = MagicMock(spec=Response)
+    mock_response.json.return_value = raw_response_json
+    mock_response.text = json.dumps(raw_response_json)
+    mock_response.headers = {}
+
+    logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj.post_call = MagicMock()
+    logging_obj.model_call_details = {}
+
+    result = AzureModelRouterConfig().transform_response(
+        model="smart-pick",
+        raw_response=mock_response,
+        model_response=ModelResponse(),
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[{"role": "user", "content": "Reply with just pong"}],
+        optional_params={},
+        litellm_params={"model": "azure_ai/model_router/smart-pick"},
+        encoding=None,
+        api_key="test-key",
+        json_mode=False,
+    )
+
+    assert result._hidden_params[AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY] == result.model
+    assert (
+        result._hidden_params[AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY]
+        == "azure_ai/grok-4-1-fast-reasoning"
+    )
+    assert AzureFoundryModelInfo.get_model_router_selected_model(
+        result._hidden_params
+    ) == ("azure_ai/grok-4-1-fast-reasoning")
+    assert (
+        AzureFoundryModelInfo.is_model_router_call(
+            model="smart-pick", hidden_params=result._hidden_params
+        )
+        is True
+    )
+
+
+def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
+    """
+    Regression test: Azure AI returns 400 when tools contain copilot_mcp_server_name.
+    LiteLLM should strip the field and retry automatically.
+    """
+    import httpx
+
+    config = AzureAIStudioConfig()
+
+    error_text = json.dumps(
+        {
+            "error": {
+                "message": "2 request validation errors: Extra inputs are not permitted, field: 'tools[0].copilot_mcp_server_name', value: 'github-mcp-server'; Extra inputs are not permitted, field: 'tools[1].copilot_mcp_server_name', value: 'ide'"
+            }
+        }
+    )
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.text = error_text
+    mock_response.json.return_value = json.loads(error_text)
+    mock_response.status_code = 400
+    e = httpx.HTTPStatusError(
+        message="400", request=MagicMock(), response=mock_response
+    )
+
+    assert config._error_has_tool_level_extra_fields(error_text) is True
+    assert (
+        config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
+    )
+
+    request_data = {
+        "model": "FW-Kimi-K2.6",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "tools": [
+            {
+                "type": "function",
+                "copilot_mcp_server_name": "github-mcp-server",
+                "function": {
+                    "name": "github_search_code",
+                    "description": "Search code",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "copilot_mcp_server_name": "ide",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+    }
+
+    result = config.transform_request_on_unprocessable_entity_error(e, request_data)
+
+    for tool in result["tools"]:
+        assert "copilot_mcp_server_name" not in tool
+    assert result["tools"][0]["type"] == "function"
+    assert result["tools"][1]["function"]["name"] == "read_file"
+
+
+def test_extra_parameters_error_drops_reasoning_effort_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import httpx
+
+    error_text: Final = json.dumps(
+        {
+            "error": {
+                "message": "Extra parameters ['reasoning_effort'] are not allowed when extra-parameters is not set "
+                "or set to be 'error'. Set extra-parameters to 'pass-through' to pass to the model."
+            }
+        }
+    )
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.services.ai.azure.com/models/chat/completions"),
+        response=httpx.Response(422, text=error_text),
+    )
+    request_data: Final = {
+        "model": "Kimi-K2.6",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "reasoning_effort": "high",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = AzureAIStudioConfig().transform_request_on_unprocessable_entity_error(error, request_data)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert retried == {"model": "Kimi-K2.6", "messages": [{"role": "user", "content": "Say hi."}]}
+    assert len(drop_warnings) == 1
+    assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='high'", "Kimi-K2.6"))
+    assert "drop_params" not in drop_warnings[0]
+
+
+def test_extra_inputs_error_names_drop_params_in_the_reasoning_drop_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import httpx
+
+    detail: Final = [
+        {"type": "extra_forbidden", "loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"}
+    ]
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.services.ai.azure.com/models/chat/completions"),
+        response=httpx.Response(422, text=json.dumps({"error": {"message": json.dumps({"detail": detail})}})),
+    )
+    request_data: Final = {
+        "model": "Mistral-Large-3",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "reasoning_effort": "high",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = AzureAIStudioConfig().transform_request_on_unprocessable_entity_error(error, request_data)
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert retried == {"model": "Mistral-Large-3", "messages": [{"role": "user", "content": "Say hi."}]}
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0] for fragment in ("reasoning_effort='high'", "Mistral-Large-3", "(drop_params=True)")
+    )
+
+
+def _find_key_anywhere(obj, key: str) -> bool:
+    if isinstance(obj, dict):
+        if key in obj:
+            return True
+        return any(_find_key_anywhere(v, key) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_find_key_anywhere(item, key) for item in obj)
+    return False
+
+
+def test_azure_ai_strips_non_openai_spec_message_fields():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/33961.
+
+    Azure AI Foundry backends set additionalProperties=false, so any message
+    field outside the OpenAI chat-completions schema causes a 400 "Extra inputs
+    are not permitted". Anthropic-format clients (e.g. Claude Code) echo prior
+    assistant turns back as history carrying thinking_blocks, a nested thought
+    signature at tool_calls[].function.provider_specific_fields, and Anthropic
+    cache_control annotations. transform_request must strip all of these before
+    the request reaches the upstream.
+    """
+    config = AzureAIStudioConfig()
+
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "The user wants me to read a file.",
+                    "signature": "",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "reasoning_content": "The user wants me to read a file.",
+            "provider_specific_fields": {"thought_signature": "sig-top"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "sig-nested"},
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "go ahead"},
+    ]
+
+    request = config.transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    transformed_messages = request["messages"]
+
+    assert not _find_key_anywhere(transformed_messages, "thinking_blocks")
+    assert transformed_messages[1]["reasoning_content"] == "The user wants me to read a file."
+    assert not _find_key_anywhere(transformed_messages, "provider_specific_fields")
+    assert not _find_key_anywhere(transformed_messages, "cache_control")
+
+    assistant_message = transformed_messages[1]
+    assert assistant_message["content"] == "I can help."
+    assert assistant_message["tool_calls"][0]["function"]["name"] == "read_file"
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model", "replayed"),
+    [
+        pytest.param("FW-Kimi-K3", None, "I will pick the code word ZEBRAFINCH-42.", id="fireworks"),
+        pytest.param("fw-kimi-k3", None, "I will pick the code word ZEBRAFINCH-42.", id="fireworks-lowercase"),
+        pytest.param(
+            "k3-prod", "FW-Kimi-K3", "I will pick the code word ZEBRAFINCH-42.", id="fireworks-base-model"
+        ),
+        pytest.param("kimi-k2.6", None, "I will pick the code word ZEBRAFINCH-42.", id="moonshot-kimi"),
+        pytest.param("Kimi-K3.1-Pro", None, "I will pick the code word ZEBRAFINCH-42.", id="moonshot-kimi-mixed-case"),
+        pytest.param(
+            "k26-prod", "azure_ai/kimi-k2.6", "I will pick the code word ZEBRAFINCH-42.", id="moonshot-kimi-base-model"
+        ),
+        pytest.param("Mistral-Large-3", None, None, id="not-fireworks"),
+        pytest.param("my-kimi-k2.6", None, None, id="kimi-not-at-start"),
+        pytest.param("k3-prod", "Mistral-Large-3", None, id="not-fireworks-base-model"),
+    ],
+)
+def test_azure_ai_replays_reasoning_content_only_to_fireworks_and_kimi_models(
+    model: str, base_model: str | None, replayed: str | None
+) -> None:
+    request: Final = AzureAIStudioConfig().transform_request(
+        model=model,
+        messages=[
+            {"role": "user", "content": "Pick a code word, then check the weather."},
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "I will pick the code word ZEBRAFINCH-42.",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "72F"},
+        ],
+        optional_params={},
+        litellm_params={"base_model": base_model} if base_model else {},
+        headers={},
+    )
+
+    assert request["messages"][1].get("reasoning_content") == replayed
+
+
+def test_azure_ai_stripping_does_not_mutate_caller_messages():
+    """
+    The stripping must not touch the caller's messages. LiteLLM reuses the same
+    message objects when falling back to another provider, so stripping in place
+    would hand the fallback a conversation history with its thinking blocks and
+    provider metadata already destroyed.
+    """
+    config = AzureAIStudioConfig()
+
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Reading the file.", "signature": "sig"}
+            ],
+            "provider_specific_fields": {"thought_signature": "sig-top"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "sig-nested"},
+                    },
+                }
+            ],
+        },
+    ]
+
+    request = config.transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert not _find_key_anywhere(request["messages"], "thinking_blocks")
+
+    original_assistant = messages[1]
+    assert original_assistant["thinking_blocks"][0]["thinking"] == "Reading the file."
+    assert original_assistant["provider_specific_fields"] == {"thought_signature": "sig-top"}
+    assert original_assistant["tool_calls"][0]["function"]["provider_specific_fields"] == {
+        "thought_signature": "sig-nested"
+    }
+
+
+def test_azure_ai_keeps_prompt_cache_breakpoint_for_a_model_that_supports_it(_local_model_cost_map):
+    """
+    Foundry GPT-6 deployments take OpenAI explicit prompt caching, and the breakpoint only
+    counts on a content part, so a system message carrying one must reach the request body as
+    the content-part list it arrived in while the Anthropic-only fields are still stripped.
+    """
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "stable instructions",
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert request["messages"][1]["content"] == [{"type": "text", "text": "hi"}]
+    assert request["prompt_cache_options"] == {"mode": "explicit"}
+
+
+def test_azure_ai_still_flattens_list_content_for_a_model_without_the_breakpoint_flag(_local_model_cost_map):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "stable ", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                    {"type": "text", "text": "instructions"},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == "stable instructions"
+    assert request["messages"][1]["content"] == "hi"
+    assert not _find_key_anywhere(request["messages"], "prompt_cache_breakpoint")
+
+
+def test_azure_ai_drops_thinking_parts_from_history_while_keeping_the_breakpoint(_local_model_cost_map):
+    """
+    A multi-turn client can echo an assistant turn back with thinking parts inside its content
+    list. Foundry rejects those parts, and the string conversion always dropped them, so a model
+    that keeps content parts must still drop them while the text parts and the breakpoint stay.
+    """
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                ],
+            },
+            {"role": "user", "content": "read the file"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "The user wants me to read a file.", "signature": "sig"},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                    {"type": "text", "text": "Reading it now."},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "thanks"}]},
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert request["messages"][2]["content"] == [{"type": "text", "text": "Reading it now."}]
+    assert request["messages"][3]["content"] == [{"type": "text", "text": "thanks"}]
+    assert not _find_key_anywhere(request["messages"], "thinking")
+    assert not _find_key_anywhere(request["messages"], "data")
+
+
+
+def test_azure_ai_renames_a_cache_control_mark_to_a_breakpoint_for_a_model_that_reads_them(_local_model_cost_map):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "stable instructions", "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}},
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "stable instructions", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert request["messages"][1]["content"] == [
+        {"type": "text", "text": "hi", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert not _find_key_anywhere(request["messages"], "cache_control")
+
+
+def test_azure_ai_drops_a_file_part_next_to_the_breakpoint_like_the_string_conversion(_local_model_cost_map):
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "summarize", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {"type": "file", "file": {"file_id": "file-held-by-another-provider"}},
+            ],
+        }
+    ]
+
+    kept: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+    flattened: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-4o", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert kept["messages"][0]["content"] == [
+        {"type": "text", "text": "summarize", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert flattened["messages"][0]["content"] == "summarize"
+
+
+def test_azure_ai_sends_a_pdf_part_next_to_the_breakpoint_as_is(_local_model_cost_map):
+    content: Final = [
+        {"type": "file", "file": {"filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"}},
+        {"type": "text", "text": "What is the codeword?", "prompt_cache_breakpoint": {"mode": "explicit"}},
+    ]
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]
+
+
+def test_azure_ai_puts_a_message_level_mark_on_the_last_text_part_when_a_file_part_follows(_local_model_cost_map):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {
+                "role": "user",
+                "cache_control": {"type": "ephemeral"},
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "file", "file": {"file_id": "file-held-by-another-provider"}},
+                ],
+            }
+        ],
+        optional_params={"prompt_cache_options": {"mode": "explicit"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [
+        {"type": "text", "text": "summarize", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("registered", "keeps_parts"),
+    [
+        ({"azure_ai/qa-foundry-alias": {"litellm_provider": "azure_ai", "supports_prompt_cache_breakpoint": True}}, True),
+        ({"qa-foundry-alias": {"litellm_provider": "openai", "supports_prompt_cache_breakpoint": True}}, False),
+    ],
+    ids=["azure_ai-entry-opts-in", "openai-entry-does-not-speak-for-azure_ai"],
+)
+def test_azure_ai_keeps_parts_only_when_the_azure_ai_entry_reads_breakpoints(
+    _local_model_cost_map, registered: dict[str, dict[str, object]], keeps_parts: bool
+):
+    litellm.register_model(model_cost=registered, persist_across_reloads=False, add_to_provider_model_sets=False)
+    breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="qa-foundry-alias",
+        messages=[{"role": "system", "content": [breakpoint_part]}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "azure_ai", "drop_params": True},
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == ([breakpoint_part] if keeps_parts else "stable")
+
+
+@pytest.mark.parametrize(
+    "registration_order", [("opted-in", "opted-out", "unflagged"), ("unflagged", "opted-out", "opted-in")]
+)
+def test_azure_ai_deployment_reads_only_its_own_breakpoint_flag_not_a_siblings_sharing_its_model_string(
+    _local_model_cost_map, respx_mock: respx.MockRouter, registration_order: tuple[str, ...]
+) -> None:
+    breakpoint_flags: Final = MappingProxyType(
+        {
+            "opted-in": {"supports_prompt_cache_breakpoint": True},
+            "opted-out": {"supports_prompt_cache_breakpoint": False},
+        }
+    )
+    def deployment(host: str, model_info: dict[str, object]) -> dict[str, object]:
+        return {
+            "model_name": host,
+            "litellm_params": {
+                "model": "azure_ai/qa-shared-deployment",
+                "api_base": f"https://{host}.services.ai.azure.com/models",
+                "api_key": "azure-ai-test-key",
+            },
+            "model_info": model_info,
+        }
+
+    routes: Final = {
+        host: respx_mock.post(host=f"{host}.services.ai.azure.com", path="/models/chat/completions").mock(
+            return_value=Response(
+                200,
+                json={
+                    "id": "chatcmpl-azure-ai",
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": "qa-shared-deployment",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+                },
+            )
+        )
+        for host in registration_order
+    }
+    router: Final = Router(
+        model_list=[
+            deployment(host, {"id": f"{host}-id", **breakpoint_flags.get(host, {})}) for host in registration_order
+        ]
+    )
+    marked_system: Final = {
+        "role": "system",
+        "content": [{"type": "text", "text": "stable", "cache_control": {"type": "ephemeral"}}],
+    }
+
+    for host in registration_order:
+        router.completion(model=host, messages=[marked_system, {"role": "user", "content": "hi"}])
+
+    def sent_system_content(host: str) -> object:
+        return json.loads(routes[host].calls.last.request.content)["messages"][0]["content"]
+
+    assert sent_system_content("opted-in") == [
+        {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert sent_system_content("opted-out") == "stable"
+    assert sent_system_content("unflagged") == "stable"
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"base_model": "azure_ai/gpt-6-astra"},
+        {"base_model": "azure_ai/gpt-6-astra", "model_info": {"id": "my-astra-deployment-id"}},
+    ],
+)
+def test_azure_ai_keeps_parts_for_a_custom_deployment_name_whose_base_model_reads_breakpoints(
+    _local_model_cost_map, litellm_params: dict[str, object]
+):
+    breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="my-astra-deployment",
+        messages=[{"role": "system", "content": [breakpoint_part]}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [breakpoint_part]
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"base_model": "azure/cost-tracking-row"},
+        {"base_model": "azure/cost-tracking-row", "model_info": {"id": "astra-deployment-id"}},
+    ],
+)
+def test_azure_ai_falls_back_to_the_model_name_when_the_base_model_row_does_not_read_breakpoints(
+    _local_model_cost_map, litellm_params: dict[str, object]
+):
+    breakpoint_part: Final = {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[{"role": "system", "content": [breakpoint_part]}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [breakpoint_part]
+
+
+@pytest.mark.parametrize(
+    "sent_marker, litellm_params, wire_part",
+    [
+        (
+            {"mode": "explicit", "ttl": "30m"},
+            {"drop_params": True},
+            {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        ),
+        ({"type": "ephemeral"}, {"drop_params": True}, {"type": "text", "text": "stable"}),
+        ({"mode": "implicit"}, {"drop_params": True}, {"type": "text", "text": "stable"}),
+        (
+            {"mode": "explicit", "ttl": "1h"},
+            {"drop_params": True},
+            {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        ),
+        (
+            {"mode": "explicit", "ttl": "30m"},
+            {},
+            {"type": "text", "text": "stable", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+        ),
+    ],
+)
+def test_azure_ai_reshapes_breakpoints_for_foundry_only_under_drop_params(
+    _local_model_cost_map,
+    sent_marker: dict[str, object],
+    litellm_params: dict[str, object],
+    wire_part: dict[str, object],
+):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-6-astra",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "stable", "prompt_cache_breakpoint": sent_marker}]}
+        ],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert request["messages"][0]["content"] == [wire_part]
+
+
+def test_azure_ai_reference_only_tool_result_is_sent_as_empty_text():
+    messages: Final = [
+        {"role": "user", "content": "load the WebFetch tool"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "ToolSearch", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "tool_reference", "tool_name": "WebFetch"}],
+        },
+    ]
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][2] == {"role": "tool", "tool_call_id": "call_1", "content": ""}
+
+
+@pytest.mark.parametrize(
+    "api_base, expected_url",
+    [
+        (
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
+        ),
+        (
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+        ),
+        (
+            "https://litellm8397336933.services.ai.azure.com/models",
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+        ),
+        (
+            "https://litellm8397336933.services.ai.azure.com",
+            "https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+        ),
+    ],
+)
+def test_azure_ai_services_handler(api_base, expected_url):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    litellm.set_verbose = True
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = litellm.completion(
+                model="azure_ai/Llama-3.3-70B-Instruct",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                api_key="my-fake-api-key",
+                api_base=api_base,
+                client=client,
+            )
+
+            print(response)
+
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        assert mock_client.call_args.kwargs["headers"]["api-key"] == "my-fake-api-key"
+        assert mock_client.call_args.kwargs["url"] == expected_url
+
+
+def test_azure_ai_services_with_api_version():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = litellm.completion(
+                model="azure_ai/Llama-3.3-70B-Instruct",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                api_key="my-fake-api-key",
+                api_version="2024-05-01-preview",
+                api_base="https://litellm8397336933.services.ai.azure.com/models",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        assert mock_client.call_args.kwargs["headers"]["api-key"] == "my-fake-api-key"
+        assert (
+            mock_client.call_args.kwargs["url"]
+            == "https://litellm8397336933.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview"
+        )
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_with_image_url():
+    """
+    Important test:
+
+    Test that Azure AI studio can handle image_url passed when content is a list containing both text and image_url
+    """
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    litellm.set_verbose = True
+
+    client = AsyncHTTPHandler()
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            await litellm.acompletion(
+                model="azure_ai/Phi-3-5-vision-instruct-dcvov",
+                api_base="https://Phi-3-5-vision-instruct-dcvov.eastus2.models.ai.azure.com",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "What is in this image?",
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+                                },
+                            },
+                        ],
+                    },
+                ],
+                api_key="fake-api-key",
+                client=client,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            print(f"Error: {e}")
+
+        # Verify the request was made
+        mock_client.assert_called_once()
+
+        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
+        # Check the request body
+        request_body = json.loads(mock_client.call_args.kwargs["data"])
+        assert request_body["model"] == "Phi-3-5-vision-instruct-dcvov"
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+                        },
+                    },
+                ],
+            }
+        ]
+
+
+def test_azure_deepseek_reasoning_content():
+    import json
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = MagicMock()
+
+        mock_response.text = json.dumps(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "message": {
+                            "content": "<think>I am thinking here</think>\n\nThe sky is a canvas of blue",
+                            "role": "assistant",
+                        },
+                    }
+                ],
+            }
+        )
+
+        mock_response.status_code = 200
+        # Add required response attributes
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.completion(
+            model="azure_ai/deepseek-r1",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            api_base="https://litellm8397336933.services.ai.azure.com/models/chat/completions",
+            api_key="my-fake-api-key",
+            client=client,
+        )
+
+        print(response)
+        assert response.choices[0].message.reasoning_content == "I am thinking here"
+        assert response.choices[0].message.content == "\n\nThe sky is a canvas of blue"
+
+
+@pytest.mark.parametrize(
+    "model_group_header, expected_model",
+    [
+        ("offer-cohere-embed-multili-paygo", "Cohere-embed-v3-multilingual"),
+        ("offer-cohere-embed-english-paygo", "Cohere-embed-v3-english"),
+    ],
+)
+def test_map_azure_model_group(model_group_header, expected_model):
+    from litellm.llms.azure_ai.embed.cohere_transformation import AzureAICohereConfig
+
+    config = AzureAICohereConfig()
+    assert config._map_azure_model_group(model_group_header) == expected_model
+
+
+def test_azure_ai_sends_file_parts_instead_of_flattening_them_to_text() -> None:
+    file_part: Final = {
+        "type": "file",
+        "file": {"filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+    }
+    content: Final = [file_part, {"type": "text", "text": "What is the codeword?"}]
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Kimi-K2.6",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]
+
+
+def test_azure_ai_passes_dict_message_content_through_for_the_provider_to_judge() -> None:
+    content: Final = {"type": "text", "text": "Say hi"}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-5.6-sol",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        {"filename": "notes.txt", "file_data": "data:text/plain;base64,aGVsbG8="},
+        {"file_id": "file-abc"},
+    ],
+    ids=["text_data_url", "file_id_only"],
+)
+def test_azure_ai_flattens_a_non_pdf_file_part_to_its_text_as_before(file: dict[str, str]) -> None:
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Llama-3.3-70B-Instruct",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": file}]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "summarize"}]
+
+
+def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_that_rejects_it(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+) -> None:
+    declare_mid_conversation_system("azure_ai/system-first-model", False)
+    messages: Final = AzureAIStudioConfig().translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        model="system-first-model",
+        custom_llm_provider="azure_ai",
+        api_base="https://example.services.ai.azure.com/models",
+        model_info=None,
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
+    assert messages[0]["content"] == "You are terse.\n\nAnswer with exactly one word."
+
+
+@pytest.mark.parametrize("base_model", ["azure_ai/gpt-chat-latest", "gpt-chat-latest"])
+def test_a_custom_named_foundry_deployment_takes_its_base_models_request_shape(
+    local_model_cost_map: None, base_model: str
+) -> None:
+    params: Final = litellm.get_optional_params(
+        model="prod-chat",
+        custom_llm_provider="azure_ai",
+        base_model=base_model,
+        max_tokens=50,
+        reasoning_effort="high",
+        drop_params=True,
+    )
+    assert params["max_completion_tokens"] == 50
+    assert "max_tokens" not in params
+    assert "reasoning_effort" not in params
+
+
+_GET_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+_FOUNDRY_REQUEST_PARAMS: Final = (
+    MappingProxyType({"stop": ["END"]}),
+    MappingProxyType({"presence_penalty": 0.5}),
+    MappingProxyType({"top_p": 0.5}),
+    MappingProxyType({"temperature": 0.2}),
+    MappingProxyType({"user": "u-1"}),
+    MappingProxyType({"tools": [_GET_WEATHER_TOOL], "tool_choice": "auto"}),
+    MappingProxyType({"max_tokens": 50, "reasoning_effort": "high"}),
+)
+
+
+def _foundry_outcome(
+    model: str, base_model: str | None, request_params: MappingProxyType[str, object], drop_params: bool
+) -> dict[str, object] | str:
+    try:
+        return litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="azure_ai",
+            base_model=base_model,
+            drop_params=drop_params,
+            **request_params,
+        )
+    except litellm.UnsupportedParamsError as refusal:
+        return refusal.message
+
+
+def _foundry_optional_params(
+    model: str, base_model: str | None, request_params: MappingProxyType[str, object], drop_params: bool
+) -> dict[str, object] | None:
+    outcome: Final = _foundry_outcome(model, base_model, request_params, drop_params)
+    return outcome if isinstance(outcome, dict) else None
+
+
+@pytest.mark.parametrize(
+    "base_model", ["azure_ai/gpt-5.5", "gpt-5.5", "openai/gpt-5.5", "azure/gpt-5.5", "azure_ai/gpt-chat-latest"]
+)
+@pytest.mark.parametrize("request_params", _FOUNDRY_REQUEST_PARAMS)
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_custom_named_foundry_deployment_answers_like_the_deployment_its_base_model_names(
+    local_model_cost_map: None, base_model: str, request_params: MappingProxyType[str, object], drop_params: bool
+) -> None:
+    assert _foundry_optional_params("prod-deployment", base_model, request_params, drop_params) == (
+        _foundry_optional_params(base_model.rsplit("/", 1)[-1], None, request_params, drop_params)
+    )
+
+
+@pytest.mark.parametrize("deployment", ["gpt-5.6-qa-name", "prod-gpt-chat-latest"])
+@pytest.mark.parametrize("base_model", ["azure_ai/gpt-5.5", "azure_ai/gpt-chat-latest"])
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_foundry_deployment_named_after_a_gpt_5_model_takes_reasoning_effort_by_its_own_name(
+    local_model_cost_map: None, deployment: str, base_model: str, drop_params: bool
+) -> None:
+    request_params: Final = MappingProxyType({"max_tokens": 50, "reasoning_effort": "high"})
+
+    assert _foundry_outcome(deployment, base_model, request_params, drop_params) == (
+        _foundry_outcome(deployment, None, request_params, drop_params)
+    )
+
+
+_KNOWN_NAME_WITH_GPT_5_BASE_MODEL: Final = (
+    ("gpt-5.5", "openai/gpt-5.5"),
+    ("gpt-5.5", "azure/gpt-5.5"),
+    ("model-router", "azure_ai/gpt-5.5"),
+    ("Phi-4", "gpt-5.5"),
+)
+
+
+@pytest.mark.parametrize(("model", "base_model"), _KNOWN_NAME_WITH_GPT_5_BASE_MODEL)
+@pytest.mark.parametrize("request_params", _FOUNDRY_REQUEST_PARAMS)
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_gpt_5_base_model_keeps_what_a_known_foundry_deployment_name_accepts(
+    local_model_cost_map: None,
+    model: str,
+    base_model: str,
+    request_params: MappingProxyType[str, object],
+    drop_params: bool,
+) -> None:
+    by_name: Final = _foundry_optional_params(model, None, request_params, drop_params)
+    with_base_model: Final = _foundry_optional_params(model, base_model, request_params, drop_params) or {}
+    assert by_name is None or by_name.items() <= with_base_model.items()
+
+
+@pytest.mark.parametrize(("model", "base_model"), _KNOWN_NAME_WITH_GPT_5_BASE_MODEL)
+def test_a_gpt_5_base_model_keeps_the_params_a_known_foundry_deployment_name_lists(
+    local_model_cost_map: None, model: str, base_model: str
+) -> None:
+    by_name: Final = litellm.get_supported_openai_params(model=model, custom_llm_provider="azure_ai")
+    with_base_model: Final = litellm.get_supported_openai_params(
+        model=model, custom_llm_provider="azure_ai", base_model=base_model
+    )
+    assert by_name is not None and with_base_model is not None
+    assert set(by_name) <= set(with_base_model)
+
+
+_GET_TIME_TOOL: Final = {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}
+
+
+@pytest.mark.parametrize(
+    ("tool_params", "expected_tool_choice"),
+    [
+        ({"tool_choice": "none"}, None),
+        ({"tools": [], "tool_choice": "auto"}, None),
+        ({"tools": [_GET_TIME_TOOL], "tool_choice": "none"}, "none"),
+        ({"functions": [_GET_TIME_TOOL["function"]], "tool_choice": "auto"}, "auto"),
+    ],
+)
+def test_azure_ai_sends_tool_choice_only_with_tools(
+    _local_model_cost_map, tool_params: Mapping[str, object], expected_tool_choice: str | None
+):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="grok-4.7",
+        messages=[{"role": "user", "content": "What time is it?"}],
+        optional_params=dict(tool_params),
+        litellm_params={},
+        headers={},
+    )
+
+    assert request.get("tool_choice") == expected_tool_choice

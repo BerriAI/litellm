@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from typing import Protocol
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from typing import Protocol, TypeAlias, runtime_checkable
 
 from litellm.types.guardrails import PresidioPerRequestConfig
 
+ResponsesWsQuotaRefund: TypeAlias = Callable[[], Awaitable[None]]
 
+
+@runtime_checkable
 class ResponsesClientWebSocket(Protocol):
     """Client-facing websocket surface used by the Responses API websocket handlers."""
 
@@ -39,3 +44,14 @@ class PresidioGuardrailCallback(Protocol):
         presidio_config: PresidioPerRequestConfig | None,
         request_data: dict[str, object],
     ) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ResponsesWebSocketRequestDefaults:
+    """Deployment-level request parameters merged into every ``response.create`` frame relayed over a native websocket."""
+
+    fill_missing: Mapping[str, object]
+    overrides: Mapping[str, object]
+
+    def merged_into(self, request: Mapping[str, object]) -> dict[str, object]:
+        return {**self.fill_missing, **request, **self.overrides}

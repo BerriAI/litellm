@@ -26,16 +26,27 @@ sees three rows for this (feature, provider).
 from __future__ import annotations
 
 import pytest
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 ANTHROPIC_MODELS = [
-    "claude-haiku-4-5",
-    "claude-sonnet-4-5",
-    "claude-opus-4-7",
+    "claude-haiku-5-5",
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    "claude-fable-5-2",
 ]
 
 
 @pytest.mark.covers("llm.messages.anthropic.basic.stream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.ANTHROPIC,),
+        models=tuple(ANTHROPIC_MODELS),
+        mode=Mode.STREAM,
+    )
+)
 def test_basic_messaging_streaming_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     non-empty streamed reply (one row per Claude tier).

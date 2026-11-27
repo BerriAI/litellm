@@ -30,7 +30,14 @@ class HyperbolicChatConfig(OpenAILikeChatConfig):
         dynamic_api_key: Final = api_key or get_secret_str("HYPERBOLIC_API_KEY")
         return api_base, dynamic_api_key
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Hyperbolic supports standard OpenAI parameters
         Reference: https://docs.hyperbolic.xyz/docs/rest-api

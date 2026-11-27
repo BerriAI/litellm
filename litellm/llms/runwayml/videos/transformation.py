@@ -1,22 +1,23 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
 import httpx
-from httpx._types import RequestFiles
+from httpx._types import FileContent, RequestFiles
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import RUNWAYML_DEFAULT_API_VERSION
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -119,9 +120,9 @@ class RunwayMLVideoConfig(BaseVideoConfig):
 
     @staticmethod
     def _parse_task_response(raw_response: httpx.Response) -> _RunwayTaskResponse:
-        return raw_response.json()
+        return _parse_runway_task_response(raw_response)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the list of supported OpenAI parameters for video generation.
         Maps OpenAI params to RunwayML equivalents:
@@ -155,12 +156,23 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         - size -> ratio (convert "WIDTHxHEIGHT" to "WIDTH:HEIGHT")
         - seconds -> duration (convert to integer)
         """
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "runwayml",
+            drop_params,
+            frozenset({"seed", "duration", "aspect_ratio", "generate_audio"}),
+        )
         supported_openai_params: Final = self.get_supported_openai_params(model)
         return {
             **self._prompt_image_param(video_create_optional_params),
             **self._ratio_param(video_create_optional_params),
             **self._duration_param(video_create_optional_params),
-            **{key: value for key, value in video_create_optional_params.items() if key not in supported_openai_params},
+            **{
+                key: value
+                for key, value in video_create_optional_params.items()
+                if key not in supported_openai_params and key not in unsupported
+            },
         }
 
     @staticmethod
@@ -194,11 +206,11 @@ class RunwayMLVideoConfig(BaseVideoConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up authentication headers.
         RunwayML uses Bearer token authentication via RUNWAYML_API_SECRET.
@@ -229,7 +241,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the base URL for RunwayML API.
@@ -247,8 +259,8 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         api_base: str,
         video_create_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles, str]:
+        headers: Mapping[str, object],
+    ) -> tuple[dict[str, object], RequestFiles, str]:
         """
         Transform the video creation request for RunwayML API.
 
@@ -274,7 +286,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
 
         files_list: Final[RequestFiles] = []
 
-        return request_data, files_list, f"{api_base}/{endpoint}"
+        return request_data, files_list, join_api_base(api_base, endpoint)
 
     def _select_generation_endpoint(self, request_data: Mapping[str, object]) -> str:
         if request_data.get("promptVideo") is not None or request_data.get("videoUri") is not None:
@@ -289,7 +301,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
     ) -> VideoObject:
         """
         Transform the RunwayML video creation response.
@@ -399,9 +411,9 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         variant: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the video content request for RunwayML API.
 
@@ -413,7 +425,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Get task status to retrieve video URL
-        url: Final = f"{api_base}/tasks/{encoded_video_id}"
+        url: Final = join_api_base(api_base, f"tasks/{encoded_video_id}")
 
         return url, dict[str, str]()
 
@@ -445,6 +457,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
         """
         Transform the RunwayML video content download response (synchronous).
@@ -464,7 +477,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         video_url: Final = self._extract_video_url_from_response(response_data)
 
         # Download the video from the CloudFront URL synchronously
-        httpx_client: Final[HTTPHandler] = _get_httpx_client()
+        httpx_client: Final[HTTPHandler] = get_httpx_client()
         video_response: Final = httpx_client.get(video_url)
         video_response.raise_for_status()
 
@@ -474,6 +487,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "AsyncHTTPHandler | None" = None,
     ) -> bytes:
         """
         Transform the RunwayML video content download response (asynchronous).
@@ -507,9 +521,9 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         prompt: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> NoReturn:
         """
         Transform the video remix request for RunwayML API.
 
@@ -531,12 +545,12 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
         extra_query: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> NoReturn:
         """
         Transform the video list request for RunwayML API.
 
@@ -558,8 +572,8 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the video delete request for RunwayML API.
 
@@ -569,7 +583,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the URL for task cancellation
-        url: Final = f"{api_base}/tasks/{encoded_video_id}/cancel"
+        url: Final = join_api_base(api_base, f"tasks/{encoded_video_id}/cancel")
 
         return url, dict[str, str]()
 
@@ -595,8 +609,8 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the RunwayML video status retrieve request.
 
@@ -606,7 +620,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the full URL for task status retrieval
-        url: Final = f"{api_base}/tasks/{encoded_video_id}"
+        url: Final = join_api_base(api_base, f"tasks/{encoded_video_id}")
 
         # Empty dict for GET request (no body)
         return url, dict[str, str]()
@@ -616,6 +630,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: HTTPHandler | None = None,
     ) -> VideoObject:
         """
         Transform the RunwayML video status retrieve response.
@@ -656,56 +671,80 @@ class RunwayMLVideoConfig(BaseVideoConfig):
 
         return video_obj
 
-    def transform_video_create_character_request(self, name, video: object, api_base, litellm_params, headers):
+    def transform_video_create_character_request(
+        self,
+        name: str,
+        video: object,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, object],
+    ) -> NoReturn:
         raise NotImplementedError("video create character is not supported for RunwayML")
 
-    def transform_video_create_character_response(self, raw_response, logging_obj):
+    def transform_video_create_character_response(
+        self, raw_response: httpx.Response, logging_obj: LiteLLMLoggingObj
+    ) -> NoReturn:
         raise NotImplementedError("video create character is not supported for RunwayML")
 
-    def transform_video_get_character_request(self, character_id, api_base, litellm_params, headers):
+    def transform_video_get_character_request(
+        self,
+        character_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, object],
+    ) -> NoReturn:
         raise NotImplementedError("video get character is not supported for RunwayML")
 
-    def transform_video_get_character_response(self, raw_response, logging_obj):
+    def transform_video_get_character_response(
+        self, raw_response: httpx.Response, logging_obj: LiteLLMLoggingObj
+    ) -> NoReturn:
         raise NotImplementedError("video get character is not supported for RunwayML")
 
     def transform_video_edit_request(
         self,
-        prompt,
-        video_id,
-        api_base,
-        litellm_params,
-        headers,
-        video_file=None,
-        extra_body=None,
-        prefetched_source_data=None,
-    ):
+        prompt: str,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, object],
+        video_file: FileContent | None = None,
+        extra_body: Mapping[str, object] | None = None,
+        prefetched_source_data: Mapping[str, object] | None = None,
+    ) -> NoReturn:
         raise NotImplementedError("video edit is not supported for RunwayML")
 
     def transform_video_edit_response(
         self,
-        raw_response,
-        logging_obj,
-        custom_llm_provider=None,
-        request_data=None,
-    ):
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        request_data: Mapping[str, object] | None = None,
+    ) -> NoReturn:
         raise NotImplementedError("video edit is not supported for RunwayML")
 
     def transform_video_extension_request(
         self,
-        prompt,
-        video_id,
-        seconds,
-        api_base,
-        litellm_params,
-        headers,
-        extra_body=None,
-    ):
+        prompt: str,
+        video_id: str,
+        seconds: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, object],
+        extra_body: Mapping[str, object] | None = None,
+    ) -> NoReturn:
         raise NotImplementedError("video extension is not supported for RunwayML")
 
-    def transform_video_extension_response(self, raw_response, logging_obj, custom_llm_provider=None):
+    def transform_video_extension_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+    ) -> NoReturn:
         raise NotImplementedError("video extension is not supported for RunwayML")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return RunwayMLError(
             status_code=status_code,
             message=error_message,

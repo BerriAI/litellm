@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from itertools import accumulate, groupby
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 CUE_MAX_CHARS: Final = 84
 CUE_MAX_DURATION_MS: Final = 7000
@@ -230,7 +232,7 @@ def render_subtitle_tokens_as_vtt(tokens: Sequence[SubtitleToken]) -> str:
     return _render_vtt(group_subtitle_tokens_into_cues(tokens))
 
 
-class TranscriptionWordTiming(BaseModel):
+class TranscriptionWordTiming(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     word: str = ""

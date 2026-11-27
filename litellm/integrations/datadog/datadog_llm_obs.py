@@ -12,9 +12,10 @@ import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -32,6 +33,10 @@ from litellm.integrations.datadog.datadog_mock_client import (
     should_use_datadog_mock,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.llm_cost_calc.cache_tokens import (
+    extract_cache_creation_tokens,
+    extract_cache_read_tokens,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     handle_any_messages_to_chat_completion_str_messages_conversion,
@@ -39,24 +44,27 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
 from litellm.types.integrations.datadog_llm_obs import *
 from litellm.types.utils import (
     AUDIT_GUARDRAIL_FIELDS,
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CallTypes,
+    StandardLoggingMetadata,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
 
-_EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_MESSAGE: Final[Message] = {"role": "", "content": ""}
 _MAX_PARSED_TOOL_ARGUMENT_CHARS: Final = 256 * 1024
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_RESPONSE: Final = TypeAdapter(object)
 _SAFE_REDACTED_MESSAGE_ROLES: Final = frozenset(
     {"agent", "assistant", "developer", "function", "model", "system", "tool", "user"}
 )
@@ -87,8 +95,12 @@ _ROUTER_DIMENSIONS: Final[tuple[str, ...]] = ("router_tier", "router_cause", "ro
 _COST_DIMENSIONS: Final[tuple[str, ...]] = ("team", "user", "key_alias", "model_group", *_ROUTER_DIMENSIONS)
 
 
-def _metadata_of(standard_logging_payload: StandardLoggingPayload) -> Mapping[str, Any]:
-    metadata: Final = standard_logging_payload.get("metadata")
+def _logging_metadata_of(standard_logging_payload: StandardLoggingPayload) -> StandardLoggingMetadata | None:
+    return standard_logging_payload.get("metadata")
+
+
+def _metadata_of(standard_logging_payload: StandardLoggingPayload) -> Mapping[str, object]:
+    metadata: Final = _logging_metadata_of(standard_logging_payload)
     return metadata or _EMPTY_MAPPING
 
 
@@ -131,7 +143,7 @@ def _guardrail_entry_without_prompt_carriers(entry: Mapping[str, object]) -> Map
     Built as an allow-list rather than a deny-list: a key neither set classifies is dropped, so a
     guardrail that records its own extra detail cannot put the caller's prompt on a redacted span.
     """
-    return {  # mutable-ok: a fresh record built per entry, handed straight to the span serializer
+    return {
         field: REDACTED_BY_LITELM_STRING if field in PROMPT_CARRYING_GUARDRAIL_FIELDS else value
         for field, value in entry.items()
         if field in _CLASSIFIED_GUARDRAIL_FIELDS
@@ -154,7 +166,7 @@ def _guardrail_information_without_prompt_carriers(
     return tuple(_guardrail_entry_without_prompt_carriers(entry) for entry in _guardrail_entries(guardrail_information))
 
 
-def _metadata_without_prompt_carriers(standard_logging_metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+def _metadata_without_prompt_carriers(standard_logging_metadata: Mapping[str, object]) -> Mapping[str, object]:
     """The metadata minus the records that quote prompts, tool arguments, tool results, or retrieved text."""
     return MappingProxyType(
         {
@@ -237,7 +249,7 @@ def _declared_cost_tags(span_tags: Sequence[str]) -> tuple[str, ...]:
     return tuple(dimension for dimension in _COST_DIMENSIONS if dimension in present)
 
 
-def _reasoning_output_tokens(usage_object: Mapping[str, Any] | None) -> float:
+def _reasoning_output_tokens(usage_object: Mapping[str, object] | None) -> float:
     """The provider's reasoning-token count, from either the chat or the responses spelling."""
     if usage_object is None:
         return 0.0
@@ -254,20 +266,24 @@ def _reasoning_output_tokens(usage_object: Mapping[str, Any] | None) -> float:
     )
 
 
-def _mapping_field(source: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+def _mapping_field(source: Mapping[str, object], key: str) -> Mapping[str, object]:
     """The value at `key` when it is a mapping, else an empty one."""
     value: Final = source.get(key)
     return value if isinstance(value, dict) else _EMPTY_MAPPING
 
 
-def _content_blocks(message: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+def _text_field(source: Mapping[str, object], key: str, default: str = "") -> str:
+    return _safe_identifier(source.get(key, default))
+
+
+def _content_blocks(message: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     content: Final = message.get("content")
     if not isinstance(content, list):
         return ()
     return tuple(block for block in content if isinstance(block, dict))
 
 
-def _to_dd_arguments(raw_arguments: object) -> dict[str, Any] | str:
+def _to_dd_arguments(raw_arguments: object) -> dict[str, object] | str:
     """
     Arguments as the object LLM Obs types them as, or the raw string when they are not one.
 
@@ -278,11 +294,13 @@ def _to_dd_arguments(raw_arguments: object) -> dict[str, Any] | str:
         return raw_arguments if isinstance(raw_arguments, dict) else str(raw_arguments)
     if len(raw_arguments) > _MAX_PARSED_TOOL_ARGUMENT_CHARS:
         return raw_arguments
-    parsed: Final = safe_json_loads(raw_arguments)
-    return parsed if isinstance(parsed, dict) else raw_arguments
+    try:
+        return _JSON_OBJECT.validate_python(safe_json_loads(raw_arguments))
+    except ValidationError:
+        return raw_arguments
 
 
-def _to_dd_tool_calls(message: Mapping[str, Any]) -> tuple[ToolCall, ...]:
+def _to_dd_tool_calls(message: Mapping[str, object]) -> tuple[ToolCall, ...]:
     """
     The tool calls a message carries, in LLM Obs' ToolCall schema, from either dialect.
 
@@ -293,20 +311,23 @@ def _to_dd_tool_calls(message: Mapping[str, Any]) -> tuple[ToolCall, ...]:
     raw_tool_calls: Final = message.get("tool_calls")
     openai_calls: Final = tuple(
         ToolCall(
-            name=function.get("name", ""),
+            name=_text_field(function, "name"),
             arguments=_to_dd_arguments(function.get("arguments", "")),
-            tool_id=tool_call.get("id", ""),
-            type=tool_call.get("type", "function"),
+            tool_id=_text_field(tool_call, "id"),
+            type=_text_field(tool_call, "type", "function"),
         )
-        for tool_call in (raw_tool_calls if isinstance(raw_tool_calls, list) else ())
+        for tool_call in (
+            *anthropic_server_tool_call_params(message),
+            *(raw_tool_calls if isinstance(raw_tool_calls, list) else ()),
+        )
         if isinstance(tool_call, dict)
         for function in [_mapping_field(tool_call, "function")]
     )
     anthropic_calls: Final = tuple(
         ToolCall(
-            name=block.get("name", ""),
+            name=_text_field(block, "name"),
             arguments=_to_dd_arguments(block.get("input") or {}),
-            tool_id=block.get("id", ""),
+            tool_id=_text_field(block, "id"),
             type="tool_use",
         )
         for block in _content_blocks(message)
@@ -315,7 +336,7 @@ def _to_dd_tool_calls(message: Mapping[str, Any]) -> tuple[ToolCall, ...]:
     return openai_calls + anthropic_calls
 
 
-def _to_dd_tool_results(message: Mapping[str, Any], tool_call_names: Mapping[str, str]) -> tuple[ToolResult, ...]:
+def _to_dd_tool_results(message: Mapping[str, object], tool_call_names: Mapping[str, str]) -> tuple[ToolResult, ...]:
     """
     The tool results a message carries, linked back to the call each answers.
 
@@ -400,14 +421,14 @@ def _to_dd_messages(messages: object) -> tuple[Message, ...]:
     return tuple(_to_dd_message(message, tool_call_names) for message in messages)
 
 
-def _to_dd_tool_definition(entry: Mapping[str, Any]) -> ToolDefinition | None:
+def _to_dd_tool_definition(entry: Mapping[str, object]) -> ToolDefinition | None:
     function: Final = entry.get("function")
-    declared: Final[Mapping[str, Any]] = function if isinstance(function, dict) else entry
-    name: Final = declared.get("name")
+    declared: Final[Mapping[str, object]] = function if isinstance(function, dict) else entry
+    name: Final = _text_field(declared, "name")
     if not name:
         return None
     schema: Final = declared.get("parameters") or declared.get("input_schema")
-    description: Final = declared.get("description", "")
+    description: Final = _text_field(declared, "description")
     if not isinstance(schema, dict):
         return ToolDefinition(name=name, description=description)
     return ToolDefinition(name=name, description=description, schema=schema)
@@ -507,13 +528,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         self.intake_url = f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
 
-    def _get_datadog_llm_obs_params(self) -> dict:
+    def _get_datadog_llm_obs_params(self) -> Mapping[str, object]:
         """
         Get the datadog_llm_observability_params from litellm.datadog_llm_observability_params
 
         These are params specific to initializing the DataDogLLMObsLogger e.g. turn_off_message_logging
         """
-        dict_datadog_llm_obs_params: dict = {}
+        dict_datadog_llm_obs_params: dict[str, object] = {}
         if litellm.datadog_llm_observability_params is not None:
             if isinstance(litellm.datadog_llm_observability_params, DatadogLLMObsInitParams):
                 dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump(exclude_unset=True)
@@ -524,7 +545,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 ).model_dump(exclude_unset=True)
         return dict_datadog_llm_obs_params
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ):
         try:
             verbose_logger.debug("DataDogLLMObs: Logging success event for model %s", kwargs.get("model", "unknown"))
             payload: Final = self.create_llm_obs_payload(kwargs, start_time, end_time)
@@ -536,7 +559,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("DataDogLLMObs: Error logging success event - %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ):
         try:
             verbose_logger.debug("DataDogLLMObs: Logging failure event for model %s", kwargs.get("model", "unknown"))
             payload: Final = self.create_llm_obs_payload(kwargs, start_time, end_time)
@@ -564,7 +589,8 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     type="span",
                     attributes=DDSpanAttributes(
                         ml_app=get_datadog_service(),
-                        tags=get_datadog_tags(),
+                        # Datadog copies batch tags onto every span, and each span already carries DD_TAGS
+                        tags=get_datadog_tags(include_dd_tags=False),
                         spans=self.log_queue,
                     ),
                 ),
@@ -635,10 +661,10 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         )
         span_kind: Final = self._get_datadog_span_kind(standard_logging_payload.get("call_type"), metadata_parent_id)
         router_fields: Final = _router_span_fields(standard_logging_payload, redact_prompt_text=redact_payload)
-        span_tags: Final = [
-            *get_datadog_tags(standard_logging_object=standard_logging_payload),
-            *_cost_dimension_tags(standard_logging_payload, router_fields),
-        ]
+        span_tags: Final = get_datadog_tags(
+            standard_logging_object=standard_logging_payload,
+            extra_tags=_cost_dimension_tags(standard_logging_payload, router_fields),
+        )
         payload_metadata: Final = self._get_dd_llm_obs_payload_metadata(
             standard_logging_payload,
             router_fields=router_fields,
@@ -683,7 +709,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             if callable(current_span_fn):
                 current_span: Final = current_span_fn()
                 if current_span is not None:
-                    trace_id: Final = getattr(current_span, "trace_id", None)
+                    trace_id: Final[object] = getattr(current_span, "trace_id", None)
                     if trace_id is not None:
                         return str(trace_id)
         except Exception:
@@ -716,7 +742,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
     def redacts_messages_itself(self) -> bool:
         return True
 
-    def _payload_logging_is_off(self, kwargs: Mapping[str, Any]) -> bool:
+    def _payload_logging_is_off(self, kwargs: Mapping[str, object]) -> bool:
         return (
             bool(self.turn_off_message_logging)
             or self.message_logging is not True
@@ -804,11 +830,11 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             try:
                 import ast
 
-                response_obj = ast.literal_eval(response_obj)
+                response_obj = _DECODED_RESPONSE.validate_python(ast.literal_eval(response_obj))
             except (ValueError, SyntaxError):
                 try:
                     # fallback to json parsing
-                    response_obj = json.loads(str(response_obj))
+                    response_obj = _DECODED_RESPONSE.validate_python(json.loads(str(response_obj)))
                 except json.JSONDecodeError:
                     return ()
 
@@ -944,7 +970,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         router_fields: Mapping[str, object] | None = None,
         cost_tags: Sequence[str] = (),
         redact_prompt_text: bool = False,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object]:
         """
         Fields to track in DD LLM Observability metadata from litellm standard logging payload
         """
@@ -1045,14 +1071,23 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         # Get budget information from metadata
         metadata: Final = _metadata_of(standard_logging_payload)
+        logging_metadata: Final = _logging_metadata_of(standard_logging_payload)
 
         # API key max budget
-        user_api_key_max_budget: Final = metadata.get("user_api_key_max_budget")
+        user_api_key_max_budget: Final = (
+            logging_metadata["user_api_key_max_budget"]
+            if logging_metadata and "user_api_key_max_budget" in logging_metadata
+            else None
+        )
         if user_api_key_max_budget is not None:
             spend_metrics["user_api_key_max_budget"] = float(user_api_key_max_budget)
 
         # API key spend
-        user_api_key_spend: Final = metadata.get("user_api_key_spend")
+        user_api_key_spend: Final = (
+            logging_metadata["user_api_key_spend"]
+            if logging_metadata and "user_api_key_spend" in logging_metadata
+            else None
+        )
         if user_api_key_spend is not None:
             try:
                 spend_metrics["user_api_key_spend"] = float(user_api_key_spend)

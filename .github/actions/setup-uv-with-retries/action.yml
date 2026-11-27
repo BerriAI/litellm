@@ -7,16 +7,29 @@ inputs:
   version:
     description: "uv version to install"
     required: true
+  rust-toolchain:
+    description: >-
+      Install the pinned Rust toolchain. Pass "false" in jobs that install the
+      prebuilt Rust bridge and never compile Rust.
+    required: false
+    default: "true"
 
 runs:
   using: composite
   steps:
+    - name: Configure the Rust build environment
+      if: inputs.rust-toolchain == 'true'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: bash .github/scripts/setup_rust_environment.sh
+
     - name: Set up uv (attempt 1)
       id: attempt-1
       continue-on-error: true
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         version: ${{ inputs.version }}
+        save-cache: ${{ github.ref == 'refs/heads/main' }}
 
     - name: Wait before attempt 2
       if: steps.attempt-1.outcome == 'failure'
@@ -30,6 +43,7 @@ runs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         version: ${{ inputs.version }}
+        save-cache: ${{ github.ref == 'refs/heads/main' }}
 
     - name: Wait before attempt 3
       if: steps.attempt-2.outcome == 'failure'
@@ -41,3 +55,4 @@ runs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         version: ${{ inputs.version }}
+        save-cache: ${{ github.ref == 'refs/heads/main' }}

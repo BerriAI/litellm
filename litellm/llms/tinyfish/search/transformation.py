@@ -7,6 +7,7 @@ Docs: https://docs.tinyfish.ai/search-api
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Final, Literal
 from urllib.parse import urlencode
 
@@ -14,7 +15,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import as_object_list, process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
@@ -26,10 +27,15 @@ from litellm.secret_managers.main import get_secret_str
 _UrlEncodableParams: Final = TypeAdapter(dict[str, str | int | float | bool])
 _StrList: Final = TypeAdapter(list[str])
 _StrFrozenSet: Final = TypeAdapter(frozenset[str])
+_DecodedJson: Final = TypeAdapter(object)
 
 _TINYFISH_PARAMS_KEY: Final = "_tinyfish_params"
 _TINYFISH_DOCS_URL: Final = "https://docs.tinyfish.ai/search-api"
 _TINYFISH_RESULT_CAP: Final = 10  # TinyFish's natural per-page SERP ceiling
+
+
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
 
 
 class TinyfishSearchConfig(BaseSearchConfig):
@@ -52,11 +58,11 @@ class TinyfishSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         resolved_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
@@ -218,7 +224,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
             )
 
         try:
-            raw_json: Final[object] = raw_response.json()  # any-ok: httpx Response.json() -> Any
+            raw_json: Final = _DecodedJson.validate_python(raw_response.json())
         except json.JSONDecodeError:
             raise self._wrap_error(
                 error_message=f"Expected JSON response, got: {raw_response.text[:200]}",
@@ -251,7 +257,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
         return self._wrap_error(
             error_message=error.response.text,
             status_code=error.response.status_code,
-            headers=dict(error.response.headers),  # mutable-ok: existing error wrapper requires dict headers
+            headers=dict(error.response.headers),
         )
 
     def _wrap_error(
@@ -276,11 +282,13 @@ class TinyfishSearchConfig(BaseSearchConfig):
         # for other envelope shapes (CDN HTML pages, other JSON envelopes, plain text).
         inner_message = error_message
         try:
-            body: Final[object] = json.loads(error_message)  # any-ok: json.loads -> Any
-            if isinstance(body, dict):
-                error_obj: Final[object] = body.get("error")  # any-ok: untyped dict
-                if isinstance(error_obj, dict):
-                    candidate: Final[object] = error_obj.get("message")  # any-ok: untyped dict
+            body: Final = _DecodedJson.validate_python(json.loads(error_message))
+            body_fields: Final = _as_dict(body)
+            if body_fields is not None:
+                error_obj: Final[object] = body_fields.get("error")  # any-ok: untyped dict
+                error_fields: Final = _as_dict(error_obj)
+                if error_fields is not None:
+                    candidate: Final[object] = error_fields.get("message")  # any-ok: untyped dict
                     if isinstance(candidate, str) and candidate:
                         inner_message = candidate
         except (json.JSONDecodeError, TypeError):
@@ -304,10 +312,11 @@ def _default_missing_result_fields(raw_json: object) -> None:
     SearchResult requires these three fields; a degraded TinyFish result flows
     through with empty strings instead of failing the whole call.
     """
-    if not isinstance(raw_json, dict):
+    raw_fields: Final = _as_dict(raw_json)
+    if raw_fields is None:
         return
-    results_in: Final = raw_json.get("results")
-    if not isinstance(results_in, list):
+    results_in: Final = as_object_list(raw_fields.get("results"))
+    if results_in is None:
         return
     for item in results_in:
         if not isinstance(item, dict):
@@ -325,10 +334,11 @@ def _emit_parameter_warnings(parsed: SearchResponse) -> None:
     Schema per entry: ``{type, parameter, message, docs_url?}``.
     """
     warnings_field: Final[object] = getattr(parsed, "parameter_warnings", None)  # any-ok: extras=allow field
-    if not isinstance(warnings_field, list):
+    warnings_list: Final = as_object_list(warnings_field)
+    if warnings_list is None:
         return
-    for entry in warnings_field:
-        if not isinstance(entry, dict):
+    for entry in (_as_dict(warning) for warning in warnings_list):
+        if entry is None:
             continue
         warning_type: object = entry.get("type")  # any-ok: untyped dict
         parameter: object = entry.get("parameter")  # any-ok: untyped dict

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import pytest
 
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_count_tokens_shape,
@@ -47,13 +48,24 @@ from claude_code.http_probe import (
 
 
 BEDROCK_INVOKE_MODELS = [
-    "claude-haiku-4-5-bedrock-invoke",
-    "claude-sonnet-4-5-bedrock-invoke",
-    "claude-opus-4-7-bedrock-invoke",
+    "claude-haiku-5-5-bedrock-invoke",
+    "claude-sonnet-5-5-bedrock-invoke",
+    "claude-opus-5-5-bedrock-invoke",
 ]
+# Fable 5.2 is left out: Bedrock's CountTokens answers 404 "The model
+# 'anthropic.claude-fable-5-2' does not exist", so there is nothing to count against.
 
 
 @pytest.mark.covers("llm.messages.bedrock_invoke.count_tokens.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.COUNT_TOKENS,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_INVOKE_MODELS),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_count_tokens_bedrock_invoke(compat_result):
     """Probe `/v1/messages/count_tokens` for each Bedrock (Invoke) tier and
     assert the response shape."""

@@ -8,14 +8,48 @@ surface from silently dropping a field: omitting the auth headers, for instance,
 still executes the tool, just with no credentials.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
+
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+async def resolve_inference_mcp_auth(raw_auth: object) -> "UserAPIKeyAuth | None":
+    if raw_auth is None:
+        return None
+    from litellm.proxy.mcp_server.ui_session_utils import acting_user_auth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    auth: Final = require_attributes(raw_auth, UserAPIKeyAuth, "dashboard_model_access_auth")
+    session: Final = auth.dashboard_model_access_auth()
+    if session.mcp_explicit_grants_only or any(
+        scope is not None
+        for scope in (
+            session.object_permission,
+            session.object_permission_id,
+            session.mcp_toolset_id,
+            session.mcp_session_resource_server_ids,
+        )
+    ):
+        return auth
+    acting: Final = await acting_user_auth(session)
+    if acting is session:
+        return acting
+    return acting.model_copy(
+        update={
+            "end_user_id": session.end_user_id,
+            "mcp_authorization_is_admission_credential": bool(session.api_key),
+        }
+    )
 
 
 class _AuthCarryingMetadata(TypedDict):
@@ -30,18 +64,20 @@ class MCPRequestContext:
 
     user_api_key_auth: "UserAPIKeyAuth | None"
     mcp_auth_header: str | None = None
-    mcp_server_auth_headers: Mapping[str, Mapping[str, str]] | None = None
-    oauth2_headers: Mapping[str, str] | None = None
-    raw_headers: Mapping[str, str] | None = None
-    request_tags: Sequence[str] | None = None
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None
+    oauth2_headers: dict[str, str] | None = None
+    raw_headers: dict[str, str] | None = None
+    request_tags: list[str] | None = None
     litellm_trace_id: str | None = None
     litellm_call_id: str | None = None
+    guardrail_context: Mapping[str, object] | None = None
 
     @classmethod
     def resolve(
         cls,
         kwargs: Mapping[str, Any],
         tools: Iterable[object] | None,
+        mcp_auth: "UserAPIKeyAuth | None" = None,
     ) -> "MCPRequestContext":
         """
         Build the context from a gateway handler's kwargs.
@@ -55,13 +91,7 @@ class MCPRequestContext:
         )
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
-        litellm_metadata: Final[_AuthCarryingMetadata] = kwargs.get("litellm_metadata") or {}
-        metadata: Final[_AuthCarryingMetadata] = kwargs.get("metadata") or {}
-        user_api_key_auth: Final[UserAPIKeyAuth | None] = (
-            kwargs.get("user_api_key_auth")
-            or litellm_metadata.get("user_api_key_auth")
-            or metadata.get("user_api_key_auth")
-        )
+        user_api_key_auth: Final = cls.caller_auth(kwargs)
 
         (
             mcp_auth_header,
@@ -71,6 +101,7 @@ class MCPRequestContext:
         ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
             secret_fields=kwargs.get("secret_fields"),
             tools=tools,
+            mcp_auth=mcp_auth,
         )
 
         return cls(
@@ -79,7 +110,70 @@ class MCPRequestContext:
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
-            request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(dict(kwargs)),
+            request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(dict(kwargs)),
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             litellm_call_id=kwargs.get("litellm_call_id"),
+            guardrail_context=cls.resolve_guardrail_context(kwargs),
+        )
+
+    @staticmethod
+    def caller_auth(kwargs: Mapping[str, Any]) -> "UserAPIKeyAuth | None":
+        litellm_metadata: Final[_AuthCarryingMetadata] = kwargs.get("litellm_metadata") or {}
+        metadata: Final[_AuthCarryingMetadata] = kwargs.get("metadata") or {}
+        return (
+            kwargs.get("user_api_key_auth")
+            or litellm_metadata.get("user_api_key_auth")
+            or metadata.get("user_api_key_auth")
+        )
+
+    @staticmethod
+    def resolve_guardrail_context(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        metadata_keys: Final = (
+            "guardrails",
+            "guardrail_config",
+            "_guardrail_pipelines",
+            "_pipeline_managed_guardrails",
+            "applied_policies",
+            "policy_sources",
+            "tags",
+        )
+        buckets: Final = tuple(
+            TypeAdapter(dict[str, object]).validate_python(kwargs[key])
+            for key in ("litellm_metadata", "metadata")
+            if isinstance(kwargs.get(key), Mapping)
+        )
+        sources: Final = (*buckets, kwargs)
+        metadata: Final = MappingProxyType(
+            {
+                **MappingProxyType(
+                    {
+                        key: deepcopy(value)
+                        for bucket in buckets
+                        for key, value in bucket.items()
+                        if key in metadata_keys
+                    }
+                ),
+                "guardrails": deepcopy(
+                    tuple(
+                        selection
+                        for source in sources
+                        for selection in TypeAdapter(list[object]).validate_python(source.get("guardrails") or ())
+                    )
+                ),
+                "guardrail_config": deepcopy(
+                    {
+                        key: value
+                        for source in sources
+                        for key, value in TypeAdapter(dict[str, object])
+                        .validate_python(source.get("guardrail_config") or MappingProxyType({}))
+                        .items()
+                    }
+                ),
+            }
+        )
+        return MappingProxyType(
+            {
+                **MappingProxyType({key: kwargs[key] for key in ("model",) if key in kwargs}),
+                "metadata": metadata,
+            }
         )

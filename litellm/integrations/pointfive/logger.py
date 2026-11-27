@@ -207,9 +207,7 @@ class PointFiveLogger(CustomBatchLogger):
         the excluded-field list and this callback's own setting are applied here, then the
         global, per-request and header settings that only the framework's predicate knows.
         """
-        details: Final = self.redact_standard_logging_payload_from_model_call_details(
-            dict(kwargs)  # mutable-ok: both framework helpers take the call details as a dict
-        )
+        details: Final = self.redact_standard_logging_payload_from_model_call_details(dict(kwargs))
         payload: Final = details.get("standard_logging_object")
         if not isinstance(payload, dict):
             return None

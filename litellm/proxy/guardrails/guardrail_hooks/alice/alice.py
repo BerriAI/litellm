@@ -11,14 +11,14 @@ from collections.abc import Mapping
 from itertools import islice
 from typing import (
     TYPE_CHECKING,
-    Any,  # noqa: TID251  # **kwargs forwards verbatim to CustomGuardrail.__init__; see ruff-strict.toml
     Final,
     Literal,
     Optional,
 )
 
 import httpx
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException, Timeout
@@ -48,6 +48,7 @@ _VERDICT_DETECT: Final = "DETECT"
 _KNOWN_VERDICTS: Final = frozenset({_VERDICT_ALLOW, _VERDICT_BLOCK, _VERDICT_MASK, _VERDICT_DETECT})
 
 _DEFAULT_BLOCK_MESSAGE: Final = "Blocked by your organization's content policy."
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # apply_guardrail selects nothing: it forwards whichever of these came populated and lets Alice
 # decide what is worth evaluating. Only skip the call when every one of them is empty — there is
@@ -60,8 +61,8 @@ _MAX_DEPTH: Final = 12
 _MAX_ITEMS: Final = 5000
 
 # request_data carries the caller's raw credentials under these keys, at any nesting depth —
-# a real captured payload puts inbound headers at request_data["proxy_server_request"]["headers"],
-# again under ["metadata"]["headers"] / ["litellm_metadata"]["headers"], and again under
+# a real captured payload puts inbound headers under ["metadata"]["headers"] /
+# ["litellm_metadata"]["headers"], and again under
 # ["metadata"]["requester_metadata"]["headers"], any of which can carry an Authorization or
 # x-api-key value. LiteLLM's own spend-log sanitizer excludes `secret_fields` for the same reason
 # (spend_tracking_utils._SENSITIVE_REQUEST_BODY_KEYS): `secret_fields.raw_headers` holds the
@@ -73,6 +74,9 @@ _MAX_ITEMS: Final = 5000
 _CREDENTIAL_KEYS_TO_STRIP: Final = frozenset(
     {"secret_fields", "api_key", "raw_headers", "headers", "provider_specific_header"}
 )
+
+_UNREAD_REQUEST_KEYS: Final = frozenset({"proxy_server_request"})
+_CONVERSATION_REQUEST_KEYS: Final = frozenset({"messages", "input", "instructions"})
 
 
 class AliceReplacement(TypedDict):
@@ -92,6 +96,10 @@ class AliceVerdict(TypedDict):
     replacements: ReadOnly[NotRequired["tuple[AliceReplacement, ...]"]]
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class AliceGuardrailMissingSecrets(Exception):
     """Raised when the Alice API key is not configured."""
 
@@ -101,9 +109,12 @@ class AliceGuardrail(CustomGuardrail):
     Alice — policy-based guardrails for prompts and model responses.
 
     This forwards the hook's arguments as it received them and enforces the verdict that comes
-    back, with one deliberate exception: any key named `secret_fields`, `api_key`, `raw_headers`,
+    back, with two deliberate exceptions. Any key named `secret_fields`, `api_key`, `raw_headers`,
     `headers`, or `provider_specific_header` is dropped from `request_data` at any nesting depth
-    before it is serialized, and never reaches Alice. Short of that, it selects nothing and
+    before it is serialized, and never reaches Alice. And `request_data` leaves out what would only
+    repeat the conversation in `inputs`: the proxy's `proxy_server_request` snapshot always, and
+    `messages`, or the Responses `input` and `instructions`, when `structured_messages` is
+    populated. Short of that, it selects nothing and
     renames nothing: which parts of a conversation are worth evaluating, and how a verdict is
     reached, are decided by Alice — so changing either is a change on their side rather than a
     LiteLLM upgrade. A batch with nothing selectable at all (no `texts`, `images`, `tools`,
@@ -144,7 +155,9 @@ class AliceGuardrail(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
-        **kwargs: Any,  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__, whose param list is wide and evolving
+        **kwargs: Unpack[  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__, whose param list is wide and evolving
+            _CustomGuardrailOptions
+        ],
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
@@ -161,7 +174,7 @@ class AliceGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
 
         if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [  # mutable-ok: CustomGuardrail.__init__ requires a list here
+            kwargs["supported_event_hooks"] = [
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.during_call,
                 GuardrailEventHooks.post_call,
@@ -213,18 +226,23 @@ class AliceGuardrail(CustomGuardrail):
     ) -> AliceVerdict:
         response: Final = await self.async_handler.post(
             url=self.api_base,
-            json={  # mutable-ok: one-shot HTTP request body, never mutated after construction
+            json={
                 "input_type": input_type,
                 "inputs": _json_safe(inputs),
-                "request_data": _json_safe(request_data, strip_keys=_CREDENTIAL_KEYS_TO_STRIP),
+                "request_data": _json_safe(
+                    request_data,
+                    strip_keys=_CREDENTIAL_KEYS_TO_STRIP,
+                    omit_keys=_request_keys_to_omit(inputs),
+                ),
             },
-            headers={  # mutable-ok: one-shot HTTP headers, never mutated after construction
+            headers={
                 "Content-Type": "application/json",
                 "af-api-key": self.alice_api_key,
             },
+            timeout=self.timeout,
         )
         response.raise_for_status()
-        body = response.json()
+        body: Final = _DECODED_JSON.validate_python(response.json())
         if not isinstance(body, dict):
             raise TypeError("Alice returned a non-object body")
         return body
@@ -270,8 +288,8 @@ class AliceGuardrail(CustomGuardrail):
         rather than being silently skipped, so content Alice meant to replace can never reach the
         model unmasked alongside content that was replaced.
         """
-        texts: Final = inputs.get("texts") or []  # mutable-ok: empty-list fallback, replaced wholesale below
-        replacements: Final = verdict.get("replacements") or []  # mutable-ok: empty-list fallback for iteration only
+        texts: Final = inputs.get("texts") or []
+        replacements: Final = verdict.get("replacements") or []
 
         if not replacements:
             raise self._mask_rejected(verdict)
@@ -281,7 +299,7 @@ class AliceGuardrail(CustomGuardrail):
             text = replacement.get("text")
             if not (isinstance(index, int) and isinstance(text, str) and 0 <= index < len(texts)):
                 raise self._mask_rejected(verdict)
-            texts[index] = text  # mutable-ok: item assignment into the local working copy above
+            texts[index] = text
 
         inputs["texts"] = texts
 
@@ -318,11 +336,22 @@ class AliceGuardrail(CustomGuardrail):
         return AliceGuardrailConfigModel
 
 
+def _request_keys_to_omit(inputs: GenericGuardrailAPIInputs) -> frozenset[str]:
+    """
+    Alice reads `request_data["messages"]` only when `structured_messages` is not a non-empty list,
+    and a non-empty one already carries the Responses `input` and `instructions` it was parsed from.
+    """
+    structured: Final = inputs.get("structured_messages")
+    carries_conversation: Final = isinstance(structured, list) and len(structured) > 0
+    return _UNREAD_REQUEST_KEYS | (_CONVERSATION_REQUEST_KEYS if carries_conversation else frozenset[str]())
+
+
 def _json_safe(
     value: object,
     depth: int = 0,
     seen: frozenset[int] = frozenset(),
     strip_keys: frozenset[str] = frozenset(),
+    omit_keys: frozenset[str] = frozenset(),
 ) -> object:
     """
     Copy `value` into something `json.dumps` accepts, dropping only what cannot cross.
@@ -334,8 +363,10 @@ def _json_safe(
 
     `strip_keys` drops a dict key by name at every depth it appears, not just the root — a caller
     passes `_CREDENTIAL_KEYS_TO_STRIP` here so a credential nested under any path is caught the
-    same way a top-level one is, without maintaining a list of paths. The source object is never
-    mutated: every branch below builds a new container.
+    same way a top-level one is, without maintaining a list of paths. `omit_keys` drops keys of
+    `value` itself only. Both are dropped here rather than from a copy made beforehand, which
+    would hide a cycle back to `value` from `seen`. The source object is never mutated: every
+    branch below builds a new container.
     """
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
@@ -348,13 +379,11 @@ def _json_safe(
         return {
             key: _json_safe(item, depth + 1, nested, strip_keys)
             for key, item in islice(value.items(), _MAX_ITEMS)
-            if isinstance(key, str) and key not in strip_keys
+            if isinstance(key, str) and key not in strip_keys and key not in omit_keys
         }
 
     if isinstance(value, (list, tuple, set, frozenset)):
-        return [  # mutable-ok: return value is a one-shot list, discarded by the caller after use
-            _json_safe(item, depth + 1, nested, strip_keys) for item in islice(value, _MAX_ITEMS)
-        ]
+        return [_json_safe(item, depth + 1, nested, strip_keys) for item in islice(value, _MAX_ITEMS)]
 
     dump: Final = getattr(value, "model_dump", None)
     if callable(dump):

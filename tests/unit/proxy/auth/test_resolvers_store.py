@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+from typing import Final
+
+import pytest
+
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
+from litellm.proxy._types import UserAPIKeyAuth, hash_token
+from litellm.proxy.auth.resolvers.exceptions import (
+    KeyNotFoundError,
+    NoDatabaseConnectionError,
+    PrincipalMissingSourceKeyError,
+)
+from litellm.proxy.auth.auth_method import AuthMethod
+from litellm.proxy.auth.resolvers.models import Principal, PrincipalType
+from litellm.proxy.auth.resolvers.store import IdentityStore
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
+
+
+def _cache_holding(key: UserAPIKeyAuth) -> UserApiKeyCache:
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(AuthObject.virtual_key(key.token or ""), key, model_type=UserAPIKeyAuth)
+    return cache
+
+
+
+async def test_resolve_returns_a_principal_projected_from_the_looked_up_key():
+    raw = "sk-live-abc"
+    key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1", team_id="t-1")
+    store = IdentityStore(object(), _cache_holding(key))
+
+    principal = await store.resolve(hashed_token=hash_token(raw))
+
+    assert isinstance(principal, Principal)
+    assert principal.principal_type == PrincipalType.HUMAN
+    assert principal.user is not None and principal.user.id == "u-1"
+    assert [t.id for t in principal.teams] == ["t-1"]
+
+
+async def test_resolve_carries_the_key_for_key_from_principal():
+    raw = "sk-live-abc"
+    key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1", team_id="t-1")
+    store = IdentityStore(object(), _cache_holding(key))
+
+    principal = await store.resolve(hashed_token=hash_token(raw))
+    recovered = IdentityStore.key_from_principal(principal)
+
+    assert recovered.user_id == "u-1"
+    assert recovered.team_id == "t-1"
+
+
+def test_key_from_principal_raises_when_no_source_key_is_carried():
+    bare = Principal(
+        principal_type=PrincipalType.SERVICE_ACCOUNT,
+        subject="svc",
+        auth_method=AuthMethod.API_KEY,
+    )
+    with pytest.raises(PrincipalMissingSourceKeyError):
+        IdentityStore.key_from_principal(bare)
+
+
+async def test_resolve_raises_without_a_db_connection():
+    store = IdentityStore(None, UserApiKeyCache())
+    with pytest.raises(NoDatabaseConnectionError):
+        await store.resolve(hashed_token="missing")
+
+
+async def test_resolve_raises_a_generic_key_not_found_carrying_the_hash_when_no_key_row_exists(
+    rust_auth_stores: RustAuthStores,
+):
+    """The 401 message stays generic for the caller, while the hash rides on the
+    exception so the auth failure log line can still name it for the operator."""
+    missing = hash_token("sk-live-not-a-key")
+    store = IdentityStore(object(), UserApiKeyCache())
+
+    with pytest.raises(KeyNotFoundError) as exc_info:
+        await store.resolve(hashed_token=missing)
+
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    assert missing not in str(exc_info.value)
+    assert exc_info.value.hashed_token == missing
+    assert rust_auth_stores.key.lookups == [(missing, False)]

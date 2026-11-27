@@ -1,12 +1,13 @@
 import asyncio
 import base64
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -15,6 +16,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, joined, length_of, require_get
 from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts, message_with_slot_texts
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -26,16 +28,22 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.prompt_security import PromptSecurityGuardrailConfigModel
 
 
 _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS: Final = 30.0
 _SANITIZE_FILE_QUEUED_STATUSES: Final = frozenset({"created", "in progress"})
 _PROTECT_ROLES: Final = frozenset({"system", "user", "assistant"})
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PromptSecurityGuardrailMissingSecrets(Exception):
     pass
+
+
+def _modified_or_original(text: str, verdict: "_ProtectVerdict") -> str:
+    modified_text: Final = verdict.get("modified_text") if verdict.get("action") == "modify" else None
+    return text if modified_text is None else modified_text
 
 
 def _inputs_with_structured_messages(
@@ -45,7 +53,7 @@ def _inputs_with_structured_messages(
         return inputs
     patched: Final[GenericGuardrailAPIInputs] = {
         **inputs,
-        "structured_messages": list(rewritten_messages),  # mutable-ok: the TypedDict field is declared as a list
+        "structured_messages": list(rewritten_messages),
     }
     return patched
 
@@ -77,10 +85,6 @@ class _ProtectResult(TypedDict, total=False):
 
 class _ProtectResponse(TypedDict, total=False):
     result: ReadOnly[_ProtectResult]
-
-
-class _SanitizeUploadResponse(TypedDict, total=False):
-    jobId: ReadOnly[str]
 
 
 class _SanitizeMetadata(TypedDict, total=False):
@@ -119,6 +123,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         user: str | None = None,
         system_prompt: str | None = None,
         check_tool_results: bool | None = None,
+        streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
         file_sanitization_timeout: float = _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS,
         file_sanitization_fail_open: bool | None = None,
         block_on_file_modify: bool | None = None,
@@ -148,6 +153,10 @@ class PromptSecurityGuardrail(CustomGuardrail):
             )
             raise PromptSecurityGuardrailMissingSecrets(msg)
 
+        self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
+            "block_only" if streaming_transform_mode is None else streaming_transform_mode
+        )
+
         # Configuration for file sanitization
         self.max_poll_attempts = 30  # Maximum number of polling attempts
         self.poll_interval = 2  # Seconds between polling attempts
@@ -160,11 +169,14 @@ class PromptSecurityGuardrail(CustomGuardrail):
     def supports_scan_only_tool_results(self) -> bool:
         return self.check_tool_results
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -235,8 +247,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         texts: list[str],
         images: list[str],
-        structured_messages: list,
-        request_data: dict,
+        structured_messages: Sequence[AllMessageValues],
+        request_data: object,
         user_api_key_alias: str | None,
     ) -> GenericGuardrailAPIInputs:
         """Handle request-side guardrail checks."""
@@ -280,9 +292,10 @@ class PromptSecurityGuardrail(CustomGuardrail):
             f"{self.api_base}/api/protect",
             headers=headers,
             json=payload,
+            timeout=self.timeout,
         )
         response.raise_for_status()
-        res: Final[_ProtectResponse] = response.json()
+        res: Final = require_get(_DECODED_JSON.validate_python(response.json()))
 
         self._log_api_response(
             url=f"{self.api_base}/api/protect",
@@ -290,23 +303,24 @@ class PromptSecurityGuardrail(CustomGuardrail):
             payload={"result": res.get("result")},
         )
 
-        result: Final = res.get("result", {}).get("prompt", {})
+        result: Final = require_get(res.get("result", {})).get("prompt", {})
         if result is None:
             return inputs
 
-        action: Final = result.get("action")
-        violations: Final = result.get("violations", [])
+        verdict: Final = require_get(result)
+        action: Final = verdict.get("action")
+        violations: Final = verdict.get("violations", [])
 
         if action == "block":
             raise HTTPException(
                 status_code=400,
-                detail="Blocked by Prompt Security, Violations: " + ", ".join(violations),
+                detail="Blocked by Prompt Security, Violations: " + joined(", ", violations),
             )
         elif action == "modify":
-            modified_messages: Final = result.get("modified_messages", [])
+            modified_messages: Final = verdict.get("modified_messages", [])
             return _inputs_with_modifications(
                 inputs,
-                self._extract_texts_from_messages(modified_messages),
+                self._extract_texts_from_messages(iter_items(modified_messages)),
                 self._structured_messages_with_modifications(structured_messages, modified_messages),
             )
 
@@ -318,16 +332,16 @@ class PromptSecurityGuardrail(CustomGuardrail):
     def _structured_messages_with_modifications(
         self,
         structured_messages: Sequence[AllMessageValues],
-        modified_messages: Sequence[Mapping[str, object]],
+        modified_messages: object,
     ) -> tuple[AllMessageValues, ...] | None:
         sent_indices: Final = tuple(
             index for index, message in enumerate(structured_messages) if self._is_sent_to_protect(message)
         )
-        if not sent_indices or len(sent_indices) != len(modified_messages):
+        if not sent_indices or len(sent_indices) != length_of(modified_messages):
             return None
         rewritten: Final = tuple(
             message_with_slot_texts(structured_messages[index], self._extract_texts_from_messages((modified,)))
-            for index, modified in zip(sent_indices, modified_messages)
+            for index, modified in zip(sent_indices, iter_items(modified_messages))
         )
         replacements: Final = MappingProxyType(
             {index: message for index, message in zip(sent_indices, rewritten) if message is not None}
@@ -342,16 +356,44 @@ class PromptSecurityGuardrail(CustomGuardrail):
         texts: list[str],
         user_api_key_alias: str | None,
     ) -> GenericGuardrailAPIInputs:
-        """Handle response-side guardrail checks."""
+        """Handle response-side guardrail checks, one protect verdict per text.
+
+        Prompt Security rewrites a single string, so texts from several choices must be scanned separately
+        or one ``modified_text`` cannot be mapped back onto the choice it came from. It also returns no span
+        offsets, so on a stream every text is held back in full until the final verdict: a value the vendor
+        redacts later may start anywhere in text that looked clean so far, and streamed bytes cannot be recalled.
+        """
         if not texts:
             return inputs
 
-        # Combine all texts for response checking
-        combined_text: Final = "\n".join(texts)
+        verdicts: Final = await asyncio.gather(
+            *(self._protect_response_text(text, user_api_key_alias) for text in texts)
+        )
+        violations: Final = tuple(
+            violation
+            for verdict in verdicts
+            if verdict.get("action") == "block"
+            for violation in verdict.get("violations", ())
+        )
+        if any(verdict.get("action") == "block" for verdict in verdicts):
+            raise HTTPException(
+                status_code=400,
+                detail="Blocked by Prompt Security, Violations: " + ", ".join(violations),
+            )
+        returned_texts: Final = [
+            _modified_or_original(text, verdict) for text, verdict in zip(texts, verdicts, strict=True)
+        ]
+        patched: Final[GenericGuardrailAPIInputs] = {
+            **inputs,
+            "texts": returned_texts,
+            "stream_holdback_chars": [len(text) for text in returned_texts],
+        }
+        return patched
 
+    async def _protect_response_text(self, text: str, user_api_key_alias: str | None) -> _ProtectVerdict:
         headers: Final = self._build_headers(user_api_key_alias)
         payload: Final = {
-            "response": combined_text,
+            "response": text,
             "user": user_api_key_alias or self.user,
             "system_prompt": self.system_prompt,
         }
@@ -360,13 +402,14 @@ class PromptSecurityGuardrail(CustomGuardrail):
             method="POST",
             url=f"{self.api_base}/api/protect",
             headers=headers,
-            payload={"response_length": len(combined_text)},
+            payload={"response_length": len(text)},
         )
 
         response: Final = await self.async_handler.post(
             f"{self.api_base}/api/protect",
             headers=headers,
             json=payload,
+            timeout=self.timeout,
         )
         response.raise_for_status()
         res: Final[_ProtectResponse] = response.json()
@@ -377,29 +420,11 @@ class PromptSecurityGuardrail(CustomGuardrail):
             payload={"result": res.get("result")},
         )
 
-        result: Final = res.get("result", {}).get("response", {})
-        if result is None:
-            return inputs
+        verdict: Final = res.get("result", {}).get("response", {})
+        return {} if verdict is None else verdict
 
-        action: Final = result.get("action")
-        violations: Final = result.get("violations", [])
-
-        if action == "block":
-            raise HTTPException(
-                status_code=400,
-                detail="Blocked by Prompt Security, Violations: " + ", ".join(violations),
-            )
-        elif action == "modify":
-            modified_text: Final = result.get("modified_text")
-            if modified_text is not None:
-                # If we combined multiple texts, return the modified version as single text
-                # The framework will handle distributing it back
-                inputs["texts"] = [modified_text]
-
-        return inputs
-
-    def _extract_texts_from_messages(self, messages: Sequence[Mapping[str, object]]) -> list[str]:
-        return [text for message in messages for text in message_slot_texts(message)]
+    def _extract_texts_from_messages(self, messages: Iterable[object]) -> list[str]:
+        return [text for message in messages for text in message_slot_texts(decoded_json_object(message))]
 
     async def _process_standalone_images(self, images: list[str], user_api_key_alias: str | None) -> None:
         """Process standalone images from inputs (data URLs)."""
@@ -500,10 +525,11 @@ class PromptSecurityGuardrail(CustomGuardrail):
             f"{self.api_base}/api/sanitizeFile",
             headers=headers,
             files=files,
+            timeout=self.timeout,
         )
         upload_response.raise_for_status()
-        upload_result: Final[_SanitizeUploadResponse] = upload_response.json()
-        job_id: Final = upload_result.get("jobId")
+        upload_result: Final = _DECODED_JSON.validate_python(upload_response.json())
+        job_id: Final = require_get(upload_result).get("jobId")
 
         self._log_api_response(
             url=f"{self.api_base}/api/sanitizeFile",
@@ -530,6 +556,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 f"{self.api_base}/api/sanitizeFile",
                 headers=headers,
                 params={"jobId": job_id},
+                timeout=self.timeout,
             )
             poll_response.raise_for_status()
             result: _SanitizeStatusResponse = poll_response.json()
@@ -578,7 +605,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             detail=f"{resource_name} blocked by Prompt Security. Violations: {', '.join(violations)}",
         )
 
-    async def _process_image_url_item(self, item: dict, user_api_key_alias: str | None) -> dict:
+    async def _process_image_url_item(self, item: dict, user_api_key_alias: str | None) -> dict[str, object]:
         """Process and sanitize image_url items."""
         image_url_data: Final = item.get("image_url", {})
         url: Final = image_url_data.get("url", "") if isinstance(image_url_data, dict) else image_url_data
@@ -617,12 +644,13 @@ class PromptSecurityGuardrail(CustomGuardrail):
             verbose_proxy_logger.error("Error sanitizing image file: %s", e)
             raise HTTPException(status_code=500, detail=f"File sanitization failed: {e}")
 
-    async def _process_document_item(self, item: dict, user_api_key_alias: str | None) -> dict:
+    async def _process_document_item(self, item: dict, user_api_key_alias: str | None) -> dict[str, object]:
         """Process and sanitize document/file items."""
         doc_data: Final = item.get("document") or item.get("file") or item
+        url_key: Final = "file_data" if isinstance(doc_data, dict) and not doc_data.get("url") else "url"
 
         if isinstance(doc_data, dict):
-            url = doc_data.get("url", "")
+            url = doc_data.get(url_key) or ""
             doc_content = doc_data.get("data", "")
         else:
             url = doc_data if isinstance(doc_data, str) else ""
@@ -671,7 +699,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                     if url.startswith("data:") and header:
                         sanitized_url: Final = f"{header},{sanitized_encoded}"
                         if isinstance(doc_data, dict):
-                            doc_data["url"] = sanitized_url
+                            doc_data[url_key] = sanitized_url
                     elif isinstance(doc_data, dict):
                         doc_data["data"] = sanitized_encoded
 
@@ -712,7 +740,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return processed_messages
 
-    def filter_messages_by_role(self, messages: list) -> list:
+    def filter_messages_by_role(self, messages: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
         """Filter messages to only include standard OpenAI/Anthropic roles.
 
         Behavior depends on check_tool_results flag:
@@ -721,7 +749,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         This allows checking tool results for indirect prompt injection when enabled.
         """
-        filtered_messages: Final = []
+        filtered_messages: Final[list[Mapping[str, object]]] = []
         transformed_count = 0
         filtered_count = 0
 
@@ -764,21 +792,21 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return filtered_messages
 
-    def _build_headers(self, user_api_key_alias: str | None = None) -> dict:
+    def _build_headers(self, user_api_key_alias: str | None = None) -> dict[str, str | None]:
         headers: Final = {"APP-ID": self.api_key, "Content-Type": "application/json"}
         if user_api_key_alias:
             headers["X-LiteLLM-Key-Alias"] = user_api_key_alias
         return headers
 
     @staticmethod
-    def _redact_headers(headers: dict) -> dict:
+    def _redact_headers(headers: Mapping[str, str | None]) -> dict[str, str | None]:
         return {name: ("REDACTED" if name.lower() == "app-id" else value) for name, value in headers.items()}
 
     def _log_api_request(
         self,
         method: str,
         url: str,
-        headers: dict,
+        headers: Mapping[str, str | None],
         payload: object,
     ) -> None:
         verbose_proxy_logger.debug(
@@ -803,7 +831,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["PromptSecurityGuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.prompt_security import (
             PromptSecurityGuardrailConfigModel,
         )

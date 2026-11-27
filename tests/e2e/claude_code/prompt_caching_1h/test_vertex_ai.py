@@ -19,6 +19,7 @@ from typing import Any, Mapping, Optional
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -28,9 +29,9 @@ from claude_code.cli_driver import (
 
 
 VERTEX_AI_MODELS = [
-    "claude-haiku-4-5-vertex",
-    "claude-sonnet-4-5-vertex",
-    "claude-opus-4-7-vertex",
+    "claude-haiku-5-5-vertex",
+    "claude-sonnet-5-5-vertex",
+    "claude-opus-5-5-vertex",
 ]
 
 CACHE_1H_ENV = {"ENABLE_PROMPT_CACHING_1H": "1"}
@@ -48,6 +49,16 @@ def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
 
 
 @pytest.mark.covers("llm.messages.vertex.prompt_cache_1h.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.VERTEX_AI,),
+        models=tuple(VERTEX_AI_MODELS),
+        capabilities=(Capability.PROMPT_CACHING,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_prompt_caching_1h_vertex_ai(compat_result):
     base_url, api_key = require_proxy(compat_result)
 

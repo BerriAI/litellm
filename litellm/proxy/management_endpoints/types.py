@@ -4,10 +4,12 @@ Types for the management endpoints
 Might include fastapi/proxy requirements.txt related imports
 """
 
-from collections.abc import Iterable, Sequence
-from typing import Any, Final, cast
+from collections.abc import Callable, Iterable, Sequence
+from typing import Final, Protocol, cast
 
+import email_validator
 from fastapi_sso.sso.base import OpenID
+from pydantic import field_validator
 
 from litellm.proxy._types import LitellmUserRoles
 
@@ -93,5 +95,46 @@ def get_litellm_user_role(role_str: object) -> LitellmUserRoles | None:
 
 class CustomOpenID(OpenID):
     team_ids: list[str]
+    team_id_to_upsert: str | None = None
     user_role: LitellmUserRoles | None = None
-    extra_fields: dict[str, Any] | None = None
+    extra_fields: dict[str, object] | None = None
+    email_verified: bool | None = None
+
+
+class _EmailValidator(Protocol):
+    @property
+    def SPECIAL_USE_DOMAIN_NAMES(self) -> Sequence[str]: ...
+
+
+_EMAIL_VALIDATOR: Final = cast(_EmailValidator, email_validator)  # cast-ok: typecheck venv omits email-validator
+
+
+class GenericOpenID(CustomOpenID):
+    @field_validator("email", mode="wrap")
+    @classmethod
+    def _validate_directory_email(cls, value: object, validate: Callable[[object], str | None]) -> str | None:
+        if not isinstance(value, str):
+            return validate(value)
+        local, _, domain = value.partition("@")
+        if "@" in domain or value != value.strip() or any(char in value for char in "<>"):
+            return validate(value)
+
+        lower_domain: Final = domain.lower()
+        special_use_name: Final = max(
+            (
+                name
+                for name in _EMAIL_VALIDATOR.SPECIAL_USE_DOMAIN_NAMES
+                if lower_domain == name or lower_domain.endswith("." + name)
+            ),
+            key=len,
+            default=None,
+        )
+        if special_use_name is None:
+            return validate(value)
+
+        validation_suffix: Final = ".".join("a" * len(label) for label in special_use_name.split("."))
+        domain_prefix: Final = domain[: -len(special_use_name)]
+        normalized: Final = validate(f"{local}@{domain_prefix}{validation_suffix}")
+        if normalized is None or not normalized.endswith(validation_suffix):
+            raise ValueError("Invalid email domain")
+        return normalized.removesuffix(validation_suffix) + special_use_name

@@ -8,6 +8,7 @@ provider-specific resolution (slug, API key env var, base URL).
 
 from typing import Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -29,10 +30,10 @@ class OpenAILikeResponsesConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, object]:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key: Final = litellm_params.api_key or get_secret_str("OPENAI_LIKE_API_KEY")
         if api_key:
@@ -42,10 +43,9 @@ class OpenAILikeResponsesConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")
         if not api_base:
             raise ValueError("api_base is required for openai_like provider")
-        api_base = api_base.rstrip("/")
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")

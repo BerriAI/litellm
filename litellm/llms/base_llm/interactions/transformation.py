@@ -11,7 +11,8 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -60,9 +61,10 @@ class BaseInteractionsAPIConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -84,7 +86,9 @@ class BaseInteractionsAPIConfig(ABC):
         """
 
     @abstractmethod
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, str], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
         """
         Validate and prepare environment settings including headers.
         """
@@ -118,6 +122,13 @@ class BaseInteractionsAPIConfig(ABC):
             raise ValueError("api_base is required")
         return api_base
 
+    def transform_top_level_request_fields(
+        self,
+        request_fields: Mapping[str, object] | None,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object] | None:
+        return request_fields
+
     @abstractmethod
     def transform_request(
         self,
@@ -126,7 +137,7 @@ class BaseInteractionsAPIConfig(ABC):
         input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict:
         """
         Transform the input request into the provider's expected format.
@@ -183,8 +194,8 @@ class BaseInteractionsAPIConfig(ABC):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the get interaction request into URL and query params.
 
@@ -214,8 +225,8 @@ class BaseInteractionsAPIConfig(ABC):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the delete interaction request into URL and body.
 
@@ -246,8 +257,8 @@ class BaseInteractionsAPIConfig(ABC):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the cancel interaction request into URL and body.
 

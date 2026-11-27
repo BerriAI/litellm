@@ -3,13 +3,14 @@ GitLab prompt manager with configurable prompts folder.
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.litellm_core_utils.core_helpers import require_attributes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -34,10 +35,26 @@ class GitLabCachedPrompt(TypedDict):
     path: ReadOnly[str]
     content: ReadOnly[str]
     metadata: ReadOnly[Mapping[str, object]]
-    model: ReadOnly[str | None]
-    temperature: ReadOnly[float | None]
-    max_tokens: ReadOnly[int | None]
+    model: ReadOnly[object]
+    temperature: ReadOnly[object]
+    max_tokens: ReadOnly[object]
     optional_params: ReadOnly[Mapping[str, object]]
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+class _SupportsStrip(Protocol):
+    def strip(self, chars: str, /) -> str: ...
+
+
+def _input_schema(metadata: Mapping[str, object]) -> object:
+    return require_attributes(metadata.get("input", {}), _SupportsGet, "get").get("schema", {})
+
+
+def _optional_params(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return {k: v for k, v in metadata.items() if k not in ["model", "input", "content"]}
 
 
 def encode_prompt_id(raw_id: str) -> str:
@@ -59,7 +76,7 @@ class GitLabPromptTemplate:
         self,
         template_id: str,
         content: str,
-        metadata: dict[str, Any],
+        metadata: Mapping[str, object],
         model: str | None = None,
     ):
         self.template_id = template_id
@@ -68,8 +85,8 @@ class GitLabPromptTemplate:
         self.model = model or metadata.get("model")
         self.temperature = metadata.get("temperature")
         self.max_tokens = metadata.get("max_tokens")
-        self.input_schema = metadata.get("input", {}).get("schema", {})
-        self.optional_params = {k: v for k, v in metadata.items() if k not in ["model", "input", "content"]}
+        self.input_schema = _input_schema(metadata)
+        self.optional_params = _optional_params(metadata)
 
     def __repr__(self):
         return f"GitLabPromptTemplate(id='{self.template_id}', model='{self.model}')"
@@ -84,7 +101,7 @@ class GitLabTemplateManager:
 
     def __init__(
         self,
-        gitlab_config: dict[str, Any],
+        gitlab_config: Mapping[str, object],
         prompt_id: str | None = None,
         ref: str | None = None,
         gitlab_client: GitLabClient | None = None,
@@ -98,8 +115,8 @@ class GitLabTemplateManager:
             self.gitlab_client.set_ref(ref)
 
         # Folder inside repo to look for prompts (e.g., "prompts" or "prompts/chat")
-        self.prompts_path: str = (
-            self.gitlab_config.get("prompts_path") or self.gitlab_config.get("folder") or ""
+        self.prompts_path: str = require_attributes(
+            self.gitlab_config.get("prompts_path") or self.gitlab_config.get("folder") or "", _SupportsStrip, "strip"
         ).strip("/")
 
         # Templates fetched from a GitLab repo are not trustworthy:
@@ -120,16 +137,18 @@ class GitLabTemplateManager:
         )
 
         if self.prompt_id:
-            self._load_prompt_from_gitlab(self.prompt_id)
+            self.load_prompt_from_gitlab(self.prompt_id)
 
     # ---------- path helpers ----------
 
-    def _id_to_repo_path(self, prompt_id: str) -> str:
+    def id_to_repo_path(self, prompt_id: str) -> str:
         """Map a prompt_id to a repo path (respects prompts_path and adds .prompt)."""
         prompt_id = decode_prompt_id(prompt_id)
         if self.prompts_path:
             return f"{self.prompts_path}/{prompt_id}.prompt"
         return f"{prompt_id}.prompt"
+
+    _id_to_repo_path = id_to_repo_path
 
     def _repo_path_to_id(self, repo_path: str) -> str:
         """
@@ -144,17 +163,19 @@ class GitLabTemplateManager:
 
     # ---------- loading ----------
 
-    def _load_prompt_from_gitlab(self, prompt_id: str, *, ref: str | None = None) -> None:
+    def load_prompt_from_gitlab(self, prompt_id: str, *, ref: str | None = None) -> None:
         """Load a specific .prompt file from GitLab (scoped under prompts_path if set)."""
         try:
             # prompt_id = decode_prompt_id(prompt_id)
-            file_path: Final = self._id_to_repo_path(prompt_id)
+            file_path: Final = self.id_to_repo_path(prompt_id)
             prompt_content: Final = self.gitlab_client.get_file_content(file_path, ref=ref)
             if prompt_content:
                 template: Final = self._parse_prompt_file(prompt_content, prompt_id)
                 self.prompts[prompt_id] = template
         except Exception as e:
             raise Exception(f"Failed to load prompt '{encode_prompt_id(prompt_id)}' from GitLab: {e}")
+
+    _load_prompt_from_gitlab = load_prompt_from_gitlab
 
     def load_all_prompts(self, *, recursive: bool = True) -> list[str]:
         """
@@ -164,7 +185,7 @@ class GitLabTemplateManager:
         loaded: Final[list[str]] = []
         for pid in files:
             if pid not in self.prompts:
-                self._load_prompt_from_gitlab(pid)
+                self.load_prompt_from_gitlab(pid)
             loaded.append(pid)
         return loaded
 
@@ -183,7 +204,7 @@ class GitLabTemplateManager:
             frontmatter_str = ""
             template_content = content
 
-        metadata: dict[str, Any] = {}
+        metadata: Mapping[str, object] = {}
         if frontmatter_str:
             try:
                 import yaml
@@ -200,8 +221,8 @@ class GitLabTemplateManager:
             metadata=metadata,
         )
 
-    def _parse_yaml_basic(self, yaml_str: str) -> dict[str, Any]:
-        result: Final[dict[str, Any]] = {}
+    def _parse_yaml_basic(self, yaml_str: str) -> dict[str, bool | int | float | str]:
+        result: Final[dict[str, bool | int | float | str]] = {}
         for line in yaml_str.split("\n"):
             line = line.strip()
             if ":" in line and not line.startswith("#"):
@@ -215,7 +236,7 @@ class GitLabTemplateManager:
                 elif value.replace(".", "").isdigit():
                     try:
                         result[key] = float(value)
-                    except Exception:
+                    except ValueError:
                         result[key] = value
                 else:
                     result[key] = value.strip("\"'")
@@ -293,7 +314,7 @@ class GitLabPromptManager(CustomPromptManagement):
 
     def __init__(
         self,
-        gitlab_config: dict[str, Any],
+        gitlab_config: Mapping[str, object],
         prompt_id: str | None = None,
         ref: str | None = None,  # tag/branch/SHA override
         gitlab_client: GitLabClient | None = None,
@@ -333,7 +354,7 @@ class GitLabPromptManager(CustomPromptManagement):
         ref: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         if prompt_id not in self.prompt_manager.prompts:
-            self.prompt_manager._load_prompt_from_gitlab(prompt_id, ref=ref)
+            self.prompt_manager.load_prompt_from_gitlab(prompt_id, ref=ref)
 
         template: Final = self.prompt_manager.get_template(prompt_id)
         if not template:
@@ -456,7 +477,7 @@ class GitLabPromptManager(CustomPromptManagement):
         litellm_params: Mapping[str, object] | None = None,
         prompt_id: str | None = None,
         prompt_variables: Mapping[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> _ResponseT:
         return response
 
@@ -490,7 +511,7 @@ class GitLabPromptManager(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -506,7 +527,7 @@ class GitLabPromptManager(CustomPromptManagement):
                     if hasattr(dynamic_callback_params, "extra")
                     else None
                 )
-                self.prompt_manager._load_prompt_from_gitlab(decoded_id, ref=git_ref)
+                self.prompt_manager.load_prompt_from_gitlab(decoded_id, ref=git_ref)
 
             rendered_prompt, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)
 
@@ -537,7 +558,7 @@ class GitLabPromptManager(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -563,16 +584,16 @@ class GitLabPromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         return PromptManagementBase.get_chat_completion_prompt(
             self,
             model,
@@ -590,18 +611,18 @@ class GitLabPromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, object]] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Async version - delegates to PromptManagementBase async implementation.
         """
@@ -658,7 +679,7 @@ class GitLabPromptCache:
 
     def __init__(
         self,
-        gitlab_config: dict[str, Any],
+        gitlab_config: dict[str, object],
         *,
         ref: str | None = None,
         gitlab_client: GitLabClient | None = None,
@@ -689,17 +710,17 @@ class GitLabPromptCache:
         for pid in ids:
             # Ensure template is loaded into TemplateManager
             if pid not in self.template_manager.prompts:
-                self.template_manager._load_prompt_from_gitlab(pid)
+                self.template_manager.load_prompt_from_gitlab(pid)
 
             tmpl = self.template_manager.get_template(pid)
             if tmpl is None:
                 # If something raced/failed, try once more
-                self.template_manager._load_prompt_from_gitlab(pid)
+                self.template_manager.load_prompt_from_gitlab(pid)
                 tmpl = self.template_manager.get_template(pid)
             if tmpl is None:
                 continue
 
-            file_path = self.template_manager._id_to_repo_path(pid)  # "prompts/chat/..../file.prompt"
+            file_path = self.template_manager.id_to_repo_path(pid)  # "prompts/chat/..../file.prompt"
             entry = self._template_to_json(pid, tmpl)
 
             self._by_file[file_path] = entry
@@ -758,7 +779,7 @@ class GitLabPromptCache:
 
         return {
             "id": prompt_id,  # e.g. "greet/hi"
-            "path": self.template_manager._id_to_repo_path(prompt_id),  # e.g. "prompts/chat/greet/hi.prompt"
+            "path": self.template_manager.id_to_repo_path(prompt_id),  # e.g. "prompts/chat/greet/hi.prompt"
             "content": tmpl.content,  # rendered content (without frontmatter)
             "metadata": md,  # parsed frontmatter
             "model": model,

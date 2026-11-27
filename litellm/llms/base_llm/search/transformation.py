@@ -2,6 +2,7 @@
 Base Search transformation configuration.
 """
 
+import builtins
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
@@ -75,7 +76,15 @@ class SearchResponse(LiteLLMPydanticObjectBase):
     model_config = {"extra": "allow"}
 
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class BaseSearchConfig:
@@ -94,6 +103,18 @@ class BaseSearchConfig:
         Override in provider-specific implementations.
         """
         return "Unknown Search Provider"
+
+    def supports_rich_search_input(self) -> bool:
+        """
+        Whether this provider's search API accepts a natural-language
+        objective plus multiple keyword queries in one request.
+
+        Integrations that collect the richer shape (e.g. websearch
+        interception) forward ``query`` as a list plus an ``objective``
+        optional param to providers that return True; every other provider
+        keeps receiving the single query string.
+        """
+        return False
 
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
@@ -172,11 +193,11 @@ class BaseSearchConfig:
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         Override in provider-specific implementations.
@@ -209,9 +230,9 @@ class BaseSearchConfig:
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: dict[str, object],
+        data: dict[str, object] | list[dict] | None = None,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint.
@@ -236,8 +257,8 @@ class BaseSearchConfig:
     def transform_search_request(
         self,
         query: str | list[str],
-        optional_params: dict,
-        **kwargs,
+        optional_params: dict[str, object],
+        **kwargs: object,
     ) -> dict | list[dict]:
         """
         Transform Search request to provider-specific format.
@@ -256,7 +277,7 @@ class BaseSearchConfig:
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform provider-specific Search response to standard format.
@@ -268,7 +289,7 @@ class BaseSearchConfig:
         return self.get_error_class(
             error_message=error.response.text,
             status_code=error.response.status_code,
-            headers=dict(error.response.headers),  # mutable-ok: provider error factories require dict headers
+            headers=dict(error.response.headers),
         )
 
     def get_error_class(

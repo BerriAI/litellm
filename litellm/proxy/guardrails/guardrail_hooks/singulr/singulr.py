@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final, Literal, Protocol, overload
 from urllib.parse import urlparse
 
 import httpx
@@ -15,6 +15,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import (
     Logging as LiteLLMLoggingObj,
 )
@@ -24,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.base import (
     GuardrailConfigModel,
 )
@@ -35,13 +37,33 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     ToolCall,
     ToolCallFunction,
 )
-from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypes, ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 _DEFAULT_API_BASE: Final = "http://localhost:8003"
 _GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm-v2"
 _DEFAULT_TIMEOUT: Final = 30.0
-_EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_MAPPING: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _MCP_MODEL_PREFIX: Final = "MCP:"
+
+
+class _ToolCallFunctionFields(Protocol):
+    @overload
+    def get(self, key: Literal["name"], /) -> str | None: ...
+
+    @overload
+    def get(self, key: Literal["arguments"], /) -> object: ...
+
+
+class _ToolCallFields(Protocol):
+    @overload
+    def get(self, key: Literal["id", "type"], /) -> str | None: ...
+
+    @overload
+    def get(self, key: Literal["function"], /) -> _ToolCallFunctionFields | None: ...
+
+
+class _MetadataContainer(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
@@ -84,8 +106,6 @@ class SingulrGuardrail(CustomGuardrail):
         else:
             self.block_on_error = block_on_error
 
-        self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
-
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -100,9 +120,10 @@ class SingulrGuardrail(CustomGuardrail):
             ]
 
         super().__init__(**kwargs)
+        self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[pydantic.BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
             SingulrGuardrailConfigModel,
         )
@@ -110,8 +131,10 @@ class SingulrGuardrail(CustomGuardrail):
         return SingulrGuardrailConfigModel
 
     @staticmethod
-    def _metadata_containers(request_data: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
-        litellm_params: Final = request_data.get("litellm_params") or _EMPTY_MAPPING
+    def _metadata_containers(request_data: Mapping[str, object]) -> tuple[object, ...]:
+        litellm_params: Final = require_attributes(
+            request_data.get("litellm_params") or _EMPTY_MAPPING, _MetadataContainer, "get"
+        )
         return tuple(
             container
             for container in (
@@ -124,23 +147,23 @@ class SingulrGuardrail(CustomGuardrail):
         )
 
     @classmethod
-    def _resolve_metadata_value(cls, request_data: Mapping[str, Any], key: str) -> str | None:
+    def _resolve_metadata_value(cls, request_data: Mapping[str, object], key: str) -> object:
         for container in cls._metadata_containers(request_data=request_data):
-            value = container.get(key)
+            value = require_attributes(container, _MetadataContainer, "get").get(key)
             if value:
                 return value
         return None
 
     @classmethod
-    def _resolve_user_role_from_request_data(cls, request_data: Mapping[str, Any]) -> str | None:
+    def _resolve_user_role_from_request_data(cls, request_data: Mapping[str, object]) -> str | None:
         for container in cls._metadata_containers(request_data=request_data):
-            auth = container.get("user_api_key_auth")
+            auth = require_attributes(container, _MetadataContainer, "get").get("user_api_key_auth")
             if isinstance(auth, UserAPIKeyAuth) and auth.user_role:
                 return auth.user_role.value
         return None
 
     @classmethod
-    def _build_metadata(cls, request_data: Mapping[str, Any]) -> Mapping[str, str] | None:
+    def _build_metadata(cls, request_data: Mapping[str, object]) -> Mapping[str, object] | None:
         fields: Final = (
             "user_api_key_alias",
             "user_api_key_user_id",
@@ -156,11 +179,11 @@ class SingulrGuardrail(CustomGuardrail):
         )
         if not any(value for _, value in resolved):
             return None
-        return {key: value for key, value in resolved if value}  # mutable-ok: short-lived JSON payload dict
+        return {key: value for key, value in resolved if value}
 
     @staticmethod
-    def _build_user_message(text: str) -> Mapping[str, Any]:
-        return {"role": "user", "content": text}  # mutable-ok: short-lived JSON payload dict
+    def _build_user_message(text: str) -> Mapping[str, str]:
+        return {"role": "user", "content": text}
 
     def _build_headers(self) -> Mapping[str, str]:
         all_headers: Final = MappingProxyType(
@@ -224,8 +247,8 @@ class SingulrGuardrail(CustomGuardrail):
         self,
         inputs: GenericGuardrailAPIInputs,
         texts: Sequence[str],
-        structured_messages: Sequence[Any],
-        request_data: Mapping[str, Any],
+        structured_messages: Sequence[AllMessageValues],
+        request_data: Mapping[str, object],
     ) -> GenericGuardrailAPIInputs:
         messages: Final = (
             tuple(structured_messages)
@@ -242,14 +265,16 @@ class SingulrGuardrail(CustomGuardrail):
 
         metadata: Final = self._build_metadata(request_data=request_data)
 
-        singulr_req_obj = SingulrGuardrailPayload(
-            correlation_id=request_data.get("litellm_call_id"),
-            model_name=inputs.get("model"),
-            guardrail_scope="request",
-            messages=messages,
-            images=images,
-            tools=tools,
-            metadata=metadata,
+        singulr_req_obj = SingulrGuardrailPayload.model_validate(
+            {
+                "correlation_id": request_data.get("litellm_call_id"),
+                "model_name": inputs.get("model"),
+                "guardrail_scope": "request",
+                "messages": messages,
+                "images": images,
+                "tools": tools,
+                "metadata": metadata,
+            }
         )
         payload = singulr_req_obj.model_dump(mode="json")
         guardrail_resp = await self._call_api(payload)
@@ -267,31 +292,33 @@ class SingulrGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def _mcp_tool_name(request_data: Mapping[str, Any]) -> str | None:
+    def _mcp_tool_name(request_data: Mapping[str, object]) -> object:
         return request_data.get("mcp_tool_name") or request_data.get("name")
 
     @staticmethod
-    def _mcp_arguments(request_data: Mapping[str, Any]) -> object:
+    def _mcp_arguments(request_data: Mapping[str, object]) -> object:
         arguments: Final = request_data.get("mcp_arguments")
         return arguments if arguments is not None else request_data.get("arguments")
 
     @staticmethod
-    def _is_mcp_call(request_data: Mapping[str, Any], logging_obj: LiteLLMLoggingObj | None) -> bool:
+    def _is_mcp_call(request_data: Mapping[str, object], logging_obj: LiteLLMLoggingObj | None) -> bool:
         call_type: Final = logging_obj.call_type if logging_obj is not None else request_data.get("call_type")
         if call_type is not None:
             return call_type == CallTypes.call_mcp_tool.value
         model: Final = request_data.get("model")
         return "mcp_tool_name" in request_data or (isinstance(model, str) and model.startswith(_MCP_MODEL_PREFIX))
 
-    async def _apply_guardrail_on_mcp_request(self, request_data: Mapping[str, Any]) -> None:
+    async def _apply_guardrail_on_mcp_request(self, request_data: Mapping[str, object]) -> None:
         metadata: Final = self._build_metadata(request_data=request_data)
 
-        singulr_mcp_obj = SingulrMcpGuardrailPayload(
-            guardrail_scope="mcp_request",
-            tool_name=self._mcp_tool_name(request_data),
-            tool_arguments=self._mcp_arguments(request_data),
-            mcp_server_name=request_data.get("mcp_server_name"),
-            metadata=metadata,
+        singulr_mcp_obj = SingulrMcpGuardrailPayload.model_validate(
+            {
+                "guardrail_scope": "mcp_request",
+                "tool_name": self._mcp_tool_name(request_data),
+                "tool_arguments": self._mcp_arguments(request_data),
+                "mcp_server_name": request_data.get("mcp_server_name"),
+                "metadata": metadata,
+            }
         )
         payload = singulr_mcp_obj.model_dump(mode="json")
         guardrail_resp = await self._call_api(payload)
@@ -308,18 +335,20 @@ class SingulrGuardrail(CustomGuardrail):
             )
 
     async def _apply_guardrail_on_mcp_response(
-        self, inputs: GenericGuardrailAPIInputs, texts: Sequence[str], request_data: Mapping[str, Any]
+        self, inputs: GenericGuardrailAPIInputs, texts: Sequence[str], request_data: Mapping[str, object]
     ) -> GenericGuardrailAPIInputs:
         if not texts:
             return inputs
 
         metadata: Final = self._build_metadata(request_data=request_data)
 
-        singulr_mcp_obj = SingulrMcpGuardrailPayload(
-            model_name=request_data.get("model"),
-            guardrail_scope="mcp_response",
-            tool_result=texts,
-            metadata=metadata,
+        singulr_mcp_obj = SingulrMcpGuardrailPayload.model_validate(
+            {
+                "model_name": request_data.get("model"),
+                "guardrail_scope": "mcp_response",
+                "tool_result": texts,
+                "metadata": metadata,
+            }
         )
         payload = singulr_mcp_obj.model_dump(mode="json")
         guardrail_resp = await self._call_api(payload)
@@ -338,16 +367,17 @@ class SingulrGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def _build_tool_call(tool_call: Mapping[str, Any]) -> "ToolCall | None":
-        tool_call_id: Final = tool_call.get("id")
-        fun: Final = tool_call.get("function")
+    def _build_tool_call(tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall) -> "ToolCall | None":
+        tool_call_fields: Final = require_attributes(tool_call, _ToolCallFields, "get")
+        tool_call_id: Final = tool_call_fields.get("id")
+        fun: Final = tool_call_fields.get("function")
         if not tool_call_id or not fun:
             return None
         func_name: Final = fun.get("name")
         args: Final = fun.get("arguments")
         if not func_name or args is None:
             return None
-        call_type: Final = tool_call.get("type")
+        call_type: Final = tool_call_fields.get("type")
         return ToolCall(
             id=tool_call_id,
             type=call_type if isinstance(call_type, str) and call_type else "function",
@@ -358,7 +388,7 @@ class SingulrGuardrail(CustomGuardrail):
         )
 
     async def _apply_guardrail_on_response(
-        self, inputs: GenericGuardrailAPIInputs, texts: Sequence[str], request_data: Mapping[str, Any]
+        self, inputs: GenericGuardrailAPIInputs, texts: Sequence[str], request_data: Mapping[str, object]
     ) -> GenericGuardrailAPIInputs:
         combined_texts: Final = "\n".join(texts) if texts else None
 
@@ -377,14 +407,16 @@ class SingulrGuardrail(CustomGuardrail):
 
         metadata: Final = self._build_metadata(request_data=request_data)
 
-        singulr_resp_obj = SingulrGuardrailPayload(
-            correlation_id=request_data.get("litellm_call_id"),
-            guardrail_scope="response",
-            model_name=request_data.get("model"),
-            messages=request_data.get("messages"),
-            images=inputs.get("images"),
-            response=assistant_message,
-            metadata=metadata,
+        singulr_resp_obj = SingulrGuardrailPayload.model_validate(
+            {
+                "correlation_id": request_data.get("litellm_call_id"),
+                "guardrail_scope": "response",
+                "model_name": request_data.get("model"),
+                "messages": request_data.get("messages"),
+                "images": inputs.get("images"),
+                "response": assistant_message,
+                "metadata": metadata,
+            }
         )
 
         payload = singulr_resp_obj.model_dump(mode="json")
@@ -402,11 +434,14 @@ class SingulrGuardrail(CustomGuardrail):
             )
         return inputs
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: required by CustomGuardrail.apply_guardrail override signature
+        request_data: dict[str, object],  # mutable-ok: required by CustomGuardrail.apply_guardrail override signature
         input_type: str,
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:

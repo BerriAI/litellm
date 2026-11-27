@@ -13,7 +13,7 @@ from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import RerankResponse
-from litellm.utils import _add_path_to_api_base
+from litellm.utils import add_path_to_api_base
 
 
 class AzureAIRerankConfig(CohereRerankConfig):
@@ -25,7 +25,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         if api_base is None:
             raise ValueError(
@@ -52,20 +52,20 @@ class AzureAIRerankConfig(CohereRerankConfig):
             or normalized_path.endswith("/v2")
             or normalized_path.endswith("/providers/cohere/v2")
         ):
-            return _add_path_to_api_base(
+            return add_path_to_api_base(
                 api_base=str(original_url.copy_with(path=normalized_path or "/")),
                 ending_path="/rerank",
             )
 
         # Backwards compatible default: Azure AI rerank was originally exposed under /v1/rerank
-        return _add_path_to_api_base(api_base=api_base, ending_path="/v1/rerank")
+        return add_path_to_api_base(api_base=api_base, ending_path="/v1/rerank")
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
@@ -91,7 +91,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
+        request_data: dict[str, object] = {},
         optional_params: dict = {},
         litellm_params: dict = {},
     ) -> RerankResponse:
@@ -105,15 +105,10 @@ class AzureAIRerankConfig(CohereRerankConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        base_model: Final = self._get_base_model(rerank_response._hidden_params.get("llm_provider-azureml-model-group"))
-        rerank_response._hidden_params["model"] = base_model
+        azure_model_group: Final = rerank_response.hidden_params.get("llm_provider-azureml-model-group")
+        base_model: Final = self._get_base_model(azure_model_group if isinstance(azure_model_group, str) else None)
+        rerank_response.hidden_params["model"] = base_model
         return rerank_response
 
     def _get_base_model(self, azure_model_group: str | None) -> str | None:
-        if azure_model_group is None:
-            return None
-        if azure_model_group == "offer-cohere-rerank-mul-paygo":
-            return "azure_ai/cohere-rerank-v3-multilingual"
-        if azure_model_group == "offer-cohere-rerank-eng-paygo":
-            return "azure_ai/cohere-rerank-v3-english"
         return azure_model_group

@@ -1,5 +1,8 @@
-from typing import Any, Final, TypeVar
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final, Protocol, TypeVar
 
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_attributes
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import (
@@ -19,7 +22,7 @@ def decode_managed_container_id_for_request(
     Returns:
         (original_container_id, resolved_provider, updated_litellm_params)
     """
-    decoded: Final = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    decoded: Final = ResponsesAPIRequestUtils.decode_container_id(container_id)
     original_container_id: Final = decoded.get("response_id", container_id)
 
     decoded_provider: Final = decoded.get("custom_llm_provider")
@@ -36,10 +39,17 @@ def decode_managed_container_id_for_request(
 T = TypeVar("T")
 
 
+class _LooksUpById(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+_NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 class ContainerRequestUtils:
     @staticmethod
     def get_requested_container_create_optional_param(
-        passed_params: dict,
+        passed_params: Mapping[str, object],
     ) -> ContainerCreateOptionalRequestParams:
         """Extract only valid container creation parameters from the passed parameters."""
         container_create_optional_params: Final = ContainerCreateOptionalRequestParams()
@@ -61,7 +71,7 @@ class ContainerRequestUtils:
     def get_optional_params_container_create(
         container_provider_config: BaseContainerConfig,
         container_create_optional_params: ContainerCreateOptionalRequestParams,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Get the optional parameters for container creation."""
         supported_params: Final = container_provider_config.get_supported_openai_params()
 
@@ -75,7 +85,7 @@ class ContainerRequestUtils:
 
     @staticmethod
     def get_requested_container_list_optional_param(
-        passed_params: dict,
+        passed_params: Mapping[str, object],
     ) -> ContainerListOptionalRequestParams:
         """Extract only valid container list parameters from the passed parameters."""
         container_list_optional_params: Final = ContainerListOptionalRequestParams()
@@ -98,8 +108,8 @@ class ContainerRequestUtils:
     def encode_container_id_in_response(
         response_obj: T,
         custom_llm_provider: str | None,
-        litellm_metadata: dict[str, Any] | None = None,
-        extra_body: dict[str, Any] | None = None,
+        litellm_metadata: SupportsGet | None = None,
+        extra_body: Mapping[str, object] | None = None,
     ) -> T:
         """
         Encode container_id in response object with provider/model metadata for routing.
@@ -124,8 +134,8 @@ class ContainerRequestUtils:
         """
         # Extract model_id from litellm_metadata
         litellm_metadata = litellm_metadata or {}
-        model_info: Final[dict[str, Any]] = litellm_metadata.get("model_info", {}) or {}
-        model_id = model_info.get("id")
+        model_info: Final = litellm_metadata.get("model_info") or _NO_MODEL_INFO
+        model_id = require_attributes(model_info, _LooksUpById, "get").get("id")
 
         # Check if we should encode based on routing metadata
         should_encode = False
@@ -148,7 +158,7 @@ class ContainerRequestUtils:
 
         # Only encode if we have routing metadata
         if should_encode and response_obj and hasattr(response_obj, "id"):
-            encoded_id: Final = ResponsesAPIRequestUtils._build_container_id(
+            encoded_id: Final = ResponsesAPIRequestUtils.build_container_id(
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
                 container_id=response_obj.id,

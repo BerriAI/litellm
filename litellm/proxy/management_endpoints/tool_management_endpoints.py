@@ -15,7 +15,9 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Annotated, Final, Protocol, TypeAlias, TypeVar, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import Field, TypeAdapter
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_DailyToolSpend as PrismaDailyToolSpendRow
@@ -32,9 +34,9 @@ from litellm.constants import TOOL_SPEND_TOP_TOOLS
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.repositories.table_repositories import (
     DailyToolSpendRepository,
-    SpendLogsRepository,
     SpendLogToolIndexRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
@@ -57,7 +59,7 @@ from litellm.types.tool_management import (
     ToolUsageLogsResponse,
 )
 
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
 
 if TYPE_CHECKING:
 
@@ -216,13 +218,13 @@ def _parse_day_start(value: str | None) -> datetime | None:
         )
 
 
-class _ToolSpendSums(BaseModel):
+class _ToolSpendSums(LiteLLMBaseModel):
     spend: float = 0.0
     total_tokens: int = 0
     request_count: int = 0
 
 
-class _TopToolRow(BaseModel):
+class _TopToolRow(LiteLLMBaseModel):
     tool_name: str
     sums: _ToolSpendSums = Field(alias="_sum")
 
@@ -386,7 +388,7 @@ def _snippet_str(text: object, max_len: int = 200) -> str | None:
     if isinstance(text, str):
         s = text
     elif isinstance(text, list):
-        parts: Final = []
+        parts: Final = list[str]()
         for item in text:
             if isinstance(item, dict) and "content" in item:
                 c = item["content"]

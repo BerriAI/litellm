@@ -1,0 +1,792 @@
+"""Behavior pins for ``proxy_server.py`` model routes.
+
+Pins (PR2):
+    - GET /v1/models
+    - GET /models
+    - GET /v1/models/{model_id}
+    - GET /models/{model_id}
+"""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager
+from dataclasses import dataclass, field
+from typing import Final, Protocol
+from unittest.mock import MagicMock
+
+import httpx
+import pytest
+import respx
+from fastapi.testclient import TestClient
+
+import litellm
+from litellm import Router
+from litellm.proxy import proxy_server
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy import utils as proxy_utils
+from litellm.proxy.utils import create_model_info_response
+from litellm.types.router import DeploymentModelListingInfo
+
+from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
+
+
+def _stub_model_info_response(model_id: str = "gpt-4", provider: str = "openai") -> dict:
+    return {
+        "id": model_id,
+        "object": "model",
+        "created": 0,
+        "owned_by": provider,
+    }
+
+
+@pytest.fixture
+def patched_models(monkeypatch):
+    """Stub router + utility helpers used by the /models routes."""
+    from litellm.proxy import utils as proxy_utils
+
+    router = MagicMock()
+    router.get_fully_blocked_model_names = MagicMock(return_value=set())
+    router.get_model_names = MagicMock(return_value=["gpt-4", "claude-sonnet"])
+    router.get_model_access_groups = MagicMock(return_value={})
+
+    deployment = MagicMock()
+    deployment.litellm_params.model = "gpt-4"
+    router.get_deployment_by_model_group_name = MagicMock(return_value=deployment)
+    router.get_routable_upstream_model = MagicMock(return_value="gpt-4")
+    router.get_routable_upstream_provider = MagicMock(return_value=None)
+    router.get_routable_upstreams = MagicMock(return_value=())
+    router.get_configured_display_name = MagicMock(return_value=None)
+    router.get_configured_service_tiers = MagicMock(return_value=())
+    router.get_configured_max_input_tokens = MagicMock(return_value=())
+    router.get_routable_deployment_model_info = MagicMock(return_value=())
+    router.get_model_group_info = MagicMock(return_value=None)
+    router.get_search_tool_support = MagicMock(return_value=())
+    route_entry_points_to_stubs(router)
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    async def _fake_get_available_models_for_user(**kwargs):
+        return ["gpt-4", "claude-sonnet"]
+
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        _fake_get_available_models_for_user,
+    )
+
+    def _fake_create_model_info_response(model_id, provider="openai", **kwargs):
+        return _stub_model_info_response(model_id=model_id, provider=provider)
+
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _fake_create_model_info_response)
+
+    monkeypatch.setattr(proxy_utils, "validate_model_access", lambda **kwargs: None)
+
+    monkeypatch.setattr(
+        litellm,
+        "get_llm_provider",
+        lambda model: (model, "openai", None, None),
+    )
+
+    return router
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_get_models_happy_path(client, auth_as, patched_models, path):
+    """Pins: ``GET /v1/models``, ``GET /models``."""
+    with auth_as():
+        response = client.get(path)
+    assert response.status_code == 200
+    assert normalize(response.json()) == {
+        "data": [
+            {
+                "id": "<VOLATILE>",
+                "object": "model",
+                "created": "<VOLATILE>",
+                "owned_by": "openai",
+            },
+            {
+                "id": "<VOLATILE>",
+                "object": "model",
+                "created": "<VOLATILE>",
+                "owned_by": "openai",
+            },
+        ],
+        "object": "list",
+    }
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_get_models_anthropic_format_when_header_present(client, auth_as, patched_models, path):
+    """Pins: ``GET /v1/models`` returns the Anthropic-native models shape when
+    the caller sends an ``anthropic-version`` header (Claude Code gateway
+    discovery), while the default OpenAI shape is unchanged without it."""
+    with auth_as():
+        response = client.get(path, headers={"anthropic-version": "2023-06-01"})
+    assert response.status_code == 200
+    body = response.json()
+    assert "object" not in body
+    assert body["has_more"] is False
+    assert body["first_id"] == "gpt-4"
+    assert body["last_id"] == "claude-sonnet"
+    assert [m["id"] for m in body["data"]] == ["gpt-4", "claude-sonnet"]
+    for entry in body["data"]:
+        assert entry["type"] == "model"
+        assert entry["display_name"] == entry["id"]
+        assert entry["created_at"].endswith("Z")
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_anthropic_format_exposes_token_limits(client, auth_as, patched_models, monkeypatch, path):
+    """Claude Code sizes requests off the listing, so the Anthropic-native entries
+    carry the same token limits the OpenAI listing resolves, with the output budget
+    named max_tokens as the Messages API names it."""
+    from litellm.proxy import utils as proxy_utils
+
+    def _create_model_info_response(model_id, provider="openai", **kwargs):
+        if model_id != "claude-sonnet":
+            return _stub_model_info_response(model_id=model_id, provider=provider)
+        return {
+            **_stub_model_info_response(model_id=model_id, provider=provider),
+            "max_input_tokens": 200000,
+            "max_output_tokens": 64000,
+        }
+
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _create_model_info_response)
+
+    with auth_as():
+        response = client.get(path, headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    gpt_4, claude = response.json()["data"]
+    assert claude["max_input_tokens"] == 200000
+    assert claude["max_tokens"] == 64000
+    assert "max_output_tokens" not in claude
+    assert gpt_4["max_input_tokens"] is None
+    assert gpt_4["max_tokens"] is None
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_anthropic_format_carries_router_configured_token_limits(client, auth_as, patched_models, monkeypatch, path):
+    """Pins the whole resolution chain, not just the formatter: a deployment's
+    configured limits beat the cost map, and the configured output budget is what
+    lands on the Anthropic ``max_tokens``. All eight limits differ, so an entry
+    built from another entry's lookup shows up as the wrong numbers."""
+
+    def _configured(model_name):
+        max_input, max_output = (300000, 32000) if model_name == "gpt-4" else (500000, 4096)
+        return DeploymentModelListingInfo(
+            cost_map_keys=(model_name,), max_input_tokens=max_input, max_output_tokens=max_output
+        )
+
+    def _cost_map_lookup(model_id):
+        max_input, max_output = (200000, 64000) if model_id == "gpt-4" else (100000, 8000)
+        return {"max_input_tokens": max_input, "max_output_tokens": max_output, "mode": "chat"}
+
+    patched_models.get_model_listing_info = MagicMock(side_effect=_configured)
+
+    def _resolved(**kwargs):
+        return create_model_info_response(**kwargs, get_model_info=_cost_map_lookup)
+
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _resolved)
+
+    with auth_as():
+        response = client.get(path, headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    gpt_4, claude = response.json()["data"]
+    assert (gpt_4["max_input_tokens"], gpt_4["max_tokens"]) == (300000, 32000)
+    assert (claude["max_input_tokens"], claude["max_tokens"]) == (500000, 4096)
+
+
+@pytest.mark.parametrize(
+    ("path", "params", "role"),
+    [
+        ("/v1/models", {}, None),
+        ("/v1/models", {"scope": "expand"}, LitellmUserRoles.PROXY_ADMIN),
+        ("/v1/models/gpt-4", {}, None),
+    ],
+)
+def test_token_limits_are_read_for_the_key_team(client, auth_as, patched_models, monkeypatch, path, params, role):
+    """Two teams can route one wildcard name to different deployments, so the limits a listing
+    shows come from the deployments the key's team routes to, and no team for a key without one."""
+    patched_models.get_model_listing_info = MagicMock(
+        side_effect=lambda model_name, team_id=None: (
+            DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024)
+            if team_id == "team-1"
+            else None
+        )
+    )
+    monkeypatch.setattr(
+        proxy_utils,
+        "create_model_info_response",
+        lambda **kwargs: create_model_info_response(
+            **kwargs, get_model_info=lambda _model: {"max_input_tokens": 100, "max_output_tokens": 10}
+        ),
+    )
+
+    with auth_as(role, team_id="team-1"):
+        team_body = client.get(path, params=params).json()
+    with auth_as(role):
+        teamless_body = client.get(path, params=params).json()
+
+    def _limits(body):
+        return {(m["max_input_tokens"], m["max_output_tokens"]) for m in body.get("data", [body])}
+
+    assert _limits(team_body) == {(4096, 1024)}
+    assert _limits(teamless_body) == {(100, 10)}
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_anthropic_format_uses_configured_display_name(client, auth_as, patched_models, path):
+    """A deployment's ``model_info.display_name`` becomes the Anthropic-native
+    ``display_name`` so Claude Code's picker shows a clean name while the id keeps
+    routing; models without one keep the id fallback, and the OpenAI-shaped
+    listing carries no display_name either way."""
+
+    def _configured(model_name):
+        return "Kimi K3" if model_name == "gpt-4" else None
+
+    patched_models.get_configured_display_name = MagicMock(side_effect=_configured)
+
+    with auth_as():
+        anthropic_response = client.get(path, headers={"anthropic-version": "2023-06-01"})
+        openai_response = client.get(path)
+
+    assert anthropic_response.status_code == 200
+    gpt_4, claude = anthropic_response.json()["data"]
+    assert (gpt_4["id"], gpt_4["display_name"]) == ("gpt-4", "Kimi K3")
+    assert (claude["id"], claude["display_name"]) == ("claude-sonnet", "claude-sonnet")
+
+    assert openai_response.status_code == 200
+    openai_models = openai_response.json()["data"]
+    assert [m["id"] for m in openai_models] == ["gpt-4", "claude-sonnet"]
+    assert all("display_name" not in m for m in openai_models)
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_anthropic_display_name_resolved_via_internal_team_key(client, auth_as, patched_models, monkeypatch, params):
+    """For a team-scoped row the configured display name must be looked up by the
+    internal routing key while the entry itself is keyed by the public name, so
+    the clean name lands on the id the client actually sees."""
+    from litellm.proxy import utils as proxy_utils
+    from litellm.proxy.auth import model_checks
+
+    internal_name = "model_name_team-1_c0ffee"
+
+    patched_models.get_model_list = MagicMock(
+        return_value=[
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
+                "model_info": {
+                    "team_id": "team-1",
+                    "team_public_model_name": "gpt-4-team",
+                },
+            }
+        ]
+    )
+    patched_models.get_model_names = MagicMock(return_value=[internal_name])
+    patched_models.get_configured_display_name = MagicMock(
+        side_effect=lambda model_name: "Team GPT" if model_name == internal_name else None
+    )
+
+    async def _fake_get_available_models_for_user(**kwargs):
+        return [internal_name]
+
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        _fake_get_available_models_for_user,
+    )
+    monkeypatch.setattr(model_checks, "get_complete_model_list", lambda **kwargs: [internal_name])
+
+    with auth_as():
+        response = client.get("/v1/models", params=params, headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    (entry,) = response.json()["data"]
+    assert (entry["id"], entry["display_name"]) == ("gpt-4-team", "Team GPT")
+
+
+class _AuthAs(Protocol):
+    def __call__(
+        self,
+        role: LitellmUserRoles | None = None,
+        *,
+        team_id: str | None = None,
+        team_models: list[str] | None = None,
+    ) -> AbstractContextManager[UserAPIKeyAuth]: ...
+
+
+@pytest.fixture
+def router_with_model_descriptions(monkeypatch: pytest.MonkeyPatch) -> Router:
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "described",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-test"},
+                "model_info": {"description": "A configured model description"},
+            },
+            {"model_name": "undescribed", "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-test"}},
+            {
+                "model_name": "shared",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-test"},
+                "model_info": {"team_id": "team-2", "description": "Another team's description"},
+            },
+            {
+                "model_name": "shared",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                "model_info": {"description": "A shared description"},
+            },
+            {
+                "model_name": "model_name_team-1_sonnet",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-test"},
+                "model_info": {
+                    "team_id": "team-1",
+                    "team_public_model_name": "team-sonnet",
+                    "description": "A team model description",
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    return router
+
+
+@pytest.mark.usefixtures("router_with_model_descriptions")
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}], ids=["default", "expanded"])
+def test_anthropic_format_only_includes_configured_descriptions(
+    client: TestClient, auth_as: _AuthAs, params: Mapping[str, str]
+) -> None:
+    with auth_as():
+        response = client.get("/v1/models", params=params, headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    rows = {row["id"]: row for row in response.json()["data"]}
+    assert rows["described"].get("description") == "A configured model description"
+    assert "description" not in rows["undescribed"]
+
+
+@pytest.mark.usefixtures("router_with_model_descriptions")
+def test_anthropic_description_uses_internal_team_lookup_id(client: TestClient, auth_as: _AuthAs) -> None:
+    with auth_as(team_id="team-1", team_models=["model_name_team-1_sonnet"]):
+        response = client.get("/v1/models", headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    (row,) = response.json()["data"]
+    assert (row["id"], row.get("description")) == ("team-sonnet", "A team model description")
+
+
+@pytest.mark.usefixtures("router_with_model_descriptions")
+def test_anthropic_description_uses_team_eligible_deployment(client: TestClient, auth_as: _AuthAs) -> None:
+    with auth_as(LitellmUserRoles.INTERNAL_USER, team_id="team-1", team_models=["shared"]):
+        response = client.get("/v1/models", headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    (row,) = response.json()["data"]
+    assert (row["id"], row.get("description")) == ("shared", "A shared description")
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_get_models_invalid_scope_returns_400(client, auth_as, patched_models, path):
+    """Pins: ``GET /v1/models``, ``GET /models`` (error path: invalid scope)."""
+    with auth_as():
+        response = client.get(path, params={"scope": "not-a-real-scope"})
+    assert response.status_code == 400
+    assert "Invalid scope parameter" in str(response.json())
+
+
+@pytest.mark.parametrize("path", ["/v1/models/gpt-4", "/models/gpt-4"])
+def test_get_model_by_id_happy_path(client, auth_as, patched_models, path):
+    """Pins: ``GET /v1/models/{model_id}``, ``GET /models/{model_id}``."""
+    with auth_as():
+        response = client.get(path)
+    assert response.status_code == 200
+    assert normalize(response.json()) == {
+        "id": "<VOLATILE>",
+        "object": "model",
+        "created": "<VOLATILE>",
+        "owned_by": "openai",
+    }
+
+
+@pytest.mark.parametrize("path", ["/v1/models/missing", "/models/missing"])
+def test_get_model_by_id_not_found(client, auth_as, patched_models, path):
+    """Pins: ``GET /v1/models/{model_id}``, ``GET /models/{model_id}`` (error: 404)."""
+    patched_models.get_deployment_by_model_group_name = MagicMock(return_value=None)
+    with auth_as():
+        response = client.get(path)
+    assert response.status_code == 404
+    assert "not found" in response.text.lower()
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_anthropic_format_returns_public_team_model_name(client, auth_as, patched_models, monkeypatch, params):
+    """Regression: the Anthropic-native listing must go through the same team
+    name translation as the OpenAI listing, so a caller never sees the internal
+    ``model_name_{team_id}_{uuid}`` routing key."""
+    from litellm.proxy import utils as proxy_utils
+    from litellm.proxy.auth import model_checks
+
+    internal_name = "model_name_team-1_c0ffee"
+
+    patched_models.get_model_list = MagicMock(
+        return_value=[
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
+                "model_info": {
+                    "team_id": "team-1",
+                    "team_public_model_name": "gpt-4-team",
+                },
+            }
+        ]
+    )
+    patched_models.get_model_names = MagicMock(return_value=[internal_name])
+
+    async def _fake_get_available_models_for_user(**kwargs):
+        return [internal_name]
+
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        _fake_get_available_models_for_user,
+    )
+    monkeypatch.setattr(model_checks, "get_complete_model_list", lambda **kwargs: [internal_name])
+
+    with auth_as():
+        response = client.get("/v1/models", params=params, headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    assert [m["id"] for m in response.json()["data"]] == ["gpt-4-team"]
+    assert internal_name not in response.text
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize(
+    "caller_headers",
+    [
+        {"anthropic-version": "2023-06-01", "user-agent": "claude-code/2.1.267"},
+        {"anthropic-version": "2023-06-01", "user-agent": "claude-cli/2.1.267 (external, sdk-cli)"},
+        {"anthropic-version": "2023-06-01", "x-gateway-client": "claude-code"},
+    ],
+)
+def test_anthropic_format_lists_claude_code_view_ids_for_claude_code(
+    client, auth_as, patched_models, monkeypatch, path, caller_headers
+):
+    """Claude Code drops every id without claude/anthropic in it and reads [1m] as its 1M marker, so for Claude
+    Code (its discovery fetch's own user agent, its SDK's, or the gateway-client header a launcher sends) every
+    group is listed under a Claude-shaped id with the marker where the window reaches 1M; the display name stays
+    the served name."""
+
+    def _create_model_info_response(model_id, provider="openai", **kwargs):
+        if model_id != "claude-sonnet":
+            return _stub_model_info_response(model_id=model_id, provider=provider)
+        return {**_stub_model_info_response(model_id=model_id, provider=provider), "max_input_tokens": 1000000}
+
+    patched_models.model_group_alias = {}
+    patched_models.has_model_id.return_value = False
+    patched_models.get_candidate_model_ids_for_route.side_effect = lambda name, team_id=None: (
+        frozenset({name}) if name in ("gpt-4", "claude-sonnet") else frozenset()
+    )
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _create_model_info_response)
+
+    with auth_as():
+        response = client.get(path, headers=caller_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [(m["id"], m["display_name"]) for m in body["data"]] == [
+        ("claude-router-6770742d34", "gpt-4"),
+        ("claude-sonnet[1m]", "claude-sonnet"),
+    ]
+    assert (body["first_id"], body["last_id"]) == ("claude-router-6770742d34", "claude-sonnet[1m]")
+    assert [row["source_model"] for row in body["data"]] == ["gpt-4", "claude-sonnet"]
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_anthropic_format_keeps_served_ids_for_other_anthropic_clients(client, auth_as, patched_models, path):
+    """An Anthropic SDK asking for the vendor shape gets the served ids: the view is Claude Code's alone."""
+    with auth_as():
+        response = client.get(
+            path, headers={"anthropic-version": "2023-06-01", "user-agent": "anthropic-sdk-python/0.40"}
+        )
+
+    assert response.status_code == 200
+    assert [m["id"] for m in response.json()["data"]] == ["gpt-4", "claude-sonnet"]
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_codex_format_when_client_version_present(client, auth_as, patched_models, path, params):
+    """Codex CLI fetches a provider's catalog as ``GET /v1/models?client_version=<its version>`` and
+    decodes Codex's own ``{"models": [...]}`` shape; the same request without the parameter keeps the
+    OpenAI shape byte for byte."""
+    with auth_as():
+        codex_response = client.get(path, params={**params, "client_version": "0.159.3"})
+        openai_response = client.get(path, params=params)
+
+    assert codex_response.status_code == 200
+    assert codex_response.headers["content-type"] == "application/json"
+    body = codex_response.json()
+    assert list(body) == ["models"]
+    assert [(m["slug"], m["display_name"], m["priority"]) for m in body["models"]] == [
+        ("gpt-4", "gpt-4", 0),
+        ("claude-sonnet", "claude-sonnet", 1),
+    ]
+    assert all(m["base_instructions"] and m["visibility"] == "list" for m in body["models"])
+
+    assert openai_response.status_code == 200
+    assert normalize(openai_response.json()) == {
+        "data": [
+            {"id": "<VOLATILE>", "object": "model", "created": "<VOLATILE>", "owned_by": "openai"},
+            {"id": "<VOLATILE>", "object": "model", "created": "<VOLATILE>", "owned_by": "openai"},
+        ],
+        "object": "list",
+    }
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_codex_format_wins_over_the_anthropic_header(client, auth_as, patched_models, path):
+    with auth_as():
+        response = client.get(path, params={"client_version": "0.159.3"}, headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    assert list(response.json()) == ["models"]
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_codex_format_carries_configured_service_tiers(client, auth_as, patched_models, path):
+    """A deployment's ``model_info.service_tiers`` becomes the entry's ``service_tiers``, which Codex
+    offers as slash commands; a model without one offers none, and the OpenAI shape gains no field."""
+    patched_models.get_configured_service_tiers = MagicMock(
+        side_effect=lambda model_name, team_id=None: (["ultrafast"],) if model_name == "gpt-4" else (None,)
+    )
+
+    with auth_as():
+        codex_response = client.get(path, params={"client_version": "0.159.3"})
+        openai_response = client.get(path)
+
+    gpt_4, claude = codex_response.json()["models"]
+    assert gpt_4["service_tiers"] == [
+        {"id": "ultrafast", "name": "Ultrafast", "description": "Sends service_tier=ultrafast upstream"}
+    ]
+    assert claude["service_tiers"] == []
+    assert all("service_tiers" not in m for m in openai_response.json()["data"])
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_codex_reasoning_levels_are_the_ones_the_requesting_codex_parses(client, auth_as, monkeypatch, params):
+    """Both listing paths hand the route's ``client_version`` to the catalog: Codex before 0.138.0 cannot
+    parse max, so it is offered there only to a newer release."""
+    declared = {"supports_reasoning": True, "reasoning_effort_levels": ["low", "max"]}
+    vllm = {"model": "hosted_vllm/qa-local-coder", "api_base": "https://vllm.example/v1"}
+    router = litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": vllm, "model_info": declared} for name in ("gpt-4", "claude-sonnet")
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    with auth_as():
+        current = client.get("/v1/models", params={**params, "client_version": "0.165.0"})
+        older = client.get("/v1/models", params={**params, "client_version": "0.137.0"})
+
+    assert [[level["effort"] for level in m["supported_reasoning_levels"]] for m in current.json()["models"]] == [
+        ["low", "max"]
+    ] * 2
+    assert [[level["effort"] for level in m["supported_reasoning_levels"]] for m in older.json()["models"]] == [
+        ["low"]
+    ] * 2
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_codex_service_tiers_are_read_for_the_key_team(client, auth_as, patched_models, params):
+    """A tier and the upstream model that picks Codex's stock entry are read off the deployments the
+    key's team can route to, so both listing paths hand the router the key's team, and no team for a
+    key without one."""
+    patched_models.get_configured_service_tiers = MagicMock(
+        side_effect=lambda model_name, team_id=None: (["ultrafast"],) if team_id == "team-1" else (None,)
+    )
+    patched_models.get_routable_upstream_model = MagicMock(
+        side_effect=lambda model_name, team_id=None: "openai/gpt-5.5" if team_id == "team-1" else "gpt-4"
+    )
+
+    with auth_as(team_id="team-1"):
+        team_response = client.get("/v1/models", params={**params, "client_version": "0.159.3"})
+    with auth_as():
+        teamless_response = client.get("/v1/models", params={**params, "client_version": "0.159.3"})
+
+    assert [[t["id"] for t in m["service_tiers"]] for m in team_response.json()["models"]] == [["ultrafast"]] * 2
+    assert [m["service_tiers"] for m in teamless_response.json()["models"]] == [[], []]
+    assert all(m["supported_reasoning_levels"] for m in team_response.json()["models"])
+    assert [m["supported_reasoning_levels"] for m in teamless_response.json()["models"]] == [[], []]
+
+
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
+def test_codex_service_tiers_resolved_via_internal_team_key(client, auth_as, patched_models, monkeypatch, params):
+    """A team-scoped row's tiers are looked up by the internal routing key while the entry is keyed by
+    the public name Codex sends back as the model."""
+    from litellm.proxy import utils as proxy_utils
+    from litellm.proxy.auth import model_checks
+
+    internal_name = "model_name_team-1_c0ffee"
+
+    patched_models.get_model_list = MagicMock(
+        return_value=[
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-4"},
+                "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4-team"},
+            }
+        ]
+    )
+    patched_models.get_model_names = MagicMock(return_value=[internal_name])
+    patched_models.get_configured_service_tiers = MagicMock(
+        side_effect=lambda model_name, team_id=None: (["ultrafast"],) if model_name == internal_name else ()
+    )
+
+    async def _fake_get_available_models_for_user(**kwargs):
+        return [internal_name]
+
+    monkeypatch.setattr(proxy_utils, "get_available_models_for_user", _fake_get_available_models_for_user)
+    monkeypatch.setattr(model_checks, "get_complete_model_list", lambda **kwargs: [internal_name])
+
+    with auth_as():
+        response = client.get("/v1/models", params={**params, "client_version": "0.159.3"})
+
+    assert response.status_code == 200
+    (entry,) = response.json()["models"]
+    assert (entry["slug"], [tier["id"] for tier in entry["service_tiers"]]) == ("gpt-4-team", ["ultrafast"])
+
+
+OPENROUTER_BASE: Final = "https://openrouter.ai/api/v1"
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogHeldUntilTheLoopRuns:
+    requested: threading.Event = field(default_factory=threading.Event)
+    released: threading.Event = field(default_factory=threading.Event)
+
+    def answer(self, _request: httpx.Request) -> httpx.Response:
+        self.requested.set()
+        if not self.released.wait(timeout=30):
+            return httpx.Response(504)
+        return httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]})
+
+    async def release_from_the_loop(self) -> None:
+        assert await asyncio.to_thread(self.requested.wait, 30)
+        self.released.set()
+
+
+@pytest.mark.parametrize("scope", [None, "expand"])
+def test_v1_models_fetches_a_live_openrouter_catalog_without_holding_the_event_loop_or_its_default_thread_pool(
+    monkeypatch: pytest.MonkeyPatch, scope: str | None
+):
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openrouter/*",
+                    "litellm_params": {
+                        "model": "openrouter/*",
+                        "api_key": f"sk-or-v1-models-off-loop-{scope}",
+                        "api_base": OPENROUTER_BASE,
+                    },
+                }
+            ]
+        ),
+    )
+    catalog: Final = _CatalogHeldUntilTheLoopRuns()
+
+    async def listed_ids_on_a_one_thread_default_pool() -> list[str]:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        listing: Final = asyncio.ensure_future(
+            proxy_server.model_list(
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="sk-test-key", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+                scope=scope,
+            )
+        )
+        await catalog.release_from_the_loop()
+        response: Final = await listing
+        return [str(model["id"]) for model in response["data"]]
+
+    with respx.mock() as respx_mock:
+        catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(side_effect=catalog.answer)
+        listed_ids: Final = asyncio.run(listed_ids_on_a_one_thread_default_pool())
+
+    assert catalog_route.calls.last.response.status_code == 200
+    assert listed_ids == ["openrouter/openai/gpt-5.4-mini"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["expand", None])
+async def test_pickers_offer_typesafe_names_once_and_no_bare_name_for_registered_typesafe_deployments(
+    monkeypatch: pytest.MonkeyPatch, scope: str | None
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-typesafe-fake")
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    router: Final = Router(
+        model_list=[
+            {"model_name": "typesafe/*", "litellm_params": {"model": "typesafe/*", "api_key": "sk-typesafe-fake"}},
+            {
+                "model_name": "ticket-router",
+                "litellm_params": {"model": "typesafe/my-classifier", "api_key": "sk-typesafe-fake"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    admin: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    response: Final = await proxy_server.model_list(
+        user_api_key_dict=admin, return_wildcard_routes=True, include_model_access_groups=True, scope=scope
+    )
+
+    listed: Final = [model["id"] for model in response["data"]]
+    assert "ticket-router" in listed
+    assert listed.count("typesafe/*") == 1
+    assert set(listed).isdisjoint({"*", "my-classifier"})
+
+
+@pytest.mark.asyncio
+async def test_accessible_model_names_lists_the_registered_models_a_key_can_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "ticket-router", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"}},
+            {"model_name": "off-limits", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}},
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    key: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", models=["ticket-router"])
+
+    assert await proxy_server.accessible_model_names(key) == ("ticket-router",)

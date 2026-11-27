@@ -1,19 +1,57 @@
-import json
 from abc import abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, cast
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+from typing_extensions import TypedDict
+
 import litellm
+from litellm.constants import STREAM_SSE_DONE_STRING, VLLM_STREAM_PROMPT_FIELDS
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, loads_json_object
+from litellm.litellm_core_utils.hidden_params import set_extra_attribute, stored_attribute
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.sse_lines import is_sse_payload_line
 
 if TYPE_CHECKING:
     import httpx
+from litellm.types.llms.openai import ChatCompletionRedactedThinkingBlock, ChatCompletionThinkingBlock
 from litellm.types.utils import (
     Choices,
     Delta,
     GenericStreamingChunk,
+    Message,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
 )
+
+
+def _indexed_thinking_block(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, index: int
+) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
+    if block["type"] == "redacted_thinking":
+        return {**block, "index": index}
+    return {**block, "index": index}
+
+
+class _DeltaFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _message_fields_without_thinking_blocks(message: Message) -> Mapping[str, object]:
+    return message.model_dump(exclude={"thinking_blocks"})
+
+
+def _streaming_delta(message: Message) -> Delta:
+    thinking_blocks: Final = message.thinking_blocks if hasattr(message, "thinking_blocks") else None
+    return Delta(
+        **_DeltaFields(**_message_fields_without_thinking_blocks(message)),
+        thinking_blocks=(
+            None
+            if thinking_blocks is None
+            else [_indexed_thinking_block(block, index) for index, block in enumerate(thinking_blocks)]
+        ),
+    )
 
 
 def convert_model_response_to_streaming(
@@ -40,10 +78,9 @@ def convert_model_response_to_streaming(
             streaming_choices.append(
                 StreamingChoices(
                     index=choice.index,
-                    delta=Delta(
-                        **cast(Choices, choice).message.model_dump(),
-                    ),
+                    delta=_streaming_delta(cast(Choices, choice).message),
                     finish_reason=choice.finish_reason,
+                    logprobs=stored_attribute(choice, "logprobs"),
                 )
             )
         processed_chunk: Final = ModelResponseStream(
@@ -51,8 +88,18 @@ def convert_model_response_to_streaming(
             object="chat.completion.chunk",
             created=model_response.created,
             model=model_response.model,
+            system_fingerprint=model_response.system_fingerprint,
             choices=streaming_choices,
+        ).model_copy(
+            update={
+                field: value
+                for field in VLLM_STREAM_PROMPT_FIELDS
+                if (value := attribute_or_none(model_response, field)) is not None
+            }
         )
+        service_tier: Final = stored_attribute(model_response, "service_tier")
+        if service_tier is not None:
+            set_extra_attribute(processed_chunk, "service_tier", service_tier)
         # Carry usage onto the streaming chunk so fake-streamed responses
         # (e.g. Vertex AI Gemma :predict) still report token counts.
         usage: Final = getattr(model_response, "usage", None)
@@ -61,6 +108,36 @@ def convert_model_response_to_streaming(
         return processed_chunk
     except Exception as e:
         raise ValueError(f"Failed to convert ModelResponse to ModelResponseStream: {model_response}. Error: {e}")
+
+
+UPSTREAM_ABORT_MESSAGE: Final = "Upstream generation aborted (finish_reason=abort)"
+
+
+class _StreamedChoice(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    finish_reason: object = None
+
+
+class _StreamedChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    choices: tuple[_StreamedChoice, ...] | None = None
+
+
+class UpstreamAbortError(BaseLLMException):
+    pass
+
+
+def upstream_abort_error() -> UpstreamAbortError:
+    return UpstreamAbortError(status_code=500, message=UPSTREAM_ABORT_MESSAGE)
+
+
+def raise_on_upstream_abort(chunk: object) -> None:
+    try:
+        choices: Final = _StreamedChunk.model_validate(chunk).choices or ()
+    except ValidationError:
+        return
+    if any(choice.finish_reason == "abort" for choice in choices):
+        raise upstream_abort_error()
 
 
 class BaseModelResponseIterator:
@@ -75,13 +152,17 @@ class BaseModelResponseIterator:
         released (and a backend like vLLM aborts generation) when the stream
         is abandoned before its natural end.
 
-        ``streaming_response`` is usually a bare ``aiter_lines()`` generator
+        ``streaming_response`` is usually a bare ``aiter_sse_lines()`` generator
         that holds no reference to the response, so the handler that owns the
         response attaches it here after construction."""
         if self.http_response is not None:
             await self.http_response.aclose()
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
+    def close(self) -> None:
+        if self.http_response is not None:
+            self.http_response.close()
+
+    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk | ModelResponseStream:
         return GenericStreamingChunk(
             text="",
             is_finished=False,
@@ -96,22 +177,23 @@ class BaseModelResponseIterator:
         return self
 
     @staticmethod
-    def _string_to_dict_parser(str_line: str) -> dict | None:
-        stripped_json_chunk: dict | None = None
-        stripped_chunk: Final = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(str_line)
-        try:
-            if stripped_chunk is not None:
-                stripped_json_chunk = json.loads(stripped_chunk)
-            else:
-                stripped_json_chunk = None
-        except json.JSONDecodeError:
-            stripped_json_chunk = None
-        return stripped_json_chunk
+    def _string_to_dict_parser(str_line: str) -> dict[str, object] | None:
+        stripped_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
+        decoded: Final = None if stripped_chunk is None else loads_json_object(stripped_chunk)
+        return decoded if isinstance(decoded, dict) else None
+
+    @classmethod
+    def string_to_dict_parser(
+        cls,
+        str_line: str,
+    ) -> dict[str, object] | None:  # mutable-ok: mirrors override contract
+        return cls._string_to_dict_parser(str_line)
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         # chunk is a str at this point
-        stripped_json_chunk: Final = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
-        if "[DONE]" in str_line:
+        stripped_json_chunk: Final = BaseModelResponseIterator.string_to_dict_parser(str_line=str_line)
+        stripped_sse_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
+        if stripped_sse_chunk is not None and stripped_sse_chunk.strip() == STREAM_SSE_DONE_STRING:
             return GenericStreamingChunk(
                 text="",
                 is_finished=True,
@@ -121,7 +203,10 @@ class BaseModelResponseIterator:
                 tool_use=None,
             )
         elif stripped_json_chunk:
-            return self.chunk_parser(chunk=stripped_json_chunk)
+            parsed_chunk: Final = self.chunk_parser(chunk=stripped_json_chunk)
+            if '"abort"' in str_line:
+                raise_on_upstream_abort(stripped_json_chunk)
+            return parsed_chunk
         else:
             return GenericStreamingChunk(
                 text="",
@@ -149,10 +234,9 @@ class BaseModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                # Skip empty lines (common in SSE streams between events).
                 # Only apply to str chunks — non-string objects (e.g. Pydantic
                 # BaseModel events from the Responses API) must pass through.
-                if isinstance(str_line, str) and (not str_line or not str_line.strip()):
+                if isinstance(str_line, str) and not is_sse_payload_line(str_line):
                     continue
 
                 # chunk is a str at this point
@@ -185,10 +269,9 @@ class BaseModelResponseIterator:
                     if index != -1:
                         str_line = str_line[index:]
 
-                # Skip empty lines (common in SSE streams between events).
                 # Only apply to str chunks — non-string objects (e.g. Pydantic
                 # BaseModel events from the Responses API) must pass through.
-                if isinstance(str_line, str) and (not str_line or not str_line.strip()):
+                if isinstance(str_line, str) and not is_sse_payload_line(str_line):
                     continue
 
                 # chunk is a str at this point
@@ -242,7 +325,7 @@ class FakeStreamResponseIterator:
         return self
 
     @abstractmethod
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk:
         pass
 
     def __next__(self):

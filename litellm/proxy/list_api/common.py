@@ -1,15 +1,17 @@
 """Contract machinery shared by every LiteLLM-defined list route, on any surface."""
 
 from collections.abc import Sequence
-from typing import Final
+from typing import Final, Protocol
 from urllib.parse import urlencode
 
 from fastapi import Request
+from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_flat_params
 from fastapi.params import ParamTypes
 from fastapi.responses import JSONResponse
-from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.proxy.common_utils.validation_error_body import ValidationErrorDetail
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListLinks,
     PageLinks,
@@ -39,9 +41,14 @@ def problem_response(problem: ProblemDetail) -> JSONResponse:
     )
 
 
+class _DependantRoute(Protocol):
+    @property
+    def dependant(self) -> Dependant: ...
+
+
 def _declared_query_params(request: Request) -> frozenset[str]:
     route: Final = request.scope.get("route")
-    dependant: Final = getattr(route, "dependant", None)
+    dependant: Final = route.dependant if has_attributes(route, _DependantRoute, "dependant") else None
     if dependant is None:
         return frozenset()
     # fastapi>=0.140.7 removed get_flat_dependant(); get_flat_params() returns the
@@ -56,14 +63,6 @@ def _declared_query_params(request: Request) -> frozenset[str]:
 def escape_like(value: str) -> str:
     """Escape LIKE/ILIKE metacharacters. Ids routinely contain `_`, which is a wildcard unescaped."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-class ValidationErrorDetail(TypedDict):
-    """The keys of a pydantic/FastAPI validation error a problem document needs."""
-
-    type: ReadOnly[str]
-    loc: ReadOnly[tuple[int | str, ...]]
-    msg: ReadOnly[str]
 
 
 def _is_length_error_of_rejected_items(error: ValidationErrorDetail, errors: Sequence[ValidationErrorDetail]) -> bool:

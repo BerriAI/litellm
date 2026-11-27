@@ -16,27 +16,48 @@ Requires:
 
 import json
 import os
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import SECRETS_MANAGER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
-from litellm.proxy._types import KeyManagementSystem
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.secret_managers.main import KeyManagementSettings
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager
 
+if TYPE_CHECKING:
+    from botocore.awsrequest import HTTPHeaders
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _SecretStringResponse(TypedDict):
+    SecretString: ReadOnly[str]
+
+
+_SECRET_STRING_RESPONSE: Final = TypeAdapter(_SecretStringResponse)
+_AWS_SECRET_MANAGER_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_PRIMARY_SECRET_JSON: Final = TypeAdapter(object)
+
 
 class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SECRETS_MANAGER_SESSION_POLICY
+
     def __init__(
         self,
         aws_region_name: str | None = None,
@@ -48,7 +69,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         aws_sts_endpoint: str | None = None,
         replica_regions: list[str] | None = None,
         kms_key_id: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         BaseSecretManager.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
@@ -118,7 +139,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
     async def async_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         primary_secret_name: str | None = None,
     ) -> str | None:
@@ -149,7 +170,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()["SecretString"]
+            return _SECRET_STRING_RESPONSE.validate_python(response.json())["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
         except Exception as e:
@@ -163,7 +184,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         primary_secret_name: str | None = None,
     ) -> str | None:
@@ -193,13 +214,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             optional_params=optional_params,
         )
 
-        sync_client: Final = _get_httpx_client(
+        sync_client: Final = get_httpx_client(
             params={"timeout": timeout},
         )
 
         try:
             response: Final = sync_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
-            return response.json()["SecretString"]
+            return _SECRET_STRING_RESPONSE.validate_python(response.json())["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
         except httpx.HTTPStatusError as e:
@@ -227,7 +248,8 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         Returns:
             Dictionary of key-value pairs from the primary secret
         """
-        return json.loads(primary_secret_json_str or "{}")
+        decoded: Final = _PRIMARY_SECRET_JSON.validate_python(json.loads(primary_secret_json_str or "{}"))
+        return require_attributes(decoded, dict[str, object], "get")
 
     def sync_read_secret_from_primary_secret(self, secret_name: str, primary_secret_name: str) -> str | None:
         """
@@ -250,10 +272,10 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         secret_name: str,
         secret_value: str,
         description: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tags: dict | list | None = None,
-    ) -> dict:
+        tags: Mapping[str, object] | Sequence[object] | None = None,
+    ) -> dict[str, object]:
         """
         Async function to write a secret to AWS Secrets Manager
 
@@ -291,31 +313,12 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 raise ValueError("Tags must be a dict or list of {Key, Value} pairs")
             data["Tags"] = tags_list
 
-        endpoint_url, headers, body = self._prepare_request(
-            action="CreateSecret",
+        create_response: Final = await self._async_create_or_restore_secret(
             secret_name=secret_name,
-            secret_value=secret_value,
-            optional_params=optional_params,
             request_data=data,
+            optional_params=optional_params,
+            timeout=timeout,
         )
-
-        async_client: Final = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.SecretManager,
-            params={"timeout": timeout},
-        )
-
-        try:
-            response: Final = await async_client.post(
-                url=endpoint_url,
-                headers=headers,
-                data=body.decode("utf-8"),
-            )
-            response.raise_for_status()
-            create_response: Final = response.json()
-        except httpx.HTTPStatusError as err:
-            raise ValueError(f"HTTP error occurred: {err.response.text}")
-        except httpx.TimeoutException:
-            raise ValueError("Timeout error occurred")
 
         if self.replica_regions:
             try:
@@ -339,6 +342,110 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 )
 
         return create_response
+
+    async def _async_create_or_restore_secret(
+        self,
+        secret_name: str,
+        request_data: Mapping[str, object],
+        optional_params: dict[str, object] | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> dict[str, object]:
+        try:
+            return await self._async_post_action(
+                action="CreateSecret",
+                secret_name=secret_name,
+                request_data=request_data,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+        except ValueError:
+            if not await self._async_is_scheduled_for_deletion(
+                secret_name=secret_name,
+                optional_params=optional_params,
+                timeout=timeout,
+            ):
+                raise
+
+        verbose_logger.info(
+            "Secret %s is scheduled for deletion, restoring and updating in place (RestoreSecret + UpdateSecret)",
+            secret_name,
+        )
+        await self._async_post_action(
+            action="RestoreSecret",
+            secret_name=secret_name,
+            request_data=None,
+            optional_params=optional_params,
+            timeout=timeout,
+        )
+        update_data: Final = MappingProxyType(
+            {("SecretId" if key == "Name" else key): value for key, value in request_data.items() if key != "Tags"}
+        )
+        tags: Final = request_data.get("Tags")
+        try:
+            updated: Final = await self._async_post_action(
+                action="UpdateSecret",
+                secret_name=secret_name,
+                request_data=update_data,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+            if tags is not None:
+                await self._async_post_action(
+                    action="TagResource",
+                    secret_name=secret_name,
+                    request_data=MappingProxyType({"SecretId": secret_name, "Tags": tags}),
+                    optional_params=optional_params,
+                    timeout=timeout,
+                )
+        except ValueError:
+            await self.async_delete_secret(secret_name=secret_name, optional_params=optional_params, timeout=timeout)
+            raise
+        return updated
+
+    async def _async_is_scheduled_for_deletion(
+        self,
+        secret_name: str,
+        optional_params: dict[str, object] | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> bool:
+        try:
+            described: Final = await self._async_post_action(
+                action="DescribeSecret",
+                secret_name=secret_name,
+                request_data=None,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+        except ValueError:
+            return False
+        return described.get("DeletedDate") is not None
+
+    async def _async_post_action(
+        self,
+        action: str,
+        secret_name: str,
+        request_data: Mapping[str, object] | None,
+        optional_params: dict[str, object] | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> dict[str, object]:
+        endpoint_url, headers, body = self._prepare_request(
+            action=action,
+            secret_name=secret_name,
+            optional_params=optional_params,
+            request_data=dict(request_data) if request_data is not None else None,
+        )
+        async_client: Final = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager,
+            params={"timeout": timeout},
+        )
+        try:
+            response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
+            response.raise_for_status()
+            return _AWS_SECRET_MANAGER_RESPONSE.validate_python(response.json())
+        except httpx.HTTPStatusError as err:
+            raise ValueError(f"HTTP error occurred: {err.response.text}")
+        except httpx.TimeoutException:
+            raise ValueError("Timeout error occurred")
 
     async def async_replicate_secret(
         self,
@@ -391,7 +498,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _AWS_SECRET_MANAGER_RESPONSE.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -401,9 +508,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self,
         secret_name: str,
         secret_value: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Async function to update an existing secret's value in AWS Secrets Manager.
 
@@ -443,7 +550,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _AWS_SECRET_MANAGER_RESPONSE.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -454,9 +561,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         current_secret_name: str,
         new_secret_name: str,
         new_secret_value: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Rotate a secret. When current_secret_name == new_secret_name (in-place
         update), uses PutSecretValue instead of create+delete to avoid
@@ -487,9 +594,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self,
         secret_name: str,
         recovery_window_in_days: int | None = 7,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Async function to delete a secret from AWS Secrets Manager
 
@@ -523,7 +630,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _AWS_SECRET_MANAGER_RESPONSE.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -534,15 +641,14 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         action: str,  # "GetSecretValue" or "PutSecretValue"
         secret_name: str,
         secret_value: str | None = None,
-        optional_params: dict | None = None,
-        request_data: dict | None = None,
-    ) -> tuple[str, Any, bytes]:
+        optional_params: dict[str, object] | None = None,
+        request_data: Mapping[str, object] | None = None,
+    ) -> tuple[str, "HTTPHeaders", bytes]:
         """Prepare the AWS Secrets Manager request"""
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+
         optional_params = optional_params or {}
 
         # Build optional_params from instance settings if not provided

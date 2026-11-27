@@ -13,14 +13,16 @@ import pytest
 
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
-from reliability_support import chat_override, create_timeout_deployment
+from reliability_support import REAL_MODEL, chat_override, create_timeout_deployment
 
 pytestmark = pytest.mark.e2e
 
 
 class TestReliabilityTimeouts:
     @pytest.mark.covers("reliability.timeout.request_timeout.exceeds_deadline")
+    @meta(Subject(domain=Domain.ROUTING, providers=(Provider.OPENAI,), models=(REAL_MODEL,), mode=Mode.NONSTREAM))
     def test_request_timeout_exceeds_deadline(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -35,6 +37,7 @@ class TestReliabilityTimeouts:
         assert "timeout" in resp.body.lower(), f"the 408 body should name the timeout, got: {resp.body[:300]}"
 
     @pytest.mark.covers("reliability.timeout.stream_timeout.exceeds_deadline")
+    @meta(Subject(domain=Domain.ROUTING, providers=(Provider.OPENAI,), models=(REAL_MODEL,), mode=Mode.STREAM))
     def test_stream_timeout_exceeds_deadline(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:

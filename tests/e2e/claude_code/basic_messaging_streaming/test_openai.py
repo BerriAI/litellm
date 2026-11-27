@@ -1,8 +1,8 @@
-"""basic_messaging_streaming x OpenAI (GPT-5.6).
+"""basic_messaging_streaming x OpenAI (GPT-6).
 
 Drive the real `claude` CLI in headless `--output-format stream-json`
 mode against a running LiteLLM proxy that routes Anthropic Messages
-requests to OpenAI's GPT-5.6 family (Sol, Terra, Luna), and report the
+requests to OpenAI's GPT-6 family (Sol, Terra, Luna, Astra), and report the
 outcome via `compat_result`.
 
 LiteLLM translates OpenAI's chat-completions SSE chunks into Anthropic
@@ -18,25 +18,36 @@ The (feature, provider) for this cell is inferred from the file path by
                        ^^^^^^^^^^^^^^^^^^^^^^^^^      ^^^^^^
                        feature_id                     provider
 
-Every GPT cell exercises the three GPT-5.6 tiers; the cell only goes
-green if all three pass.
+Every GPT cell exercises the four GPT-6 models; the cell only goes
+green if all four pass.
 """
 
 from __future__ import annotations
 
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._basic_messaging import run_basic_messaging_cell
 from claude_code._gpt_cells import skip_unless_openai_gpt_cells_enabled
 
 OPENAI_MODELS = [
-    "gpt-5-6-sol-openai",
-    "gpt-5-6-terra-openai",
-    "gpt-5-6-luna-openai",
+    "gpt-6-2-sol-openai",
+    "gpt-6-1-terra-openai",
+    "gpt-6-luna-openai",
+    "gpt-6-2-astra-openai",
 ]
 
 
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.OPENAI,),
+        models=tuple(OPENAI_MODELS),
+        mode=Mode.STREAM,
+    )
+)
 def test_basic_messaging_streaming_openai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
-    non-empty streamed reply from each GPT-5.6 tier."""
+    non-empty streamed reply from each GPT-6 model."""
     skip_unless_openai_gpt_cells_enabled()
     run_basic_messaging_cell(
         compat_result=compat_result,

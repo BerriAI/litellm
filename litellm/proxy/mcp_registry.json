@@ -35,6 +35,7 @@
       "registry_url": "https://registry.modelcontextprotocol.io/servers/com.atlassian%2Fatlassian-mcp-server",
       "transport": "http",
       "url": "https://mcp.atlassian.com/v1/mcp",
+      "auth_type": "oauth2",
       "env_vars": []
     },
     {
@@ -46,6 +47,7 @@
       "registry_url": "https://registry.modelcontextprotocol.io/servers/app.linear%2Flinear",
       "transport": "http",
       "url": "https://mcp.linear.app/mcp",
+      "auth_type": "oauth2",
       "env_vars": []
     },
     {
@@ -187,8 +189,42 @@
       "icon_url": "https://cdn.simpleicons.org/notion",
       "category": "Productivity",
       "registry_url": "https://registry.modelcontextprotocol.io/servers/com.notion%2Fmcp",
-      "transport": "sse",
-      "url": "https://mcp.notion.com/sse",
+      "transport": "http",
+      "url": "https://mcp.notion.com/mcp",
+      "auth_type": "oauth2",
+      "env_vars": []
+    },
+    {
+      "name": "granola",
+      "title": "Granola",
+      "description": "Search meeting notes and transcripts in Granola",
+      "icon_url": "https://www.granola.ai/favicon/favicon.svg",
+      "category": "Productivity",
+      "transport": "http",
+      "url": "https://mcp.granola.ai/mcp",
+      "auth_type": "oauth2",
+      "env_vars": []
+    },
+    {
+      "name": "attio",
+      "title": "Attio",
+      "description": "Read and update CRM records, lists, notes, and tasks in Attio",
+      "icon_url": "https://attio.com/favicon.ico",
+      "category": "Productivity",
+      "transport": "http",
+      "url": "https://mcp.attio.com/mcp",
+      "auth_type": "oauth2",
+      "env_vars": []
+    },
+    {
+      "name": "pylon",
+      "title": "Pylon",
+      "description": "Search and update customer support issues, accounts, and contacts in Pylon",
+      "icon_url": "https://cdn.prod.website-files.com/6a2c6d7ab6674379553c0824/6a2c722c1b6ec8316309587e_webclip.png",
+      "category": "Productivity",
+      "transport": "http",
+      "url": "https://mcp.usepylon.com/",
+      "auth_type": "oauth2",
       "env_vars": []
     },
     {
@@ -216,6 +252,17 @@
         {"name": "GOOGLE_CLIENT_ID", "description": "Google OAuth Client ID", "secret": false},
         {"name": "GOOGLE_CLIENT_SECRET", "description": "Google OAuth Client Secret", "secret": true}
       ]
+    },
+    {
+      "name": "microsoft_365",
+      "title": "Microsoft 365 (Graph)",
+      "description": "Outlook mail and calendar, OneDrive and SharePoint files, and Teams through Microsoft Graph, with each user's own Entra ID sign-in. Self-hosted: run ms-365-mcp-server next to the proxy and point the URL at it",
+      "icon_url": "/ui/assets/logos/microsoft_365.svg",
+      "category": "Productivity",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.Softeria%2Fms-365-mcp-server",
+      "transport": "http",
+      "url": "http://localhost:3000/mcp",
+      "env_vars": []
     },
     {
       "name": "obsidian",
@@ -257,6 +304,17 @@
       "env_vars": [
         {"name": "EXA_API_KEY", "description": "Exa API Key", "secret": true}
       ]
+    },
+    {
+      "name": "parallel_search",
+      "title": "Parallel Search",
+      "description": "AI-optimized web search and extraction for agents",
+      "icon_url": "https://assets.parallel.ai/dark-parallel-avatar-270.png",
+      "category": "Search",
+      "registry_url": null,
+      "transport": "http",
+      "url": "https://mcp.parallel.ai/mcp",
+      "env_vars": []
     },
     {
       "name": "tavily",
@@ -371,6 +429,7 @@
       "registry_url": "https://registry.modelcontextprotocol.io/servers/com.stripe%2Fmcp",
       "transport": "http",
       "url": "https://mcp.stripe.com",
+      "auth_type": "oauth2",
       "env_vars": []
     },
     {

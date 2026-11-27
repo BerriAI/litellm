@@ -1,22 +1,28 @@
 import json
+import math
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
+    TypeAlias,
     get_args,
 )
+from urllib.parse import urlsplit
 
 import httpx
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
     FileTypes as FileTypes,
 )
+from openai.types.batch_usage import BatchUsage, InputTokensDetails, OutputTokensDetails
 from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
@@ -34,34 +40,58 @@ from openai.types.moderation_create_response import (
 )
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
+    FieldSerializationInfo,
+    GetCoreSchemaHandler,
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    TypeAdapter,
+    ValidationError,
     field_serializer,
     field_validator,
 )
+from pydantic.main import IncEx
+from pydantic_core import core_schema
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import INTERNAL_KWARG_PREFIX
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
     CachedTokensDetails,
+    LiteLLMBaseModel,
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
+from litellm.types.token_count import TokenCountModelInfo, TokenCountSource, TokenCountTokenizer
+from litellm.types.workload_identity import (
+    ANTHROPIC_WIF_KWARGS_KEYS,
+    OPENAI_WIF_KWARGS_KEYS,
+    WIF_SECRET_BEARING_KEYS,
+)
 
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
+from ..litellm_core_utils.hidden_params import set_extra_attribute
+from . import litellm_params as _litellm_params
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
+from .litellm_params import (
+    AGENTIC_LOOP_KWARG_NAMES,
+    BEDROCK_BATCH_KWARG_NAMES,
+    KWARG_ARTIFACTS,
+    OWNED_KWARG_NAMES,
+)
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
 from .llms.openai import (
     AllMessageValues,
     Batch,
     ChatCompletionAnnotation,
+    ChatCompletionAudioDelta,
     ChatCompletionReasoningItem,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
@@ -77,17 +107,44 @@ from .llms.openai import (
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
     WebSearchOptions,
+    _JsonValue,
 )
 from .rerank import RerankResponse as RerankResponse
 
+
+def _nested_selector(
+    selector: IncEx | None,
+    index: int,
+    count: int,
+    is_include: bool,
+) -> tuple[bool, IncEx | None]:
+    if selector is None:
+        return True, None
+    if isinstance(selector, Mapping):
+        value: Final = selector.get(index, selector.get(index - count, selector.get("__all__")))
+        keep: Final = value is not None if is_include else value is not True
+        per_item_selector: Final = None if value is True or value is None else value
+        return keep, per_item_selector
+    if isinstance(selector, Collection) and not isinstance(selector, (str, bytes)):
+        if all(isinstance(item, int) for item in selector):
+            addressed: Final = index in selector or index - count in selector
+            return (addressed if is_include else not addressed), None
+    return True, selector
+
+
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Tokenizer
+
     from .vector_stores import VectorStoreSearchResponse
 else:
     VectorStoreSearchResponse = Any
 
 
-def _generate_id():  # private helper function
+def generate_id() -> str:
     return "chatcmpl-" + str(uuid.uuid4())
+
+
+_generate_id = generate_id
 
 
 class SafeAttributeModel:
@@ -118,6 +175,10 @@ class LiteLLMCommonStrings(Enum):
     llm_provider_not_provided = "Unmapped LLM provider for this endpoint. You passed model={model}, custom_llm_provider={custom_llm_provider}. Check supported provider and route: https://docs.litellm.ai/docs/providers"
 
 
+def is_decisions_model_mode(mode: str | None) -> bool:
+    return mode in ("decisions", "evaluation")
+
+
 SupportedCacheControls: Final = ["ttl", "s-maxage", "no-cache", "no-store"]
 
 
@@ -146,42 +207,72 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_assistant_prefill: bool | None
     supports_prompt_caching: bool | None
     supports_prompt_cache_breakpoint: ReadOnly[bool | None]
+    supports_openai_prompt_cache_breakpoint: ReadOnly[bool | None]
+    supports_bedrock_converse_cache_point: ReadOnly[bool | None]
+    supports_thinking_cache_preservation: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
+    supports_video_input: ReadOnly[bool | None]
+    supports_box_questions: ReadOnly[bool | None]
     supports_embedding_image_input: bool | None
     supports_audio_output: bool | None
     supports_pdf_input: bool | None
+    supports_part_media_resolution: ReadOnly[bool | None]
+    supports_media_in_tool_response: ReadOnly[bool | None]
     supports_native_streaming: bool | None
     supports_native_structured_output: bool | None
+    supports_bedrock_native_structured_output: ReadOnly[bool | None]
+    supports_bedrock_native_structured_output_by_default: ReadOnly[bool | None]
     supports_parallel_function_calling: bool | None
     supports_web_search: bool | None
     supports_reasoning: bool | None
+    supports_sampling_params: ReadOnly[bool | None]
     supports_adaptive_thinking: bool | None
     supports_legacy_thinking: ReadOnly[bool | None]
     thinking_always_on: ReadOnly[bool | None]
+    thinking_on_by_default: ReadOnly[bool | None]
     supports_tool_search: bool | None
+    supports_per_turn_control: ReadOnly[bool | None]
+    supports_server_side_fallback: ReadOnly[bool | None]
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
+    supports_continuation: ReadOnly[bool | None]
     supports_none_reasoning_effort: bool | None
     supports_minimal_reasoning_effort: bool | None
     supports_low_reasoning_effort: bool | None
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
     reasoning_effort_levels: ReadOnly[Sequence[str] | None]
+    reasoning_modes: ReadOnly[Sequence[str] | None]
+    reasoning_contexts: ReadOnly[Sequence[str] | None]
     default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
     supports_anthropic_thinking_payload: ReadOnly[bool | None]
+    supports_anthropic_compaction: ReadOnly[bool | None]
     supported_audio_formats: ReadOnly[Sequence[Literal["mp3", "wav"]] | None]
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
+    supports_regex_lookaround: ReadOnly[bool | None]
+    token_count_framing: ReadOnly[int | None]
+    token_count_tool_framing: ReadOnly[int | None]
+    token_count_responses_framing: ReadOnly[int | None]
+    token_count_responses_tool_framing: ReadOnly[int | None]
+    token_count_model: ReadOnly[TokenCountModelInfo | None]
+    token_count_tokenizer: ReadOnly[TokenCountTokenizer | None]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
     search_context_size_low: float
     search_context_size_medium: float
     search_context_size_high: float
+
+
+class SearchFreeRequests(TypedDict):
+    count: ReadOnly[int]
+    period: ReadOnly[Literal["day", "month"]]
+    shared_group: ReadOnly[str]
 
 
 class AgenticLoopParams(TypedDict, total=False):
@@ -193,10 +284,10 @@ class AgenticLoopParams(TypedDict, total=False):
     """
 
     model: str
-    """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
+    """The model as the caller requested it, usually with its provider prefix (e.g., 'bedrock/invoke/...')"""
 
     custom_llm_provider: str
-    """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
+    """The LLM provider name (e.g., 'bedrock', 'anthropic'), when the recorder resolved one"""
 
 
 class OffPeakWindow(TypedDict, total=False):
@@ -230,6 +321,7 @@ class OffPeakPricing(TypedDict, total=False):
     output_cost_per_token: ReadOnly[float]
     output_cost_per_reasoning_token: ReadOnly[float]
     cache_read_input_token_cost: ReadOnly[float]
+    explicit_cache_read_input_token_cost: ReadOnly[float]
     cache_creation_input_token_cost: ReadOnly[float]
 
 
@@ -242,56 +334,108 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token: Required[float | None]
     input_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     input_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
+    input_cost_per_token_balanced: ReadOnly[float | None]
     input_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_creation_input_token_cost: float | None
     cache_creation_input_token_cost_above_200k_tokens: float | None
+    cache_creation_input_token_cost_above_100k_tokens: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_1hr_above_100k_tokens: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens: float | None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
+    cache_creation_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_creation_input_token_cost_above_1hr: float | None
+    cache_creation_input_token_cost_above_12hr: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_flex: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_priority: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_ultrafast: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
     cache_read_input_audio_token_cost: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_flex: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_priority: ReadOnly[float | None]
+    cache_read_input_image_token_cost: ReadOnly[float | None]
+    cache_read_input_image_token_cost_priority: ReadOnly[float | None]
+    explicit_cache_read_input_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_balanced: ReadOnly[float | None]
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost_above_200k_tokens: float | None
+    cache_read_input_token_cost_above_100k_tokens: ReadOnly[float | None]
     cache_read_input_token_cost_above_200k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens: float | None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None
+    cache_read_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_read_input_token_cost_above_512k_tokens: float | None
+    cache_read_input_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_audio_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_image_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
     off_peak_pricing: ReadOnly[OffPeakPricing | None]  # time-windowed off-peak rates
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
+    input_cost_per_audio_token_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_priority: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_batches: ReadOnly[float | None]
+    input_cost_per_audio_token_priority: ReadOnly[float | None]
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
+    input_cost_per_token_above_100k_tokens: ReadOnly[float | None]
     input_cost_per_token_above_200k_tokens_priority: float | None
     input_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_token_above_272k_tokens_priority: float | None
     input_cost_per_token_above_272k_tokens_flex: float | None
+    input_cost_per_token_above_272k_tokens_ultrafast: ReadOnly[float | None]
     input_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_query: float | None  # per-request pricing: rerank, search, and Bedrock Marengo embeddings
     input_cost_per_image: float | None  # only for vertex ai models
     input_cost_per_image_token: float | None  # for gpt-image-1 and similar models
+    input_cost_per_image_token_priority: ReadOnly[float | None]
     input_cost_per_video_token: float | None  # for gemini omni models with video input
     input_cost_per_audio_per_second: float | None  # only for vertex ai models
     input_cost_per_video_per_second: float | None  # only for vertex ai models
     input_cost_per_audio_token_batches: ReadOnly[float | None]
     input_cost_per_image_token_batches: ReadOnly[float | None]
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
+    input_cost_per_text_message: ReadOnly[float | None]
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
+    input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    input_cost_per_token_above_200k_tokens_flex: ReadOnly[float | None]
+    input_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
+    input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
+    output_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    output_cost_per_token_above_200k_tokens_flex: ReadOnly[float | None]
+    output_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
+    output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     output_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
+    output_cost_per_token_balanced: ReadOnly[float | None]
     output_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     regional_processing_uplift_multiplier_eu: (
         float | None
@@ -299,6 +443,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     regional_processing_uplift_multiplier_us: (
         float | None
     )  # OpenAI US data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
+    fedramp_uplift_multiplier: ReadOnly[
+        float | None
+    ]  # OpenAI FedRAMP endpoint (gov.api.openai.com) uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
     regional_endpoint_uplift_multiplier: ReadOnly[
         float | None
     ]  # Vertex AI non-global (regional) endpoint uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
@@ -306,20 +453,28 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_audio_token: float | None
     output_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
+    output_cost_per_token_above_100k_tokens: ReadOnly[float | None]
     output_cost_per_token_above_200k_tokens_priority: float | None
     output_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_token_above_272k_tokens_priority: float | None
     output_cost_per_token_above_272k_tokens_flex: float | None
+    output_cost_per_token_above_272k_tokens_ultrafast: ReadOnly[float | None]
     output_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_image: float | None
+    output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
+    output_cost_per_image_token_batches: ReadOnly[float | None]
+    output_cost_per_image_token_priority: ReadOnly[float | None]
+    output_cost_per_image_token_flex: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
     output_cost_per_reasoning_token_flex: float | None
     output_cost_per_reasoning_token_priority: float | None
+    output_cost_per_video: ReadOnly[float | None]
     output_cost_per_video_per_second: float | None  # only for vertex ai models
+    output_cost_per_video_clip: ReadOnly[Mapping[str, Mapping[str, float]] | None]
     output_cost_per_audio_per_second: float | None  # only for vertex ai models
     output_cost_per_second: float | None  # for OpenAI Speech models
     output_cost_per_second_1080p: (
@@ -327,14 +482,26 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
+    output_cost_per_second_768p: ReadOnly[float | None]
+    output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_4k: ReadOnly[float | None]
+    output_cost_per_image_512: ReadOnly[float | None]
+    output_cost_per_image_1024: ReadOnly[float | None]
+    output_cost_per_image_1536: ReadOnly[float | None]
+    output_cost_per_image_1K: ReadOnly[float | None]
+    output_cost_per_image_2K: ReadOnly[float | None]
+    output_cost_per_billable_unit: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
+    ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
     annotation_cost_per_page: float | None  # for OCR models
+    annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
+    search_queries_cost_per_query: ReadOnly[float | SearchContextCostPerQuery | None]
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
+    search_free_requests: ReadOnly[SearchFreeRequests | None]
     google_maps_grounding_cost_per_query: ReadOnly[float | None]
     citation_cost_per_token: float | None  # Cost per citation token for Perplexity
     tiered_pricing: list[dict[str, Any]] | None  # Tiered pricing structure for models like Dashscope
@@ -348,6 +515,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_transcription",
             "audio_speech",
             "responses",
+            "decisions",
+            "evaluation",
+            "extraction",
             "ocr",
             "realtime",
         ]
@@ -404,8 +574,19 @@ class CallTypes(str, Enum):
     arerank = "arerank"
     search = "search"
     asearch = "asearch"
+    decisions = "decisions"
+    adecisions = "adecisions"
+    systemone = "systemone"
+    asystemone = "asystemone"
+    extraction = "extraction"
+    aextraction = "aextraction"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
+    acreate_realtime_client_secret = "acreate_realtime_client_secret"
+    arealtime_calls = "arealtime_calls"
+    acreate_realtime_transcription_session = "acreate_realtime_transcription_session"
+    acreate_realtime_translation_client_secret = "acreate_realtime_translation_client_secret"
+    arealtime_translation_calls = "arealtime_translation_calls"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
@@ -451,6 +632,8 @@ class CallTypes(str, Enum):
     #########################################################
     create_video = "create_video"
     acreate_video = "acreate_video"
+    video_generation = "video_generation"
+    avideo_generation = "avideo_generation"
     avideo_retrieve = "avideo_retrieve"
     video_retrieve = "video_retrieve"
     avideo_content = "avideo_content"
@@ -531,6 +714,14 @@ class CallTypes(str, Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    get_responses = "get_responses"
+    aget_responses = "aget_responses"
+    delete_responses = "delete_responses"
+    adelete_responses = "adelete_responses"
+    cancel_responses = "cancel_responses"
+    acancel_responses = "acancel_responses"
+    compact_responses = "compact_responses"
+    acompact_responses = "acompact_responses"
     alist_input_items = "alist_input_items"
     llm_passthrough_route = "llm_passthrough_route"
     allm_passthrough_route = "allm_passthrough_route"
@@ -588,6 +779,12 @@ CallTypesLiteral = Literal[
     "arerank",
     "search",
     "asearch",
+    "decisions",
+    "adecisions",
+    "systemone",
+    "asystemone",
+    "extraction",
+    "aextraction",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -628,14 +825,26 @@ CallTypesLiteral = Literal[
     "send_message",
     "aresponses",
     "responses",
+    "compact_responses",
+    "acompact_responses",
     "acreate_skill",
     "acreate_realtime_client_secret",
     "arealtime_calls",
     "acreate_realtime_transcription_session",
+    "acreate_realtime_translation_client_secret",
+    "arealtime_translation_calls",
 ]
+
+MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {CallTypes.call_mcp_tool.value, CallTypes.list_mcp_tools.value}
+)
 
 # Mapping of API routes to their corresponding call types
 API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
+    "/v1/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/v1/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
+    "/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
     # Chat Completions
     "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
     "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
@@ -693,6 +902,12 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # Search
     "/search": [CallTypes.asearch, CallTypes.search],
     "/v1/search": [CallTypes.asearch, CallTypes.search],
+    "/decisions": [CallTypes.adecisions, CallTypes.decisions],
+    "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
+    "/systemone": [CallTypes.asystemone, CallTypes.systemone],
+    "/v1/systemone": [CallTypes.asystemone, CallTypes.systemone],
+    "/extraction": [CallTypes.aextraction, CallTypes.extraction],
+    "/v1/extraction": [CallTypes.aextraction, CallTypes.extraction],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -948,9 +1163,14 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     "/openai/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     # Realtime API
-    "/realtime": [CallTypes.arealtime],
-    "/v1/realtime": [CallTypes.arealtime],
-    "/openai/v1/realtime": [CallTypes.arealtime],
+    "/realtime": (CallTypes.arealtime,),
+    "/v1/realtime": (CallTypes.arealtime,),
+    "/openai/v1/realtime": (CallTypes.arealtime,),
+    "/realtime/translations": (CallTypes.arealtime,),
+    "/v1/realtime/translations": (CallTypes.arealtime,),
+    "/live/sessions": (CallTypes.arealtime,),
+    "/v1/live/sessions": (CallTypes.arealtime,),
+    "/openai/v1/live/sessions": (CallTypes.arealtime,),
     # Provider-specific routes
     "/anthropic/v1/messages": [CallTypes.anthropic_messages],
     # Google GenAI routes
@@ -980,6 +1200,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # A2A (Agent-to-Agent)
     "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
+    "/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
+    "/v1/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
         CallTypes.allm_passthrough_route,
@@ -1041,7 +1263,7 @@ class ChatCompletionTokenLogprob(OpenAIObject):
     unlikely.
     """
 
-    top_logprobs: list[TopLogprob]
+    top_logprobs: list[TopLogprob] = Field(default_factory=list)
     """List of the most likely tokens and their log probability, at this token
     position.
 
@@ -1064,34 +1286,53 @@ class ChatCompletionTokenLogprob(OpenAIObject):
             return []
         return v
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
 
 class ChoiceLogprobs(OpenAIObject):
+    model_config = ConfigDict(defer_build=False)
+
     content: list[ChatCompletionTokenLogprob] | None = None
     """A list of message content tokens with log probability information."""
 
-    def __contains__(self, key) -> bool:
+    refusal: Sequence[ChatCompletionTokenLogprob] | None = None
+
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
+
+
+def _sdk_logprobs_as_dict(logprobs: object) -> object:
+    if isinstance(logprobs, ChoiceLogprobs) or not isinstance(logprobs, BaseModel):
+        return logprobs
+    return logprobs.model_dump(exclude_unset=True)
+
+
+CHOICE_LOGPROBS_OR_JSON: Final[TypeAdapter[ChoiceLogprobs | JsonValue]] = TypeAdapter(
+    Annotated[
+        ChoiceLogprobs | JsonValue,
+        Field(union_mode="left_to_right"),
+        BeforeValidator(_sdk_logprobs_as_dict),
+    ]
+)
 
 
 class FunctionCall(OpenAIObject):
@@ -1107,7 +1348,7 @@ class Function(OpenAIObject):
         self,
         arguments: dict | str | None = None,
         name: str | None = None,
-        **params,
+        **params: object,
     ) -> None:
         if arguments is None:
             if params.get("parameters", None) is not None and isinstance(params["parameters"], dict):
@@ -1127,19 +1368,19 @@ class Function(OpenAIObject):
 
         super().__init__(**data)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1150,34 +1391,34 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
     type: str | None = None
     index: int
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
 
 class _CustomToolCallAccess(OpenAIObject):
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         setattr(self, key, value)
 
 
@@ -1228,19 +1469,19 @@ class ChatCompletionMessageToolCall(OpenAIObject):
         else:
             self.type = "function"
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1277,19 +1518,19 @@ class ChatCompletionAudioResponse(ChatCompletionAudio):
             id = f"{uuid.uuid4()}"
         super().__init__(data=data, expires_at=expires_at, transcript=transcript, id=id, **params)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1309,9 +1550,8 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: di
 class Message(SafeAttributeModel, OpenAIObject):
     content: str | None
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: (
-        list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
-    )  # mutable-ok: public pydantic response field; only the union member is new
+    refusal: str | None = None
+    tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
     function_call: FunctionCall | None
     audio: ChatCompletionAudioResponse | None = None
     images: list[ImageURLListItem] | None = None
@@ -1388,6 +1628,9 @@ class Message(SafeAttributeModel, OpenAIObject):
             if hasattr(self, "annotations"):
                 del self.annotations
 
+        if "refusal" not in params and hasattr(self, "refusal"):
+            del self.refusal
+
         if reasoning_content is None:
             # ensure default response matches OpenAI spec
             if hasattr(self, "reasoning_content"):
@@ -1405,19 +1648,19 @@ class Message(SafeAttributeModel, OpenAIObject):
 
         add_provider_specific_fields(self, provider_specific_fields)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -1434,10 +1677,8 @@ class Delta(SafeAttributeModel, OpenAIObject):
         content: str | None
         role: str | None
         function_call: FunctionCall | None
-        tool_calls: (
-            list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
-        )  # mutable-ok: public pydantic response field; only the union member is new
-        audio: ChatCompletionAudioResponse | None
+        tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
+        audio: ChatCompletionAudioResponse | ChatCompletionAudioDelta | None
         images: list[ImageURLListItem] | None
         annotations: list[ChatCompletionAnnotation] | None
 
@@ -1452,7 +1693,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         role=None,
         function_call=None,
         tool_calls=None,
-        audio: ChatCompletionAudioResponse | None = None,
+        audio: ChatCompletionAudioResponse | ChatCompletionAudioDelta | None = None,
         images: list[ImageURLListItem] | None = None,
         reasoning_content: str | None = None,
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None,
@@ -1474,9 +1715,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
             function_call = FunctionCall(**function_call)
 
         if tool_calls is not None and isinstance(tool_calls, (list, tuple)):
-            coerced_tool_calls: list[
-                ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall
-            ] = []  # mutable-ok: public Delta.tool_calls contract is a list
+            coerced_tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] = []
             current_index = 0
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
@@ -1549,19 +1788,19 @@ class Delta(SafeAttributeModel, OpenAIObject):
             if hasattr(self, "reasoning_items"):
                 del self.reasoning_items
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1582,7 +1821,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
         logprobs: ChoiceLogprobs | dict | Any | None = None,
         enhancements=None,
         provider_specific_fields: dict[str, Any] | None = None,
-        **params,
+        **params: object,
     ) -> None:
         if finish_reason is not None:
             mapped: Final = map_finish_reason(finish_reason)
@@ -1609,7 +1848,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
                 params["message"] = Message(**dump)
         if logprobs is not None:
             if isinstance(logprobs, dict):
-                params["logprobs"] = ChoiceLogprobs(**logprobs)
+                params["logprobs"] = CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs)
             else:
                 params["logprobs"] = logprobs
         else:
@@ -1626,19 +1865,19 @@ class Choices(SafeAttributeModel, OpenAIObject):
         if self.provider_specific_fields is None:
             del self.provider_specific_fields
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1655,6 +1894,8 @@ def text_tokens_without_nested_reasoning(
 
 
 class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for older openai versions
+    model_config = ConfigDict(defer_build=False)
+
     text_tokens: int | None = None
     """Text tokens generated by the model."""
 
@@ -1665,14 +1906,27 @@ class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for ol
     """Video tokens generated by the model."""
 
 
-class CacheCreationTokenDetails(BaseModel):
+class CacheCreationTokenDetails(LiteLLMBaseModel):
     ephemeral_5m_input_tokens: int | None = None
+    ephemeral_30m_input_tokens: int | None = None
     ephemeral_1h_input_tokens: int | None = None
+    ephemeral_12h_input_tokens: int | None = None
+
+
+def _nested_cache_creation_token_details(nested: object) -> CacheCreationTokenDetails | None:
+    if not isinstance(nested, Mapping):
+        return None
+    try:
+        return CacheCreationTokenDetails.model_validate(nested)
+    except ValidationError:
+        return None
 
 
 class PromptTokensDetailsWrapper(
     SafeAttributeModel, PromptTokensDetails
 ):  # extends with image generation fields (text_tokens, image_tokens)
+    model_config = ConfigDict(defer_build=False)
+
     text_tokens: int | None = None
     """Text tokens sent to the model."""
 
@@ -1690,6 +1944,9 @@ class PromptTokensDetailsWrapper(
 
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
+
+    initial_prompt_tokens: int | None = None
+    """The first hop's prompt tokens on a Gemini long decode, the real context size when prompt_tokens sums every hop."""
 
     character_count: int | None = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
@@ -1717,6 +1974,13 @@ class PromptTokensDetailsWrapper(
 
     cached_tokens_details: CachedTokensDetails | None = None
     """Details of cached (cache-hit) tokens sent to the model. OpenAI realtime naming; carries the per-modality cache-read split."""
+    cache_type: str | None = None
+    """Provider-reported cache mode. DashScope returns ``ephemeral`` for explicit Qwen Context Cache requests."""
+
+    @field_validator("cache_type", mode="before")
+    @classmethod
+    def _drop_non_string_cache_type(cls, value: object) -> str | None:
+        return value if isinstance(value, str) else None
 
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)
@@ -1725,7 +1989,7 @@ class PromptTokensDetailsWrapper(
         elif name == "cache_creation_tokens":
             super().__setattr__("cache_write_tokens", value)
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: object, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         extra_fields: Final = self.model_extra
         nested_cache_creation_input_tokens: Final = (
@@ -1742,6 +2006,8 @@ class PromptTokensDetailsWrapper(
                 )
             )
         )
+        if self.cache_creation_token_details is None and extra_fields is not None:
+            self.cache_creation_token_details = _nested_cache_creation_token_details(extra_fields.get("cache_creation"))
         if self.character_count is None:
             del self.character_count
         if self.image_count is None:
@@ -1766,9 +2032,11 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_token_details
         if self.cached_tokens_details is None:
             del self.cached_tokens_details
+        if self.cache_type is None:
+            del self.cache_type
 
 
-class ServerToolUse(BaseModel):
+class ServerToolUse(LiteLLMBaseModel):
     web_search_requests: int | None = None
     tool_search_requests: int | None = None
     browser_open_requests: int | None = None
@@ -1779,13 +2047,29 @@ class ServerToolUse(BaseModel):
         return getattr(self, key)
 
 
+_COST_BREAKDOWN_ADAPTER: Final = TypeAdapter(Mapping[object, object])
+
+
+def _is_non_finite_float(value: object) -> bool:
+    return isinstance(value, float) and not math.isfinite(value)
+
+
+def _carries_non_finite_number(cost: object) -> bool:
+    if not isinstance(cost, Mapping):
+        return _is_non_finite_float(cost)
+    return any(_is_non_finite_float(member) for member in _COST_BREAKDOWN_ADAPTER.validate_python(cost).values())
+
+
 class Usage(SafeAttributeModel, CompletionUsage):
+    model_config = ConfigDict(defer_build=False)
+
     _cache_creation_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
     _cache_read_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    _dropped_non_finite_cost: bool = PrivateAttr(False)
 
     server_tool_use: ServerToolUse | None = None
     cost: float | None = None
@@ -1806,7 +2090,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         completion_tokens_details: CompletionTokensDetailsWrapper | dict | None = None,
         server_tool_use: ServerToolUse | dict | None = None,
         cost: float | None = None,
-        **params,
+        **params: object,
     ) -> None:
         # handle reasoning_tokens
         _completion_tokens_details: CompletionTokensDetailsWrapper | None = None
@@ -1892,10 +2176,14 @@ class Usage(SafeAttributeModel, CompletionUsage):
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
-        if cost is not None:
-            self.cost = cost
-        else:
+        dropped_non_finite_cost: Final = cost is not None and _carries_non_finite_number(cost)
+        if cost is None:
             del self.cost
+        elif dropped_non_finite_cost:
+            verbose_logger.warning("Dropping a non-finite provider usage cost")
+            del self.cost
+        else:
+            self.cost = cost
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(params["cache_creation_input_tokens"], int):
@@ -1910,25 +2198,41 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
         for k, v in params.items():
             setattr(self, k, v)
+        self._dropped_non_finite_cost = dropped_non_finite_cost
 
-    def __contains__(self, key) -> bool:
+    @staticmethod
+    def dropped_non_finite_cost(usage: "Usage") -> bool:
+        return usage._dropped_non_finite_cost
+
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
 
+class UnreportedUsage(Usage):
+    pass
+
+
 class StreamingChoices(OpenAIObject):
+    if TYPE_CHECKING:
+        finish_reason: str | None
+        index: int
+        delta: Delta
+        enhancements: object
+        logprobs: ChoiceLogprobs | JsonValue
+
     def __init__(
         self,
         finish_reason=None,
@@ -1936,45 +2240,42 @@ class StreamingChoices(OpenAIObject):
         delta: Delta | None = None,
         logprobs=None,
         enhancements=None,
-        **params,
+        **params: object,
     ) -> None:
         # Fix Perplexity return both delta and message cause OpenWebUI repect text
         # https://github.com/BerriAI/litellm/issues/8455
         params.pop("message", None)
         super().__init__(**params)
-        if finish_reason:
-            self.finish_reason = map_finish_reason(finish_reason)
-        else:
-            self.finish_reason = None
-        self.index = index
+        set_extra_attribute(self, "finish_reason", map_finish_reason(finish_reason) if finish_reason else None)
+        set_extra_attribute(self, "index", index)
         if delta is not None:
             if isinstance(delta, Delta):
-                self.delta = delta
+                set_extra_attribute(self, "delta", delta)
             elif isinstance(delta, dict):
-                self.delta = Delta(**delta)
+                set_extra_attribute(self, "delta", Delta(**delta))
         else:
-            self.delta = Delta()
+            set_extra_attribute(self, "delta", Delta())
         if enhancements is not None:
-            self.enhancements = enhancements
+            set_extra_attribute(self, "enhancements", enhancements)
 
-        if logprobs is not None and isinstance(logprobs, dict):
-            self.logprobs = ChoiceLogprobs(**logprobs)
+        if isinstance(logprobs, (dict, BaseModel)):
+            set_extra_attribute(self, "logprobs", CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs))
         else:
-            self.logprobs = logprobs
+            set_extra_attribute(self, "logprobs", logprobs)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2012,13 +2313,24 @@ class ModelResponseBase(OpenAIObject):
 
     _hidden_params: dict = {}
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        private: Final = self.__pydantic_private__
+        if private is None or "_hidden_params" not in private:
+            return self._hidden_params
+        return private["_hidden_params"]
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     _response_headers: dict | None = None
 
     def set_provider_response_headers(self, headers: httpx.Headers) -> None:
         """Surface a provider's raw response headers to the caller as `llm_provider-*` headers."""
         self._hidden_params["additional_headers"] = process_response_headers(headers)
 
-    def model_dump(self, **kwargs):
+    def model_dump(self, **kwargs: object):
         """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
         if "exclude_unset" not in kwargs and "exclude_none" not in kwargs:
             kwargs["exclude_unset"] = True
@@ -2053,7 +2365,7 @@ class ModelResponseStream(ModelResponseBase):
             kwargs["choices"] = [StreamingChoices()]
 
         if id is None:
-            id = _generate_id()
+            id = generate_id()
         else:
             id = id
         if created is None:
@@ -2083,24 +2395,38 @@ class ModelResponseStream(ModelResponseBase):
         if usage_to_set is not None:
             self.usage = usage_to_set
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+def _normalize_model_response_usage(usage: Mapping[str, object] | BaseModel) -> Usage:
+    if isinstance(usage, dict):
+        return Usage(**usage)
+    dump: Final = usage.model_dump() if hasattr(usage, "model_dump") else usage.dict()
+    return Usage(**dump)
+
+
+class _UnsetSystemFingerprint:
+    __slots__ = ()
+
+
+_UNSET_SYSTEM_FINGERPRINT: Final = _UnsetSystemFingerprint()
 
 
 class ModelResponse(ModelResponseBase):
@@ -2114,7 +2440,7 @@ class ModelResponse(ModelResponseBase):
         created=None,
         model=None,
         object=None,
-        system_fingerprint=None,
+        system_fingerprint=_UNSET_SYSTEM_FINGERPRINT,
         usage=None,
         stream=None,
         stream_options=None,
@@ -2141,7 +2467,7 @@ class ModelResponse(ModelResponseBase):
         else:
             choices = [Choices()]
         if id is None:
-            id = _generate_id()
+            id = generate_id()
         else:
             id = id
         if created is None:
@@ -2150,13 +2476,8 @@ class ModelResponse(ModelResponseBase):
             created = created
         model = model
         if usage is not None:
-            if isinstance(usage, dict):
-                usage = Usage(**usage)
-            elif isinstance(usage, BaseModel):
-                dump = usage.model_dump() if hasattr(usage, "model_dump") else usage.dict()
-                usage = Usage(**dump)
-            else:
-                usage = usage
+            if isinstance(usage, dict | BaseModel):
+                usage = _normalize_model_response_usage(usage)
         elif stream is None or stream is False:
             usage = None  # avoid constructing throwaway Usage; set by convert_to_model_response_object
         if hidden_params:
@@ -2171,30 +2492,31 @@ class ModelResponse(ModelResponseBase):
             "created": created,
             "model": model,
             "object": object,
-            "system_fingerprint": system_fingerprint,
         }
 
         if usage is not None:
             init_values["usage"] = usage
+        if system_fingerprint is not _UNSET_SYSTEM_FINGERPRINT:
+            init_values["system_fingerprint"] = system_fingerprint
 
         super().__init__(
             **init_values,
             **params,
         )
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2207,17 +2529,20 @@ class Embedding(OpenAIObject):
     index: int
     object: Literal["embedding"]
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+_ITEM_USAGE: Final = TypeAdapter(tuple[Usage, ...], config=ConfigDict(strict=True))
 
 
 class EmbeddingResponse(OpenAIObject):
@@ -2234,8 +2559,22 @@ class EmbeddingResponse(OpenAIObject):
     """Usage statistics for the embedding request."""
 
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     _response_headers: dict | None = None
     _response_ms: float | None = None
+    _item_usage: tuple[Usage, ...] = ()
+
+    @property
+    def item_usage(self) -> tuple[Usage, ...]:
+        return self._item_usage
 
     def __init__(
         self,
@@ -2245,6 +2584,7 @@ class EmbeddingResponse(OpenAIObject):
         data: list | list[Embedding] | None = None,
         hidden_params=None,
         _response_headers=None,
+        item_usage: tuple[Usage, ...] = (),
         **params,
     ) -> None:
         object: Final = "list"
@@ -2270,24 +2610,32 @@ class EmbeddingResponse(OpenAIObject):
 
         if hidden_params:
             self._hidden_params = hidden_params
+        self._item_usage = EmbeddingResponse._typed_item_usage(item_usage)
 
-    def __contains__(self, key) -> bool:
+    @staticmethod
+    def _typed_item_usage(value: object) -> tuple[Usage, ...]:
+        try:
+            return _ITEM_USAGE.validate_python(value)
+        except ValidationError:
+            return ()
+
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2322,23 +2670,23 @@ class TextChoices(OpenAIObject):
             else:
                 self.logprobs = logprobs
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2374,6 +2722,14 @@ class TextCompletionResponse(OpenAIObject):
     _response_ms: int | None = None
     _hidden_params: HiddenParams
 
+    @property
+    def hidden_params(self) -> HiddenParams:
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: HiddenParams) -> None:
+        self._hidden_params = hidden_params
+
     def __init__(
         self,
         id=None,
@@ -2406,7 +2762,7 @@ class TextCompletionResponse(OpenAIObject):
         if object is not None:
             object = object
         if id is None:
-            id = _generate_id()
+            id = generate_id()
         else:
             id = id
         if created is None:
@@ -2436,19 +2792,19 @@ class TextCompletionResponse(OpenAIObject):
             self._response_ms = None
         self._hidden_params = HiddenParams()
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2486,28 +2842,48 @@ class ImageObject(OpenAIImage):
         if provider_specific_fields:
             self.provider_specific_fields = provider_specific_fields
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+class ImageSVGUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
+def _parse_image_svg_usage(value: object) -> ImageSVGUsage | None:
+    if value is None:
+        return None
+    try:
+        return ImageSVGUsage.model_validate(value)
+    except ValidationError:
+        verbose_logger.debug("Ignoring invalid SVG authoring usage in image response")
+        return None
 
 
 class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
@@ -2516,6 +2892,14 @@ class ImageUsageInputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 
     text_tokens: int
     """The number of text tokens in the input prompt."""
+
+    cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
+
+    @field_validator("cached_tokens", mode="before")
+    @classmethod
+    def normalize_null_cached_tokens(cls, value: object) -> object:
+        return 0 if value is None else value
 
 
 class ImageUsage(BaseLiteLLMOpenAIResponseObject):
@@ -2537,6 +2921,15 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
+    svg_usage: ImageSVGUsage | None = None
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     usage: ImageUsage | None = None
     """
@@ -2546,6 +2939,37 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
+    @field_serializer("data")
+    def _serialize_image_data(
+        self,
+        data: Sequence[OpenAIImage] | None,
+        info: FieldSerializationInfo,
+    ) -> Sequence[Mapping[str, object]] | None:
+        if data is None:
+            return None
+        include: Final = info.include
+        exclude: Final = info.exclude
+
+        def _serialize_image(index: int, image: OpenAIImage) -> Mapping[str, object] | None:
+            include_keep, include_selector = _nested_selector(include, index, len(data), is_include=True)
+            exclude_keep, exclude_selector = _nested_selector(exclude, index, len(data), is_include=False)
+            if not include_keep or not exclude_keep:
+                return None
+            return image.model_dump(
+                mode=info.mode,
+                include=include_selector,
+                exclude=exclude_selector,
+                context=info.context,
+                exclude_none=info.exclude_none,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
+                round_trip=info.round_trip,
+                by_alias=info.by_alias,
+            )
+
+        serialized_images: Final = tuple(_serialize_image(index, image) for index, image in enumerate(data))
+        return [image for image in serialized_images if image is not None]
+
     def __init__(
         self,
         created: int | None = None,
@@ -2553,7 +2977,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         response_ms=None,
         usage: ImageUsage | None = None,
         hidden_params: dict | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         if response_ms:
             _response_ms = response_ms
@@ -2585,7 +3009,8 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             output_tokens=0,
             total_tokens=0,
         )
-        super().__init__(created=created, data=_data, usage=_usage)
+        svg_usage: Final = _parse_image_svg_usage(kwargs.get("svg_usage"))
+        super().__init__(created=created, data=_data, usage=_usage, svg_usage=svg_usage)
 
         self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)
@@ -2593,23 +3018,23 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         self.size = kwargs.get("size", None)
         self._hidden_params = hidden_params or {}
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2617,51 +3042,95 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             return self.dict()
 
 
-class TranscriptionUsageDurationObject(BaseModel):
+class TranscriptionUsageDurationObject(LiteLLMBaseModel):
     type: Literal["duration"]
     seconds: float
 
 
-class TranscriptionUsageInputTokenDetailsObject(BaseModel):
+class TranscriptionUsageInputTokenDetailsObject(LiteLLMBaseModel):
     audio_tokens: int
     text_tokens: int
 
 
-class TranscriptionUsageTokensObject(BaseModel):
+class TranscriptionUsageTokensObject(LiteLLMBaseModel):
     type: Literal["tokens"]
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    input_token_details: TranscriptionUsageInputTokenDetailsObject
+    input_token_details: TranscriptionUsageInputTokenDetailsObject | None = None
+
+
+class TranscriptionDetectedLanguage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+
+
+_DETECTED_LANGUAGES: Final = TypeAdapter(tuple[TranscriptionDetectedLanguage, ...])
 
 
 class TranscriptionResponse(OpenAIObject):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     text: str | None = None
     usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
+    languages: Sequence[TranscriptionDetectedLanguage] | None = None
 
     _hidden_params: dict = {}
     _response_headers: dict | None = None
 
-    def __init__(self, text=None) -> None:
-        super().__init__(text=text)
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
 
-    def __contains__(self, key) -> bool:
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
+    def __init__(
+        self,
+        text: str | None = None,
+        usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | Mapping[str, object] | None = None,
+        languages: Sequence[TranscriptionDetectedLanguage | Mapping[str, object]] | None = None,
+        **kwargs: object,  # kwargs-ok: OpenAI-compatible responses preserve provider extension fields
+    ) -> None:
+        super().__init__(
+            text=text, usage=usage, languages=TranscriptionResponse.detected_languages(languages), **kwargs
+        )
+        if self.languages is None:
+            del self.languages
+
+    @staticmethod
+    def detected_languages(value: object) -> tuple[TranscriptionDetectedLanguage, ...] | None:
+        try:
+            return _DETECTED_LANGUAGES.validate_python(value, from_attributes=True)
+        except ValidationError:
+            return None
+
+    def set_audio_transcription_duration(self, duration: float) -> None:
+        self._hidden_params["audio_transcription_duration"] = duration
+
+    def report_duration_usage_when_provider_sent_none(self, duration: object) -> None:
+        if self.usage is None and isinstance(duration, (int, float)) and duration > 0:
+            self.usage = TranscriptionUsageDurationObject(type="duration", seconds=duration)
+
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2693,7 +3162,9 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     acompletion: bool | None
     preset_cache_key: str | None
     no_log: bool | None
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
+    input_cost_per_text_message: ReadOnly[float | None]
     input_cost_per_token: float | None
     output_cost_per_token: float | None
     output_cost_per_second: float | None
@@ -2734,6 +3205,9 @@ class AdapterCompletionStreamWrapper:
 
 
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
+    user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_group_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_hash: str | None  # hash of the litellm virtual key used
     user_api_key_alias: str | None
     user_api_key_spend: float | None
@@ -2752,6 +3226,14 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_user_email: str | None
     user_api_key_team_alias: str | None
     user_api_key_end_user_id: str | None
+    user_api_key_customer_member_id: ReadOnly[str | None]
+    user_api_key_customer_team_id: ReadOnly[str | None]
+    user_api_key_customer_org_id: ReadOnly[str | None]
+    user_api_key_customer_org_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_team_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_member_alias: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_budget_scopes: ReadOnly[NotRequired[str | None]]
+    user_api_key_customer_hierarchy: NotRequired[ReadOnly[Mapping[str, object] | None]]
     user_api_key_request_route: str | None
     user_api_key_auth_metadata: dict[str, str] | None
 
@@ -2883,6 +3365,7 @@ class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
 
 
 RoutingDecisionCause = Literal[
+    "prompt_cache_cost",
     "heuristic_scorer",
     "heuristic_v2",
     # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
@@ -2892,6 +3375,7 @@ RoutingDecisionCause = Literal[
     "reasoning_override",
     "llm_classifier",
     "capability_classifier",
+    "jev_classifier",
     "llm_v2_classifier",
     "llm_v2_fallback",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
@@ -2950,15 +3434,25 @@ RoutingDecisionCause = Literal[
     "keyword",
     "quality_tier",
     "bandit",
+    "semantic_match",
+    "semantic_no_match",
+    "semantic_error",
+]
+
+
+ClassifierFailureReason = Literal[
+    "timeout", "circuit_open", "not_configured", "unsupported_input", "invalid_response", "declined", "classifier_error"
 ]
 
 
 InternalCallOrigin = Literal[
     "autorouter_classifier",
+    "autorouter_compaction",
     "shadow_eval_router",
     "shadow_eval_judge",
     "llm_as_a_judge_guardrail",
     "background_response_cost_poll",
+    "background_response_status_poll",
 ]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
@@ -2968,13 +3462,27 @@ SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
 SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN: Final[InternalCallOrigin] = "llm_as_a_judge_guardrail"
 BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
+BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_status_poll"
+
+
+class StandardLoggingHeuristicV2Forecast(TypedDict):
+    probabilities: ReadOnly[Mapping[str, float]]
+    threshold: ReadOnly[float]
+    predicted_tier: ReadOnly[str]
+    request_type: ReadOnly[str]
 
 
 class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
     router_model_name: str
-    router_type: Literal["complexity", "adaptive", "quality"]
+    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic", "switchyard"]]
+    switchyard_algorithm: ReadOnly[str]
+    switchyard_evidence: ReadOnly[object]
+    switchyard_fallback_reason: ReadOnly[str]
+    router_config_id: ReadOnly[str]
+    router_config_updated_at: ReadOnly[str]
+    router_config_fingerprint: ReadOnly[str]
     routed_model: str
     cause: RoutingDecisionCause
     tier: str
@@ -2986,6 +3494,16 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_failure_reason: ReadOnly[ClassifierFailureReason]
+    classifier_error_type: ReadOnly[str]
+    classifier_input_budget_tokens: ReadOnly[int]
+    classifier_input_tokens: ReadOnly[int]
+    classifier_input_count_method: ReadOnly[str]
+    classifier_input_truncated: ReadOnly[bool]
+    classifier_input_budget_status: ReadOnly[str]
+    classifier_probabilities: ReadOnly[Mapping[str, float]]
+    classifier_confidence: ReadOnly[float]
+    heuristic_v2_forecast: ReadOnly[StandardLoggingHeuristicV2Forecast]
     classifier_crux: str  # writable-ok: added only when a capability verdict is available
     classifier_primary_rule: str  # writable-ok: added only when a capability verdict is available
     classifier_capability_boundary: str  # writable-ok: added only when a capability verdict is available
@@ -3010,17 +3528,35 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
+class ClaudeSubscriptionUsage(TypedDict):
+    is_overage: ReadOnly[bool]
+    status: ReadOnly[str | None]
+    overage_status: ReadOnly[str | None]
+
+
+class StandardLoggingKubernetesPodRouting(TypedDict):
+    service_host: ReadOnly[str]
+    pod_ip: ReadOnly[str]
+    pod_count: ReadOnly[int]
+    selection: ReadOnly[Literal["round_robin", "session_affinity", "session_affinity_retry"]]
+
+
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
 # logging off. Every other field aggregates the prompt without reproducing it and is kept,
 # so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
 # fails if a field is added to the record without being placed in one set or the other.
 PROMPT_QUOTING_ROUTING_DECISION_FIELDS: frozenset[str] = frozenset(
-    {"signals", "matched_keyword", "escalation_keyword", "classifier_crux"}
+    {"signals", "matched_keyword", "escalation_keyword", "classifier_crux", "switchyard_evidence"}
 )
 DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
     {
+        "switchyard_algorithm",
+        "switchyard_fallback_reason",
         "router_model_name",
         "router_type",
+        "router_config_id",
+        "router_config_updated_at",
+        "router_config_fingerprint",
         "routed_model",
         "cause",
         "tier",
@@ -3029,6 +3565,16 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_failure_reason",
+        "classifier_error_type",
+        "classifier_input_budget_tokens",
+        "classifier_input_tokens",
+        "classifier_input_count_method",
+        "classifier_input_truncated",
+        "classifier_input_budget_status",
+        "classifier_probabilities",
+        "classifier_confidence",
+        "heuristic_v2_forecast",
         "classifier_primary_rule",
         "classifier_capability_boundary",
         "classifier_p_solve",
@@ -3068,11 +3614,21 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
+    kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     applied_guardrails: list[str] | None
     usage_object: dict | None
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
     team_alias: str | None
     team_id: str | None
+    used_client_oauth_token: ReadOnly[bool | None]
+    claude_subscription_usage: NotRequired[ReadOnly[ClaudeSubscriptionUsage | None]]
+    is_silent_experiment: ReadOnly[NotRequired[bool]]
+
+
+class AzureSpillover(TypedDict):
+    """Spillover Azure reports in its response headers for a request it served from pay-as-you-go capacity."""
+
+    from_deployment: ReadOnly[str | None]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -3096,6 +3652,7 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_models: list[str] | None
     batch_successful_requests: ReadOnly[int | None]
     batch_failed_requests: ReadOnly[int | None]
+    upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 
@@ -3120,6 +3677,20 @@ class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
     base_model: str | None
     call_type: str
     custom_pricing: bool | None
+
+
+ZeroCostReason = Literal["missing_pricing_key", "pricing_not_applied", "cost_calculation_error"]
+
+
+class StandardLoggingZeroCostDiagnostic(TypedDict):
+    reason: ReadOnly[ZeroCostReason]
+    pricing_model: ReadOnly[str]
+    missing_pricing_keys: ReadOnly[tuple[str, ...]]
+
+
+class CooldownDeploymentInfo(TypedDict):
+    model_id: ReadOnly[str]
+    api_base: ReadOnly[str | None]
 
 
 class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
@@ -3150,6 +3721,8 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_budget_entity_id: str | None
     error_budget_limit: float | None
     error_budget_spend: float | None
+    error_cooldown_deployments: ReadOnly[tuple[CooldownDeploymentInfo, ...] | None]
+    normalized_error: ReadOnly[str | None]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -3372,6 +3945,8 @@ class CostBreakdown(TypedDict, total=False):
     from ``optional_params``, which no log record carries.
     """
 
+    customer_margin_percent: ReadOnly[float]
+    customer_margin_amount: ReadOnly[float]
     service_tier: str | None
     data_residency: str | None
     vertex_location: ReadOnly[str | None]
@@ -3422,12 +3997,54 @@ class StandardAuditLogPayload(TypedDict):
     updated_values: str | None
 
 
+class StandardBatchLineItemUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class StandardBatchLineItemMetadata(TypedDict):
+    user_api_key_hash: ReadOnly[str | None]
+    user_api_key_alias: ReadOnly[str | None]
+    user_api_key_team_id: ReadOnly[str | None]
+    user_api_key_team_alias: ReadOnly[str | None]
+    user_api_key_user_id: ReadOnly[str | None]
+    user_api_key_org_id: ReadOnly[str | None]
+
+
+class StandardBatchLineItem(TypedDict):
+    """One line of a finished batch, the request line next to the output or error line the provider wrote for it."""
+
+    batch_id: ReadOnly[str]
+    custom_id: ReadOnly[str | None]
+    status: ReadOnly[Literal["success", "failure"]]
+    request: ReadOnly[Mapping[str, object] | None]
+    response: ReadOnly[Mapping[str, object] | None]
+    usage: ReadOnly[StandardBatchLineItemUsage | None]
+    response_cost: ReadOnly[float]
+    model: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str | None]
+    metadata: ReadOnly[StandardBatchLineItemMetadata]
+
+
+class StandardBatchLineItemsPayload(TypedDict):
+    """One part of a finished batch's lines, dispatched to batch_line_item_callbacks. A batch's lines arrive in parts
+    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines.
+    """
+
+    batch_id: ReadOnly[str]
+    finished_at: ReadOnly[int]
+    part: ReadOnly[int]
+    lines: ReadOnly[tuple[StandardBatchLineItem, ...]]
+
+
 class ClassifierAudit(TypedDict, total=False):
     classifier_input: ReadOnly[Mapping[str, JsonValue]]
     originating_request_masked: ReadOnly[Mapping[str, JsonValue]]
 
 
 class StandardLoggingPayload(ClassifierAudit):
+    cost_finalized: NotRequired[ReadOnly[bool]]
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
@@ -3436,8 +4053,11 @@ class StandardLoggingPayload(ClassifierAudit):
     stream: bool | None
     response_cost: float
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown
-    autorouter_savings: ReadOnly[float | None]  # None = not an auto-routed caller request; 0.0 is a real figure
+    autorouter_savings: ReadOnly[float | None]
+    autorouter_savings_estimate: ReadOnly[Mapping[str, JsonValue] | None]
+    autorouter_baseline_observation: ReadOnly[str | None]
     response_cost_failure_debug_info: StandardLoggingModelCostFailureDebugInformation | None
+    zero_cost_diagnostic: NotRequired[ReadOnly[StandardLoggingZeroCostDiagnostic | None]]
     status: StandardLoggingPayloadStatus
     status_fields: StandardLoggingPayloadStatusFields
     custom_llm_provider: str | None
@@ -3501,6 +4121,43 @@ OPENAI_RESPONSE_HEADERS: Final = [
 ]
 
 
+OtelSpanScope = Literal["full", "llm_only"]
+OTEL_SPAN_SCOPES: Final[frozenset[str]] = frozenset(get_args(OtelSpanScope))
+
+ArizeOtlpProtocol = Literal["grpc", "http/protobuf"]
+ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtocol))
+
+
+CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
+EXCLUDED_SERVICES_VAR: Final = "excluded_services"
+BAGGAGE_METADATA_KEYS_VAR: Final = "baggage_metadata_keys"
+#: Team and key callback vars that tune that callback's own OTel v2 destination, never sent to the backend.
+OTEL_DESTINATION_VARS: Final[tuple[str, ...]] = (
+    CAPTURE_MESSAGE_CONTENT_VAR,
+    EXCLUDED_SERVICES_VAR,
+    BAGGAGE_METADATA_KEYS_VAR,
+)
+
+
+class CaptureMessageContent(str):
+    NO_CONTENT = "no_content"
+    SPAN_ONLY = "span_only"
+    EVENT_ONLY = "event_only"
+    SPAN_AND_EVENT = "span_and_event"
+
+
+# The values a team or key destination may set. OTel v2 writes content only to span attributes,
+# so the event modes stay global-only settings
+CAPTURE_MESSAGE_CONTENT_VALUES: Final[frozenset[str]] = frozenset(
+    {CaptureMessageContent.NO_CONTENT, CaptureMessageContent.SPAN_ONLY}
+)
+
+
+def captures_span_content(mode: str | None) -> bool:
+    """Whether a capture mode puts prompt and response content on spans"""
+    return mode in (CaptureMessageContent.SPAN_ONLY, CaptureMessageContent.SPAN_AND_EVENT)
+
+
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
     langfuse_public_key: str | None
@@ -3508,6 +4165,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret_key: str | None
     langfuse_host: str | None
     langfuse_environment: ReadOnly[str | None]
+    langfuse_span_scope: ReadOnly[OtelSpanScope | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None
@@ -3530,6 +4188,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_api_key: str | None
     arize_space_key: str | None
     arize_space_id: str | None
+    arize_success_sampling_rate: ReadOnly[float | None]
+    arize_error_sampling_rate: ReadOnly[float | None]
+    arize_otlp_protocol: ReadOnly[ArizeOtlpProtocol | None]
 
     # PostHog dynamic params
     posthog_api_key: str | None
@@ -3550,12 +4211,18 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     newrelic_api_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
     newrelic_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
 
+    signoz_ingestion_endpoint: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+    signoz_ingestion_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+
+    mixpanel_project_token: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+    mixpanel_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
     litellm_disabled_callbacks: list[str] | None
 
 
-class MirroredPricingParams(BaseModel):
+class MirroredPricingParams(LiteLLMBaseModel):
     """Pricing overrides that ``Deployment.__init__`` mirrors from ``litellm_params``
     onto ``model_info``, so both blobs hold the same rate.
 
@@ -3567,18 +4234,41 @@ class MirroredPricingParams(BaseModel):
     input_cost_per_character: float | None = None
     output_cost_per_character: float | None = None
     cache_read_input_token_cost: float | None = None
+    explicit_cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
+    cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_12hr: float | None = None
+    cache_creation_input_token_cost_above_12hr_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_flex: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_priority: float | None = None
+    cache_creation_input_token_cost_above_12hr_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_ultrafast: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 
 
 class CustomPricingLiteLLMParams(MirroredPricingParams):
     ## CUSTOM PRICING ##
+    cost_per_second: float | None = None
     input_cost_per_second: float | None = None
+    input_cost_per_text_message: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
+    output_cost_per_video_clip: Mapping[str, Mapping[str, float]] | None = None
     output_cost_per_second_480p: float | None = None
     output_cost_per_second_720p: float | None = None
+    output_cost_per_second_768p: float | None = None
+    output_cost_per_second_2k: float | None = None
     output_cost_per_second_4k: float | None = None
+    output_cost_per_image_512: float | None = None
+    output_cost_per_image_1024: float | None = None
+    output_cost_per_image_1536: float | None = None
+    output_cost_per_image_1K: float | None = None
+    output_cost_per_image_2K: float | None = None
+    output_cost_per_billable_unit: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
@@ -3586,32 +4276,64 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     # This allows any model_info parameter to be set in litellm_params
     input_cost_per_token_flex: float | None = None
     input_cost_per_token_priority: float | None = None
+    input_cost_per_token_balanced: float | None = None
     input_cost_per_token_ultrafast: float | None = None
-    cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_100k_tokens: float | None = None
+    cache_creation_input_token_cost_above_1hr_above_100k_tokens: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_ultrafast: float | None = None
     cache_creation_input_token_cost_flex: float | None = None
     cache_creation_input_token_cost_priority: float | None = None
     cache_creation_input_token_cost_ultrafast: float | None = None
     cache_creation_input_audio_token_cost: float | None = None
     cache_read_input_token_cost_flex: float | None = None
     cache_read_input_token_cost_priority: float | None = None
+    cache_read_input_token_cost_balanced: float | None = None
     cache_read_input_token_cost_ultrafast: float | None = None
+    cache_read_input_token_cost_above_100k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_ultrafast: float | None = None
+    cache_read_input_token_cost_batches: float | None = None
+    cache_read_input_token_cost_above_100k_tokens_batches: float | None = None
+    cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
+    cache_read_input_audio_token_cost_batches: float | None = None
+    cache_read_input_image_token_cost_batches: float | None = None
+    cache_creation_input_token_cost_batches: float | None = None
+    cache_creation_input_token_cost_above_100k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
+    cache_read_input_audio_token_cost_flex: float | None = None
+    cache_read_input_audio_token_cost_priority: float | None = None
+    cache_read_input_image_token_cost: float | None = None
+    cache_read_input_image_token_cost_priority: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
+    input_cost_per_audio_token_flex: float | None = None
+    input_cost_per_audio_token_above_200k_tokens: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_flex: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_priority: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_batches: float | None = None
+    input_cost_per_audio_token_priority: float | None = None
     input_cost_per_token_cache_hit: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
+    input_cost_per_token_above_100k_tokens: float | None = None
     input_cost_per_token_above_200k_tokens: float | None = None
     input_cost_per_token_above_200k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_flex: float | None = None
+    input_cost_per_token_above_272k_tokens_ultrafast: float | None = None
+    input_cost_per_token_above_200k_tokens_batches: float | None = None
+    input_cost_per_token_above_200k_tokens_flex: float | None = None
+    input_cost_per_token_above_100k_tokens_batches: float | None = None
+    input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
     input_cost_per_image: float | None = None
     input_cost_per_image_above_128k_tokens: float | None = None
@@ -3628,28 +4350,41 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_batches: float | None = None
     output_cost_per_token_flex: float | None = None
     output_cost_per_token_priority: float | None = None
+    output_cost_per_token_balanced: float | None = None
     output_cost_per_token_ultrafast: float | None = None
     output_cost_per_audio_token: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
+    output_cost_per_token_above_100k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_flex: float | None = None
+    output_cost_per_token_above_272k_tokens_ultrafast: float | None = None
+    output_cost_per_token_above_200k_tokens_batches: float | None = None
+    output_cost_per_token_above_200k_tokens_flex: float | None = None
+    output_cost_per_token_above_100k_tokens_batches: float | None = None
+    output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
     output_cost_per_image_token: float | None = None
+    output_cost_per_image_token_batches: float | None = None
+    output_cost_per_image_token_priority: float | None = None
+    output_cost_per_image_token_flex: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
     output_cost_per_reasoning_token_priority: float | None = None
+    output_cost_per_video: float | None = None
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
+    search_queries_cost_per_query: float | SearchContextCostPerQuery | None = None
     google_maps_grounding_cost_per_query: float | None = None
     citation_cost_per_token: float | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
     cache_read_input_token_cost_above_512k_tokens: float | None = None
     input_cost_per_image_token: float | None = None
+    input_cost_per_image_token_priority: float | None = None
     input_cost_per_video_token: float | None = None
     input_cost_per_token_above_272k_tokens: float | None = None
     input_cost_per_token_above_512k_tokens: float | None = None
@@ -3657,10 +4392,13 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_512k_tokens: float | None = None
     output_vector_size: int | None = None
     ocr_cost_per_page: float | None = None
+    ocr_cost_per_page_batches: float | None = None
     ocr_cost_per_credit: float | None = None
     annotation_cost_per_page: float | None = None
+    annotation_cost_per_page_batches: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
+    fedramp_uplift_multiplier: float | None = None
     regional_endpoint_uplift_multiplier: float | None = None
 
     @classmethod
@@ -3674,14 +4412,65 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
         """
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
 
+    def custom_pricing_overrides(self) -> Mapping[str, object]:
+        return MappingProxyType(
+            self.model_dump(include=set(CustomPricingLiteLLMParams.model_fields), exclude_none=True)
+        )
+
+    def per_second_pricing(self) -> Mapping[str, float]:
+        return MappingProxyType(
+            self.model_dump(
+                include={"cost_per_second", "input_cost_per_second", "output_cost_per_second"}, exclude_none=True
+            )
+        )
+
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
+
+DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "supports_regex_lookaround",
+        "supports_assistant_prefill",
+        "supports_bedrock_native_structured_output",
+        "supports_bedrock_native_structured_output_by_default",
+        "supports_per_turn_control",
+        "supports_server_side_fallback",
+        "supports_pdf_input",
+        "supports_continuation",
+        "reasoning_modes",
+        "reasoning_contexts",
+    }
+)
+
+DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"max_input_tokens", "max_output_tokens", "max_tokens"}
+)
+
+DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "token_count_framing",
+        "token_count_tool_framing",
+        "token_count_responses_framing",
+        "token_count_responses_tool_framing",
+        "token_count_model",
+    }
+)
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
     - frozenset(CustomPricingLiteLLMParams.model_fields)
     - DEPLOYMENT_SCOPED_PRICING_FIELDS
+    - DEPLOYMENT_SCOPED_CAPABILITY_FIELDS
+    - DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS
 )
+
+SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_box_questions"})
+
+
+def _belongs_on_shared_backend_key(field: str, value: object) -> bool:
+    if field in SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS:
+        return value is True
+    return field in SHARED_BACKEND_MODEL_INFO_FIELDS
 
 
 def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
@@ -3691,11 +4480,16 @@ def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     ``off_peak_pricing``. Per-deployment metadata (``id``, ``access_via_team_ids``,
     arbitrary custom keys) never belongs on the shared key; it stays under the
     deployment's unique model id.
+
+    A ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag reaches the shared key only as
+    ``True``. Its reader checks the deployment's own flag first, so a ``False`` or
+    non-boolean value already applies to its deployment, and on the shared key it would
+    only take the capability away from same-model deployments that set no flag.
     """
-    return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
+    return {k: v for k, v in model_info.items() if _belongs_on_shared_backend_key(k, v)}
 
 
-ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens$")
+ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens(?:_batches)?$")
 
 _PRICING_FIELD_EXEMPTIONS: Final[frozenset[str]] = frozenset({"output_vector_size"})
 
@@ -3715,6 +4509,10 @@ def is_server_derived_pricing_key(key: str) -> bool:
     return key in SERVER_DERIVED_PRICING_FIELDS or ABOVE_THRESHOLD_COST_KEY_PATTERN.search(key) is not None
 
 
+PRICING_OVERRIDES_KEY: Final = "pricing_overrides"
+COST_MAP_LOOKUP_KEY: Final = "key"
+
+
 def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str, Any]:
     """Drop the pricing ``/model/info`` derives for display, keeping everything else.
 
@@ -3724,197 +4522,211 @@ def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str
     deployment at that day's price where no cost map refresh can reach it. A deployment's
     own pricing belongs on ``litellm_params``, which is unaffected.
     """
-    return MappingProxyType({k: v for k, v in model_info.items() if not is_server_derived_pricing_key(k)})
+    return MappingProxyType(
+        {k: v for k, v in model_info.items() if k != PRICING_OVERRIDES_KEY and not is_server_derived_pricing_key(k)}
+    )
 
 
-# Server-controlled fields that bound or drive an interceptor's agentic loop
-# (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
-# in all_litellm_params so they are treated as LiteLLM-level and excluded from
-# get_non_default_completion_params; otherwise the OpenAI param builder sweeps
-# any unrecognized top-level key into extra_body and leaks them to the provider.
-# This is what lets the loop carry state across rerun calls without a provider
-# scrubber.
-agentic_loop_internal_litellm_params: Final = [
-    "_agentic_loop_depth",
-    "_agentic_loop_fingerprints",
-    "_agentic_loop_api_surface",
-    "max_agentic_loops",
-    "_code_interpreter_interception_active",
-    "_code_interpreter_interception_sandbox_key",
-    "_code_interpreter_interception_session_scoped",
-    "_code_interpreter_interception_converted_stream",
-    "_websearch_interception_emit_native_blocks",
-    "_websearch_interception_converted_stream",
-    "_headroom_interception_converted_stream",
+def echoed_cost_map_pricing_fields(model_info: Mapping[str, object]) -> tuple[str, ...]:
+    """Pricing fields a stored ``model_info`` blob copied from a ``/model/info`` response.
+
+    Only ``litellm.get_model_info`` emits ``key`` (the resolved cost-map entry), so a stored
+    blob carrying it alongside pricing fields holds the cost map as it stood on the day the
+    row was saved, not a price anyone typed. Rows saved before 1.102 through the Admin UI
+    edit form look exactly like this, and a price typed into ``litellm_params`` never does.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
+
+
+def echoed_cost_map_fields(
+    model_info: Mapping[str, object], *cost_map_entries: Mapping[str, object]
+) -> tuple[str, ...]:
+    """Fields a ``/model/info`` echo copied from the cost map unchanged.
+
+    Only ``litellm.get_model_info`` emits ``key``, so a blob carrying it is an echo of that
+    response. Anything in it that still equals a resolved cost-map entry is a display value
+    nobody typed; a value the operator edited differs from every entry and stays a real override.
+    Callers pass both the live entry, which the router rewrites with each deployment's own
+    overrides, and the catalog entry as loaded, so a reset to the catalog value reads as an echo either way.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(
+        sorted(k for k, v in model_info.items() if any(k in entry and entry[k] == v for entry in cost_map_entries))
+    )
+
+
+def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            frozenset(
+                k for source in sources for k, v in source.items() if v is not None and is_server_derived_pricing_key(k)
+            )
+        )
+    )
+
+
+agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)
+
+bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
+
+TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
+ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
+ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_COMPARISON_RESPONSE_ID_FIELD
+
+anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
+openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
+oauth_token_exchange_litellm_params: Final = (
+    "token_exchange_audience",
+    "token_exchange_endpoint",
+    "token_exchange_profile",
+    "token_exchange_scope",
+)
+provider_oauth_litellm_params: Final = (
+    "oauth_client_credentials",
+    "oauth_token_url",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "oauth_scope",
+)
+github_copilot_oauth_litellm_params: Final = (
+    "github_copilot_auth_type",
+    "github_copilot_host",
+    "github_copilot_app_id",
+    "github_copilot_app_installation_id",
+    "github_copilot_app_private_key_ref",
+    "github_copilot_app_private_key",
+)
+OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
+API_KEY_SECRET_REFERENCE_REJECTION: Final = (
+    "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
+    "admin configures can carry."
+)
+
+
+API_KEY_UPSTREAM_PARAMS: Final = (
+    "api_base",
+    "base_url",
+    "aws_bedrock_runtime_endpoint",
+    "s3_endpoint_url",
+    "sagemaker_base_url",
+    "deployment_url",
+)
+
+
+_DEFAULT_PORTS: Final = MappingProxyType({"http": 80, "ws": 80, "https": 443, "wss": 443})
+
+
+def _origin(url: str) -> str:
+    text: Final = url.strip()
+    try:
+        parts: Final = urlsplit(text)
+        explicit_port: Final = parts.port
+    except ValueError:
+        return text.rstrip("/").lower()
+    host: Final = (parts.hostname or "").rstrip(".")
+    if not host:
+        return text.rstrip("/").lower()
+    scheme: Final = parts.scheme.lower()
+    port: Final = explicit_port if explicit_port is not None else _DEFAULT_PORTS.get(scheme)
+    return f"{scheme}://{host}" if port is None else f"{scheme}://{host}:{port}"
+
+
+_URL_IN_MODEL: Final = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def _model_url(model: object) -> str | None:
+    found: Final = _URL_IN_MODEL.search(model) if isinstance(model, str) else None
+    return None if found is None else found.group(0)
+
+
+def upstream_origins(params: Mapping[str, object]) -> frozenset[str]:
+    values: Final = (*(params.get(key) for key in API_KEY_UPSTREAM_PARAMS), _model_url(params.get("model")))
+    return frozenset(_origin(value) for value in values if isinstance(value, str) and value)
+
+
+class AdminApiKeySecretReference(str):
+    """An ``oidc/`` api_key reference read from a source only a proxy admin writes: a proxy-level deployment or a
+    stored credential. The call path swaps only this type for the secret it points to, so the same text arriving
+    in a request, a prompt template, or a row a non-admin wrote is sent as written, and the secret goes only to the
+    origins the admin configured beside the reference."""
+
+    def __new__(cls, reference: str, origins: frozenset[str]) -> "AdminApiKeySecretReference":
+        return super().__new__(cls, reference)
+
+    def __init__(self, reference: str, origins: frozenset[str]) -> None:
+        super().__init__()
+        self.origins: Final = origins
+
+    def __reduce__(self) -> tuple[type["AdminApiKeySecretReference"], tuple[str, frozenset[str]]]:
+        return type(self), (str(self), self.origins)
+
+    def may_reach(self, upstream: Mapping[str, object]) -> bool:
+        destinations: Final = upstream_origins(upstream)
+        return destinations <= self.origins if destinations else not self.origins
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        return core_schema.is_instance_schema(cls, serialization=core_schema.to_string_ser_schema())
+
+
+class CredentialApiKeySecretReference(AdminApiKeySecretReference):
+    """An admin ``oidc/`` api_key reference stored in a named credential, so its origins are the credential's own."""
+
+
+def _unmarked_api_key_secret_reference(params: Mapping[str, object]) -> str | None:
+    api_key: Final = params.get("api_key")
+    if (
+        not isinstance(api_key, str)
+        or isinstance(api_key, AdminApiKeySecretReference)
+        or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX)
+    ):
+        return None
+    return api_key
+
+
+def admin_api_key_secret_reference(params: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _unmarked_api_key_secret_reference(params)
+    if api_key is None:
+        return params
+    return {**params, "api_key": AdminApiKeySecretReference(api_key, upstream_origins(params))}
+
+
+def credential_api_key_secret_reference(credential_values: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _unmarked_api_key_secret_reference(credential_values)
+    if api_key is None:
+        return credential_values
+    reference: Final = CredentialApiKeySecretReference(api_key, upstream_origins(credential_values))
+    return {**credential_values, "api_key": reference}
+
+
+server_owned_wif_litellm_params: Final = (
+    anthropic_wif_litellm_params
+    + openai_wif_litellm_params
+    + oauth_token_exchange_litellm_params
+    + github_copilot_oauth_litellm_params
+    + provider_oauth_litellm_params
+    + ("chatgpt_auth_file",)
+)
+secret_bearing_wif_litellm_params: Final = tuple(
+    sorted(
+        WIF_SECRET_BEARING_KEYS
+        | {"github_copilot_app_private_key_ref", "github_copilot_app_private_key", "oauth_client_secret"}
+    )
+)
+
+all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
+    *OWNED_KWARG_NAMES,
+    *KWARG_ARTIFACTS,
+    *StandardCallbackDynamicParams.__annotations__,
+    *CustomPricingLiteLLMParams.model_fields,
 ]
 
-# Proxy-owned callback credentials, stamped from admin-configured team/key callback
-# settings. Listed in all_litellm_params for the same reason as the agentic-loop
-# fields above: an unrecognized top-level key is swept into extra_body and sent to
-# the provider.
-TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 
-# Bedrock managed-batch deployment config, read from litellm_params by the batch and
-# files transformations. Listed for the same reason as the fields above: these sit on
-# a deployment that also serves chat, so leaking them into extra_body makes Bedrock
-# reject every non-batch request to that deployment.
-bedrock_batch_litellm_params: Final = (
-    "aws_batch_role_arn",
-    "s3_bucket_name",
-    "s3_region_name",
-    "s3_output_bucket_name",
-    "bedrock_tags",
-)
-
-all_litellm_params = (
-    agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params]
-    + [
-        "metadata",
-        "litellm_metadata",
-        "keepalive_seconds",
-        "allow_client_keepalive_override",
-        "litellm_trace_id",
-        "litellm_request_debug",
-        "guardrails",
-        "tags",
-        "acompletion",
-        "aimg_generation",
-        "atext_completion",
-        "text_completion",
-        "caching",
-        "mock_response",
-        "mock_timeout",
-        "disable_add_transform_inline_image_block",
-        "api_key",
-        "api_version",
-        "prompt_id",
-        "prompt_variables",
-        "litellm_system_prompt",
-        "provider_specific_header",
-        "prompt_version",
-        "prompt_environment",
-        "api_base",
-        "force_timeout",
-        "logger_fn",
-        "verbose",
-        "custom_llm_provider",
-        "model_file_id_mapping",
-        "litellm_logging_obj",
-        "litellm_call_id",
-        "completion_call_id",
-        "model_alias_map",
-        "custom_prompt_dict",
-        "stream_response",
-        "cost_per_query",
-        "ssl_verify",
-        "data_residency",
-        "async_call",
-        "aembedding",
-        "allm_passthrough_route",
-        "_litellm_strip_stream_usage",
-        "use_client",
-        "id",
-        "fallbacks",
-        "routing_strategy",
-        "_router_weights",
-        "azure",
-        "headers",
-        "model_list",
-        "num_retries",
-        "context_window_fallback_dict",
-        "retry_policy",
-        "retry_strategy",
-        "roles",
-        "final_prompt_value",
-        "bos_token",
-        "eos_token",
-        "request_timeout",
-        "client_side_timeout",
-        "complete_response",
-        "self",
-        "client",
-        "rpm",
-        "tpm",
-        "default_api_key_rpm_limit",
-        "default_api_key_tpm_limit",
-        "itpm",
-        "otpm",
-        "max_parallel_requests",
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "input_cost_per_second",
-        "output_cost_per_second",
-        "hf_model_name",
-        "model_info",
-        "proxy_server_request",
-        "secret_fields",
-        "preset_cache_key",
-        "caching_groups",
-        "ttl",
-        "cache",
-        "enable_prompt_caching",
-        "no-log",
-        "base_model",
-        "stream_timeout",
-        "supports_system_message",
-        "region_name",
-        "allowed_model_region",
-        "model_config",
-        "fastest_response",
-        "cooldown_time",
-        "cache_key",
-        "max_retries",
-        "azure_ad_token_provider",
-        "tenant_id",
-        "client_id",
-        "azure_username",
-        "azure_password",
-        "azure_scope",
-        "client_secret",
-        "user_continue_message",
-        "configurable_clientside_auth_params",
-        "weight",
-        "ensure_alternating_roles",
-        "assistant_continue_message",
-        "user_continue_message",
-        "fallback_depth",
-        "max_fallbacks",
-        "attempted_targets",
-        "max_budget",
-        "budget_duration",
-        "use_in_pass_through",
-        "merge_reasoning_content_in_choices",
-        "litellm_credential_name",
-        "allowed_openai_params",
-        "litellm_session_id",
-        "use_litellm_proxy",
-        "use_chat_completions_api",
-        "rust",
-        "prompt_label",
-        "shared_session",
-        "search_tool_name",
-        "order",
-        "enable_tag_filtering",
-        "enable_json_schema_validation",
-        "use_xai_oauth",
-        "auto_router_config_path",
-        "auto_router_config",
-        "auto_router_default_model",
-        "auto_router_embedding_model",
-        "auto_router_max_input_chars",
-        "auto_router_routing_compression",
-        "auto_router_model_compression",
-        "complexity_router_config",
-        "complexity_router_default_model",
-        "adaptive_router_config",
-        "adaptive_router_default_model",
-        "quality_router_config",
-        "quality_router_default_model",
-    ]
-    + list(StandardCallbackDynamicParams.__annotations__.keys())
-    + list(CustomPricingLiteLLMParams.model_fields.keys())
-)
+def is_litellm_owned_kwarg(name: str) -> bool:
+    return name in all_litellm_params or name.startswith(INTERNAL_KWARG_PREFIX)
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -3934,7 +4746,7 @@ class StandardKeyGenerationConfig(TypedDict, total=False):
     personal_key_generation: PersonalUIKeyGenerationConfig
 
 
-class BudgetConfig(BaseModel):
+class BudgetConfig(LiteLLMBaseModel):
     max_budget: float | None = None
     budget_duration: str | None = None
     tpm_limit: int | None = None
@@ -3956,12 +4768,14 @@ GenericBudgetConfigType = dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):
+    REFUSELESS = "refuseless"
     OPENAI = "openai"
     CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"
     ZAI = "zai"
+    BIGMODEL = "bigmodel"
     CUSTOM_OPENAI = "custom_openai"
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
@@ -3972,8 +4786,10 @@ class LlmProviders(str, Enum):
     BYTEZ = "bytez"
     REPLICATE = "replicate"
     REDUCTO = "reducto"
+    AWS_TEXTRACT = "aws_textract"
     RUNWAYML = "runwayml"
     AWS_POLLY = "aws_polly"
+    TRANSCRIBE = "transcribe"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
@@ -3981,6 +4797,7 @@ class LlmProviders(str, Enum):
     VERTEX_AI = "vertex_ai"
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"
+    ABLITERATION = "abliteration"
     AI21 = "ai21"
     BASETEN = "baseten"
     BLACK_FOREST_LABS = "black_forest_labs"
@@ -3998,7 +4815,17 @@ class LlmProviders(str, Enum):
     OLLAMA = "ollama"
     OLLAMA_CHAT = "ollama_chat"
     DEEPINFRA = "deepinfra"
+    CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
+    PERPLEXITY_ORCHESTRATOR = "perplexity_orchestrator"
+    TYPESAFE = "typesafe"
+    PARALLEL_AI = "parallel_ai"
+    NACE = "nace"
+    STRANDS_DECIDER = "strands_decider"
+    LAYA = "laya"
+    BESPOKE = "bespoke"
+    EMPIRIOLABS = "empiriolabs"
+    EU_JEV = "eu_jev"
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"
@@ -4006,8 +4833,10 @@ class LlmProviders(str, Enum):
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
     NVIDIA_RIVA = "nvidia_riva"
+    GNANI = "gnani"
     SONIOX = "soniox"
     CEREBRAS = "cerebras"
+    NADIR = "nadir"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
     CODESTRAL = "codestral"
@@ -4019,7 +4848,9 @@ class LlmProviders(str, Enum):
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
     V0 = "v0"
+    VISPARK = "vispark"
     MORPH = "morph"
+    OPENCODE_GO = "opencode_go"
     LAMBDA_AI = "lambda_ai"
     INCEPTION = "inception"
     TEXT_COMPLETION_INCEPTION = "text-completion-inception"
@@ -4033,10 +4864,12 @@ class LlmProviders(str, Enum):
     FRIENDLIAI = "friendliai"
     FEATHERLESS_AI = "featherless_ai"
     WATSONX = "watsonx"
+    SCALEDOWN = "scaledown"
     WATSONX_TEXT = "watsonx_text"
     TRITON = "triton"
     PREDIBASE = "predibase"
     DATABRICKS = "databricks"
+    DATABRICKS_AGENT = "databricks_agent"
     EMPOWER = "empower"
     GITHUB = "github"
     RAGFLOW = "ragflow"
@@ -4053,6 +4886,7 @@ class LlmProviders(str, Enum):
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"
+    GRADIUM = "gradium"
     NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
@@ -4060,6 +4894,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
+    AZURE_SPEECH = "azure_speech"
     CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
@@ -4070,6 +4905,7 @@ class LlmProviders(str, Enum):
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
     MONGODB = "mongodb"
+    OPENSEARCH = "opensearch"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
@@ -4081,6 +4917,7 @@ class LlmProviders(str, Enum):
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
+    EDENAI = "edenai"
     DOTPROMPT = "dotprompt"
     MANUS = "manus"
     WANDB = "wandb"
@@ -4091,6 +4928,7 @@ class LlmProviders(str, Enum):
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
     LANGFLOW = "langflow"
+    MICROSOFT_365_COPILOT = "microsoft_365_copilot"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"
@@ -4098,19 +4936,35 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     NEOSANTARA = "neosantara"
+    AIAND = "aiand"
     PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    RESETDATA = "resetdata"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
+    CORALBRICKS = "coralbricks"
+    CORTECS = "cortecs"
     SCX_AI = "scx-ai"
+    PRISM = "prism"
+    OPENINFER = "openinfer"
+    INFERENCEAPIS = "inferenceapis"
+    HOSTINGER_ROUTER = "hostinger_router"
+    ZEROGPU = "zerogpu"
     DARKBLOOM = "darkbloom"
     META = "meta"
+    SAIL = "sail"
+    REKA = "reka"
+    STREAMLAKE = "streamlake"
+    WALLY = "wally"
+    HUAWEI_MAAS = "huawei_maas"
+    SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
     GDC = "gdc"
+    KYMA = "kyma"
 
 
 # Create a set of all provider values for quick lookup
@@ -4123,7 +4977,13 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.LITELLM_PROXY.value,
 }
 
-ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai"]
+FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value, LlmProviders.GEMINI.value}
+)
+
+LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})
+
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai", "xai"]
 
 LIST_BATCHES_SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(get_args(ListBatchesSupportedProvider))
 
@@ -4154,6 +5014,9 @@ class SearchProviders(str, Enum):
     AGENTCORE = "agentcore"
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
+    WEBIQ = "webiq"
+    DEEPSEEK = "deepseek"
+    XAI = "xai"
 
 
 # Create a set of all search provider values for quick lookup
@@ -4184,11 +5047,26 @@ class LiteLLMLoggingBaseClass:
         pass
 
 
+TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
+
+
+@dataclass(frozen=True, slots=True)
+class FailureLoggedCost:
+    cost: float
+
+
+@dataclass(frozen=True, slots=True)
+class CountContextManagement:
+    spec: JsonValue
+    drop_invalid_edits: bool
+
+
 class TokenCountResponse(LiteLLMPydanticObjectBase):
     total_tokens: int
     request_model: str
     model_used: str
     tokenizer_type: str
+    count_source: TokenCountSource | None = None
     original_response: dict | None = None
     """
     Original Response from upstream API call - if an API call was made for token counting
@@ -4199,6 +5077,7 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     HTTP status code from the token counting API (e.g., 200 for success, 429 for rate limit, 400 for bad request)
     """
     status_code: int | None = None
+    rejected_before_provider_call: bool = Field(default=False, exclude=True)
 
 
 class CustomHuggingfaceTokenizer(TypedDict):
@@ -4226,15 +5105,25 @@ class HttpHandlerRequestFields(TypedDict, total=False):
 class ProviderSpecificHeader(TypedDict):
     custom_llm_provider: str
     extra_headers: dict
+    native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
 
 
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
-    tokenizer: Any
+    tokenizer: ReadOnly["Tokenizer"]
 
 
 class LiteLLMFineTuningJob(FineTuningJob):
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     seed: int | None = None
 
     def __init__(self, **kwargs) -> None:
@@ -4246,28 +5135,207 @@ class LiteLLMFineTuningJob(FineTuningJob):
         self._hidden_params = kwargs.get("_hidden_params", {})
 
 
+class _BatchInputTokensDetails(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    cached_tokens: int | None = None
+
+
+class _BatchOutputTokensDetails(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    reasoning_tokens: int | None = None
+
+
+class _BatchTokenCounts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int | None = None
+    input_tokens_details: _BatchInputTokensDetails | None = None
+    output_tokens_details: _BatchOutputTokensDetails | None = None
+
+
+def _parse_batch_token_counts(value: object) -> _BatchTokenCounts | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return _BatchTokenCounts.model_validate(value)
+    except ValidationError:
+        return None
+
+
+def _prompt_details_with_cached_tokens(
+    details: PromptTokensDetailsWrapper | None, cached_tokens: int | None
+) -> PromptTokensDetailsWrapper | None:
+    if not cached_tokens:
+        return details
+    return (details or PromptTokensDetailsWrapper()).model_copy(update={"cached_tokens": cached_tokens})
+
+
+def _completion_details_with_reasoning_tokens(
+    details: CompletionTokensDetailsWrapper | None, reasoning_tokens: int | None
+) -> CompletionTokensDetailsWrapper | None:
+    if not reasoning_tokens:
+        return details
+    return (details or CompletionTokensDetailsWrapper()).model_copy(update={"reasoning_tokens": reasoning_tokens})
+
+
+def _usage_with_batch_token_counts(usage: Usage, counts: _BatchTokenCounts) -> Usage:
+    return usage.model_copy(
+        update={
+            "prompt_tokens": counts.input_tokens,
+            "completion_tokens": counts.output_tokens,
+            "total_tokens": (
+                counts.input_tokens + counts.output_tokens if counts.total_tokens is None else counts.total_tokens
+            ),
+            "prompt_tokens_details": _prompt_details_with_cached_tokens(
+                usage.prompt_tokens_details,
+                counts.input_tokens_details.cached_tokens if counts.input_tokens_details else None,
+            ),
+            "completion_tokens_details": _completion_details_with_reasoning_tokens(
+                usage.completion_tokens_details,
+                counts.output_tokens_details.reasoning_tokens if counts.output_tokens_details else None,
+            ),
+        }
+    )
+
+
+class _ProviderBatchUsageDetails(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    input_tokens_details: Mapping[str, JsonValue] | None = None
+    output_tokens_details: Mapping[str, JsonValue] | None = None
+
+
+def _provider_batch_usage_details(usage: Usage) -> _ProviderBatchUsageDetails:
+    try:
+        return _ProviderBatchUsageDetails.model_validate(usage)
+    except ValidationError:
+        return _ProviderBatchUsageDetails()
+
+
+def _has_unparsed_batch_token_counts(usage: Usage) -> bool:
+    provider_fields: Final = usage.model_extra or {}
+    sent_batch_counts: Final = "input_tokens" in provider_fields or "output_tokens" in provider_fields
+    return sent_batch_counts and _parse_batch_token_counts(provider_fields) is None
+
+
+def _batch_usage_from_chat_usage(usage: Usage) -> BatchUsage:
+    provider_details: Final = _provider_batch_usage_details(usage)
+    cached_tokens: Final = usage.prompt_tokens_details.cached_tokens if usage.prompt_tokens_details else None
+    reasoning_tokens: Final = (
+        usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
+    )
+    return BatchUsage(
+        input_tokens=usage.prompt_tokens,
+        input_tokens_details=InputTokensDetails.model_validate(
+            {**(provider_details.input_tokens_details or {}), "cached_tokens": cached_tokens or 0}
+        ),
+        output_tokens=usage.completion_tokens,
+        output_tokens_details=OutputTokensDetails.model_validate(
+            {**(provider_details.output_tokens_details or {}), "reasoning_tokens": reasoning_tokens or 0}
+        ),
+        total_tokens=usage.total_tokens,
+    )
+
+
+OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS: Final = MappingProxyType(
+    {"pending": "validating", "running": "in_progress"}
+)
+
+
+def openai_batch_status(status: _JsonValue) -> _JsonValue:
+    return OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(status, status) if isinstance(status, str) else status
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
+
+    object: Literal["batch"] = "batch"
+
+    @field_validator("object", mode="before")
+    @classmethod
+    def _default_missing_object_type(cls, value: _JsonValue) -> _JsonValue:
+        return "batch" if value is None else value
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _map_vllm_router_status(cls, value: _JsonValue) -> _JsonValue:
+        return openai_batch_status(value)
+
+    @property
+    def hidden_params(self) -> dict[str, _JsonValue]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     usage: Usage | None = None
 
-    def __contains__(self, key) -> bool:
+    @field_validator("usage", mode="before")
+    @classmethod
+    def _usage_from_batch_token_counts(cls, value: _JsonValue) -> _JsonValue:
+        counts: Final = _parse_batch_token_counts(value)
+        return value if counts is None else _usage_with_batch_token_counts(Usage.model_validate(value), counts)
+
+    @field_serializer("usage")
+    def _serialize_usage_with_batch_fields(
+        self, usage: Usage | None, info: FieldSerializationInfo
+    ) -> Mapping[str, _JsonValue] | None:
+        if not isinstance(usage, Usage):
+            return usage
+        chat_fields: Final = usage.model_dump(
+            mode=info.mode,
+            include=info.include,
+            exclude=info.exclude,
+            exclude_unset=info.exclude_unset,
+            exclude_defaults=info.exclude_defaults,
+            exclude_none=info.exclude_none,
+        )
+        if _has_unparsed_batch_token_counts(usage):
+            return chat_fields
+        return {
+            **chat_fields,
+            **_batch_usage_from_chat_usage(usage).model_dump(
+                mode=info.mode,
+                include=info.include,
+                exclude=info.exclude,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
+                exclude_none=info.exclude_none,
+            ),
+        }
+
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+_PROVIDER_ONLY_BATCH_USAGE_FIELDS: Final = frozenset(BatchUsage.model_fields) - frozenset(Usage.model_fields)
+
+
+def batch_chat_usage(batch: LiteLLMBatch) -> Usage | None:
+    if batch.usage is None:
+        return None
+    return Usage.model_validate(batch.usage.model_dump(exclude=set(_PROVIDER_ONLY_BATCH_USAGE_FIELDS)))
 
 
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
@@ -4278,25 +5346,34 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
     service_tier: str | None = None
+    id: str | None = None
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     @field_serializer("results")
     def _serialize_results(self, results: OpenAIRealtimeStreamList) -> list[dict[str, Any]]:
         return [dict(event) for event in results]
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -4361,6 +5438,7 @@ class ServiceTier(Enum):
 
     AUTO = "auto"
     FLEX = "flex"
+    BALANCED = "balanced"
     PRIORITY = "priority"
     FAST = "fast"
     ULTRAFAST = "ultrafast"
@@ -4373,11 +5451,13 @@ class DataResidency(Enum):
     Inferred from the OpenAI api_base host (eu.api.openai.com -> EU,
     us.api.openai.com -> US). Used to apply the regional-processing
     cost uplift (see ``regional_processing_uplift_multiplier_<region>``
-    on ModelInfo).
+    on ModelInfo). gov.api.openai.com maps to FEDRAMP, which applies
+    ``fedramp_uplift_multiplier`` instead.
     """
 
     US = "us"
     EU = "eu"
+    FEDRAMP = "fedramp"
 
 
 LLMResponseTypes = (
@@ -4435,7 +5515,38 @@ class PriorityReservationDict(TypedDict, total=False):
     value: float
 
 
-class PriorityReservationSettings(BaseModel):
+ClassShareEntity: TypeAlias = Literal["team", "key", "customer_organization", "customer_member"]
+
+
+ModelLimitBorrowingEntity: TypeAlias = Literal["team", "key", "customer_organization"]
+
+
+class ModelLimitBorrowingConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    borrow_idle_capacity: tuple[ModelLimitBorrowingEntity, ...] = Field(
+        default=(),
+        description="Entity types whose model_tpm_limit and model_rpm_limit on a model this limiter covers stop being ceilings. Each may run past them on capacity other callers are not using while the model is below saturation_threshold, up to its borrow cap when one is set, and is held to them once the model saturates. A customer organization's usage counts across every key its requests use.",
+    )
+    max_borrow_multiple: float | None = Field(
+        default=None,
+        ge=1,
+        le=1_000_000,
+        allow_inf_nan=False,
+        description="Most a borrower may use on a model while it borrows idle capacity, as a multiple of its model_tpm_limit or model_rpm_limit. It applies to every listed entity type. A team or key that sets model_limit_max_borrow_multiple in its metadata uses that value instead. None lets a borrower without its own value use everything up to the model limit.",
+    )
+
+
+class PriorityClassShareConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    split_equally_among_active: tuple[ClassShareEntity, ...] = Field(
+        default=(),
+        description="Entity types that each take an equal slice of their priority class's share of a model, renormalized over the classes active on the model in the current window. Once the model saturates each is held to its own slice instead of the class pool. A request that matches several listed types counts under one of them: its team first, so customer headers cannot move a team's key off the team's slice, then customer_member, then customer_organization, then key.",
+    )
+
+
+class PriorityReservationSettings(LiteLLMBaseModel):
     """
     Settings for priority-based rate limiting reservation.
 
@@ -4452,6 +5563,22 @@ class PriorityReservationSettings(BaseModel):
         default=0.50,
         description="Saturation threshold (0.0-1.0) at which strict priority enforcement begins. Below this threshold, generous mode allows priority borrowing. Above this threshold, strict mode enforces normalized priority limits.",
     )
+    model_limit_borrowing_config: ModelLimitBorrowingConfig = Field(
+        default_factory=ModelLimitBorrowingConfig,
+        description="Which callers have their per-model limits treated as guaranteed shares that borrow idle capacity.",
+    )
+    priority_class_share_config: PriorityClassShareConfig = Field(
+        default_factory=PriorityClassShareConfig,
+        description="Which callers take their own equal slice of a priority class's share of a model, instead of sharing the class pool.",
+    )
+
+    @property
+    def model_limit_borrowing_entities(self) -> frozenset[ModelLimitBorrowingEntity]:
+        return frozenset(self.model_limit_borrowing_config.borrow_idle_capacity)
+
+    @property
+    def class_share_split_entities(self) -> frozenset[ClassShareEntity]:
+        return frozenset(self.priority_class_share_config.split_equally_among_active)
 
     saturation_check_cache_ttl: int = Field(
         default=60,
@@ -4473,3 +5600,12 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     stream_holdback_chars: list[
         int
     ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)
+
+
+class ProviderRoutingHints(TypedDict, total=False):
+    custom_llm_provider: ReadOnly[str | None]
+    api_base: ReadOnly[str | None]
+
+
+class BaseUrlRoutingHint(TypedDict, total=False):
+    base_url: ReadOnly[str | None]

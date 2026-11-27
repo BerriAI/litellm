@@ -20,16 +20,27 @@ The (feature, provider) for this cell is inferred from the file path by
 from __future__ import annotations
 
 import pytest
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 AZURE_MODELS = [
-    "claude-haiku-4-5-azure",
-    "claude-sonnet-4-5-azure",
-    "claude-opus-4-7-azure",
+    "claude-haiku-5-5-azure",
+    "claude-sonnet-5-5-azure",
+    "claude-opus-5-5-azure",
+    "claude-fable-5-2-azure",
 ]
 
 
 @pytest.mark.covers("llm.messages.azure_foundry.basic.stream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.AZURE_AI,),
+        models=tuple(AZURE_MODELS),
+        mode=Mode.STREAM,
+    )
+)
 def test_basic_messaging_streaming_azure(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     non-empty streamed reply (one row per Claude tier).

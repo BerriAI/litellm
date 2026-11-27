@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import pytest
 
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_count_tokens_shape,
@@ -47,13 +48,23 @@ from claude_code.http_probe import (
 
 
 AZURE_MODELS = [
-    "claude-haiku-4-5-azure",
-    "claude-sonnet-4-5-azure",
-    "claude-opus-4-7-azure",
+    "claude-haiku-5-5-azure",
+    "claude-sonnet-5-5-azure",
+    "claude-opus-5-5-azure",
+    "claude-fable-5-2-azure",
 ]
 
 
 @pytest.mark.covers("llm.messages.azure_foundry.count_tokens.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.COUNT_TOKENS,
+        providers=(Provider.AZURE_AI,),
+        models=tuple(AZURE_MODELS),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_count_tokens_azure(compat_result):
     """Probe `/v1/messages/count_tokens` for each Azure (Microsoft Foundry) tier and
     assert the response shape."""

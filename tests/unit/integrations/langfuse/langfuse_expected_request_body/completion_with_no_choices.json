@@ -1,0 +1,31 @@
+{
+    "name": "litellm-acompletion",
+    "parent_span_id": null,
+    "attributes": {
+        "langfuse.observation.cost_details": {
+            "total": 1.9999999999999998e-05
+        },
+        "langfuse.observation.input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Hello!"
+                }
+            ]
+        },
+        "langfuse.observation.level": "DEFAULT",
+        "langfuse.observation.model.name": "gpt-3.5-turbo",
+        "langfuse.observation.model.parameters": {
+            "extra_body": "{}"
+        },
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.usage_details": {
+            "input": 10,
+            "output": 10,
+            "total": 20,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0
+        },
+        "langfuse.trace.name": "litellm-acompletion"
+    }
+}

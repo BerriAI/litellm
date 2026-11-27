@@ -4,25 +4,27 @@ import os
 import posixpath
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
-from functools import cache
+from email.utils import parsedate_to_datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeAlias, TypedDict
+from typing import Any, ClassVar, Final, Literal, Protocol, TypeAlias, TypedDict
 from urllib.parse import quote, unquote, urlencode
 
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -30,25 +32,41 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
     BEDROCK_MANAGED_S3_PREFIXES,
     BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
+    STORED_S3_BUCKET_PARAM,
     build_managed_cloud_object_name,
     encode_s3_object_key_for_url,
+    s3_media_uris,
     sanitize_cloud_object_component,
     should_allow_legacy_cloud_file_ids,
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    extract_file_data,
     text_completion_prompt_to_messages,
 )
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    extract_file_data,
+)
+from litellm.litellm_core_utils.tool_fields import hosted_mcp_batch_row_remedy, tool_params_without_hosted_mcp
+from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseLLMException
+from litellm.llms.base_llm.files.batch_records import (
+    responses_batch_body_to_chat_body,
+    row_or_deployment_drop_params,
+)
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
-from litellm.types.llms.bedrock import BedrockBatchRecordKind
+from litellm.llms.bedrock.web_identity_session_policy import BEDROCK_FILES_SESSION_POLICY, WebIdentitySessionPolicy
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.bedrock import AwsAuthParams, BedrockBatchRecordKind
 from litellm.types.llms.openai import (
     AllMessageValues,
+    BatchInputFormat,
     CreateFileRequest,
     FileContentRequest,
     FileTypes,
@@ -56,23 +74,98 @@ from litellm.types.llms.openai import (
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
     PathLike,
-    ResponseInputParam,
-    ResponsesAPIOptionalRequestParams,
 )
-from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums
-from litellm.utils import get_llm_provider
+from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums, is_litellm_owned_kwarg
+from litellm.utils import get_llm_provider, get_optional_params
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, merge_bedrock_aws_request_params, resolve_s3_encryption_key_id
+from ..common_utils import (
+    BedrockError,
+    bedrock_batch_record_takes_native_output,
+    deployment_model_info,
+    merge_bedrock_aws_request_params,
+    resolve_s3_encryption_key_id,
+    without_bedrock_native_output_opt_in,
+)
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
+S3_RETRIEVE_FILE_ID_PARAM: Final = "_s3_retrieve_file_id"
+S3_RETRIEVE_FILE_KEY_PARAM: Final = "_s3_retrieve_file_key"
+S3_RETRIEVE_FILE_RELATIVE_KEY_PARAM: Final = "_s3_retrieve_file_relative_key"
+_S3_SIGNED_REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(
+    Mapping[str, str],
+    config=ConfigDict(strict=True),
+)
 
 LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 
 LIST_FILES_LOCATION_PARAM: Final = "_s3_list_files_location"
 
 
-class _S3DeleteContext(BaseModel):
+def _header_or_empty(headers: Headers, name: str) -> str:
+    try:
+        return headers[name]
+    except KeyError:
+        return ""
+
+
+def _is_empty_s3_object_range_error(raw_response: Response) -> bool:
+    if raw_response.status_code != 416:
+        return False
+    if raw_response.headers.get("Content-Range") == "bytes */0":
+        return True
+    try:
+        error_xml: Final = ET.fromstring(raw_response.content)
+    except ET.ParseError:
+        return False
+    return error_xml.findtext("ActualObjectSize") == "0"
+
+
+def _retrieved_s3_file_size(raw_response: Response) -> int:
+    status_code: Final = raw_response.status_code
+    if _is_empty_s3_object_range_error(raw_response):
+        return 0
+    if status_code == 206:
+        content_range: Final = _header_or_empty(raw_response.headers, "Content-Range")
+        range_parts: Final = content_range.removeprefix("bytes 0-0/")
+        if content_range.startswith("bytes 0-0/") and range_parts.isdigit():
+            return int(range_parts)
+        raise BedrockError(
+            status_code=status_code,
+            message=f"Invalid S3 Content-Range header: {content_range}",
+            headers=raw_response.headers,
+            response=raw_response,
+        )
+    if status_code == 200:
+        content_length: Final = _header_or_empty(raw_response.headers, "Content-Length")
+        if content_length.isdigit():
+            return int(content_length)
+        raise BedrockError(
+            status_code=status_code,
+            message=f"Invalid S3 Content-Length header: {content_length}",
+            headers=raw_response.headers,
+            response=raw_response,
+        )
+    if status_code >= 400:
+        raise BedrockError(
+            status_code=status_code,
+            message=raw_response.text,
+            headers=raw_response.headers,
+            response=raw_response,
+        )
+    raise BedrockError(
+        status_code=status_code,
+        message=f"S3 file retrieval returned HTTP {status_code}",
+        headers=raw_response.headers,
+        response=raw_response,
+    )
+
+
+class _SupportsRstrip(Protocol):
+    def rstrip(self, chars: str, /) -> str: ...
+
+
+class _S3DeleteContext(LiteLLMBaseModel):
     file_id: str = Field(min_length=1)
 
 
@@ -83,6 +176,32 @@ UPLOAD_CONTENT_LENGTH_PARAM: Final = "_s3_upload_content_length"
 
 def _frozen_mapping(items: Iterable[tuple[str, object]]) -> Mapping[str, object]:
     return MappingProxyType(dict(items))
+
+
+_LITELLM_PARAMS_THE_MAPPER_TAKES: Final = frozenset({"allowed_openai_params"})
+_MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS: Final = frozenset({"json_mode"})
+
+
+class _ParamsTheMapperOwns(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
+
+
+_UPLOAD_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+def _upload_params(params: object) -> Mapping[str, object]:
+    return _UPLOAD_PARAMS.validate_python(params) if isinstance(params, Mapping) else {}
+
+
+def _upload_deployment_model_info(litellm_params: object) -> Mapping[str, object]:
+    upload_params: Final = _upload_params(litellm_params)
+    return deployment_model_info(upload_params) or deployment_model_info(
+        _upload_params(upload_params.get("litellm_metadata"))
+    )
+
+
+def _invoke_route_model(model: str) -> str:
+    return f"invoke/{_strip_llm_routing_prefix(model).removeprefix('invoke/')}"
 
 
 def _strip_llm_routing_prefix(model: str) -> str:
@@ -115,6 +234,13 @@ class _OpenAIBatchRecord(TypedDict, total=False):
     body: ReadOnly[_OpenAIBatchRecordBody]
 
 
+class _OpenAIBatchRecordFields(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 class _BedrockBatchRecord(TypedDict):
     recordId: ReadOnly[str]
     modelInput: ReadOnly[Mapping[str, object]]
@@ -126,39 +252,14 @@ class _S3UploadResponse(TypedDict, total=False):
     ContentLength: ReadOnly[int]
 
 
-# JSONL batch records are untyped json, so the `/v1/responses` fields are
-# validated into their concrete Responses API types before being handed to the
-# Responses-to-Chat bridge. Both adapters drop keys the Responses API doesn't
-# define, which is what the bridge would ignore anyway. Built on first use
-# rather than at import: `ResponseInputParam` is a deep union and only batch
-# files carrying `/v1/responses` records need it.
-@cache
-def _responses_input_adapter() -> TypeAdapter[str | ResponseInputParam]:
-    return TypeAdapter(str | ResponseInputParam)
-
-
-@cache
-def _responses_request_adapter() -> TypeAdapter[ResponsesAPIOptionalRequestParams]:
-    return TypeAdapter(ResponsesAPIOptionalRequestParams)
-
-
-class _BedrockS3RequestParams(BaseModel):
+class _BedrockS3RequestParams(AwsAuthParams):
     """Typed view of the credential/region params the S3 GetObject path reads."""
 
-    model_config = ConfigDict(extra="ignore")
-
-    aws_access_key_id: str | None = None
-    aws_secret_access_key: str | None = None
-    aws_session_token: str | None = None
     aws_region_name: str | None = None
-    aws_session_name: str | None = None
-    aws_profile_name: str | None = None
-    aws_role_name: str | None = None
-    aws_web_identity_token: str | None = None
-    aws_sts_endpoint: str | None = None
-    aws_external_id: str | None = None
     s3_region_name: str | None = None
     s3_endpoint_url: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,15 +267,6 @@ class _S3RequestTarget:
     endpoint_url: str
     aws_region_name: str
     request_params: _BedrockS3RequestParams
-
-
-class _TrustedS3ModelCredentials(BaseModel):
-    """The S3 buckets the server trusts file ids against, from the deployment snapshot."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    s3_bucket_name: str | None = None
-    s3_output_bucket_name: str | None = None
 
 
 def extract_s3_uri_from_file_id(file_id: str) -> str:
@@ -200,27 +292,31 @@ def extract_s3_uri_from_file_id(file_id: str) -> str:
     raise ValueError("file_id must be a managed LiteLLM S3 file id")
 
 
-_S3_BUCKET_REQUIRED_ERROR: Final = "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
+_S3_BUCKET_REQUIRED_ERROR: Final = (
+    "S3 bucket_name is required. Pass 's3_bucket_name', set it in proxy config, "
+    "or set AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
+)
 
 
-def _trusted_s3_model_credentials(litellm_params: Mapping[str, object]) -> _TrustedS3ModelCredentials:
-    trusted_model_credentials: Final = litellm_params.get("_litellm_internal_model_credentials")
-    if not isinstance(trusted_model_credentials, MappingProxyType):
-        return _TrustedS3ModelCredentials()
-    snapshot: Final[dict[str, object]] = {}
-    snapshot.update(trusted_model_credentials)  # any-ok: untyped snapshot
-    return _TrustedS3ModelCredentials.model_validate(snapshot)
+def _s3_param(litellm_params: Mapping[str, object], key: str, env_var: str) -> str | None:
+    value: Final = litellm_params.get(key)
+    return value if isinstance(value, str) and value else os.getenv(env_var)
+
+
+def _input_bucket_name(litellm_params: Mapping[str, object]) -> str | None:
+    return _s3_param(litellm_params, "s3_bucket_name", "AWS_S3_BUCKET_NAME")
+
+
+def _output_bucket_name(litellm_params: Mapping[str, object]) -> str | None:
+    return _s3_param(litellm_params, "s3_output_bucket_name", "AWS_S3_OUTPUT_BUCKET_NAME")
 
 
 def get_configured_s3_bucket_name(litellm_params: Mapping[str, object]) -> str:
     """
-    Resolve the server-configured S3 bucket for Bedrock file operations.
-
-    Only trusts the immutable server-side credential snapshot or the
-    environment; never a request-supplied param, since the bucket is what
-    `validate_managed_cloud_file_id` checks file ids against.
+    Resolve the S3 bucket for Bedrock file operations: the call's ``s3_bucket_name``,
+    else ``AWS_S3_BUCKET_NAME``. File ids are validated against this bucket.
     """
-    bucket_name: Final = _trusted_s3_model_credentials(litellm_params).s3_bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
+    bucket_name: Final = _input_bucket_name(litellm_params)
     if not bucket_name:
         raise ValueError(_S3_BUCKET_REQUIRED_ERROR)
     return bucket_name
@@ -228,17 +324,22 @@ def get_configured_s3_bucket_name(litellm_params: Mapping[str, object]) -> str:
 
 def get_configured_s3_bucket_names(litellm_params: Mapping[str, object]) -> tuple[str, ...]:
     """
-    Resolve the server-configured S3 buckets a Bedrock file id may live in.
+    Resolve the S3 buckets a Bedrock file id may live in.
 
     Bedrock batch outputs land in ``s3_output_bucket_name`` when it differs from
-    the input bucket, so retrieval validates against both. Same trust rules as
-    ``get_configured_s3_bucket_name``: only the immutable credential snapshot or
-    the environment, never a request param.
+    the input bucket, so retrieval validates against both, plus the bucket LiteLLM
+    recorded for a managed file uploaded or written to a request-chosen bucket.
     """
-    trusted: Final = _trusted_s3_model_credentials(litellm_params)
-    input_bucket: Final = trusted.s3_bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
-    output_bucket: Final = trusted.s3_output_bucket_name or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
-    buckets: Final = tuple(dict.fromkeys(bucket for bucket in (input_bucket, output_bucket) if bucket))
+    input_bucket: Final = _input_bucket_name(litellm_params)
+    output_bucket: Final = _output_bucket_name(litellm_params)
+    stored_bucket: Final = litellm_params.get(STORED_S3_BUCKET_PARAM)
+    buckets: Final = tuple(
+        dict.fromkeys(
+            bucket
+            for bucket in (input_bucket, output_bucket, stored_bucket if isinstance(stored_bucket, str) else None)
+            if bucket
+        )
+    )
     if not buckets:
         raise ValueError(_S3_BUCKET_REQUIRED_ERROR)
     return buckets
@@ -268,7 +369,10 @@ _REJECTED_FILE_ID_REQUEST_URL: Final = "https://litellm.ai"
 
 
 def _rejected_file_id(reason: ValueError) -> BedrockError:
-    message: Final = str(reason)
+    return _client_error(str(reason))
+
+
+def _client_error(message: str) -> BedrockError:
     return BedrockError(
         status_code=400,
         message=message,
@@ -278,6 +382,143 @@ def _rejected_file_id(reason: ValueError) -> BedrockError:
             request=httpx.Request(method="GET", url=_REJECTED_FILE_ID_REQUEST_URL),
         ),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _BatchInputLine:
+    line_number: int
+    record: _OpenAIBatchRecord
+
+
+_BATCH_RECORD_CONVERSION_ERRORS: Final = (
+    AttributeError,
+    LookupError,
+    TypeError,
+    ValueError,
+    BadRequestError,
+    AnthropicError,
+)
+
+
+def _batch_line_error(line_number: int, problem: str) -> BedrockError:
+    return _client_error(f"Batch input file line {line_number} {problem}")
+
+
+class _S3MediaInBatchRecord(ValueError):
+    def __init__(self, s3_uris: tuple[str, ...]) -> None:
+        super().__init__(
+            f"has s3:// media URLs ({', '.join(s3_uris)}). "
+            "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
+        )
+
+
+_OPENAI_FORMAT_INVOKE_SERVICE_TIERS: Final = frozenset({"default", "flex", "priority"})
+
+
+def _check_batch_record_service_tier(
+    value: object, model: str, drop_params: bool, accepted_tiers: frozenset[str] = frozenset()
+) -> None:
+    import litellm
+
+    if value is None or (isinstance(value, str) and value.lower() == "auto"):
+        return
+    if not (litellm.drop_params or drop_params):
+        raise UnsupportedParamsError(
+            message=(
+                f"{model} batch records do not support service_tier={value!r}. "
+                + (
+                    f"Their InvokeModel body takes only {', '.join(sorted(accepted_tiers))}. "
+                    if accepted_tiers
+                    else "A Bedrock batch record for this model is an InvokeModel body, which takes no service tier. "
+                )
+                + "To drop unsupported params, set `litellm.drop_params = True`."
+            ),
+            status_code=400,
+        )
+    verbose_logger.warning("Dropping service_tier=%r from a %s batch record, since Bedrock rejects it.", value, model)
+
+
+def _openai_format_batch_record_service_tier(value: object, model: str, drop_params: bool) -> Mapping[str, str]:
+    from litellm.llms.bedrock.chat.converse_transformation import bedrock_service_tier_name
+
+    tier: Final = bedrock_service_tier_name(value) if isinstance(value, str) else None
+    if tier in _OPENAI_FORMAT_INVOKE_SERVICE_TIERS:
+        return MappingProxyType({"service_tier": tier})
+    _check_batch_record_service_tier(value, model, drop_params, _OPENAI_FORMAT_INVOKE_SERVICE_TIERS)
+    return MappingProxyType({})
+
+
+def _decode_batch_input(content: str | bytes) -> str:
+    if isinstance(content, str):
+        return content.removeprefix("\ufeff")
+    try:
+        return content.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise _batch_line_error(content.count(b"\n", 0, e.start) + 1, f"is not valid UTF-8: {e.reason}") from e
+
+
+def _load_batch_line(line_number: int, line: str) -> object:
+    try:
+        return _DECODED_JSON.validate_python(json.loads(line))
+    except json.JSONDecodeError as e:
+        raise _batch_line_error(line_number, f"is not valid JSON: {e.msg} at column {e.colno}") from e
+    except (ValueError, RecursionError) as e:
+        raise _batch_line_error(line_number, f"could not be parsed: {e}") from e
+
+
+def _json_object(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _batch_json_object(line_number: int, line: str) -> _OpenAIBatchRecord:
+    record: Final = _json_object(_load_batch_line(line_number, line))
+    if record is None:
+        raise _batch_line_error(line_number, "is not a JSON object")
+    return _OpenAIBatchRecord(**_OpenAIBatchRecordFields(**record))
+
+
+def _batch_body_problem(record: Mapping[str, object]) -> str | None:
+    body: Final = _json_object(record.get("body"))
+    if body is None:
+        return "has a body that is missing or not a JSON object"
+    if "model" in body and not isinstance(body["model"], str):
+        return "has a body.model that is not a string"
+    return None
+
+
+def _batch_input_line(line_number: int, line: str) -> _BatchInputLine:
+    record: Final = _batch_json_object(line_number, line)
+    problem: Final = _batch_body_problem(record)
+    if problem is not None:
+        raise _batch_line_error(line_number, problem)
+    return _BatchInputLine(line_number=line_number, record=record)
+
+
+def _non_blank_lines(file_content: str) -> Iterator[tuple[int, str]]:
+    numbered_lines: Final = enumerate(split_sse_lines(file_content), start=1)
+    return ((line_number, line) for line_number, line in numbered_lines if line.strip())
+
+
+def _parse_batch_jsonl(file_content: str) -> tuple[_BatchInputLine, ...]:
+    return tuple(_batch_input_line(line_number, line) for line_number, line in _non_blank_lines(file_content))
+
+
+def _batch_file_model(file_content: str) -> str | None:
+    records: Final = tuple(
+        _batch_json_object(line_number, line) for line_number, line in _non_blank_lines(file_content)
+    )
+    if not records:
+        return None
+    body: Final = _json_object(records[0].get("body"))
+    model: Final = body.get("model") if body is not None else None
+    return model if isinstance(model, str) else ""
+
+
+def _batch_s3_object_name(model: str) -> str:
+    safe_model: Final = sanitize_cloud_object_component(
+        model.removeprefix("bedrock/").replace(":", "-"), fallback="model"
+    )
+    return f"{BEDROCK_MANAGED_S3_BATCH_PREFIX}{safe_model}-{uuid.uuid4()}.jsonl"
 
 
 def _resolve_managed_s3_object(file_id: str, litellm_params: Mapping[str, object]) -> tuple[str, str]:
@@ -291,6 +532,25 @@ def _resolve_managed_s3_object(file_id: str, litellm_params: Mapping[str, object
         )
     except ValueError as reason:
         raise _rejected_file_id(reason) from reason
+
+
+def _relative_s3_object_key(
+    bucket_name: str,
+    object_key: str,
+    litellm_params: Mapping[str, object],
+) -> str:
+    configured_bucket_prefixes: Final = tuple(
+        split_configured_cloud_bucket_name(configured_bucket_name)
+        for configured_bucket_name in get_configured_s3_bucket_names(litellm_params)
+    )
+    matching_prefixes: Final = tuple(
+        configured_prefix
+        for configured_bucket, configured_prefix in configured_bucket_prefixes
+        if configured_bucket == bucket_name
+        and (not configured_prefix or object_key.startswith(f"{configured_prefix}/"))
+    )
+    configured_prefix: Final = max(matching_prefixes, key=len, default="")
+    return object_key[len(configured_prefix) + 1 :] if configured_prefix else object_key
 
 
 _ANY_MANAGED_LISTING_PREFIX: Final = os.path.commonprefix(BEDROCK_MANAGED_S3_PREFIXES)
@@ -338,12 +598,7 @@ def _output_location_still_unlisted(litellm_params: Mapping[str, object]) -> boo
 def _listing_bucket_name(litellm_params: Mapping[str, object], purpose: str | None) -> str:
     if purpose != "batch_output":
         return get_configured_s3_bucket_name(litellm_params)
-    trusted: Final = _trusted_s3_model_credentials(litellm_params)
-    return (
-        trusted.s3_output_bucket_name
-        or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
-        or get_configured_s3_bucket_name(litellm_params)
-    )
+    return _output_bucket_name(litellm_params) or get_configured_s3_bucket_name(litellm_params)
 
 
 def _listed_object_created_at(entry: ET.Element) -> int:
@@ -386,7 +641,7 @@ def _listed_managed_file(
     )
 
 
-def _uploaded_object_size(litellm_params: Mapping[str, object], raw_response: Response) -> int:
+def _uploaded_object_size(litellm_params: Mapping[str, object], response_headers: Mapping[str, str]) -> int:
     """
     S3 answers PutObject with an empty body, so the stored object size comes from the
     signed request recorded by `transform_create_file_request`, not the response headers.
@@ -394,7 +649,7 @@ def _uploaded_object_size(litellm_params: Mapping[str, object], raw_response: Re
     uploaded_size: Final = litellm_params.get(UPLOAD_CONTENT_LENGTH_PARAM)
     if isinstance(uploaded_size, int):
         return uploaded_size
-    response_content_length: Final = raw_response.headers.get("Content-Length", "0")
+    response_content_length: Final = response_headers.get("Content-Length", "0")
     return int(response_content_length) if response_content_length.isdigit() else 0
 
 
@@ -403,6 +658,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     Config for Bedrock Files - handles S3 uploads for Bedrock batch processing
     """
 
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_FILES_SESSION_POLICY
+
     def __init__(self):
         self.jsonl_transformation = BedrockJsonlFilesTransformation()
         super().__init__()
@@ -410,6 +667,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK
+
+    def is_retrieve_file_response_successful(self, response: httpx.Response) -> bool:
+        return not httpx.codes.is_error(response.status_code) or _is_empty_s3_object_range_error(response)
 
     @property
     def file_upload_http_method(self) -> str:
@@ -423,11 +683,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         headers: MutableMapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: MutableMapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         result: Final[dict[str, object]] = {}
         result.update(headers)
         signed_headers: Final = litellm_params.pop(S3_SIGNED_REQUEST_HEADERS_PARAM, None)
@@ -467,29 +727,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             # File-like objects need to be read
             content = file_content.read()
 
-        # Ensure content is string
-        if isinstance(content, bytes):
-            content = content.decode("utf-8")
-
-        return content
-
-    def _get_s3_object_name_from_batch_jsonl(
-        self,
-        openai_jsonl_content: Sequence[_OpenAIBatchRecord],
-    ) -> str:
-        """
-        Gets a unique S3 object name for the Bedrock batch processing job
-
-        named as: litellm-bedrock-files/{model}/{uuid}
-        """
-        _model = openai_jsonl_content[0].get("body", {}).get("model", "")
-        # Remove bedrock/ prefix if present
-        _model = _model.removeprefix("bedrock/")
-
-        safe_model: Final = sanitize_cloud_object_component(_model.replace(":", "-"), fallback="model")
-
-        object_name: Final = f"{BEDROCK_MANAGED_S3_BATCH_PREFIX}{safe_model}-{uuid.uuid4()}.jsonl"
-        return object_name
+        return _decode_batch_input(content)
 
     def get_object_name(self, extracted_file_data: ExtractedFileData, purpose: str) -> str:
         """
@@ -503,11 +741,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if purpose == "batch":
             ## 1. If jsonl, check if there's a model name
             file_content: Final = self._get_content_from_openai_file(extracted_file_data_content)
-
-            # Split into lines and parse each line as JSON
-            openai_jsonl_content: Final = [json.loads(line) for line in file_content.splitlines() if line.strip()]
-            if len(openai_jsonl_content) > 0:
-                return self._get_s3_object_name_from_batch_jsonl(openai_jsonl_content)
+            batch_model: Final = _batch_file_model(file_content)
+            if batch_model is not None:
+                return _batch_s3_object_name(batch_model)
 
         ## 2. If not jsonl, store under a server-generated managed object name
         filename: Final = extracted_file_data.get("filename")
@@ -553,9 +789,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         encoded_object_name: Final = encode_s3_object_key_for_url(object_name)
 
         # S3 endpoint URL format
-        s3_endpoint_url: Final = (
+        s3_endpoint_url: Final = require_attributes(
             request_params.get("s3_endpoint_url")
-            or f"https://s3.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
+            or f"https://s3.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}",
+            _SupportsRstrip,
+            "rstrip",
         ).rstrip("/")
 
         return f"{s3_endpoint_url}/{bucket_name}/{encoded_object_name}"
@@ -565,11 +803,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     # Providers whose InvokeModel body uses the Converse API format
@@ -830,7 +1068,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             non_default_params=non_default_params,
             optional_params={},
         )
-        return dict(titan_config._transform_request(input=input_text, inference_params=inference_params))
+        return dict(titan_config.transform_request(input=input_text, inference_params=inference_params))
 
     @staticmethod
     def _transform_text_completion_body_to_chat_body(
@@ -857,45 +1095,24 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
 
     @staticmethod
-    def _transform_responses_body_to_chat_body(openai_request_body: _OpenAIBatchRecordBody) -> Mapping[str, object]:
+    def _transform_responses_body_to_chat_body(
+        openai_request_body: _OpenAIBatchRecordBody, drop_params: bool
+    ) -> Mapping[str, object]:
         """
         Rewrite an OpenAI `/v1/responses` batch body as a Chat Completions body.
 
         Delegates to the same Responses-to-Chat bridge the real-time path uses
         for providers without a native Responses API (which is every Bedrock
         model), so `input`, `instructions`, `max_output_tokens` and the tool
-        params translate identically in batch and real time. The bridge always
-        emits a `tools` key; an empty one is dropped rather than shipped as an
-        empty array inside `modelInput`.
+        params translate identically in batch and real time.
         """
-        from litellm.responses.litellm_completion_transformation.transformation import (
-            LiteLLMCompletionResponsesConfig,
-        )
-
-        responses_input: Final = openai_request_body.get("input")
-        if responses_input is None:
-            raise ValueError(
-                "Batch record for /v1/responses is missing required `input` field: "
-                f"model={openai_request_body.get('model', '')}"
-            )
-        chat_body: Final[Mapping[str, object]] = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
-                model=openai_request_body.get("model", ""),
-                input=_responses_input_adapter().validate_python(responses_input),
-                responses_api_request=_responses_request_adapter().validate_python(
-                    _frozen_mapping(
-                        (key, value) for key, value in openai_request_body.items() if key not in ("model", "input")
-                    )
-                ),
-                metadata=openai_request_body.get("metadata"),
-            )
-        )
-        return _frozen_mapping((key, value) for key, value in chat_body.items() if key != "tools" or value)
+        return responses_batch_body_to_chat_body(openai_request_body, drop_params=drop_params)
 
     @staticmethod
     def _transform_batch_body_to_chat_body(
         openai_request_body: _OpenAIBatchRecordBody,
         record_kind: BedrockBatchRecordKind,
+        drop_params: bool,
     ) -> Mapping[str, object]:
         """
         Normalize a non-embedding batch body to the Chat Completions shape the
@@ -905,7 +1122,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             case BedrockBatchRecordKind.TEXT_COMPLETION:
                 return BedrockFilesConfig._transform_text_completion_body_to_chat_body(openai_request_body)
             case BedrockBatchRecordKind.RESPONSES:
-                return BedrockFilesConfig._transform_responses_body_to_chat_body(openai_request_body)
+                return BedrockFilesConfig._transform_responses_body_to_chat_body(openai_request_body, drop_params)
             case BedrockBatchRecordKind.CHAT:
                 return openai_request_body
             case BedrockBatchRecordKind.EMBEDDING:
@@ -916,6 +1133,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         openai_request_body: Mapping[str, Any],
         model: str,
         provider: str | None = None,
+        model_info: Mapping[str, object] | None = None,
+        deployment_drop_params: object = None,
     ) -> dict[str, object]:
         """
         Transform OpenAI request body to Bedrock-compatible modelInput
@@ -927,27 +1146,62 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         from litellm.types.utils import LlmProviders
 
-        messages: Final = openai_request_body.get("messages", [])
-        optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
+        messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
+        request_params: Final[Mapping[str, object]] = openai_request_body
+        optional_params: Final = {k: v for k, v in request_params.items() if k not in ["model", "messages"]}
+        drop_params: Final = row_or_deployment_drop_params(openai_request_body, deployment_drop_params)
+        hosted_mcp_remedy: Final = hosted_mcp_batch_row_remedy(request_params.get("drop_params"))
+        requested_service_tier: Final = REQUEST_PARAMS.validate_python(optional_params).get("service_tier")
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
-            from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            from litellm.llms.anthropic.chat.transformation import without_malformed_thinking_blocks
+            from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
                 AmazonAnthropicClaudeConfig,
             )
 
+            _check_batch_record_service_tier(requested_service_tier, model, drop_params)
             config: Final = AmazonAnthropicClaudeConfig()
-            mapped_params = config.map_openai_params(
-                non_default_params={},
-                optional_params=optional_params,
-                model=model,
-                drop_params=False,
+            litellm_params: Final = without_bedrock_native_output_opt_in(
+                {
+                    "model_info": {
+                        "supports_native_structured_output": bedrock_batch_record_takes_native_output(
+                            _invoke_route_model(model), optional_params.get("response_format"), model_info
+                        )
+                    }
+                }
+            )
+            mapped_params = get_optional_params(
+                model=_invoke_route_model(model),
+                custom_llm_provider="bedrock",
+                messages=messages,
+                model_info=deployment_model_info(litellm_params),
+                drop_params=drop_params,
+                **_ParamsTheMapperOwns(
+                    **tool_params_without_hosted_mcp(
+                        {
+                            k: v
+                            for k, v in optional_params.items()
+                            if k not in ("drop_params", "service_tier")
+                            and (not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES)
+                        },
+                        model=model,
+                        route="bedrock",
+                        drop_params=drop_params,
+                        remedy=hosted_mcp_remedy,
+                        handling="drops",
+                    )
+                ),
             )
             return config.transform_request(
                 model=model,
-                messages=messages,
-                optional_params=mapped_params,
-                litellm_params={},
+                messages=[without_malformed_thinking_blocks(message) for message in messages]
+                if drop_params
+                else messages,
+                optional_params={
+                    k: v for k, v in mapped_params.items() if k not in _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS
+                },
+                litellm_params=dict(litellm_params),
                 headers={},
             )
 
@@ -959,18 +1213,34 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 AmazonConverseConfig,
             )
 
+            s3_uris: Final = s3_media_uris(openai_request_body)
+            if s3_uris:
+                raise _S3MediaInBatchRecord(s3_uris)
+            _check_batch_record_service_tier(requested_service_tier, model, drop_params)
             converse_config: Final = AmazonConverseConfig()
+            converse_params: Final = tool_params_without_hosted_mcp(
+                {
+                    k: v
+                    for k, v in optional_params.items()
+                    if k not in ("requestMetadata", "drop_params", "service_tier")
+                },
+                model=model,
+                route="bedrock",
+                drop_params=drop_params,
+                remedy=hosted_mcp_remedy,
+                handling="drops",
+            )
             mapped_params = converse_config.map_openai_params(
-                non_default_params=optional_params,
+                non_default_params=converse_params,
                 optional_params={},
                 model=model,
-                drop_params=False,
+                drop_params=drop_params,
             )
             return converse_config.transform_request(
                 model=model,
                 messages=messages,
                 optional_params=mapped_params,
-                litellm_params={},
+                litellm_params={"drop_params": drop_params},
                 headers={},
             )
 
@@ -978,7 +1248,15 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         #     like openai.gpt-oss-*, qwen, deepseek, etc.) ---
         return {
             "messages": messages,
-            **optional_params,
+            **tool_params_without_hosted_mcp(
+                {k: v for k, v in optional_params.items() if k not in ("drop_params", "service_tier")},
+                model=model,
+                route="bedrock",
+                drop_params=drop_params,
+                remedy=hosted_mcp_remedy,
+                handling="drops",
+            ),
+            **_openai_format_batch_record_service_tier(requested_service_tier, model, drop_params),
         }
 
     def _resolve_batch_record_model_and_provider(
@@ -1016,50 +1294,99 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             }
         }
         """
+        return [
+            self._transform_openai_batch_record(idx, openai_record, target_model)
+            for idx, openai_record in enumerate(openai_jsonl_content)
+        ]
 
+    def transform_batch_input_lines(
+        self,
+        batch_input_lines: Sequence[_BatchInputLine],
+        target_model: str = "",
+        model_info: Mapping[str, object] | None = None,
+        deployment_drop_params: object = None,
+    ) -> tuple[_BedrockBatchRecord, ...]:
+        return tuple(
+            self._transform_batch_input_line(idx, batch_input_line, target_model, model_info, deployment_drop_params)
+            for idx, batch_input_line in enumerate(batch_input_lines)
+        )
+
+    def _transform_batch_input_line(
+        self,
+        idx: int,
+        batch_input_line: _BatchInputLine,
+        target_model: str,
+        model_info: Mapping[str, object] | None,
+        deployment_drop_params: object,
+    ) -> _BedrockBatchRecord:
+        try:
+            return self._transform_openai_batch_record(
+                idx, batch_input_line.record, target_model, model_info, deployment_drop_params=deployment_drop_params
+            )
+        except _S3MediaInBatchRecord as e:
+            raise _batch_line_error(batch_input_line.line_number, str(e)) from e
+        except _BATCH_RECORD_CONVERSION_ERRORS as e:
+            raise _batch_line_error(
+                batch_input_line.line_number, f"could not be converted to a Bedrock batch record: {e}"
+            ) from e
+
+    def _transform_openai_batch_record(
+        self,
+        idx: int,
+        openai_record: _OpenAIBatchRecord,
+        target_model: str,
+        model_info: Mapping[str, object] | None = None,
+        deployment_drop_params: object = None,
+    ) -> _BedrockBatchRecord:
         import litellm
 
-        bedrock_jsonl_content: Final = []
-        for idx, _openai_jsonl_content in enumerate(openai_jsonl_content):
-            # Extract the request body from OpenAI format
-            openai_body = _openai_jsonl_content.get("body", {})
-            record_model = openai_body.get("model", "")
-            resolved_model = litellm.model_alias_map.get(record_model, record_model)
-            model_for_transform, provider = self._resolve_batch_record_model_and_provider(
-                record_model=resolved_model, target_model=target_model
+        openai_body: Final = openai_record.get("body", {})
+        record_model: Final = openai_body.get("model", "")
+        resolved_model: Final = litellm.model_alias_map.get(record_model, record_model)
+        model_for_transform, provider = self._resolve_batch_record_model_and_provider(
+            record_model=resolved_model, target_model=target_model
+        )
+
+        # Route to the embedding transformer when the OpenAI batch line
+        # targets /v1/embeddings; every other endpoint shape is normalized
+        # to chat completions first. We branch here (rather than inside
+        # `_map_openai_to_bedrock_params`) so the chat helper keeps its
+        # narrow contract and the embedding helper can evolve independently.
+        record_kind: Final = self._classify_batch_record(openai_record)
+        model_input: Final = (
+            self._map_openai_embedding_to_bedrock_params(openai_request_body=openai_body, model=model_for_transform)
+            if record_kind is BedrockBatchRecordKind.EMBEDDING
+            else self._map_openai_to_bedrock_params(
+                openai_request_body=self._transform_batch_body_to_chat_body(
+                    openai_body,
+                    record_kind,
+                    row_or_deployment_drop_params(openai_body, deployment_drop_params),
+                ),
+                model=model_for_transform,
+                provider=provider,
+                model_info=model_info,
+                deployment_drop_params=deployment_drop_params,
             )
+        )
+        return _BedrockBatchRecord(
+            recordId=openai_record.get("custom_id", f"CALL{str(idx).zfill(7)}"),
+            modelInput=model_input,
+        )
 
-            # Route to the embedding transformer when the OpenAI batch line
-            # targets /v1/embeddings; every other endpoint shape is normalized
-            # to chat completions first. We branch here (rather than inside
-            # `_map_openai_to_bedrock_params`) so the chat helper keeps its
-            # narrow contract and the embedding helper can evolve independently.
-            record_kind = self._classify_batch_record(_openai_jsonl_content)
-            if record_kind is BedrockBatchRecordKind.EMBEDDING:
-                model_input = self._map_openai_embedding_to_bedrock_params(
-                    openai_request_body=openai_body, model=model_for_transform
-                )
-            else:
-                model_input = self._map_openai_to_bedrock_params(
-                    openai_request_body=self._transform_batch_body_to_chat_body(openai_body, record_kind),
-                    model=model_for_transform,
-                    provider=provider,
-                )
-
-            # Create Bedrock batch record
-            record_id = _openai_jsonl_content.get("custom_id", f"CALL{str(idx).zfill(7)}")
-            bedrock_record = {"recordId": record_id, "modelInput": model_input}
-
-            bedrock_jsonl_content.append(bedrock_record)
-        return bedrock_jsonl_content
+    def transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        self,
+        openai_jsonl_content: Sequence[_OpenAIBatchRecord],
+        target_model: str = "",
+    ) -> list[_BedrockBatchRecord]:  # mutable-ok: mirrors override contract
+        return self._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content, target_model)
 
     def transform_create_file_request(
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> bytes | str | dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+    ) -> bytes | str | dict[str, object]:
         """
         Transform file request and return a pre-signed request for S3.
         This keeps the HTTP handler clean by doing all the signing here.
@@ -1080,11 +1407,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         ):
             ## Transform JSONL content to Bedrock format
             original_file_content: Final = self._get_content_from_openai_file(extracted_file_data_content)
-            openai_jsonl_content = [json.loads(line) for line in original_file_content.splitlines() if line.strip()]
+            batch_input_lines: Final = _parse_batch_jsonl(original_file_content)
             litellm_params_model: Final = litellm_params.get("model")
             target_model: Final = model or (litellm_params_model if isinstance(litellm_params_model, str) else "")
-            bedrock_jsonl_content = self._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-                openai_jsonl_content, target_model=target_model
+            bedrock_jsonl_content: Final = self.transform_batch_input_lines(
+                batch_input_lines,
+                target_model=target_model,
+                model_info=_upload_deployment_model_info(litellm_params),
+                deployment_drop_params=litellm_params.get("drop_params"),
             )
             file_content = "\n".join(json.dumps(item) for item in bedrock_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):
@@ -1141,9 +1471,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         content: str,
         api_base: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         s3_encryption_key_id: str | None = None,
-    ) -> tuple[dict, str]:
+    ) -> tuple[dict[str, object], str]:
         """
         Sign S3 PUT request using the same proven logic as S3Logger.
         Reuses the exact pattern from litellm/integrations/s3_v2.py
@@ -1157,20 +1487,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        # Get AWS credentials using existing methods
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model="")
-        credentials: Final = self.get_credentials(
-            aws_access_key_id=optional_params.get("aws_access_key_id"),
-            aws_secret_access_key=optional_params.get("aws_secret_access_key"),
-            aws_session_token=optional_params.get("aws_session_token"),
-            aws_region_name=aws_region_name,
-            aws_session_name=optional_params.get("aws_session_name"),
-            aws_profile_name=optional_params.get("aws_profile_name"),
-            aws_role_name=optional_params.get("aws_role_name"),
-            aws_web_identity_token=optional_params.get("aws_web_identity_token"),
-            aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
-            aws_external_id=optional_params.get("aws_external_id"),
-        )
+        credentials: Final = self.resolve_s3_credentials(optional_params, aws_region_name)
 
         # Calculate SHA256 hash of the content (REQUIRED for S3)
         content_hash: Final = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -1300,28 +1618,71 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             filename=filename,
             created_at=int(time.time()),  # Current timestamp
             status="uploaded",
-            bytes=_uploaded_object_size(litellm_params=litellm_params, raw_response=raw_response),
+            bytes=_uploaded_object_size(litellm_params=litellm_params, response_headers=raw_response.headers),
             object="file",
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
-        raise NotImplementedError("BedrockFilesConfig does not support file retrieval")
+        optional_params: Mapping[str, object],
+        litellm_params: MutableMapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
+        """Prepare a ranged S3 GET for file retrieval."""
+        bucket_name, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
+        relative_key: Final = _relative_s3_object_key(
+            bucket_name=bucket_name,
+            object_key=object_key,
+            litellm_params=litellm_params,
+        )
+        url, params = self._transform_s3_file_request(
+            file_id=file_id,
+            method="GET",
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
+        signed_headers_object: Final = litellm_params.get(S3_SIGNED_REQUEST_HEADERS_PARAM)
+        if not isinstance(signed_headers_object, Mapping):
+            raise TypeError("S3 request signing did not produce request headers")
+        signed_headers: Final = _S3_SIGNED_REQUEST_HEADERS_ADAPTER.validate_python(signed_headers_object)
+        range_headers: Final = MappingProxyType({**signed_headers, "Range": "bytes=0-0"})
+        litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = range_headers  # rebind-ok: handed to validate_environment
+        litellm_params[S3_RETRIEVE_FILE_ID_PARAM] = file_id  # rebind-ok: required by response transform
+        litellm_params[S3_RETRIEVE_FILE_KEY_PARAM] = object_key  # rebind-ok: required by response transform
+        litellm_params[S3_RETRIEVE_FILE_RELATIVE_KEY_PARAM] = relative_key  # rebind-ok: required by response transform
+        return url, params
 
     def transform_retrieve_file_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
-        raise NotImplementedError("BedrockFilesConfig does not support file retrieval")
+        """Build file metadata, accepting 416 only when S3 proves the object is empty."""
+        file_id: Final = litellm_params.get(S3_RETRIEVE_FILE_ID_PARAM)
+        object_key: Final = litellm_params.get(S3_RETRIEVE_FILE_KEY_PARAM)
+        relative_key: Final = litellm_params.get(S3_RETRIEVE_FILE_RELATIVE_KEY_PARAM)
+        if not isinstance(file_id, str) or not isinstance(object_key, str) or not isinstance(relative_key, str):
+            raise TypeError("S3 retrieve response is missing request context")
+
+        file_size: Final = _retrieved_s3_file_size(raw_response)
+
+        last_modified: Final = _header_or_empty(raw_response.headers, "Last-Modified")
+        created_at: Final = int(parsedate_to_datetime(last_modified).timestamp()) if last_modified else 0
+        return OpenAIFileObject(
+            id=file_id,
+            bytes=file_size,
+            created_at=created_at,
+            filename=posixpath.basename(object_key),
+            object="file",
+            purpose="batch_output" if relative_key.startswith(BEDROCK_MANAGED_S3_OUTPUT_PREFIX) else "batch",
+            status="processed",
+        )
 
     def transform_delete_file_request(
         self,
@@ -1398,6 +1759,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             api_base=f"{url}?{urlencode(query, quote_via=quote, safe='')}",
             aws_region_name=target.aws_region_name,
             request_params=target.request_params,
+            litellm_params=litellm_params,
         )
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = signed_headers  # rebind-ok: handed to validate_environment
         return url, query
@@ -1426,7 +1788,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             _listed_managed_file(entry, bucket_name, configured_bucket_name, allow_legacy_cloud_file_ids)
             for entry in listing.iterfind("{*}Contents")
         )
-        return [  # mutable-ok: the base files contract returns a list
+        return [
             listed_file
             for listed_file in listed_files
             if listed_file is not None and (purpose is None or listed_file.purpose == purpose)
@@ -1469,9 +1831,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             api_base=url,
             aws_region_name=target.aws_region_name,
             request_params=target.request_params,
+            litellm_params=litellm_params,
         )
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = signed_headers  # rebind-ok: handed to validate_environment
-        return url, {}  # mutable-ok: the base files contract returns the query as a dict
+        return url, {}
 
     def _s3_request_target(
         self,
@@ -1488,7 +1851,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
         region_preference: Final = request_params.s3_region_name or request_params.aws_region_name
         aws_region_name: Final = self._get_aws_region_name(
-            optional_params={"aws_region_name": region_preference},  # mutable-ok: BaseAWSLLM takes a dict
+            optional_params={"aws_region_name": region_preference},
             model="",
         )
         endpoint_url: Final = (
@@ -1504,6 +1867,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         api_base: str,
         aws_region_name: str,
         request_params: _BedrockS3RequestParams,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Mapping[str, str]:
         """
         SigV4-sign a bodiless S3 request (GetObject, DeleteObject, ListObjectsV2),
@@ -1517,24 +1881,15 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        credentials: Final = self.get_credentials(  # any-ok: boto3 Credentials is untyped
-            aws_access_key_id=request_params.aws_access_key_id,
-            aws_secret_access_key=request_params.aws_secret_access_key,
-            aws_session_token=request_params.aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=request_params.aws_session_name,
-            aws_profile_name=request_params.aws_profile_name,
-            aws_role_name=request_params.aws_role_name,
-            aws_web_identity_token=request_params.aws_web_identity_token,
-            aws_sts_endpoint=request_params.aws_sts_endpoint,
-            aws_external_id=request_params.aws_external_id,
+        credentials: Final = self.resolve_s3_credentials(
+            {**(litellm_params or {}), **request_params.model_dump(exclude_none=True)}, aws_region_name
         )
 
         empty_body_hash: Final = hashlib.sha256(b"").hexdigest()
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped
             method=method,
             url=api_base,
-            headers={"x-amz-content-sha256": empty_body_hash},  # mutable-ok: botocore AWSRequest takes a dict
+            headers={"x-amz-content-sha256": empty_body_hash},
         )
         auth: Final = S3SigV4Auth(credentials, "s3", aws_region_name)  # any-ok: botocore untyped
         auth.add_auth(aws_request)  # any-ok: botocore request mutation is untyped
@@ -1544,7 +1899,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
         if raw_response.status_code >= 400:
             raise BedrockError(
@@ -1553,7 +1908,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 headers=raw_response.headers,
                 response=raw_response,
             )
-        return HttpxBinaryResponseContent(response=raw_response)
+        return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.BEDROCK)
 
 
 class BedrockJsonlFilesTransformation:
@@ -1573,37 +1928,11 @@ class BedrockJsonlFilesTransformation:
         # Read the content of the file
         file_content: Final = self._get_content_from_openai_file(openai_file_content)
 
-        # Split into lines and parse each line as JSON
-        openai_jsonl_content: Final = [json.loads(line) for line in file_content.splitlines() if line.strip()]
-        bedrock_jsonl_content = self._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
+        batch_input_lines: Final = _parse_batch_jsonl(file_content)
+        bedrock_jsonl_content: Final = BedrockFilesConfig().transform_batch_input_lines(batch_input_lines)
         bedrock_jsonl_string: Final = "\n".join(json.dumps(item) for item in bedrock_jsonl_content)
-        object_name: Final = self._get_s3_object_name(openai_jsonl_content=openai_jsonl_content)
-        return bedrock_jsonl_string, object_name
-
-    def _transform_openai_jsonl_content_to_bedrock_jsonl_content(
-        self, openai_jsonl_content: Sequence[_OpenAIBatchRecord]
-    ):
-        """
-        Delegate to the main BedrockFilesConfig transformation method
-        """
-        config: Final = BedrockFilesConfig()
-        return config._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
-
-    def _get_s3_object_name(
-        self,
-        openai_jsonl_content: Sequence[_OpenAIBatchRecord],
-    ) -> str:
-        """
-        Gets a unique S3 object name for the Bedrock batch processing job
-
-        named as: litellm-bedrock-files-{model}-{uuid}
-        """
-        _model = openai_jsonl_content[0].get("body", {}).get("model", "")
-        # Remove bedrock/ prefix if present
-        _model = _model.removeprefix("bedrock/")
-        safe_model: Final = sanitize_cloud_object_component(_model.replace(":", "-"), fallback="model")
-        object_name: Final = f"{BEDROCK_MANAGED_S3_BATCH_PREFIX}{safe_model}-{uuid.uuid4()}.jsonl"
-        return object_name
+        first_model: Final = batch_input_lines[0].record.get("body", {}).get("model", "") if batch_input_lines else ""
+        return bedrock_jsonl_string, _batch_s3_object_name(first_model)
 
     def _get_content_from_openai_file(self, openai_file_content: FileTypes) -> str:
         """
@@ -1636,11 +1965,7 @@ class BedrockJsonlFilesTransformation:
             # File-like objects need to be read
             content = file_content.read()
 
-        # Ensure content is string
-        if isinstance(content, bytes):
-            content = content.decode("utf-8")
-
-        return content
+        return _decode_batch_input(content)
 
     def transform_s3_bucket_response_to_openai_file_object(
         self, create_file_data: CreateFileRequest, s3_upload_response: _S3UploadResponse

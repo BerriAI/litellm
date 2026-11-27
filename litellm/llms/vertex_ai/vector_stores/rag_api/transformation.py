@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 import httpx
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -123,8 +124,8 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         }
 
     def validate_environment(
-        self, headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
-    ) -> dict[str, str]:
+        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         """
         Validate and set up authentication for Vertex AI RAG API
         """
@@ -159,7 +160,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         extra_body: Mapping[str, object] | None = None,
     ) -> tuple[str, dict[str, object]]:
         """
@@ -288,7 +289,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         """
         Transform create request for Vertex AI RAG Corpus
         """
-        url: Final = f"{api_base}/ragCorpora"  # Base URL for creating RAG corpus
+        url: Final = join_api_base(api_base, "ragCorpora")  # Base URL for creating RAG corpus
 
         # Add metadata if provided
         metadata: Final = vector_store_create_optional_params.get("metadata")
@@ -360,3 +361,6 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 status_code=response.status_code,
                 headers=response.headers,
             )
+
+
+vertex_rag_api_vector_store_config: Final = VertexVectorStoreConfig()

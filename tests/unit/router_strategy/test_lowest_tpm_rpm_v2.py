@@ -1,0 +1,1264 @@
+#### What this tests ####
+#    This tests the router's ability to pick deployment with lowest tpm using 'usage-based-routing-v2-v2'
+
+import asyncio
+import base64
+import importlib
+import io
+import os
+import threading
+import time
+import traceback
+from collections.abc import Callable
+from datetime import datetime, timezone
+from typing import Dict, Final, Iterator
+
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.model_cost_table import publish
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+from unittest.mock import patch
+
+import httpx
+import pytest
+import respx
+from PIL import Image
+
+import litellm
+from litellm import Router
+from litellm._logging import verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
+from litellm.router_strategy.lowest_tpm_rpm_v2 import (
+    LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
+)
+from litellm.types.router import DeploymentTypedDict, RouterRateLimitError
+from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import get_utc_datetime
+
+### UNIT TESTS FOR TPM/RPM ROUTING ###
+
+
+def _memory_usage() -> RouterUsageStore:
+    return RouterUsageStore(connect(None).router_usage())
+
+
+"""
+- Given 2 deployments, make sure it's shuffling deployments correctly.
+"""
+
+
+@pytest.fixture
+def restore_verbose_logger_level() -> Iterator[None]:
+    original_level: Final = verbose_logger.level
+    yield
+    verbose_logger.setLevel(original_level)
+
+
+@pytest.mark.usefixtures("restore_verbose_logger_level")
+def test_tpm_rpm_updated():
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
+
+    test_cache = _memory_usage()
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "1234"
+    deployment = "azure/gpt-4.1-mini"
+    total_tokens = 50
+    standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = model_group
+    standard_logging_payload["model_id"] = deployment_id
+    standard_logging_payload["total_tokens"] = total_tokens
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = deployment
+    kwargs = {
+        "litellm_params": {
+            "model": deployment,
+            "metadata": {
+                "model_group": model_group,
+                "deployment": deployment,
+            },
+            "model_info": {"id": deployment_id},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+
+    litellm_deployment_dict: DeploymentTypedDict = {
+        "model_name": model_group,
+        "litellm_params": {"model": deployment},
+        "model_info": {"id": deployment_id},
+    }
+
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": total_tokens}}
+    end_time = time.time()
+    lowest_tpm_logger.pre_call_check(deployment=litellm_deployment_dict)
+    lowest_tpm_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    dt = get_utc_datetime()
+    current_minute = dt.strftime("%H-%M")
+    tpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "tpm", current_minute)
+    rpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "rpm", current_minute)
+
+    assert response_obj["usage"]["total_tokens"] == test_cache.get_local(tpm_counter)
+    assert 1 == test_cache.get_local(rpm_counter)
+
+
+# test_tpm_rpm_updated()
+
+
+@pytest.mark.usefixtures("restore_verbose_logger_level")
+def test_get_available_deployments():
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
+
+    test_cache = _memory_usage()
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
+            "model_info": {"id": "1234"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
+            "model_info": {"id": "5678"},
+        },
+    ]
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
+    model_group = "gpt-3.5-turbo"
+    ## DEPLOYMENT 1 ##
+    total_tokens = 50
+    deployment_id = "1234"
+    deployment = "azure/gpt-4.1-mini"
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = model_group
+    standard_logging_payload["model_id"] = deployment_id
+    standard_logging_payload["total_tokens"] = total_tokens
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = deployment
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": deployment,
+            },
+            "model_info": {"id": deployment_id},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": total_tokens}}
+    end_time = time.time()
+    lowest_tpm_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    ## DEPLOYMENT 2 ##
+    total_tokens = 20
+    deployment_id = "5678"
+    standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = model_group
+    standard_logging_payload["model_id"] = deployment_id
+    standard_logging_payload["total_tokens"] = total_tokens
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = deployment
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": deployment,
+            },
+            "model_info": {"id": deployment_id},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": total_tokens}}
+    end_time = time.time()
+    lowest_tpm_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    ## CHECK WHAT'S SELECTED ##
+    assert (
+        lowest_tpm_logger.get_available_deployments(
+            model_group=model_group,
+            healthy_deployments=model_list,
+            input=["Hello world"],
+        )["model_info"]["id"]
+        == "5678"
+    )
+
+
+# test_get_available_deployments()
+
+
+@pytest.mark.usefixtures("restore_verbose_logger_level")
+def test_router_get_available_deployments():
+    """
+    Test if routers 'get_available_deployments' returns the lowest tpm deployment
+    """
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
+
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing-v2",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    print(f"router id's: {router.get_model_ids()}")
+    ## DEPLOYMENT 1 ##
+    deployment_id = 1
+    standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = "azure-model"
+    standard_logging_payload["model_id"] = str(deployment_id)
+    total_tokens = 50
+    standard_logging_payload["total_tokens"] = total_tokens
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = "azure/gpt-turbo"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 1},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": total_tokens}}
+    end_time = time.time()
+    router.lowesttpm_logger_v2.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    ## DEPLOYMENT 2 ##
+    deployment_id = 2
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = "azure-model"
+    standard_logging_payload["model_id"] = str(deployment_id)
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = "azure/gpt-35-turbo"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 2},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": 20}}
+    end_time = time.time()
+    router.lowesttpm_logger_v2.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    ## CHECK WHAT'S SELECTED ##
+    # print(router.lowesttpm_logger_v2.get_available_deployments(model_group="azure-model"))
+    assert router.get_available_deployment(model="azure-model")["model_info"]["id"] == "2"
+
+
+# test_get_available_deployments()
+# test_router_get_available_deployments()
+
+
+@pytest.mark.usefixtures("restore_verbose_logger_level")
+def test_router_skip_rate_limited_deployments():
+    """
+    Test if routers 'get_available_deployments' raises No Models Available error if max tpm would be reached by message
+    """
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
+
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "tpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing-v2",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    ## DEPLOYMENT 1 ##
+    deployment_id = 1
+    total_tokens = 1439
+    standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
+    standard_logging_payload["model_group"] = "azure-model"
+    standard_logging_payload["model_id"] = str(deployment_id)
+    standard_logging_payload["total_tokens"] = total_tokens
+    standard_logging_payload["hidden_params"]["litellm_model_name"] = "azure/gpt-turbo"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": deployment_id},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": total_tokens}}
+    end_time = time.time()
+    router.lowesttpm_logger_v2.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    ## CHECK WHAT'S SELECTED ##
+    # print(router.lowesttpm_logger_v2.get_available_deployments(model_group="azure-model"))
+    try:
+        router.get_available_deployment(
+            model="azure-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        pytest.fail(f"Should have raised No Models Available error")
+    except Exception as e:
+        print(f"An exception occurred! {str(e)}")
+
+
+def _embedding_image_uri() -> str:
+    image: Final = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(image, format="PNG", compress_level=0)
+    return f"data:image/png;base64,{base64.b64encode(image.getvalue()).decode()}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routing_strategy",
+    ["usage-based-routing", "usage-based-routing-v2", "latency-based-routing", "cost-based-routing"],
+)
+@pytest.mark.parametrize(
+    ("litellm_params", "model_info", "admitted"),
+    [
+        ({"model": "vertex_ai/gemini-embedding-2"}, {}, True),
+        (
+            {"model": "openai/team-embedder", "api_base": "https://embedder.invalid"},
+            {"base_model": "vertex_ai/gemini-embedding-2"},
+            True,
+        ),
+        ({"model": "text-embedding-3-small"}, {}, False),
+    ],
+    ids=["image-model", "image-base-model", "text-model"],
+)
+async def test_deployment_tpm_counts_embedding_image_as_media_only_on_image_models(
+    routing_strategy: str, litellm_params: Dict[str, str], model_info: Dict[str, str], admitted: bool
+) -> None:
+    uri: Final = _embedding_image_uri()
+    assert len(uri) // 4 > 75_000
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "embedder",
+                "litellm_params": {**litellm_params, "tpm": 75_000},
+                "model_info": {**model_info, "id": f"embedder-{index}"},
+            }
+            for index in range(2)
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+    if not admitted:
+        with pytest.raises((litellm.RateLimitError, RouterRateLimitError)):
+            await router.select("embedder", {}, input=[uri])
+        return
+    deployment: Final = await router.select("embedder", {}, input=[uri])
+    assert deployment["model_info"]["id"] in ("embedder-0", "embedder-1")
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_multiple_potential_deployments(sync_mode):
+    """
+    If multiple deployments have the same tpm value
+
+    call 5 times, test if deployments are shuffled.
+
+    -> prevents single deployment from being overloaded in high-concurrency scenario
+    """
+
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "tpm": 1440,
+            },
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo-2",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "tpm": 1440,
+            },
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing-v2",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    model_ids = set()
+    for _ in range(1000):
+        if sync_mode:
+            deployment = router.get_available_deployment(
+                model="azure-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+        else:
+            deployment = await router.async_get_available_deployment(
+                model="azure-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                request_kwargs={},
+            )
+
+        ## get id ##
+        id = deployment.get("model_info", {}).get("id")
+        model_ids.add(id)
+
+    assert len(model_ids) == 2
+
+
+def test_single_deployment_tpm_zero():
+    import os
+
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": os.getenv("OPENAI_API_KEY"),
+                "tpm": 0,
+            },
+        }
+    ]
+
+    router = litellm.Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing-v2",
+        cache_responses=True,
+    )
+
+    model = "gpt-3.5-turbo"
+    messages = [{"content": "Hello, how are you?", "role": "user"}]
+    try:
+        router.get_available_deployment(
+            model=model,
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        pytest.fail(f"Should have raised No Models Available error")
+    except Exception as e:
+        print(f"it worked - {str(e)}! \n{traceback.format_exc()}")
+
+
+@pytest.mark.asyncio
+async def test_router_completion_streaming():
+    messages = [{"role": "user", "content": "Hello, can you generate a 500 words poem?"}]
+    model = "azure-model"
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "tpm": 1440,
+                "mock_response": "Hello world",
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "tpm": 6,
+                "mock_response": "Hello world",
+            },
+            "model_info": {"id": 2},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing-v2",
+        set_verbose=False,
+    )  # type: ignore
+
+    ### Make 3 calls, test if 3rd call goes to lowest tpm deployment
+
+    ## CALL 1+2
+    tasks = []
+    response = None
+    final_response = None
+    for _ in range(2):
+        tasks.append(router.acompletion(model=model, messages=messages))
+    response = await asyncio.gather(*tasks)
+
+    if response is not None:
+        ## CALL 3
+        await asyncio.sleep(1)  # let the token update happen
+        dt = get_utc_datetime()
+        current_minute = dt.strftime("%H-%M")
+        picked_deployment = router.lowesttpm_logger_v2.get_available_deployments(
+            model_group=model,
+            healthy_deployments=router.healthy_deployments,
+            messages=messages,
+        )
+        final_response = await router.acompletion(model=model, messages=messages)
+        print(f"min deployment id: {picked_deployment}")
+        tpm_key = f"{model}:tpm:{current_minute}"
+        rpm_key = f"{model}:rpm:{current_minute}"
+
+        tpm_dict = router.cache.get_cache(key=tpm_key)
+        print(f"tpm_dict: {tpm_dict}")
+        rpm_dict = router.cache.get_cache(key=rpm_key)
+        print(f"rpm_dict: {rpm_dict}")
+        print(f"model id: {final_response._hidden_params['model_id']}")
+        assert final_response._hidden_params["model_id"] == picked_deployment["model_info"]["id"]
+
+
+# asyncio.run(test_router_completion_streaming())
+
+"""
+- Unit test for sync 'pre_call_checks' 
+- Unit test for async 'async_pre_call_checks' 
+"""
+
+
+def test_return_potential_deployments():
+    """
+    Assert deployment at limit is filtered out
+    """
+
+    test_cache = _memory_usage()
+    lowest_tpm_logger = LowestTPMLoggingHandler(usage=test_cache)
+
+    args: Dict = {
+        "healthy_deployments": [
+            {
+                "model_name": "model-test",
+                "litellm_params": {
+                    "rpm": 1,
+                    "api_key": "sk-9876",
+                    "model": "openai/gpt-3.5-turbo",
+                    "mock_response": "Hello, world!",
+                },
+                "model_info": {
+                    "id": "dd8e67fce56963bae6a60206b48d3f03faeb43be20cf0fd96a5f39b1a2bbd11d",
+                    "db_model": False,
+                },
+            },
+            {
+                "model_name": "model-test",
+                "litellm_params": {
+                    "rpm": 10,
+                    "api_key": "sk-9876",
+                    "model": "openai/o1-mini",
+                    "mock_response": "Hello, world, it's o1!",
+                },
+                "model_info": {
+                    "id": "e13a56981607e1749b1433e6968ffc7df5552540ad3faa44b0b44ba4f3443bfe",
+                    "db_model": False,
+                },
+            },
+        ],
+        "all_deployments": {
+            "dd8e67fce56963bae6a60206b48d3f03faeb43be20cf0fd96a5f39b1a2bbd11d": None,
+            "e13a56981607e1749b1433e6968ffc7df5552540ad3faa44b0b44ba4f3443bfe": None,
+            "dd8e67fce56963bae6a60206b48d3f03faeb43be20cf0fd96a5f39b1a2bbd11d:tpm:02-17": 0,
+            "e13a56981607e1749b1433e6968ffc7df5552540ad3faa44b0b44ba4f3443bfe:tpm:02-17": 0,
+        },
+        "input_tokens": 98,
+        "rpm_dict": {
+            "dd8e67fce56963bae6a60206b48d3f03faeb43be20cf0fd96a5f39b1a2bbd11d": 1,
+            "e13a56981607e1749b1433e6968ffc7df5552540ad3faa44b0b44ba4f3443bfe": None,
+        },
+    }
+
+    potential_deployments = lowest_tpm_logger._return_potential_deployments(
+        healthy_deployments=args["healthy_deployments"],
+        all_deployments=args["all_deployments"],
+        input_tokens=args["input_tokens"],
+        rpm_dict=args["rpm_dict"],
+    )
+
+    assert len(potential_deployments) == 1
+
+
+@pytest.mark.asyncio
+async def test_tpm_rpm_routing_model_name_checks():
+    deployment = {
+        "model_name": "gpt-3.5-turbo",
+        "litellm_params": {
+            "model": "azure/gpt-4.1-mini",
+            "api_key": os.getenv("AZURE_AI_API_KEY"),
+            "api_base": os.getenv("AZURE_AI_API_BASE"),
+            "mock_response": "Hey, how's it going?",
+        },
+    }
+    router = Router(model_list=[deployment], routing_strategy="usage-based-routing-v2")
+
+    async def side_effect_pre_call_check(*args, **kwargs):
+        return args[0]
+
+    with (
+        patch.object(
+            router.lowesttpm_logger_v2,
+            "async_pre_call_check",
+            side_effect=side_effect_pre_call_check,
+        ) as mock_object,
+        patch.object(router.lowesttpm_logger_v2, "async_log_success_event") as mock_logging_event,
+    ):
+        response = await router.acompletion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey!"}])
+
+        mock_object.assert_called()
+        print(f"mock_object.call_args: {mock_object.call_args[0][0]}")
+        assert mock_object.call_args[0][0]["litellm_params"]["model"] == deployment["litellm_params"]["model"]
+
+        await asyncio.sleep(1)
+
+        mock_logging_event.assert_called()
+
+        print(f"mock_logging_event: {mock_logging_event.call_args.kwargs}")
+        standard_logging_payload: StandardLoggingPayload = mock_logging_event.call_args.kwargs.get("kwargs", {}).get(
+            "standard_logging_object"
+        )
+
+        assert standard_logging_payload["hidden_params"]["litellm_model_name"] == "azure/gpt-4.1-mini"
+
+
+@pytest.fixture(autouse=True)
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest.fixture(scope="function", autouse=True)
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    publish(litellm.model_cost)
+
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception as e:
+            print(f"Error reloading litellm.proxy.proxy_server: {e}")
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+
+_OVER_TPM_MESSAGES: Final = [{"role": "user", "content": "word " * 500}]
+
+
+def _deployment_with_tpm(deployment_id: str, tpm: int) -> DeploymentTypedDict:
+    return {
+        "model_name": "limited",
+        "litellm_params": {
+            "model": "openai/gpt-4o",
+            "api_key": "fake-key",
+            "api_base": f"https://{deployment_id}.example.com/v1",
+            "tpm": tpm,
+        },
+        "model_info": {"id": deployment_id},
+    }
+
+
+def _record_usage(router: Router, deployment_id: str, total_tokens: int) -> None:
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
+
+    payload: Final = create_standard_logging_payload()
+    payload["model_group"] = "limited"
+    payload["model_id"] = deployment_id
+    payload["total_tokens"] = total_tokens
+    payload["hidden_params"]["litellm_model_name"] = "openai/gpt-4o"
+    router.lowesttpm_logger_v2.log_success_event(
+        response_obj={"usage": {"total_tokens": total_tokens}},
+        kwargs={
+            "litellm_params": {"metadata": {"model_group": "limited"}, "model_info": {"id": deployment_id}},
+            "standard_logging_object": payload,
+        },
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+
+
+def _assert_names_size_and_largest_limit(refused: litellm.RequestOverDeploymentTpmError) -> None:
+    message: Final = str(refused)
+    assert "No deployments available" in message
+    assert f"estimated at {litellm.token_counter(messages=_OVER_TPM_MESSAGES)} input tokens" in message
+    assert "largest tpm limit of 200" in message
+    assert refused.status_code == 429
+    assert refused.category == "litellm_rate_limit"
+    assert refused.rate_limit_type == "tokens"
+    assert "retry-after" not in refused.response.headers
+    assert PrometheusLogger._get_exception_class_name(refused) == "RateLimitError"
+    assert StandardLoggingPayloadSetup.get_error_information(refused)["error_class"] == "RateLimitError"
+
+
+def _cool_down(router: Router, deployment_id: str) -> None:
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id=deployment_id, original_exception=RuntimeError("unavailable"), exception_status=500, cooldown_time=60
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_request_over_every_tpm_limit_names_its_size_and_is_not_retried():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("smaller", 200)],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=1,
+    )
+
+    metadata: Final = {"caller": "test"}
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        await router.acompletion(model="limited", messages=_OVER_TPM_MESSAGES, metadata=metadata)
+
+    _assert_names_size_and_largest_limit(refused.value)
+    assert metadata["attempted_retries"] == 0
+
+
+def test_sync_request_over_every_tpm_limit_names_its_size_and_the_largest_limit_while_it_cools():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("smaller", 200)],
+        routing_strategy="usage-based-routing-v2",
+    )
+    _cool_down(router, "smaller")
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        router.get_available_deployment(model="limited", messages=_OVER_TPM_MESSAGES)
+
+    _assert_names_size_and_largest_limit(refused.value)
+    assert isinstance(refused.value, ValueError)
+
+
+@pytest.mark.asyncio
+async def test_request_over_every_tpm_limit_still_takes_the_group_fallback():
+    router: Final = Router(
+        model_list=[
+            _deployment_with_tpm("small", 100),
+            {
+                "model_name": "unlimited",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key", "mock_response": "fallback answer"},
+            },
+        ],
+        routing_strategy="usage-based-routing-v2",
+        fallbacks=[{"limited": ["unlimited"]}],
+    )
+
+    response: Final = await router.acompletion(model="limited", messages=_OVER_TPM_MESSAGES)
+
+    assert response.choices[0].message.content == "fallback answer"
+
+
+@pytest.mark.parametrize("spare_tokens", [0, 400])
+@pytest.mark.asyncio
+async def test_request_within_the_largest_tpm_limit_refused_on_usage_stays_retryable(spare_tokens: int):
+    estimated_tokens: Final = litellm.token_counter(messages=_OVER_TPM_MESSAGES)
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm("busy", estimated_tokens + spare_tokens)],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    with patch(
+        "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
+        return_value=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    ):
+        _record_usage(router, deployment_id="busy", total_tokens=spare_tokens + 1)
+        with pytest.raises(litellm.RateLimitError) as refused:
+            await router.async_get_available_deployment(
+                model="limited", messages=_OVER_TPM_MESSAGES, request_kwargs={"metadata": {}}
+            )
+
+    assert not isinstance(refused.value, litellm.RequestOverDeploymentTpmError)
+    assert refused.value.response.headers["retry-after"] == "60"
+
+
+def _team_deployment_with_tpm(deployment_id: str, tpm: int) -> DeploymentTypedDict:
+    deployment: Final = _deployment_with_tpm(deployment_id, tpm)
+    return {
+        **deployment,
+        "model_name": f"team-{deployment_id}",
+        "model_info": {"id": deployment_id, "team_id": "team-1", "team_public_model_name": "limited"},
+    }
+
+
+@pytest.mark.parametrize("deployment_with_tpm", [_deployment_with_tpm, _team_deployment_with_tpm])
+@pytest.mark.asyncio
+async def test_request_within_a_cooling_deployments_tpm_limit_stays_retryable(
+    deployment_with_tpm: Callable[[str, int], DeploymentTypedDict],
+):
+    router: Final = Router(
+        model_list=[deployment_with_tpm("small", 100), deployment_with_tpm("big", 200_000)],
+        routing_strategy="usage-based-routing-v2",
+    )
+    _cool_down(router, "big")
+
+    with pytest.raises(litellm.RateLimitError) as refused:
+        await router.async_get_available_deployment(
+            model="limited", messages=_OVER_TPM_MESSAGES, request_kwargs={"metadata": {"user_api_key_team_id": "team-1"}}
+        )
+
+    assert not isinstance(refused.value, litellm.RequestOverDeploymentTpmError)
+    assert "retry-after" in refused.value.response.headers
+
+
+def _deployment_with_tpm_at_order(deployment_id: str, tpm: int, order: int) -> DeploymentTypedDict:
+    deployment: Final = _deployment_with_tpm(deployment_id, tpm)
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "order": order}}
+
+
+@pytest.mark.asyncio
+async def test_request_within_a_later_order_deployments_tpm_limit_stays_retryable():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm_at_order("small", 100, 1), _deployment_with_tpm_at_order("big", 200_000, 2)],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    with pytest.raises(litellm.RateLimitError) as refused:
+        await router.async_get_available_deployment(
+            model="limited", messages=_OVER_TPM_MESSAGES, request_kwargs={"metadata": {}}
+        )
+
+    assert not isinstance(refused.value, litellm.RequestOverDeploymentTpmError)
+    assert "retry-after" in refused.value.response.headers
+
+
+def _tagged_deployment_with_tpm(deployment_id: str, tpm: int) -> DeploymentTypedDict:
+    deployment: Final = _deployment_with_tpm(deployment_id, tpm)
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "tags": [deployment_id]}}
+
+
+@pytest.mark.asyncio
+async def test_request_over_every_tpm_limit_its_tags_allow_is_not_retried_while_an_excluded_one_cools():
+    router: Final = Router(
+        model_list=[_tagged_deployment_with_tpm("free", 100), _tagged_deployment_with_tpm("paid", 200_000)],
+        routing_strategy="usage-based-routing-v2",
+        enable_tag_filtering=True,
+        num_retries=1,
+    )
+    _cool_down(router, "paid")
+    metadata: Final = {"tags": ["free"]}
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        await router.acompletion(model="limited", messages=_OVER_TPM_MESSAGES, metadata=metadata)
+
+    assert "largest tpm limit of 100" in str(refused.value)
+    assert metadata["attempted_retries"] == 0
+
+
+def _deployment_with_tpm_in(deployment_id: str, location: str, tpm: int | str) -> DeploymentTypedDict:
+    deployment: Final = _deployment_with_tpm(deployment_id, 50)
+    params_without_tpm: Final = {key: value for key, value in deployment["litellm_params"].items() if key != "tpm"}
+    match location:
+        case "top level over litellm_params":
+            return {**deployment, "tpm": tpm}
+        case "model_info":
+            return {**deployment, "litellm_params": params_without_tpm, "model_info": {"id": deployment_id, "tpm": tpm}}
+        case _:
+            return {**deployment, "litellm_params": {**params_without_tpm, "tpm": tpm}}
+
+
+@pytest.mark.parametrize(
+    ("location", "tpm"),
+    [("top level over litellm_params", 200), ("litellm_params", 200), ("model_info", 200), ("model_info", "200")],
+)
+def test_request_over_a_tpm_limit_set_anywhere_on_the_deployment_names_that_limit(location: str, tpm: int | str):
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm_in("smaller", location, tpm)],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        router.get_available_deployment(model="limited", messages=_OVER_TPM_MESSAGES)
+
+    _assert_names_size_and_largest_limit(refused.value)
+
+
+def test_a_tpm_that_is_not_a_number_counts_as_no_limit():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm("small", 100), _deployment_with_tpm_in("unlimited", "model_info", "lots")],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    picked: Final = router.get_available_deployment(model="limited", messages=_OVER_TPM_MESSAGES)
+
+    assert picked["model_info"]["id"] == "unlimited"
+
+
+def _deployment_with_tpm_in_region(deployment_id: str, tpm: int, region: str) -> DeploymentTypedDict:
+    deployment: Final = _deployment_with_tpm(deployment_id, tpm)
+    return {**deployment, "litellm_params": {**deployment["litellm_params"], "region_name": region}}
+
+
+@pytest.mark.asyncio
+async def test_request_over_every_tpm_limit_in_its_region_is_refused_while_another_regions_deployment_cools():
+    router: Final = Router(
+        model_list=[_deployment_with_tpm_in_region("small", 100, "eu"), _deployment_with_tpm_in_region("big", 200_000, "us")],
+        routing_strategy="usage-based-routing-v2",
+        enable_pre_call_checks=True,
+    )
+    _cool_down(router, "big")
+
+    with pytest.raises(litellm.RequestOverDeploymentTpmError) as refused:
+        await router.async_get_available_deployment(
+            model="limited",
+            messages=_OVER_TPM_MESSAGES,
+            request_kwargs={"metadata": {}, "allowed_model_region": "eu"},
+        )
+
+    assert "largest tpm limit of 100" in str(refused.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pricing,answer",
+    [
+        pytest.param({}, {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}, id="refusal"),
+        pytest.param({}, {"finishReason": "STOP", "content": {"parts": [{"text": "a red dot"}]}}, id="no_image"),
+        pytest.param(
+            {"input_cost_per_token": 0, "output_cost_per_token": 0},
+            {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}},
+            id="zero_priced_refusal",
+        ),
+    ],
+)
+async def test_an_image_answer_without_an_image_counts_its_answered_tokens_toward_the_deployment_tpm(
+    pricing: dict[str, int], answer: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "image",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://image.invalid/v1",
+                    "tpm": 1000,
+                    **pricing,
+                },
+                "model_info": {"id": "image"},
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+    billed: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__startswith="https://").mock(
+            return_value=httpx.Response(200, json={"candidates": [answer], "usageMetadata": billed})
+        )
+        with pytest.raises((litellm.ContentPolicyViolationError, litellm.UnprocessableEntityError)):
+            await router.aimage_generation(model="image", prompt="a single small red dot")
+        with pytest.raises(litellm.RateLimitError):
+            await router.aimage_generation(model="image", prompt="a single small red dot")
+
+    assert route.call_count == 1
+
+
+_IMAGE_REFUSAL: Final = {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}
+_BILLED_REFUSAL_USAGE: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+
+
+def _gemini_image_deployment(name: str, tpm: int | None) -> dict[str, object]:
+    return {
+        "model_name": name,
+        "litellm_params": {
+            "model": "gemini/gemini-3.1-flash-image",
+            "api_key": "test-key",
+            "api_base": f"https://{name}.invalid/v1",
+            **({} if tpm is None else {"tpm": tpm}),
+        },
+        "model_info": {"id": name},
+    }
+
+
+def test_a_sync_image_refusal_counts_its_answered_tokens_toward_the_deployment_tpm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("image", 1000)],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__startswith="https://image.invalid").mock(
+            return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+        )
+        with pytest.raises(litellm.ContentPolicyViolationError):
+            router.image_generation(model="image", prompt="a single small red dot")
+        with pytest.raises(ValueError, match="No deployments available"):
+            router.image_generation(model="image", prompt="a single small red dot")
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_an_image_refusal_from_a_fallback_counts_its_answered_tokens_toward_the_fallback_tpm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("outage", None), _gemini_image_deployment("image", 1000)],
+        fallbacks=[{"outage": ["image"]}],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="outage",
+        prompt="a single small red dot",
+        litellm_call_id="image-refusal-from-a-fallback",
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(url__startswith="https://outage.invalid").mock(
+            return_value=httpx.Response(500, json={"error": {"code": 500, "message": "scripted outage"}})
+        )
+        refusing: Final = upstream.post(url__startswith="https://image.invalid").mock(
+            return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+        )
+        with pytest.raises(litellm.ContentPolicyViolationError):
+            await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+        with pytest.raises(litellm.RateLimitError):
+            await router.aimage_generation(model="image", prompt="a single small red dot")
+
+    assert refusing.call_count == 1
+
+
+_SERVED_IMAGE: Final = {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}]}}
+_SERVED_USAGE: Final = {"promptTokenCount": 200, "candidatesTokenCount": 100, "totalTokenCount": 300}
+
+
+def _refuser_with_a_backup() -> Router:
+    return Router(
+        model_list=[_gemini_image_deployment("refuser", None), _gemini_image_deployment("backup", 599)],
+        fallbacks=[{"refuser": ["backup"]}],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
+    )
+
+
+def _mock_refuser_and_backup(upstream: respx.MockRouter) -> respx.Route:
+    upstream.post(url__startswith="https://refuser.invalid").mock(
+        return_value=httpx.Response(200, json={"candidates": [_IMAGE_REFUSAL], "usageMetadata": _BILLED_REFUSAL_USAGE})
+    )
+    return upstream.post(url__startswith="https://backup.invalid").mock(
+        return_value=httpx.Response(200, json={"candidates": [_SERVED_IMAGE], "usageMetadata": _SERVED_USAGE})
+    )
+
+
+def _refused_request_on_a_shared_logging_object(function: str) -> dict[str, object]:
+    logging_obj, request = litellm.utils.function_setup(
+        original_function=function,
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="refuser",
+        prompt="a single small red dot",
+        litellm_call_id=f"{function}-refused-then-served-by-a-fallback",
+    )
+    return {**request, "litellm_logging_obj": logging_obj}
+
+
+async def _served_image_from(router: Router, request: dict[str, object]) -> None:
+    await router.aimage_generation(**request)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_serving_a_refused_image_counts_only_its_own_tokens_toward_its_tpm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _refuser_with_a_backup()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        serving: Final = _mock_refuser_and_backup(upstream)
+        await _served_image_from(router, _refused_request_on_a_shared_logging_object("aimage_generation"))
+        await _served_image_from(router, {"model": "backup", "prompt": "a single small red dot"})
+        with pytest.raises(litellm.RateLimitError):
+            await router.aimage_generation(model="backup", prompt="a single small red dot")
+
+    assert serving.call_count == 2
+
+
+class _SyncSuccesses(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self._logged: Final = threading.Condition()
+        self.count = 0
+
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        with self._logged:
+            self.count += 1
+            self._logged.notify_all()
+
+    def wait_for(self, count: int) -> None:
+        with self._logged:
+            assert self._logged.wait_for(lambda: self.count >= count, timeout=10)
+
+
+def test_a_sync_fallback_serving_a_refused_image_counts_only_its_own_tokens_toward_its_tpm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _refuser_with_a_backup()
+    successes: Final = _SyncSuccesses()
+    litellm.logging_callback_manager.add_litellm_callback(successes)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        serving: Final = _mock_refuser_and_backup(upstream)
+        router.image_generation(**_refused_request_on_a_shared_logging_object("image_generation"))
+        successes.wait_for(1)
+        router.image_generation(model="backup", prompt="a single small red dot")
+        successes.wait_for(2)
+        with pytest.raises(ValueError, match="No deployments available"):
+            router.image_generation(model="backup", prompt="a single small red dot")
+
+    assert serving.call_count == 2

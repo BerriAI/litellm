@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
 import time
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypeGuard
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, TypeGuard
 
 import httpx
 from fastapi import HTTPException
@@ -22,12 +22,15 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.prompt_templates.factory import (
     get_attribute_or_key,
     get_tool_calls_from_response,
     group_tool_exchanges,
     has_tool_with_name,
 )
+from litellm.litellm_core_utils.provider_affinity import get_caller_session_id
+from litellm.litellm_core_utils.routing_common_utils import request_user_api_key_auth
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
@@ -42,14 +45,21 @@ from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.integrations.custom_logger import (
-    HEADROOM_CONVERTED_STREAM_KEY,
+    HEADROOM_INTERCEPTION_PREFIX,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    as_converted_stream,
+)
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
+    HEADROOM_REQUEST_CONTEXT_KEY,
+    HeadroomRequestContext,
 )
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
     from litellm.types.guardrails import LitellmParams
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
@@ -67,6 +77,19 @@ _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
 # untranslated messages can be read with concrete types (values pass through by
 # reference, so this is a shallow top-level reconstruction).
 _REQUEST_DATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
@@ -119,7 +142,7 @@ def _restore_content_shapes(
     for orig, ret in zip(originals, returned):
         orig_content = orig.get("content")
         ret_content = ret.get("content")
-        if isinstance(orig_content, list) and isinstance(ret_content, str):
+        if _is_object_list(orig_content) and isinstance(ret_content, str):
             if ret_content == content_to_text(orig_content):
                 # Untouched row: keep the exact original parts, including
                 # per-part fields like cache_control on later text parts.
@@ -180,6 +203,14 @@ def _anthropic_retrieve_ids_in_message(message: Mapping[str, object]) -> frozens
     return frozenset(call_id for block in content if (call_id := _anthropic_tool_use_retrieve_id(block)) is not None)
 
 
+def _responses_retrieve_call_ids(item: Mapping[str, object]) -> frozenset[str]:
+    name: Final = item.get("name")
+    call_id: Final = item.get("call_id")
+    if item.get("type") != "function_call" or not isinstance(name, str) or call_id is None:
+        return frozenset()
+    return frozenset({str(call_id)}) if _is_retrieve_tool_name(name) else frozenset()
+
+
 def _raw_retrieve_call_ids(messages: object) -> frozenset[str]:
     """Retrieve-tool call ids read from the request's own, untranslated messages.
 
@@ -187,8 +218,9 @@ def _raw_retrieve_call_ids(messages: object) -> frozenset[str]:
     over 64 chars is truncated to ``{prefix}_{hash}``, which drops the
     ``__headroom_retrieve`` suffix a long ``mcp__<server>__`` prefix pushes past
     the limit. Tool-call ids are never truncated, so pairing the tool result to
-    an id read from the original request keeps the match intact. Both wire
-    shapes are handled: OpenAI ``tool_calls`` and Anthropic ``tool_use`` blocks.
+    an id read from the original request keeps the match intact. OpenAI
+    ``tool_calls``, Anthropic ``tool_use`` blocks and Responses ``function_call``
+    items are handled.
     """
     if not _is_object_list(messages):
         return frozenset()
@@ -196,7 +228,9 @@ def _raw_retrieve_call_ids(messages: object) -> frozenset[str]:
         call_id
         for message in messages
         if _is_str_object_dict(message)
-        for call_id in _retrieve_call_ids_in_message(message) | _anthropic_retrieve_ids_in_message(message)
+        for call_id in _retrieve_call_ids_in_message(message)
+        | _anthropic_retrieve_ids_in_message(message)
+        | _responses_retrieve_call_ids(message)
     )
 
 
@@ -303,7 +337,7 @@ def _build_compress_failure_detail(status_code: int, body: str) -> dict[str, obj
 
 def _read_ccr_hashes(body: Mapping[str, object]) -> frozenset[str]:
     ccr_hashes: Final = body.get("ccr_hashes")
-    if not isinstance(ccr_hashes, list):
+    if not _is_object_list(ccr_hashes):
         return frozenset()
     return frozenset(
         hash_value.lower()
@@ -347,15 +381,18 @@ def _build_headroom_retrieve_tool() -> dict[str, object]:
     }
 
 
-def _resolve_call_id(logging_obj: object, request_state: dict[str, object]) -> str | None:
-    """Resolve the litellm_call_id shared by a request's pre-call hook and its
-    agentic-loop hooks, so CCR hash validation can be scoped per call instead
-    of trusting any hash-shaped string that shows up in message text."""
-    logging_call_id: Final = getattr(logging_obj, "litellm_call_id", None)
-    if isinstance(logging_call_id, str) and logging_call_id:
-        return logging_call_id
-    kwargs_call_id: Final = request_state.get("litellm_call_id")
-    return kwargs_call_id if isinstance(kwargs_call_id, str) else None
+def _session_affinity(request_data: Mapping[str, object]) -> str | None:
+    auth: Final = request_user_api_key_auth(request_data)
+    session_id: Final = get_caller_session_id(request_data)
+    if not isinstance(auth, UserAPIKeyAuth) or not session_id:
+        return None
+    tenant: Final = (
+        ("key", auth.api_key) if auth.api_key else ("principal", auth.org_id, auth.team_id, auth.user_id, auth.agent_id)
+    )
+    if not any(tenant[1:]):
+        return None
+    identity: Final = json.dumps(["headroom-affinity-v1", tenant, session_id], separators=(",", ":"))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 def has_headroom_retrieve_tool(tools: object) -> bool:
@@ -507,20 +544,19 @@ class HeadroomGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
         )
-        self.timeout: httpx.Timeout = self._resolve_timeout(timeout)
         self.ccr_retrieval = ccr_retrieval
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
-        self._issued_hashes_by_call_id: dict[str, tuple[frozenset[str], float]] = {}
         super().__init__(  # pyright: ignore[reportUnknownMemberType]
             guardrail_name=guardrail_name,
             event_hook=event_hook,
             default_on=default_on,
             supported_event_hooks=list(self.get_supported_event_hooks()),
         )
+        self.timeout = self._resolve_timeout(timeout)
 
-    def _should_bypass(self, request_data: dict) -> bool:
+    def _should_bypass(self, request_data: Mapping[str, object]) -> bool:
         psr: Final = request_data.get("proxy_server_request")
         if not _is_str_object_dict(psr):
             return False
@@ -530,10 +566,12 @@ class HeadroomGuardrail(CustomGuardrail):
         value: Final = headers.get(BYPASS_HEADER)
         return str(value).lower() == "true"
 
-    def _request_headers(self) -> dict[str, str]:
+    def _request_headers(self, affinity: str | None) -> dict[str, str]:
         headers: Final[dict[str, str]] = {"Content-Type": "application/json"}
         if self.headroom_api_key:
             headers["Authorization"] = f"Bearer {self.headroom_api_key}"
+        if affinity is not None:
+            headers["x-headroom-affinity"] = affinity
         return headers
 
     @staticmethod
@@ -559,14 +597,6 @@ class HeadroomGuardrail(CustomGuardrail):
         super().update_in_memory_litellm_params(litellm_params)
         self.timeout = self._resolve_timeout(litellm_params.timeout)
 
-    def _prune_expired_hashes(self) -> None:
-        now: Final = time.monotonic()
-        self._issued_hashes_by_call_id = {
-            call_id: (hashes, expiry)
-            for call_id, (hashes, expiry) in self._issued_hashes_by_call_id.items()
-            if expiry > now
-        }
-
     def _handle_compress_failure(
         self,
         messages: list[dict[str, object]],
@@ -586,16 +616,19 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         messages: list[dict[str, object]],
         model: str | None,
+        affinity: str | None,
     ) -> _CompressResult:
         payload: Final[dict[str, object]] = {"messages": messages}
         if model:
             payload["model"] = model
+        if self.ccr_retrieval:
+            payload["config"] = {"mode": "ccr"}
 
         try:
             raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
                 url=f"{self.headroom_api_base}/v1/compress",
                 json=payload,
-                headers=self._request_headers(),
+                headers=self._request_headers(affinity),
                 timeout=self.timeout,
             )
         except httpx.HTTPStatusError as e:
@@ -632,7 +665,7 @@ class HeadroomGuardrail(CustomGuardrail):
             )
 
         try:
-            body: Final[object] = response.json()
+            body: Final = _json_body(response)
         except ValueError:
             return _CompressResult(
                 self._handle_compress_failure(
@@ -724,7 +757,7 @@ class HeadroomGuardrail(CustomGuardrail):
             stats["tokens_saved"] = tokens_before - tokens_after
         return _CompressResult(filtered, True, stats, _read_ccr_hashes(body))
 
-    async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
+    async def _call_retrieve(self, hash_value: str, affinity: str | None, query: str | None = None) -> str:
         params: Final[dict[str, str]] = {}
         if query:
             params["query"] = query
@@ -733,7 +766,7 @@ class HeadroomGuardrail(CustomGuardrail):
             raw_response: HttpxResponse = await self.async_handler.get(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.get is untyped
                 url=f"{self.headroom_api_base}/v1/retrieve/{hash_value}",
                 params=params,
-                headers=self._request_headers(),
+                headers=self._request_headers(affinity),
                 timeout=self.timeout,
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
@@ -752,7 +785,7 @@ class HeadroomGuardrail(CustomGuardrail):
             return f"[Headroom: retrieval error {raw_response.status_code} for hash={hash_value}]"
 
         try:
-            body: Final[object] = raw_response.json()
+            body: Final = _json_body(raw_response)
         except ValueError:
             return raw_response.text
 
@@ -767,13 +800,14 @@ class HeadroomGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         if input_type != "request":
             return inputs
 
+        request_data.pop(HEADROOM_REQUEST_CONTEXT_KEY, None)
         if self._should_bypass(request_data):
             verbose_proxy_logger.debug("Headroom: %s header set; skipping compression", BYPASS_HEADER)
             return inputs
@@ -799,10 +833,9 @@ class HeadroomGuardrail(CustomGuardrail):
         # /v1/compress grows a field for sending the live turn as the retrieval
         # query without compressing it: query-aware compression reads the newest
         # user message, so it is withheld here at some cost to history ranking.
-        # request_data is a bare dict on the base signature; narrow it before
-        # reading the untranslated messages so long tool names can be recovered.
-        raw_messages: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data).get("messages")
-        raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(raw_messages)
+        raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(request_data.get("messages")) | _raw_retrieve_call_ids(
+            request_data.get("input")
+        )
         protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids)
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
@@ -810,9 +843,11 @@ class HeadroomGuardrail(CustomGuardrail):
 
         model: Final = self.headroom_model or request_data.get("model")
         start_time: Final = time.time()
+        affinity: Final = _session_affinity(request_data)
         result: Final = await self._call_compress(
             messages=_flatten_messages_for_compression(compressible),
             model=model if isinstance(model, str) else None,
+            affinity=affinity,
         )
         end_time: Final = time.time()
 
@@ -854,16 +889,13 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
-        hashes: Final = result.ccr_hashes if self.ccr_retrieval else frozenset()
+        hashes: Final[frozenset[str]] = result.ccr_hashes if self.ccr_retrieval else frozenset()
         if not hashes:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
-        self._prune_expired_hashes()
-        call_id = _resolve_call_id(logging_obj, request_data)
-        if not call_id:
-            call_id = str(uuid.uuid4())
-            request_data["litellm_call_id"] = call_id
-        self._issued_hashes_by_call_id[call_id] = (frozenset(hashes), time.monotonic() + _HASH_CACHE_TTL_SECONDS)
+        request_data[HEADROOM_REQUEST_CONTEXT_KEY] = HeadroomRequestContext(
+            frozenset(hashes), affinity, time.monotonic() + _HASH_CACHE_TTL_SECONDS
+        )
 
         existing_tools: Final = inputs.get("tools")
         retrieve_tool: Final = _build_headroom_retrieve_tool()
@@ -878,33 +910,29 @@ class HeadroomGuardrail(CustomGuardrail):
 
     async def async_pre_call_deployment_hook(
         self,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         call_type: CallTypes | None,
-    ) -> dict[str, Any] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
+    ) -> dict[str, object] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
         base_result: Final = await super().async_pre_call_deployment_hook(kwargs, call_type)
-        effective: Final = base_result if base_result is not None else kwargs
         if call_type not in _STREAM_CONVERTIBLE_CALL_TYPES:
             return base_result
+        effective: Final = kwargs if base_result is None else _REQUEST_DATA_ADAPTER.validate_python(base_result)
         if not effective.get("stream") or effective.get("background"):
             return base_result
         if not has_headroom_retrieve_tool(effective.get("tools")):
             return base_result
-        return {  # mutable-ok: the hook contract is a plain dict the router merges into the request kwargs
-            **effective,
-            "stream": False,
-            HEADROOM_CONVERTED_STREAM_KEY: True,
-        }
+        return as_converted_stream(effective, HEADROOM_INTERCEPTION_PREFIX)
 
     async def async_should_run_agentic_loop(
         self,
-        response: Any,
+        response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: object,
+        tools: object,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: object,
+    ) -> tuple[bool, dict[str, object]]:
         if not has_headroom_retrieve_tool(tools):
             return False, {}
 
@@ -918,9 +946,9 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         tools: dict,
         model: str,
-        messages: list[dict],
-        response: Any,
-        anthropic_messages_provider_config: Any,
+        messages: list[dict[str, object]],
+        response: object,
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None,
         anthropic_messages_optional_request_params: dict,
         logging_obj: LiteLLMLoggingObj | None,
         stream: bool,
@@ -928,21 +956,18 @@ class HeadroomGuardrail(CustomGuardrail):
     ) -> AgenticLoopPlan:
         tool_calls: Final[list[dict[str, object]]] = tools.get("tool_calls", [])
 
-        self._prune_expired_hashes()
-        call_id: Final = _resolve_call_id(logging_obj, kwargs)
-        valid_hashes = self._issued_hashes_by_call_id.get(call_id, (frozenset(), 0.0))[0] if call_id else frozenset()
+        context: Final = _REQUEST_DATA_ADAPTER.validate_python(kwargs).get(HEADROOM_REQUEST_CONTEXT_KEY)
+        valid_context: Final = (
+            context if isinstance(context, HeadroomRequestContext) and context.expires_at > time.monotonic() else None
+        )
+        valid_hashes: Final[frozenset[str]] = valid_context.issued_hashes if valid_context is not None else frozenset()
 
         retrieved: Final[list[tuple[dict[str, object], str]]] = []
         for tc in tool_calls:
             arguments = tc.get("arguments", {})
-            raw_hash = arguments.get("hash", "") if isinstance(arguments, dict) else ""
+            raw_hash = arguments.get("hash", "") if _is_str_object_dict(arguments) else ""
             hash_value = str(raw_hash).lower()
-            query = arguments.get("query") if isinstance(arguments, dict) else None
-            # A hash is only honored if it was issued by *this request's own*
-            # Headroom /v1/compress call, scoped by litellm_call_id. Scoping by
-            # message text alone is forgeable -- an attacker can plant a
-            # hash-shaped string in their own prompt, and a hash issued for one
-            # request would validate for any other request that echoes it back.
+            query = arguments.get("query") if _is_str_object_dict(arguments) else None
             if hash_value not in valid_hashes:
                 verbose_proxy_logger.warning(
                     "Headroom CCR: rejecting hash=%s not produced by current request compression",
@@ -952,6 +977,7 @@ class HeadroomGuardrail(CustomGuardrail):
             else:
                 content = await self._call_retrieve(
                     hash_value=hash_value,
+                    affinity=valid_context.affinity if valid_context is not None else None,
                     query=str(query) if query else None,
                 )
             verbose_proxy_logger.debug("Headroom CCR: retrieved hash=%s (%d chars)", hash_value, len(content))
@@ -977,7 +1003,12 @@ class HeadroomGuardrail(CustomGuardrail):
 
         full_model_name = model
         if logging_obj is not None:
-            agentic_params: Final = getattr(logging_obj, "model_call_details", {}).get("agentic_loop_params", {})
+            model_call_details: Final = require_attributes(
+                _DECODED_JSON.validate_python(getattr(logging_obj, "model_call_details", {})), _SupportsGet, "get"
+            )
+            agentic_params: Final = require_attributes(
+                model_call_details.get("agentic_loop_params", {}), _SupportsGet, "get"
+            )
             candidate: Final = agentic_params.get("model", model)
             if isinstance(candidate, str) and candidate:
                 full_model_name = candidate
@@ -990,7 +1021,12 @@ class HeadroomGuardrail(CustomGuardrail):
                 max_tokens=max_tokens,
                 optional_params=optional_params_without_max_tokens,
                 kwargs={
-                    k: v for k, v in kwargs.items() if not k.startswith("_headroom") and k != "litellm_logging_obj"
+                    **{
+                        k: v
+                        for k, v in _REQUEST_DATA_ADAPTER.validate_python(kwargs).items()
+                        if not k.startswith("_headroom") and k != "litellm_logging_obj"
+                    },
+                    **({HEADROOM_REQUEST_CONTEXT_KEY: valid_context} if valid_context is not None else {}),
                 },
             ),
             metadata={"tool_type": "headroom_ccr"},

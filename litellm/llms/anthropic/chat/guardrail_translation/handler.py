@@ -13,21 +13,46 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Mapping, MutableSequence, Sequence
+import sys
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from itertools import chain, repeat
+from itertools import chain, filterfalse, groupby, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast, overload, runtime_checkable
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import GuardrailRaisedException
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    is_undecodable_json_object,
+    iter_items,
+    loads_json_object,
+)
+from litellm.litellm_core_utils.routing_common_utils import get_request_team_id
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
+from litellm.llms.anthropic.messages.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
+    is_anthropic_web_search_tool,
     is_provider_native_tool_dict,
+)
+from litellm.llms.anthropic.messages.convertible_blocks import (
+    is_non_empty_text_block,
+    keep_original_fields,
+    scannable_tool_result_request,
+    tool_result_text_part,
+)
+from litellm.llms.anthropic.messages.deferred_tools import client_tool_search_name
+from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
+from litellm.llms.anthropic.messages.stream_assembly import (
+    build_complete_streaming_response,
+    build_usage_only_response_from_chunks,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -35,22 +60,23 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    anthropic_mcp_server_name,
     anthropic_tool_name,
     anthropic_tool_names,
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    list_field,
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
     scoped_structured_message_indices,
     stream_item_field,
     stream_item_fingerprint,
+    tool_calls_in_guardrail_scope,
     unappliable_request_rewrite,
 )
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-    AnthropicPassthroughLoggingHandler,
-)
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
 )
@@ -75,10 +101,10 @@ if TYPE_CHECKING:
         ModifyResponseException,
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +151,27 @@ MessageTextTarget = MessageContentTarget | ContentBlockTextTarget | ToolResultSt
 InputWriteBackTarget = SystemStringTarget | SystemBlockTextTarget | MessageTextTarget
 
 
+class DeploymentLookup(Protocol):
+    def deployments(
+        self, model_name: str | None = None, *, team_id: str | None = None
+    ) -> Sequence[Mapping[str, object]] | None: ...
+
+
+def _proxy_deployments() -> DeploymentLookup | None:
+    if "litellm.proxy.proxy_server" not in sys.modules:
+        return None
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router.registry() if llm_router is not None else None
+
+
+def _deployment_consumes_cache_control(deployment: Mapping[str, object]) -> bool:
+    deployment_model: Final = (as_str_mapping(deployment.get("litellm_params")) or {}).get("model")
+    return isinstance(deployment_model, str) and LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control(
+        deployment_model
+    )
+
+
 def _as_str_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
     return value
 
@@ -143,6 +190,13 @@ class _TextAttrBlock(Protocol):
     text: str
 
 
+@runtime_checkable
+class _ToolUseAttrBlock(Protocol):
+    name: str
+    input: Mapping[str, object]
+
+
+@runtime_checkable
 class _WritableMessage(Protocol):
     @overload
     def get(self, key: str, /) -> object | None: ...
@@ -185,13 +239,332 @@ class _ToolCallShape:
     arguments: str
 
 
-def _is_client_tool_use(block: Mapping[str, object]) -> bool:
+@dataclass(frozen=True, slots=True)
+class _WebSearchString:
+    block_idx: int
+    result_idx: int | None
+    field: str
+    value: str
+
+
+def _legacy_hook_block(block: object) -> object:
+    if not isinstance(block, Mapping):
+        return block
+    fields: Final = _as_str_mapping(block)
+    return {**fields, "type": "tool_use"} if fields.get("type") == "server_tool_use" else fields
+
+
+def _is_web_search_tool(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and is_anthropic_web_search_tool(fields)
+
+
+def _with_web_search_tools(
+    tools: Sequence[object], translated_tools: Sequence[ChatCompletionToolParam]
+) -> Sequence[ChatCompletionToolParam]:
+    """
+    The request's tools as a guardrail sees them: each web search tool as the caller sent it, at its
+    position in the request, among the translated tools. The OpenAI translation carries web search as
+    `web_search_options` rather than as a tool, so it is absent from `translated_tools`.
+    """
+    web_search_tools: Final = [
+        cast(ChatCompletionToolParam, tool)  # cast-ok: hosted tools reach guardrails in Anthropic format
+        for tool in tools
+        if _is_web_search_tool(tool)
+    ]
+    if not web_search_tools:
+        return translated_tools
+    if len(translated_tools) != len(tools) - len(web_search_tools):
+        return [*translated_tools, *web_search_tools]
+    translated: Final = iter(translated_tools)
+    web_search: Final = iter(web_search_tools)
+    return [next(web_search) if _is_web_search_tool(tool) else next(translated) for tool in tools]
+
+
+def _is_web_search_result_block(block: object) -> bool:
+    return isinstance(block, Mapping) and _as_str_mapping(block).get("type") == "web_search_tool_result"
+
+
+def _web_search_results(block: Mapping[str, object]) -> Iterable[object]:
+    return iter_items(block.get("content")) if isinstance(block.get("content"), list) else ()
+
+
+def _web_search_result_strings(block_idx: int, result_idx: int, result: object) -> tuple[_WebSearchString, ...]:
+    fields: Final = as_str_mapping(result)
+    if fields is None or fields.get("type") != "web_search_result":
+        return ()
+    values: Final = ((field, fields.get(field)) for field in ("title", "url"))
+    return tuple(
+        _WebSearchString(block_idx, result_idx, field, value)
+        for field, value in values
+        if isinstance(value, str) and value
+    )
+
+
+def _is_server_tool_use(block: Mapping[str, object]) -> bool:
+    block_id: Final = block.get("id")
+    match block.get("type"):
+        case "server_tool_use":
+            return True
+        case "tool_use":
+            return isinstance(block_id, str) and block_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+        case _:
+            return False
+
+
+def _web_search_block_strings(
+    block_idx: int, block: Mapping[str, object], *, with_query: bool
+) -> tuple[_WebSearchString, ...]:
+    """The strings a client reads off a native web search block: the ``server_tool_use`` query and each
+    ``web_search_tool_result`` result's title and url."""
+    match block.get("type"):
+        case "server_tool_use" | "tool_use" if with_query and _is_server_tool_use(block):
+            tool_input: Final = as_str_mapping(block.get("input"))
+            query: Final = None if tool_input is None else tool_input.get("query")
+            return (_WebSearchString(block_idx, None, "query", query),) if isinstance(query, str) and query else ()
+        case "web_search_tool_result":
+            return tuple(
+                chain.from_iterable(
+                    _web_search_result_strings(block_idx, result_idx, result)
+                    for result_idx, result in enumerate(_web_search_results(block))
+                )
+            )
+        case _:
+            return ()
+
+
+def _rewritten_web_search_result(
+    result_idx: int, result: object, rewrites: Mapping[tuple[int | None, str], str]
+) -> object:
+    fields: Final = as_str_mapping(result)
+    if fields is None:
+        return result
+    return {
+        **fields,
+        **{field: rewrites[(result_idx, field)] for field in ("title", "url") if (result_idx, field) in rewrites},
+    }
+
+
+def _rewritten_web_search_block(
+    block: Mapping[str, object], rewrites: Sequence[tuple[_WebSearchString, str]]
+) -> Mapping[str, object]:
+    by_location: Final = MappingProxyType({(target.result_idx, target.field): value for target, value in rewrites})
+    if _is_server_tool_use(block):
+        query: Final = by_location.get((None, "query"))
+        tool_input: Final = as_str_mapping(block.get("input")) or MappingProxyType({})
+        return block if query is None else {**block, "input": {**tool_input, "query": query}}
+    if not isinstance(block.get("content"), list):
+        return block
+    return {
+        **block,
+        "content": [
+            _rewritten_web_search_result(result_idx, result, by_location)
+            for result_idx, result in enumerate(_web_search_results(block))
+        ],
+    }
+
+
+def _write_back_web_search_block(content_block: object, rewrites: Sequence[tuple[_WebSearchString, str]]) -> None:
+    block: Final = as_str_mapping(content_block)
+    if block is None or not isinstance(content_block, _WritableMessage):
+        return
+    rewritten: Final = _rewritten_web_search_block(block, rewrites)
+    writable: Final = _as_writable(content_block)
+    for key in ("input", "content"):
+        if key in rewritten:
+            writable[key] = rewritten[key]
+
+
+def _split_web_search_texts(
+    guardrailed: Sequence[str], web_search_count: int, reply_count: int
+) -> tuple[Sequence[str], Sequence[str]]:
+    split_at: Final = web_search_count if len(guardrailed) == web_search_count + reply_count else 0
+    return guardrailed[:split_at], guardrailed[split_at:]
+
+
+def _web_search_rewrites_by_block(
+    strings: Sequence[_WebSearchString], guardrailed: Sequence[object]
+) -> Mapping[int, tuple[tuple[_WebSearchString, str], ...]]:
+    rewrites: Final = tuple(
+        (target, value)
+        for target, value in zip(strings, guardrailed)
+        if isinstance(value, str) and value != target.value
+    )
+    return MappingProxyType(
+        {
+            block_idx: tuple(rewrite for rewrite in rewrites if rewrite[0].block_idx == block_idx)
+            for block_idx in {target.block_idx for target, _ in rewrites}
+        }
+    )
+
+
+def _is_scannable_tool_use(block: Mapping[str, object]) -> bool:
     return (
-        block.get("type") == "tool_use"
+        block.get("type") in _TOOL_CALL_BLOCK_TYPES
         and isinstance(block.get("id"), str)
         and isinstance(block.get("name"), str)
         and isinstance(block.get("input"), dict)
     )
+
+
+def _tool_use_name(block: object) -> str | None:
+    fields: Final = as_str_mapping(block)
+    if fields is None or fields.get("type") != "tool_use":
+        return None
+    return anthropic_tool_name(fields)
+
+
+def _tool_use_names(message: object) -> tuple[str, ...]:
+    return tuple(name for name in map(_tool_use_name, list_field(message, "content")) if name is not None)
+
+
+@dataclass(frozen=True, slots=True)
+class _OriginalToolNames:
+    """Caller tool names over the guardrail's limit, keyed by the shortened name the guardrail sees."""
+
+    declared: Mapping[str, str]
+    used: Mapping[str, str]
+
+
+def _restorable_names(names: Iterable[str]) -> Mapping[str, str]:
+    listed: Final = tuple(names)
+    taken: Final = frozenset(listed)
+    shortened: Final = tuple(
+        (truncate_tool_name(name), name) for name in listed if len(name) > OPENAI_MAX_TOOL_NAME_LENGTH
+    )
+    return MappingProxyType({alias: name for alias, name in shortened if alias not in taken})
+
+
+def _original_tool_names(request: Mapping[str, object]) -> _OriginalToolNames:
+    return _OriginalToolNames(
+        declared=_restorable_names(chain.from_iterable(map(anthropic_tool_names, list_field(request, "tools")))),
+        used=_restorable_names(chain.from_iterable(map(_tool_use_names, list_field(request, "messages")))),
+    )
+
+
+def _restore_tool_use_names(messages: Sequence[object], original_names: Mapping[str, str]) -> None:
+    for message in messages:
+        for block in list_field(message, "content"):
+            if (name := _tool_use_name(block)) is not None and name in original_names and isinstance(block, dict):
+                block["name"] = original_names[name]
+
+
+def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[str, str]) -> ChatCompletionToolParam:
+    if "function" not in tool:
+        return tool
+    function: Final = tool["function"]
+    fields: Final = as_str_mapping(function)
+    name: Final = None if fields is None else fields.get("name")
+    original: Final = original_names.get(name) if isinstance(name, str) else None
+    if original is None:
+        return tool
+    return {**tool, "function": {**function, "name": original}}
+
+
+def _converted_tool(
+    anthropic_config: AnthropicConfig, tool: ChatCompletionToolParam, original_names: Mapping[str, str]
+) -> AllAnthropicToolsValues | None:
+    if _is_web_search_tool(tool):
+        return cast(AllAnthropicToolsValues, tool)  # cast-ok: shown to the guardrail in Anthropic format
+    return anthropic_config.map_tool_helper(_with_original_name(tool, original_names))[0]
+
+
+def _converted_tools(
+    tools: Sequence[ChatCompletionToolParam], original_names: Mapping[str, str]
+) -> tuple[AllAnthropicToolsValues, ...]:
+    anthropic_config: Final = AnthropicConfig()
+    converted: Final = (_converted_tool(anthropic_config, tool, original_names) for tool in tools)
+    return tuple(tool for tool in converted if tool is not None)
+
+
+def _is_hidden_from_guardrail(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and is_provider_native_tool_dict(fields)
+
+
+def _is_openai_format_tool(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and fields.get("type") == "function" and "function" in fields
+
+
+def _is_deferred_tool(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and fields.get("defer_loading") is True
+
+
+def _without_deferral(tool: object) -> object:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return tool
+    return {key: value for key, value in fields.items() if key != "defer_loading"}
+
+
+def _loaded_up_front(tools: Sequence[object], removed_tool_search: bool) -> Sequence[object]:
+    """
+    Deferred tools load only through the tool search tool, and Anthropic rejects a request whose tools
+    are all deferred, so when a guardrail removed the search tool or every tool that was not deferred,
+    the ones it kept are sent without `defer_loading`.
+    """
+    if not tools or not (removed_tool_search or all(map(_is_deferred_tool, tools))):
+        return tools
+    return tuple(map(_without_deferral, tools))
+
+
+def _as_sent_by_fingerprint(
+    shown_tools: Sequence[object], shown_fingerprints: Sequence[str], returned_counts: Mapping[str, int]
+) -> Mapping[str, Iterator[object]]:
+    """
+    The caller's tools the guardrail returned unchanged, keyed by what the guardrail was shown.
+    When it returned fewer of an identical-looking group than it was shown, the last ones are kept.
+    """
+    if len(shown_tools) != len(shown_fingerprints):
+        return {}
+    by_fingerprint: Final[dict[str, list[object]]] = {}  # mutable-ok: built here, read-only to the caller
+    for tool, fingerprint in zip(shown_tools, shown_fingerprints):
+        if not _is_openai_format_tool(tool):
+            by_fingerprint.setdefault(fingerprint, []).append(tool)
+    return {
+        fingerprint: iter(tools[max(0, len(tools) - returned_counts.get(fingerprint, 0)) :])
+        for fingerprint, tools in by_fingerprint.items()
+    }
+
+
+_NOT_AS_SENT: Final = object()
+
+
+def _tools_after_guardrail(
+    request_tools: Sequence[object],
+    shown_fingerprints: Sequence[str],
+    returned_tools: Iterable[ChatCompletionToolParam],
+    original_names: Mapping[str, str],
+) -> list[object]:  # mutable-ok: becomes the request body's tools
+    """
+    The guardrail's tools in the order it returned them: a tool it left alone as the caller sent it,
+    any other converted to Anthropic format. Tools it was never shown go first.
+    """
+    never_shown: Final = tuple(tool for tool in request_tools if _is_hidden_from_guardrail(tool))
+    shown: Final = tuple(tool for tool in request_tools if not _is_hidden_from_guardrail(tool))
+    returned: Final = tuple(returned_tools)
+    returned_fingerprints: Final = tuple(map(stream_item_fingerprint, returned))
+    as_sent: Final = _as_sent_by_fingerprint(shown, shown_fingerprints, Counter(returned_fingerprints))
+    anthropic_config: Final = AnthropicConfig()
+    matched: Final = tuple(
+        next(as_sent.get(fingerprint, iter(())), _NOT_AS_SENT) for fingerprint in returned_fingerprints
+    )
+    kept: Final = tuple(
+        tool
+        for tool in (
+            _converted_tool(anthropic_config, returned_tool, original_names) if original is _NOT_AS_SENT else original
+            for returned_tool, original in zip(returned, matched)
+        )
+        if tool is not None
+    )
+    all_as_sent: Final = _NOT_AS_SENT not in matched
+    removed_tool_search: Final = client_tool_search_name(shown) is not None and client_tool_search_name(kept) is None
+    return [
+        *never_shown,
+        *(_loaded_up_front(kept, removed_tool_search) if all_as_sent and len(returned) < len(shown) else kept),
+    ]
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
@@ -199,9 +572,7 @@ def _write_back_system_block(system: object, block_idx: int, response: str) -> N
         return
     text_blocks: Final = tuple(block for block in system if isinstance(block, dict) and block.get("type") == "text")
     if block_idx < len(text_blocks):
-        text_blocks[block_idx]["text"] = (
-            response  # mutable-ok: guardrails rewrite the caller's request payload in place
-        )
+        text_blocks[block_idx]["text"] = response
 
 
 def _write_back_message_text(message: _WritableMessage, target: MessageTextTarget, response: str) -> None:
@@ -211,27 +582,52 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
     match target:
         case MessageContentTarget():
             if isinstance(content, str):
-                message["content"] = response  # mutable-ok: guardrails rewrite the caller's request payload in place
+                message["content"] = response
         case ContentBlockTextTarget(content_idx=content_idx):
             if isinstance(content, list):
-                content[content_idx]["text"] = (
-                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                )
+                content[content_idx]["text"] = response
         case ToolResultStringTarget(content_idx=content_idx):
             if isinstance(content, list):
-                content[content_idx]["content"] = (
-                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                )
+                content[content_idx]["content"] = response
         case ToolResultBlockTextTarget(content_idx=content_idx, block_idx=block_idx):
             if isinstance(content, list):
-                content[content_idx]["content"][block_idx]["text"] = (
-                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                )
+                content[content_idx]["content"][block_idx]["text"] = response
         case _:
             assert_never(target)
 
 
+def _mcp_tool_result_texts(block: Mapping[str, object]) -> tuple[tuple[int | None, str], ...]:
+    content: Final = block.get("content")
+    if isinstance(content, str):
+        return ((None, content),) if content else ()
+    return tuple(
+        (nested_idx, text)
+        for nested_idx, text in enumerate(map(tool_result_text_part, list_field(block, "content")))
+        if text
+    )
+
+
+def _write_back_mcp_tool_result_text(block: _WritableMessage, nested_idx: int | None, response: str) -> None:
+    content: Final = block.get("content")
+    if nested_idx is None:
+        if isinstance(content, str):
+            block["content"] = response  # rebind-ok: the mcp_tool_result block is the client-visible object rewritten
+        return
+    nested: Final = list_field(block, "content")
+    text_block: Final = nested[nested_idx] if nested_idx < len(nested) else None
+    if isinstance(text_block, dict):
+        text_block["text"] = response
+
+
+_TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result"})
+_TOOL_CALL_BLOCK_TYPES: Final = frozenset({"tool_use", "mcp_tool_use"})
 _TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_REBUILT_TOOL_CALL_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use"})
+_RELEASED_TOOL_USE_STOP: Final = (
+    b"event: message_delta\n"
+    b'data: {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, '
+    b'"usage": {"output_tokens": 0}}\n\n'
+)
 
 
 def _rewritten_tool_use_input(arguments: str) -> Mapping[str, object] | None:
@@ -244,13 +640,78 @@ def _rewritten_tool_use_input(arguments: str) -> Mapping[str, object] | None:
 def _write_back_tool_use(
     message: _WritableMessage, target: ToolUseInputTarget, shape: _ToolCallShape, rewritten_input: Mapping[str, object]
 ) -> None:
-    content: Final = message.get("content", None)
-    block: Final = content[target.content_idx] if isinstance(content, list) else None
-    if not isinstance(block, dict):
+    blocks: Final = list_field(message, "content")
+    _write_back_tool_use_block(
+        blocks[target.content_idx] if target.content_idx < len(blocks) else None, shape, rewritten_input
+    )
+
+
+def _write_back_tool_use_block(block: object, shape: _ToolCallShape, rewritten_input: Mapping[str, object]) -> None:
+    if isinstance(block, dict):
+        block["input"] = rewritten_input  # rebind-ok: the tool_use block is the client-visible object being rewritten
+        if shape.name is not None and shape.name != block.get("name"):
+            block["name"] = shape.name  # rebind-ok: same in-place rewrite as the input above
         return
-    block["input"] = rewritten_input  # mutable-ok: guardrails rewrite the caller's request payload in place
-    if shape.name is not None and shape.name != block.get("name"):
-        block["name"] = shape.name  # mutable-ok: guardrails rewrite the caller's request payload in place
+    if not isinstance(block, _ToolUseAttrBlock):
+        return
+    block.input = rewritten_input  # rebind-ok: same in-place rewrite for an object-shaped tool_use block
+    if shape.name is not None and shape.name != block.name:
+        block.name = shape.name  # rebind-ok: same in-place rewrite as the input above
+
+
+def _redact_output_safeguard_results(response: object, unchanged_tool_use_ids: frozenset[str]) -> None:
+    fields: Final = as_str_mapping(response)
+    raw: Final = fields.get("safeguard_results") if fields is not None else None
+    if raw is None or not isinstance(response, dict):
+        return
+    response["safeguard_results"] = filtered_safeguard_results(  # rebind-ok: client-visible response rewrite
+        raw, unchanged_tool_use_ids, keep_explanations=False
+    )
+
+
+def _streamed_query_strings(
+    tool_call_blocks: Sequence[tuple[int, Mapping[str, object]]], tool_calls: Sequence[_ToolCallShape]
+) -> tuple[_WebSearchString, ...]:
+    if len(tool_call_blocks) != len(tool_calls):
+        return ()
+    return tuple(
+        chain.from_iterable(
+            _web_search_block_strings(
+                index, {**block, "input": _rewritten_tool_use_input(tool_call.arguments)}, with_query=True
+            )
+            for (index, block), tool_call in zip(tool_call_blocks, tool_calls)
+        )
+    )
+
+
+def _query_rewrites(strings: Sequence[_WebSearchString], guardrailed: Sequence[object]) -> Mapping[int, str]:
+    return MappingProxyType(
+        {
+            target.block_idx: value
+            for target, value in zip(strings, guardrailed)
+            if isinstance(value, str) and value != target.value
+        }
+    )
+
+
+def _with_query(tool_call: _ToolCallShape, query: str) -> _ToolCallShape:
+    arguments: Final = _rewritten_tool_use_input(tool_call.arguments)
+    if arguments is None:
+        return tool_call
+    return _ToolCallShape(name=tool_call.name, arguments=json.dumps({**arguments, "query": query}))
+
+
+def _with_query_rewrites(
+    tool_calls: tuple[_ToolCallShape, ...],
+    tool_call_blocks: Sequence[tuple[int, Mapping[str, object]]],
+    query_rewrites: Mapping[int, str],
+) -> tuple[_ToolCallShape, ...]:
+    if not query_rewrites or len(tool_call_blocks) != len(tool_calls):
+        return tool_calls
+    return tuple(
+        _with_query(tool_call, query_rewrites[index]) if index in query_rewrites else tool_call
+        for (index, _), tool_call in zip(tool_call_blocks, tool_calls)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,7 +732,14 @@ def _rewritten_event(event: Mapping[str, object], rewrite_event: _SSEEventRewrit
     section: Final = None if rewrite is None else event.get(rewrite.section)
     if rewrite is None or not isinstance(section, Mapping):
         return event
-    return {**event, rewrite.section: {**section, rewrite.field: rewrite.value}}  # mutable-ok: json.dumps needs a dict
+    return {**event, rewrite.section: {**section, rewrite.field: rewrite.value}}
+
+
+def _in_stream_block_order(
+    tool_calls: Sequence[ChatCompletionMessageToolCall], blocks: Sequence[tuple[int, Mapping[str, object]]]
+) -> tuple[ChatCompletionMessageToolCall, ...]:
+    positions: Final = MappingProxyType({block.get("id"): position for position, (_, block) in enumerate(blocks)})
+    return tuple(sorted(tool_calls, key=lambda tool_call: positions.get(tool_call.id, len(positions))))
 
 
 def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...]:
@@ -287,14 +755,47 @@ def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...
     )
 
 
-class _AnthropicSSEDelta(TypedDict, total=False):
-    type: ReadOnly[str]
+@with_config(ConfigDict(extra="ignore", strict=True))
+class _SSETextDelta(TypedDict, total=False):
+    type: ReadOnly[object]
     text: ReadOnly[str]
-    stop_reason: ReadOnly[str | None]
 
 
-class _AnthropicSSEEvent(TypedDict, total=False):
-    delta: ReadOnly[_AnthropicSSEDelta]
+@with_config(ConfigDict(extra="ignore", strict=True))
+class _SSETextDeltaEvent(TypedDict, total=False):
+    delta: ReadOnly[_SSETextDelta]
+
+
+@with_config(ConfigDict(extra="ignore", strict=True))
+class _SSEStopDelta(TypedDict, total=False):
+    stop_reason: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="ignore", strict=True))
+class _SSEStopDeltaEvent(TypedDict, total=False):
+    delta: ReadOnly[_SSEStopDelta]
+
+
+_SSE_TEXT_DELTA_EVENT: Final = TypeAdapter(_SSETextDeltaEvent)
+_SSE_STOP_DELTA_EVENT: Final = TypeAdapter(_SSEStopDeltaEvent)
+_SSEEventT = TypeVar("_SSEEventT")
+
+
+def _parse_sse_event(adapter: TypeAdapter[_SSEEventT], event_type: str, data_line: str) -> _SSEEventT | None:
+    event: Final = loads_json_object(data_line)
+    if event is None:
+        verbose_proxy_logger.warning("Skipping a %s SSE event that is not a JSON object", event_type)
+        return None
+    try:
+        return adapter.validate_python(event)
+    except ValidationError:
+        verbose_proxy_logger.warning("Skipping a %s SSE event with an unexpected shape", event_type)
+    return None
+
+
+def _mapping_type(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    return mapping.get("type") if mapping is not None else None
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -307,25 +808,34 @@ class AnthropicMessagesHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def __init__(self):
+    def __init__(self, deployment_lookup: Callable[[], DeploymentLookup | None] = _proxy_deployments):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
+        self._deployment_lookup: Final = deployment_lookup
 
     def post_call_hook_response(self, response: object) -> object:
         if not isinstance(response, ModelResponse):
             return response
-        return self.adapter.translate_openai_response_to_anthropic(response)
+        translated: Final = self.adapter.translate_openai_response_to_anthropic(response)
+        blocks: Final = tuple(map(_legacy_hook_block, translated.get("content") or ()))
+        return {
+            **translated,
+            "content": [
+                *filter(_is_web_search_result_block, blocks),
+                *filterfalse(_is_web_search_result_block, blocks),
+            ],
+        }
 
     @staticmethod
     def _build_streaming_usage_response(
         responses_so_far: Sequence[object],
-        request_data: dict | None,
+        request_data: Mapping[str, object] | None,
     ) -> ModelResponse | None:
         chunks: Final = tuple(response for response in responses_so_far if isinstance(response, (str, bytes)))
         if not chunks:
             return None
         try:
-            return AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            return build_usage_only_response_from_chunks(
                 all_chunks=chunks,
                 model=str((request_data or {}).get("model") or ""),
             )
@@ -360,8 +870,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     def build_stream_error_items(
         self,
         exc: "HTTPException",
-        responses_so_far: Sequence[Any] | None = None,
-    ) -> Sequence[Any] | None:
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[object] | None:
         from litellm.proxy.common_request_processing import (
             serialize_http_exception_detail,
         )
@@ -370,27 +880,30 @@ class AnthropicMessagesHandler(BaseTranslation):
         message, _ = serialize_http_exception_detail(exc.detail)
         return tuple(anthropic_sse_error_frames(message))
 
-    def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
+    def build_block_response(self, exc: "ModifyResponseException") -> "AnthropicMessagesResponse":
         import uuid
 
-        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
         from litellm.llms.base_llm.guardrail_translation.utils import (
             blocked_response_usage,
         )
         from litellm.types.utils import AnthropicMessagesResponse
 
-        block_response: Final = AnthropicMessagesResponse(
+        return AnthropicMessagesResponse(
             id=f"msg_{uuid.uuid4()}",
             type="message",
             role="assistant",
             content=[{"type": "text", "text": exc.message}],
             model=exc.model,
             stop_reason="end_turn",
-            usage=blocked_response_usage(getattr(exc, "original_response", None)),
+            usage=blocked_response_usage(exc.original_response),
         )
-        return list(FakeAnthropicMessagesStreamIterator(response=block_response))
+
+    def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+
+        return list(FakeAnthropicMessagesStreamIterator(response=self.build_block_response(exc)))
 
     def _block_continuation_chunks(
         self, exc: "ModifyResponseException", responses_so_far: Sequence[object]
@@ -403,13 +916,24 @@ class AnthropicMessagesHandler(BaseTranslation):
             blocked_response_usage,
         )
 
-        def _sse(event_type: str, payload: dict) -> bytes:
+        def _sse(event_type: str, payload: Mapping[str, object]) -> bytes:
             return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
 
         output_tokens: Final = blocked_response_usage(getattr(exc, "original_response", None)).get("output_tokens", 0)
         open_index, max_index = self._content_block_state(responses_so_far)
         new_index: Final = (max_index + 1) if max_index is not None else 0
         chunks: list[bytes] = []
+        if open_index is not None and self._is_unsigned_thinking_block(responses_so_far, open_index):
+            chunks.append(
+                _sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": open_index,
+                        "delta": {"type": "signature_delta", "signature": ""},
+                    },
+                )
+            )
         if open_index is not None:
             chunks.append(_sse("content_block_stop", {"type": "content_block_stop", "index": open_index}))
         chunks += [
@@ -443,6 +967,18 @@ class AnthropicMessagesHandler(BaseTranslation):
         return chunks
 
     @staticmethod
+    def _is_unsigned_thinking_block(responses_so_far: Sequence[object], index: int) -> bool:
+        events: Final = tuple(
+            event
+            for event in chain.from_iterable(map(AnthropicMessagesHandler._iter_sse_events, responses_so_far))
+            if event.get("index") == index
+        )
+        return any(
+            event.get("type") == "content_block_start" and _mapping_type(event.get("content_block")) == "thinking"
+            for event in events
+        ) and not any(_mapping_type(event.get("delta")) == "signature_delta" for event in events)
+
+    @staticmethod
     def _content_block_state(
         responses_so_far: Sequence[object],
     ) -> tuple[int | None, int | None]:
@@ -474,13 +1010,23 @@ class AnthropicMessagesHandler(BaseTranslation):
         line: Final = raw_line.strip()
         if not line.startswith("data:"):
             return ()
-        try:
-            parsed: Final[object] = json.loads(line[len("data:") :].strip())
-        except json.JSONDecodeError:
-            return ()
-        if not isinstance(parsed, dict):
-            return ()
-        return (_as_str_mapping(parsed),)
+        event: Final = loads_json_object(line[len("data:") :])
+        return () if event is None else (event,)
+
+    @staticmethod
+    def _stripped_sse_lines(responses_so_far: Sequence[object]) -> Iterator[str]:
+        joined: Final = b"".join(item for item in responses_so_far if isinstance(item, (bytes, bytearray)))
+        return (line.strip() for line in joined.decode("utf-8", errors="replace").split("\n"))
+
+    @classmethod
+    def _has_unreadable_event(cls, responses_so_far: Sequence[object]) -> bool:
+        lines: Final = tuple(cls._stripped_sse_lines(responses_so_far))
+        data_payloads: Final = tuple(line[len("data:") :] for line in lines if line.startswith("data:"))
+        return any(is_undecodable_json_object(payload) for payload in data_payloads) or any(
+            sum(line.startswith("data:") for line in event_lines) > 1
+            for has_lines, event_lines in groupby(lines, key=bool)
+            if has_lines
+        )
 
     @staticmethod
     def _iter_sse_events(item: object) -> Sequence[Mapping[str, object]]:
@@ -490,8 +1036,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         ``get_streaming_string_so_far``): raw SSE ``bytes`` -- which may bundle
         several events separated by a blank line -- and an already-parsed event
         ``dict``."""
-        if isinstance(item, dict):
-            return (_as_str_mapping(item),)
+        if (event := as_str_mapping(item)) is not None:
+            return (event,)
         if not isinstance(item, (bytes, bytearray)):
             return ()
         return tuple(
@@ -501,17 +1047,28 @@ class AnthropicMessagesHandler(BaseTranslation):
             for event in AnthropicMessagesHandler._parse_sse_data_line(line)
         )
 
-    def _translate_to_openai(self, data: dict) -> ChatCompletionRequest:
+    def _translate_to_openai(
+        self,
+        data: dict,  # mutable-ok: the request body the adapter reads
+        *,
+        keep_cache_control: bool = False,
+        keep_tool_errors: bool = False,
+    ) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format."""
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
+        ) = LiteLLMAnthropicMessagesAdapter(
+            keep_cache_control=keep_cache_control, keep_tool_errors=keep_tool_errors
+        ).translate_anthropic_to_openai(
+            anthropic_message_request=cast(AnthropicMessagesRequest, scannable_tool_result_request(data)),
+            preserve_midturn_system=True,
         )
         return chat_completion_compatible_request
 
-    def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
+    def get_structured_messages(
+        self, data: dict[str, object], *, keep_tool_errors: bool = False
+    ) -> list[AllMessageValues] | None:
         """
         Convert Anthropic messages request data to OpenAI-spec structured messages.
 
@@ -520,7 +1077,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         messages: Final = data.get("messages")
         if messages is None:
             return None
-        chat_completion_compatible_request: Final = self._translate_to_openai(data)
+        chat_completion_compatible_request: Final = self._translate_to_openai(data, keep_tool_errors=keep_tool_errors)
         result: Final = cast(
             list[AllMessageValues],
             chat_completion_compatible_request.get("messages", []),
@@ -532,9 +1089,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        *,
+        request_data: dict[str, object] | None = None,  # mutable-ok: the request dict guardrails receive
+        keep_cache_control: bool = False,
     ) -> Mapping[str, object]:
         """
-        Process input messages by applying guardrails to text content.
+        Process input messages by applying guardrails to text content. ``request_data`` is what the guardrail sees as
+        the request when ``data`` is only its body, e.g. a provider pass-through route that nests the body
         """
         messages: Final = data.get("messages")
         if messages is None:
@@ -546,10 +1107,20 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # The top-level prompt is translated on its own below so it can be hoisted in front of
         # any mid-turn system entries and scanned first, aligned with that structured position.
-        translation_source: Final = {  # mutable-ok: API message payload
-            key: value for key, value in data.items() if key != "system"
-        }
-        chat_completion_compatible_request: Final = self._translate_to_openai(translation_source)
+        body_model: Final = data.get("model")
+        request_model: Final = (request_data or {}).get("model")
+        model: Final[str] = (
+            body_model
+            if isinstance(body_model, str) and body_model
+            else (request_model if isinstance(request_model, str) else "")
+        )
+        translation_source: Final = {**{key: value for key, value in data.items() if key != "system"}, "model": model}
+        request_fields: Final = _as_str_mapping(data)
+        team_id: Final = get_request_team_id(request_data if request_data is not None else request_fields)
+        keeps_cache_control: Final = keep_cache_control or self._serves_cache_control(model, team_id)
+        chat_completion_compatible_request: Final = self._translate_to_openai(
+            translation_source, keep_cache_control=keeps_cache_control
+        )
 
         full_structured_messages: Final = cast(
             list[AllMessageValues],
@@ -558,7 +1129,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_midturn_system_message: Final = any(
             str(message.get("role") or "").lower() == "system" for message in full_structured_messages
         )
-        hoisted_system_message: Final = None if skip_system else self._hoisted_top_level_system_message(data)
+        hoisted_system_message: Final = (
+            None if skip_system else self._hoisted_top_level_system_message(request_fields, model, keeps_cache_control)
+        )
         if hoisted_system_message is not None:
             full_structured_messages.insert(0, hoisted_system_message)
         # skip_system already excluded the trusted top-level prompt (it is simply not hoisted);
@@ -576,7 +1149,10 @@ class AnthropicMessagesHandler(BaseTranslation):
             if scan_only_tool_results
             else [
                 tool
-                for tool in chat_completion_compatible_request.get("tools", [])
+                for tool in _with_web_search_tools(
+                    list_field(cast(Mapping[str, object], data), "tools"),  # cast-ok: Anthropic request body
+                    chat_completion_compatible_request.get("tools", []),
+                )
                 if not is_provider_native_tool_dict(tool)
             ]
         )
@@ -594,6 +1170,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
                 scan_only_tool_results=scan_only_tool_results,
+                include_tool_calls=tool_calls_in_guardrail_scope(guardrail_to_apply),
             )
             for msg_idx, message in enumerate(messages)
         )
@@ -601,14 +1178,10 @@ class AnthropicMessagesHandler(BaseTranslation):
             *top_level_system_scanned,
             *(item for one_message in extracted for item in one_message.scanned),
         )
-        texts_to_check: Final = [item.text for item in scanned]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
-        images_to_check: Final = [
-            image for one_message in extracted for image in one_message.images
-        ]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
+        texts_to_check: Final = [item.text for item in scanned]
+        images_to_check: Final = [image for one_message in extracted for image in one_message.images]
         scanned_tool_calls: Final = tuple(item for one_message in extracted for item in one_message.tool_calls)
-        tool_calls_to_check: Final = [
-            item.tool_call for item in scanned_tool_calls
-        ]  # mutable-ok: GenericGuardrailAPIInputs takes list[ChatCompletionToolCallChunk]
+        tool_calls_to_check: Final = [item.tool_call for item in scanned_tool_calls]
         pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -620,16 +1193,22 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["tool_calls"] = tool_calls_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
+            request_tools_as_sent: Final = tuple(data.get("tools") or ())
+            shown_tool_fingerprints: Final = (
+                () if scan_only_tool_results else tuple(map(stream_item_fingerprint, tools_to_check))
+            )
             original_structured_messages: Final = structured_messages
             if structured_messages:
                 inputs["structured_messages"] = structured_messages
             # Include model information if available
-            model: Final = data.get("model")
             if model:
                 inputs["model"] = model
+            original_tool_names: Final = _original_tool_names(
+                cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
+            )
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
-                request_data=data,
+                request_data=data if request_data is None else request_data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,
             )
@@ -637,25 +1216,19 @@ class AnthropicMessagesHandler(BaseTranslation):
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
-                # Convert tools back from OpenAI format to Anthropic format
-                anthropic_config: Final = AnthropicConfig()
-                anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
-                for tool in guardrailed_tools:
-                    converted_tool, mcp_server = anthropic_config._map_tool_helper(tool)
-                    if converted_tool is not None:
-                        anthropic_tools.append(converted_tool)
-                    # Note: MCP servers are handled separately in the main transformation
                 data["tools"] = (
                     merge_returned_tools_into_request_tools(
                         request_tools=data.get("tools"),
-                        returned_tools=anthropic_tools,
+                        returned_tools=_converted_tools(guardrailed_tools, original_tool_names.declared),
                         tool_name=anthropic_tool_name,
                     )
                     if scan_only_tool_results
-                    else [
-                        *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
-                        *anthropic_tools,
-                    ]
+                    else _tools_after_guardrail(
+                        request_tools=request_tools_as_sent,
+                        shown_fingerprints=shown_tool_fingerprints,
+                        returned_tools=guardrailed_tools,
+                        original_names=original_tool_names.declared,
+                    )
                 )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
@@ -674,6 +1247,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                     ),
                     hoisted_system_message=hoisted_system_message,
                     preserve_system_messages=has_midturn_system_message,
+                    original_tool_names=original_tool_names.used,
+                    model=model,
                 )
             else:
                 if guardrailed_texts and len(guardrailed_texts) != len(scanned):
@@ -696,21 +1271,29 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
+    def _serves_cache_control(self, model: str, team_id: str | None) -> bool:
+        if LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control(model):
+            return True
+        registry: Final = self._deployment_lookup() if model else None
+        deployments: Final = registry.deployments(model, team_id=team_id) if registry is not None else None
+        return any(map(_deployment_consumes_cache_control, deployments or ()))
+
     def _hoisted_top_level_system_message(
-        self, data: dict
-    ) -> AllMessageValues | None:  # mutable-ok: API message payload
+        self, data: Mapping[str, object], model: str, keep_cache_control: bool
+    ) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:
             return None
         probe: Final = self._translate_to_openai(
-            {  # mutable-ok: API message payload
-                "model": data.get("model") or "",
-                "messages": [],  # mutable-ok: API message payload
+            {
+                "model": model,
+                "messages": [],
                 "system": system,
-            }
+            },
+            keep_cache_control=keep_cache_control,
         )
-        hoisted: Final = probe.get("messages") or []  # mutable-ok: API message payload
+        hoisted: Final = probe.get("messages") or []
         return hoisted[0] if hoisted else None
 
     @staticmethod
@@ -733,29 +1316,22 @@ class AnthropicMessagesHandler(BaseTranslation):
         """Convert an OpenAI system message to the client's Anthropic-shaped entry."""
         content: Final = message.get("content")
         if isinstance(content, str):
-            return (
-                {"role": "system", "content": content} if content else None  # mutable-ok: API message payload
-            )  # mutable-ok: API message payload
+            return {"role": "system", "content": content} if content else None
         if not isinstance(content, list):
             return None
         blocks: Final[list[dict[str, object]]] = []  # mutable-ok: API message payload
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "text":
-                continue
-            text = block.get("text")
-            if not isinstance(text, str) or not text:
+        for item in cast(Sequence[object], content):  # cast-ok: untrusted client payload
+            if (block := as_str_mapping(item)) is None or not is_non_empty_text_block(block):
                 continue
             anthropic_block: dict[str, object] = {  # mutable-ok: API message payload
                 "type": "text",
-                "text": text,
-            }  # mutable-ok: API message payload
+                "text": block["text"],
+            }
             cache_control = block.get("cache_control")
             if cache_control:
                 anthropic_block["cache_control"] = deepcopy(cache_control)
             blocks.append(anthropic_block)
-        return (
-            {"role": "system", "content": blocks} if blocks else None  # mutable-ok: API message payload
-        )  # mutable-ok: API message payload
+        return {"role": "system", "content": blocks} if blocks else None
 
     @staticmethod
     def _fold_leading_systems_into_top_level(
@@ -809,7 +1385,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     @staticmethod
     def _defer_systems_inside_tool_exchanges(
         structured_messages: Sequence[Mapping[str, object]],
-    ) -> list:
+    ) -> list[Mapping[str, object]]:
         """Hold a system row until the tool exchange around it completes so the call/result pair converts together."""
         from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
 
@@ -823,8 +1399,8 @@ class AnthropicMessagesHandler(BaseTranslation):
             for group in group_tool_exchanges([structured_messages[index] for index in non_system_positions])
             if len(group) > 1
         }
-        ordered: Final[list] = []  # mutable-ok: API message payload
-        deferred_systems: Final[list] = []  # mutable-ok: API message payload
+        ordered: Final[list[Mapping[str, object]]] = []  # mutable-ok: API message payload
+        deferred_systems: Final[list[Mapping[str, object]]] = []  # mutable-ok: API message payload
         open_exchange_end = -1  # rebind-ok: advances to the enclosing exchange's last index
         for index, message in enumerate(structured_messages):
             if AnthropicMessagesHandler._is_system(message) and index < open_exchange_end:
@@ -840,10 +1416,13 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _write_back_structured_messages(
-        data: dict,  # mutable-ok: API message payload
-        structured_messages: list,  # mutable-ok: API message payload
+        data: dict[str, object],  # mutable-ok: API message payload
+        structured_messages: list[AllMessageValues],  # mutable-ok: API message payload
         hoisted_system_message: object = None,
         preserve_system_messages: bool = False,
+        *,
+        original_tool_names: Mapping[str, str],
+        model: str,
     ) -> None:
         """Write a guardrail's structured-message rewrite back without losing corrections."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -852,16 +1431,16 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
         _is_system: Final = AnthropicMessagesHandler._is_system
-        model: Final = str(data.get("model") or "")
         converted: Final[list] = []  # mutable-ok: API message payload
 
         def _convert_run(run: list) -> None:  # mutable-ok: API message payload
             for group in group_tool_exchanges(run):
                 converted.extend(
                     anthropic_messages_pt(
-                        messages=[run[index] for index in group],  # mutable-ok: API message payload
+                        messages=[run[index] for index in group],
                         model=model,
                         llm_provider="anthropic",
+                        rewrites_tool_use_ids=False,
                     )
                 )
 
@@ -907,7 +1486,12 @@ class AnthropicMessagesHandler(BaseTranslation):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "thinking":
                         block.pop("cache_control", None)
-        data["messages"] = converted
+        _restore_tool_use_names(
+            cast(Sequence[object], converted),  # cast-ok: Anthropic message payload
+            original_tool_names,
+        )
+        original_messages: Final = data.get("messages")
+        data["messages"] = keep_original_fields(converted, original_messages)
 
     @staticmethod
     def _extract_midturn_system_text(
@@ -934,10 +1518,13 @@ class AnthropicMessagesHandler(BaseTranslation):
             images=(),
         )
 
-    def extract_request_tool_names(self, data: dict) -> list[str]:
-        """Extract every tool name in an Anthropic messages request: tools[].name, plus
-        tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
-        return [name for tool in data.get("tools") or [] for name in anthropic_tool_names(tool)]
+    def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
+        """Extract every tool name in an Anthropic messages request: tools[].name,
+        tools[].function.name for OpenAI-format tools the bridge forwards verbatim, and
+        mcp_servers[].name, which the Responses bridge sends as the MCP tool's server_label."""
+        tool_names: Final = chain.from_iterable(map(anthropic_tool_names, list_field(data, "tools")))
+        server_names: Final = (name for name in map(anthropic_mcp_server_name, list_field(data, "mcp_servers")) if name)
+        return [*tool_names, *server_names]
 
     @classmethod
     def _extract_input_text_and_images(
@@ -947,6 +1534,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
+        include_tool_calls: bool = True,
     ) -> ExtractedInput:
         """Extract text content and images from a message.
 
@@ -982,11 +1570,11 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         tool_use_blocks: Final = (
             ()
-            if scan_only_tool_results
+            if not include_tool_calls
             else tuple(
                 (content_idx, content_item)
                 for content_idx, content_item in enumerate(content)
-                if isinstance(content_item, dict) and _is_client_tool_use(content_item)
+                if isinstance(content_item, dict) and _is_scannable_tool_use(content_item)
             )
         )
         return ExtractedInput(
@@ -1010,7 +1598,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_tool_message: bool,
         scan_only_tool_results: bool = False,
     ) -> ExtractedInput:
-        if content_item.get("type") == "tool_result":
+        if content_item.get("type") in _TOOL_RESULT_BLOCK_TYPES:
             if skip_tool_message:
                 return EMPTY_EXTRACTED_INPUT
             return cls._extract_tool_result(content_item=content_item, msg_idx=msg_idx, content_idx=content_idx)
@@ -1097,9 +1685,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             match item.target:
                 case SystemStringTarget():
                     if isinstance(data.get("system"), str):
-                        data["system"] = (
-                            guardrail_response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                        )
+                        data["system"] = guardrail_response
                 case SystemBlockTextTarget(block_idx=block_idx):
                     _write_back_system_block(data.get("system"), block_idx, guardrail_response)
                 case (
@@ -1144,7 +1730,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> "AnthropicMessagesResponse":
         """
         Process output response by applying guardrails to text content and tool calls.
@@ -1182,9 +1768,17 @@ class AnthropicMessagesHandler(BaseTranslation):
             task_mappings,
             tool_calls_to_check,
         )
+        block_fields: Final = tuple(map(self._output_block_fields, response_content))
+        web_search_strings: Final = tuple(
+            chain.from_iterable(
+                _web_search_block_strings(content_idx, fields[1], with_query=True)
+                for content_idx, fields in enumerate(block_fields)
+                if fields is not None
+            )
+        )
 
         # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check or tool_calls_to_check:
+        if texts_to_check or tool_calls_to_check or web_search_strings:
             request_data = self._prepare_request_data(
                 request_data,
                 response,
@@ -1193,11 +1787,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
             inputs: Final = self._build_guardrail_inputs(
-                texts_to_check,
+                [*(target.value for target in web_search_strings), *texts_to_check],
                 images_to_check,
                 tool_calls_to_check,
                 response,
             )
+            pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -1206,14 +1801,28 @@ class AnthropicMessagesHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
 
-            guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+            web_search_rewrites, reply_rewrites = _split_web_search_texts(
+                guardrailed_inputs.get("texts", []), len(web_search_strings), len(texts_to_check)
+            )
 
             # Step 3: Map guardrail responses back to original response structure
             await self._apply_guardrail_responses_to_output(
                 response=response,
-                responses=guardrailed_texts,
+                responses=list(reply_rewrites),
                 task_mappings=task_mappings,
             )
+            self._write_back_web_search_strings(
+                response_content, _web_search_rewrites_by_block(web_search_strings, web_search_rewrites)
+            )
+            unchanged_tool_use_ids: Final = self._write_back_output_tool_calls(
+                response_content,
+                scanned_tool_calls=tool_calls_to_check,
+                pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                returned_tool_calls=guardrailed_inputs.get("tool_calls"),
+                guardrail_name=guardrail_to_apply.guardrail_name,
+            )
+            if unchanged_tool_use_ids is not None:
+                _redact_output_safeguard_results(response, unchanged_tool_use_ids)
 
         verbose_proxy_logger.debug("Anthropic Messages: Processed output response: %s", response)
 
@@ -1225,7 +1834,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> Sequence[object]:
@@ -1233,17 +1842,22 @@ class AnthropicMessagesHandler(BaseTranslation):
         Process output streaming response by applying guardrails to text content.
 
         Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
-        With ``deliver_ended_stream_rewrites``, an ended stream whose guardrail rewrote the text gets the rewrite
-        written back across the buffered chunks (full rewritten text in the first ``text_delta``, the rest blanked);
-        a rewrite on a stream that never reported a ``stop_reason`` has no write-back and is reported as
-        undeliverable, so the pipeline executor discards it and releases the original chunks.
+        With ``deliver_ended_stream_rewrites``, a stream whose guardrail rewrote the text gets the rewrite
+        written back across the buffered chunks (full rewritten text in the first ``text_delta``, the rest blanked),
+        whether or not the stream ever reported a ``stop_reason``.
         """
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
+        if self._has_unreadable_event(responses_so_far):
+            raise GuardrailRaisedException(
+                guardrail_name=guardrail_to_apply.guardrail_name,
+                message="The guardrail could not read an event in the upstream stream, so it cannot check the response",
+                should_wrap_with_default_message=False,
+            )
         has_ended: Final = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
-            built_response: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            built_response: Final = build_complete_streaming_response(
                 all_chunks=responses_so_far,
                 litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
                 model="",
@@ -1253,17 +1867,26 @@ class AnthropicMessagesHandler(BaseTranslation):
             if built_response is not None and hasattr(built_response, "choices") and built_response.choices:
                 model_response: Final = cast(ModelResponse, built_response)
                 first_choice: Final = cast(Choices, model_response.choices[0])
-                tool_calls_list: Final = cast(
-                    list[ChatCompletionMessageToolCall] | None,
-                    first_choice.message.tool_calls,
+                tool_call_blocks: Final = self._streamed_tool_call_blocks(responses_so_far)
+                tool_calls_list: Final = _in_stream_block_order(
+                    (
+                        *anthropic_server_tool_calls(first_choice.message),
+                        *cast(list[ChatCompletionMessageToolCall], first_choice.message.tool_calls or []),
+                    ),
+                    tool_call_blocks,
                 )
                 string_so_far = first_choice.message.content
                 pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_list or ())
                 guardrail_inputs: Final = GenericGuardrailAPIInputs()
-                if string_so_far:
-                    guardrail_inputs["texts"] = [string_so_far]
+                leading_texts: Final = (string_so_far,) if isinstance(string_so_far, str) and string_so_far else ()
+                streamed_query_strings: Final = _streamed_query_strings(tool_call_blocks, pre_guardrail_tool_calls)
+                streamed_result_strings: Final = self._streamed_web_search_result_strings(responses_so_far)
+                streamed_web_search_strings: Final = (*streamed_result_strings, *streamed_query_strings)
+                texts_to_check: Final = [*(target.value for target in streamed_web_search_strings), *leading_texts]
+                if texts_to_check:
+                    guardrail_inputs["texts"] = texts_to_check
                 if tool_calls_list:
-                    guardrail_inputs["tool_calls"] = tool_calls_list
+                    guardrail_inputs["tool_calls"] = list(tool_calls_list)
 
                 try:
                     prepared_request_data = self._prepare_request_data(
@@ -1284,25 +1907,42 @@ class AnthropicMessagesHandler(BaseTranslation):
                             responses_so_far, request_data
                         )
                     raise
-                guardrailed_texts: Final = _guardrailed_inputs.get("texts")
+                web_search_rewrites, reply_rewrites = _split_web_search_texts(
+                    _guardrailed_inputs.get("texts") or [], len(streamed_web_search_strings), len(leading_texts)
+                )
                 if (
                     deliver_ended_stream_rewrites
                     and isinstance(string_so_far, str)
                     and string_so_far
-                    and guardrailed_texts
-                    and guardrailed_texts[0] != string_so_far
+                    and reply_rewrites
+                    and reply_rewrites[0] != string_so_far
                 ):
-                    self._write_ended_stream_text_rewrite(responses_so_far, guardrailed_texts[0])
+                    self._write_ended_stream_text_rewrite(
+                        responses_so_far,
+                        reply_rewrites[0],
+                        guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+                    )
+                if deliver_ended_stream_rewrites:
+                    self._write_ended_stream_web_search_rewrites(
+                        responses_so_far,
+                        _web_search_rewrites_by_block(streamed_result_strings, web_search_rewrites),
+                    )
                 if deliver_ended_stream_rewrites:
                     returned_tool_calls: Final = _guardrailed_inputs.get("tool_calls")
                     self._write_ended_stream_tool_call_rewrites(
                         responses_so_far,
                         pre_guardrail_tool_calls=pre_guardrail_tool_calls,
-                        post_guardrail_tool_calls=_tool_call_shapes(
-                            returned_tool_calls
-                            if isinstance(returned_tool_calls, list)
-                            and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
-                            else tool_calls_list or ()
+                        post_guardrail_tool_calls=_with_query_rewrites(
+                            _tool_call_shapes(
+                                returned_tool_calls
+                                if isinstance(returned_tool_calls, list)
+                                and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
+                                else tool_calls_list or ()
+                            ),
+                            tool_call_blocks,
+                            _query_rewrites(
+                                streamed_query_strings, web_search_rewrites[len(streamed_result_strings) :]
+                            ),
                         ),
                         guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
                     )
@@ -1330,18 +1970,20 @@ class AnthropicMessagesHandler(BaseTranslation):
             raise
         unended_texts: Final = _guardrailed_inputs.get("texts")
         if deliver_ended_stream_rewrites and unended_texts and tuple(unended_texts) != (string_so_far,):
-            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
-            raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
+            self._write_ended_stream_text_rewrite(
+                responses_so_far,
+                unended_texts[0],
+                guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+            )
         return responses_so_far
 
     def _prepare_request_data(
         self,
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         response: object,
         user_api_key_dict: "UserAPIKeyAuth | None",
         key: str,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Ensure request_data has the response/responses_so_far key and metadata."""
         if request_data is None:
             request_data = {key: response}
@@ -1354,6 +1996,55 @@ class AnthropicMessagesHandler(BaseTranslation):
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
         return request_data
+
+    @staticmethod
+    def _write_back_web_search_strings(
+        response_content: Sequence[object],
+        rewrites_by_block: Mapping[int, tuple[tuple[_WebSearchString, str], ...]],
+    ) -> None:
+        for block_idx, rewrites in rewrites_by_block.items():
+            _write_back_web_search_block(_content_block_at(response_content, block_idx), rewrites)
+
+    @classmethod
+    def _write_back_output_tool_calls(
+        cls,
+        response_content: Sequence[object],
+        *,
+        scanned_tool_calls: Sequence[object],
+        pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        returned_tool_calls: Sequence[object] | None,
+        guardrail_name: str | None,
+    ) -> frozenset[str] | None:
+        post_guardrail_tool_calls: Final = _tool_call_shapes(
+            returned_tool_calls
+            if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
+            else scanned_tool_calls
+        )
+        tool_use_blocks: Final = tuple(
+            (block, fields[1].get("id"))
+            for block in response_content
+            if (fields := cls._output_block_fields(block)) is not None and fields[0] in _TOOL_CALL_BLOCK_TYPES
+        )
+        if len(tool_use_blocks) != len(pre_guardrail_tool_calls):
+            return None
+        rewrites: Final = tuple(
+            (position, after, _rewritten_tool_use_input(after.arguments))
+            for position, (before, after) in enumerate(zip(pre_guardrail_tool_calls, post_guardrail_tool_calls))
+            if before != after
+        )
+        if not rewrites:
+            return None
+        if any(rewritten_input is None for _, _, rewritten_input in rewrites):
+            raise unappliable_request_rewrite(guardrail_name)
+        for position, after, rewritten_input in rewrites:
+            if rewritten_input is not None:
+                _write_back_tool_use_block(tool_use_blocks[position][0], after, rewritten_input)
+        rewritten_positions: Final = frozenset(position for position, _, _ in rewrites)
+        return frozenset(
+            tool_use_id
+            for position, (_, tool_use_id) in enumerate(tool_use_blocks)
+            if position not in rewritten_positions and isinstance(tool_use_id, str)
+        )
 
     @staticmethod
     def _get_response_content(response: object) -> Sequence[object]:
@@ -1379,7 +2070,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 continue
             block_type, block_dict = fields
 
-            if block_type in ["text", "tool_use"]:
+            if block_type in ("text", "tool_use", "mcp_tool_use", "mcp_tool_result"):
                 self._extract_output_text_and_images(
                     content_block=block_dict,
                     content_idx=content_idx,
@@ -1426,26 +2117,45 @@ class AnthropicMessagesHandler(BaseTranslation):
             inputs["model"] = response_model
         return inputs
 
-    @staticmethod
+    @classmethod
     def _write_ended_stream_text_rewrite(
+        cls,
         responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
         rewritten_text: str,
+        guardrail_name: str,
     ) -> None:
         """Deliver an ended-stream guardrail text rewrite by rewriting the
         buffered chunks in place: the first ``text_delta`` carries the full
         rewritten text and every later one is blanked, leaving the surrounding
-        message and content-block framing untouched."""
+        message and content-block framing untouched. A buffer with no
+        ``text_delta`` has nowhere to carry the rewrite, so the pipeline
+        executor discards it and releases the original chunks."""
+
+        def is_text_delta(event: Mapping[str, object]) -> bool:
+            delta: Final = event.get("delta")
+            return (
+                event.get("type") == "content_block_delta"
+                and isinstance(delta, Mapping)
+                and delta.get("type") == "text_delta"
+            )
+
+        if not any(is_text_delta(event) for item in responses_so_far for event in cls._iter_sse_events(item)):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(
+                guardrail_name, "the buffered stream carries no text_delta event to land the text rewrite on"
+            )
         replacements: Final = chain((rewritten_text,), repeat(""))
 
         def rewrite_text_delta(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
-            delta: Final = event.get("delta")
-            if event.get("type") != "content_block_delta" or not isinstance(delta, Mapping):
-                return None
-            if delta.get("type") != "text_delta":
+            if not is_text_delta(event):
                 return None
             return _SSEFieldRewrite("delta", "text", next(replacements))
 
-        AnthropicMessagesHandler._rewrite_ended_stream_events(responses_so_far, rewrite_text_delta)
+        cls._rewrite_ended_stream_events(responses_so_far, rewrite_text_delta)
+        cls._redact_ended_stream_message_delta(
+            responses_so_far, kept_tool_use_ids=frozenset(cls._streamed_tool_use_ids(responses_so_far).values())
+        )
 
     @classmethod
     def _write_ended_stream_tool_call_rewrites(
@@ -1458,27 +2168,23 @@ class AnthropicMessagesHandler(BaseTranslation):
     ) -> None:
         """Deliver ended-stream guardrail tool-call rewrites by rewriting the
         buffered chunks in place: the rebuilt response lists tool calls in the
-        order of the stream's ``tool_use`` blocks, so the nth rewritten call lands
-        on the nth block, its first ``input_json_delta`` carrying the full rewritten
+        order of the stream's ``tool_use`` and ``server_tool_use`` blocks, so the nth
+        rewritten call lands on the nth block, its first ``input_json_delta`` carrying the full rewritten
         arguments, every later one blanked, and ``content_block_start`` carrying the
         rewritten name. Blocks that do not line up with the rebuilt tool calls make
         the rewrite undeliverable, so the pipeline executor discards it and releases
         the original chunks."""
         if post_guardrail_tool_calls == pre_guardrail_tool_calls:
             return
-        block_indices: Final = tuple(
-            index
-            for item in responses_so_far
-            for event in cls._iter_sse_events(item)
-            if event.get("type") == "content_block_start"
-            and isinstance(block := event.get("content_block"), Mapping)
-            and block.get("type") == "tool_use"
-            and isinstance(index := event.get("index"), int)
-        )
+        block_indices: Final = tuple(index for index, _ in cls._streamed_tool_call_blocks(responses_so_far))
         if len(block_indices) != len(post_guardrail_tool_calls):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls for a stream that carried "
+                f"{len(block_indices)} tool_use or server_tool_use blocks",
+            )
         rewrites_by_block: Final = MappingProxyType(
             {
                 index: after
@@ -1509,6 +2215,118 @@ class AnthropicMessagesHandler(BaseTranslation):
                     return None
 
         cls._rewrite_ended_stream_events(responses_so_far, rewrite_tool_use)
+        streamed_tool_use_ids: Final = cls._streamed_tool_use_ids(responses_so_far)
+        cls._redact_ended_stream_message_delta(
+            responses_so_far,
+            kept_tool_use_ids=frozenset(
+                tool_use_id for index, tool_use_id in streamed_tool_use_ids.items() if index not in rewrites_by_block
+            ),
+        )
+
+    @classmethod
+    def _streamed_web_search_result_strings(cls, responses_so_far: Sequence[object]) -> tuple[_WebSearchString, ...]:
+        events: Final = chain.from_iterable(cls._iter_sse_events(item) for item in responses_so_far)
+        result_blocks: Final = (
+            (index, block)
+            for event in events
+            if event.get("type") == "content_block_start"
+            and isinstance(index := event.get("index"), int)
+            and (block := as_str_mapping(event.get("content_block"))) is not None
+        )
+        return tuple(
+            chain.from_iterable(
+                _web_search_block_strings(index, block, with_query=False) for index, block in result_blocks
+            )
+        )
+
+    @classmethod
+    def _write_ended_stream_web_search_rewrites(
+        cls,
+        responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
+        rewrites_by_block: Mapping[int, tuple[tuple[_WebSearchString, str], ...]],
+    ) -> None:
+        """Deliver ended-stream guardrail rewrites of web search result titles and urls into the
+        ``content_block_start`` that carries each whole ``web_search_tool_result`` block."""
+        if not rewrites_by_block:
+            return
+
+        def rewrite_result_block(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
+            index: Final = event.get("index")
+            block: Final = as_str_mapping(event.get("content_block"))
+            rewrites: Final = rewrites_by_block.get(index) if isinstance(index, int) else None
+            if event.get("type") != "content_block_start" or block is None or rewrites is None:
+                return None
+            return _SSEFieldRewrite(
+                "content_block", "content", _rewritten_web_search_block(block, rewrites).get("content")
+            )
+
+        cls._rewrite_ended_stream_events(responses_so_far, rewrite_result_block)
+
+    @classmethod
+    def _streamed_tool_call_blocks(
+        cls, responses_so_far: Sequence[object]
+    ) -> tuple[tuple[int, Mapping[str, object]], ...]:
+        events: Final = chain.from_iterable(cls._iter_sse_events(item) for item in responses_so_far)
+        return tuple(
+            (index, block)
+            for event in events
+            if event.get("type") == "content_block_start"
+            and (block := as_str_mapping(event.get("content_block"))) is not None
+            and isinstance(block_type := block.get("type"), str)
+            and block_type in _REBUILT_TOOL_CALL_BLOCK_TYPES
+            and isinstance(index := event.get("index"), int)
+        )
+
+    @classmethod
+    def _streamed_tool_use_ids(cls, responses_so_far: Sequence[object]) -> Mapping[int, str]:
+        """The id of each buffered ``tool_use`` block, by its content block index."""
+        events: Final = chain.from_iterable(cls._iter_sse_events(item) for item in responses_so_far)
+        tool_use_blocks: Final = (
+            (event.get("index"), block)
+            for event in events
+            if event.get("type") == "content_block_start"
+            and (block := as_str_mapping(event.get("content_block"))) is not None
+            and block.get("type") == "tool_use"
+        )
+        return MappingProxyType(
+            {
+                index: tool_use_id
+                for index, block in tool_use_blocks
+                if isinstance(index, int) and isinstance(tool_use_id := block.get("id"), str)
+            }
+        )
+
+    @classmethod
+    def _redact_ended_stream_message_delta(
+        cls,
+        responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
+        *,
+        kept_tool_use_ids: frozenset[str],
+    ) -> None:
+        """Hold the buffered ``message_delta`` to the rules a re-emitted rewrite follows: a verdict survives
+        only for a tool call delivered unchanged, and no free-text ``explanation`` describes the text the
+        guardrail rewrote."""
+
+        def rewrite_stop_details(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
+            delta: Final = as_str_mapping(event.get("delta")) if event.get("type") == "message_delta" else None
+            if delta is None or "stop_details" not in delta:
+                return None
+            return _SSEFieldRewrite(
+                "delta", "stop_details", redacted_stop_details(delta["stop_details"], keep_explanations=False)
+            )
+
+        def rewrite_safeguard_results(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
+            delta: Final = as_str_mapping(event.get("delta")) if event.get("type") == "message_delta" else None
+            if delta is None or "safeguard_results" not in delta:
+                return None
+            return _SSEFieldRewrite(
+                "delta",
+                "safeguard_results",
+                filtered_safeguard_results(delta["safeguard_results"], kept_tool_use_ids, keep_explanations=False),
+            )
+
+        cls._rewrite_ended_stream_events(responses_so_far, rewrite_stop_details)
+        cls._rewrite_ended_stream_events(responses_so_far, rewrite_safeguard_results)
 
     @staticmethod
     def _rewrite_ended_stream_events(
@@ -1525,8 +2343,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _rewrite_buffered_item(item: object, rewrite_event: _SSEEventRewriter) -> object:
-        if isinstance(item, dict):
-            return _rewritten_event(_as_str_mapping(item), rewrite_event)
+        if (event := as_str_mapping(item)) is not None:
+            return _rewritten_event(event, rewrite_event)
         if isinstance(item, (bytes, bytearray)):
             return AnthropicMessagesHandler._rewrite_sse_events(bytes(item), rewrite_event)
         return item
@@ -1548,26 +2366,43 @@ class AnthropicMessagesHandler(BaseTranslation):
     def _rewrite_sse_line(line: str, rewrite_event: _SSEEventRewriter) -> str:
         if not line.startswith("data:"):
             return line
-        try:
-            data: Final[str | int | float | bool | None | Sequence[object] | Mapping[str, object]] = json.loads(
-                line[len("data:") :].strip()
-            )
-        except json.JSONDecodeError:
+        event: Final = loads_json_object(line[len("data:") :])
+        if not isinstance(event, dict):
             return line
-        if not isinstance(data, dict):
-            return line
-        rewritten: Final = _rewritten_event(_as_str_mapping(data), rewrite_event)
-        return line if rewritten is data else "data: " + json.dumps(rewritten)
+        rewritten: Final = _rewritten_event(event, rewrite_event)
+        return line if rewritten is event else "data: " + json.dumps(rewritten)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        if self._has_unreadable_event(responses_so_far):
+            return None
         stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
         tool_use_fingerprints: Final = self._streamed_tool_use_fingerprints(responses_so_far)
+        streamed_text: Final = self.get_streaming_string_so_far(responses_so_far)
+        result_strings: Final = self._streamed_web_search_result_strings(responses_so_far) if stream_ended else ()
         return StreamingScanKey(
-            texts=(self.get_streaming_string_so_far(responses_so_far),),
+            texts=(*(target.value for target in result_strings), streamed_text),
             tool_calls=tool_use_fingerprints if stream_ended else (),
             stream_ended=stream_ended,
             tool_calls_in_flight=bool(tool_use_fingerprints) and not stream_ended,
         )
+
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        released_key: Final = self.get_streaming_scan_key(responses_so_far)
+        if released_key is None or not released_key.tool_calls_in_flight:
+            return tuple(responses_so_far)
+        return (*responses_so_far, _RELEASED_TOOL_USE_STOP)
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        return bool(self._streamed_tool_use_fingerprints((item,)))
+
+    def split_whole_stream_frames(self, carried: object | None, item: object) -> tuple[object | None, object | None]:
+        """Native ``/v1/messages`` relays raw transport reads, so an SSE event can arrive split across two."""
+        from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+
+        if not isinstance(item, bytes):
+            return item, carried
+        whole, rest = split_complete_sse_frames((carried if isinstance(carried, bytes) else b"") + item)
+        return whole or None, rest or None
 
     @classmethod
     def _streamed_tool_use_fingerprints(cls, responses_so_far: Sequence[object]) -> tuple[str, ...]:
@@ -1650,13 +2485,10 @@ class AnthropicMessagesHandler(BaseTranslation):
 
                 # Only process content_block_delta events
                 if event_type == "content_block_delta" and data_line:
-                    try:
-                        data: _AnthropicSSEEvent = json.loads(data_line)
-                        delta: _AnthropicSSEDelta = data.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            text += delta.get("text", "")
-                    except json.JSONDecodeError:
-                        verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
+                    data = _parse_sse_event(_SSE_TEXT_DELTA_EVENT, event_type, data_line)
+                    delta: _SSETextDelta = {} if data is None else data.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        text += delta.get("text", "")
 
         except Exception as e:
             verbose_proxy_logger.error("Error extracting text from SSE: %s", e)
@@ -1713,14 +2545,11 @@ class AnthropicMessagesHandler(BaseTranslation):
 
                         # Check for message_delta event with stop_reason
                         if event_type == "message_delta" and data_line:
-                            try:
-                                data: _AnthropicSSEEvent = json.loads(data_line)
-                                delta: _AnthropicSSEDelta = data.get("delta", {})
-                                stop_reason: str | None = delta.get("stop_reason")
-                                if stop_reason is not None:
-                                    return True
-                            except json.JSONDecodeError:
-                                verbose_proxy_logger.warning("Failed to parse JSON from SSE data: %s", data_line)
+                            data = _parse_sse_event(_SSE_STOP_DELTA_EVENT, event_type, data_line)
+                            delta: _SSEStopDelta = {} if data is None else data.get("delta", {})
+                            stop_reason: object = delta.get("stop_reason")
+                            if stop_reason is not None:
+                                return True
 
                 except Exception as e:
                     verbose_proxy_logger.error("Error checking streaming end in SSE: %s", e)
@@ -1780,8 +2609,13 @@ class AnthropicMessagesHandler(BaseTranslation):
                 texts_to_check.append(content_text)
                 task_mappings.append((content_idx, None))
 
+        elif content_type == "mcp_tool_result":
+            nested_texts: Final = _mcp_tool_result_texts(content_block)
+            texts_to_check.extend(text for _, text in nested_texts)
+            task_mappings.extend((content_idx, nested_idx) for nested_idx, _ in nested_texts)
+
         # Extract tool calls
-        elif content_type == "tool_use" and isinstance(content_block, dict):
+        elif content_type in _TOOL_CALL_BLOCK_TYPES and isinstance(content_block, dict):
             tool_call: Final = AnthropicConfig.convert_tool_use_to_openai_format(
                 anthropic_tool_content=content_block,
                 index=content_idx,
@@ -1830,6 +2664,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 block = _as_writable(content_block)
                 if block.get("type") == "text":
                     block["text"] = guardrail_response
+                elif block.get("type") == "mcp_tool_result":
+                    _write_back_mcp_tool_result_text(block, mapping[1], guardrail_response)
             elif hasattr(content_block, "type") and getattr(content_block, "type", None) == "text":
                 # Update Pydantic object's text attribute
                 if isinstance(content_block, _TextAttrBlock):

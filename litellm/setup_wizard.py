@@ -26,9 +26,31 @@ except ImportError:
     tty = None
     _HAS_RAW_TERMINAL = False
 
+from collections.abc import Sequence
 from typing import Final
 
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
 from litellm.utils import check_valid_key
+
+
+class _Provider(TypedDict):
+    """One provider card of the wizard, as declared literally in PROVIDERS."""
+
+    id: ReadOnly[str]
+    name: ReadOnly[str]
+    description: ReadOnly[str]
+    env_key: ReadOnly[str | None]
+    key_hint: ReadOnly[str | None]
+    test_model: ReadOnly[str | None]
+    models: ReadOnly[list[str]]
+    needs_api_base: ReadOnly[NotRequired[bool]]
+    api_base_hint: ReadOnly[NotRequired[str]]
+    api_version: ReadOnly[NotRequired[str]]
+    extra_keys: ReadOnly[NotRequired[list[str]]]
+    extra_hints: ReadOnly[NotRequired[list[str]]]
+    api_base: ReadOnly[NotRequired[str]]
+
 
 # ---------------------------------------------------------------------------
 # Provider definitions
@@ -40,7 +62,7 @@ from litellm.utils import check_valid_key
 # `models`       — default models written into the generated config
 # ---------------------------------------------------------------------------
 
-PROVIDERS: Final[list[dict]] = [
+PROVIDERS: Final[list[_Provider]] = [
     {
         "id": "openai",
         "name": "OpenAI",
@@ -53,14 +75,16 @@ PROVIDERS: Final[list[dict]] = [
     {
         "id": "anthropic",
         "name": "Anthropic",
-        "description": "Claude Fable 5.1, Fable 5, Opus 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 5, Sonnet 4.6, Haiku 4.5",
+        "description": "Claude Fable 5.1, Fable 5, Opus 5.5, Opus 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 5.5, Sonnet 5, Sonnet 4.6, Haiku 4.5",
         "env_key": "ANTHROPIC_API_KEY",
         "key_hint": "sk-ant-...",
         "test_model": "claude-haiku-4-5-20251001",
         "models": [
             "claude-fable-5-1",
             "claude-fable-5",
+            "claude-opus-5-5",
             "claude-opus-5",
+            "claude-sonnet-5-5",
             "claude-sonnet-5",
             "claude-opus-4-8",
             "claude-opus-4-7",
@@ -269,7 +293,7 @@ class SetupWizard:
     # ── provider selector ───────────────────────────────────────────────────
 
     @staticmethod
-    def _select_providers() -> list[dict]:
+    def _select_providers() -> list[_Provider]:
         """Arrow-key multi-select. Falls back to number input if /dev/tty unavailable."""
         if not _HAS_RAW_TERMINAL:
             return SetupWizard._select_fallback()
@@ -321,7 +345,7 @@ class SetupWizard:
         return content.count("\n")
 
     @staticmethod
-    def _select_interactive() -> list[dict]:
+    def _select_interactive() -> list[_Provider]:
         cursor = 0
         selected: Final[set[int]] = set()
 
@@ -358,7 +382,7 @@ class SetupWizard:
         return [PROVIDERS[i] for i in sorted(selected)]
 
     @staticmethod
-    def _select_fallback() -> list[dict]:
+    def _select_fallback() -> list[_Provider]:
         """Number-based fallback when raw terminal input is unavailable."""
         print()
         print(f"  {bold('Add your first model')}")
@@ -491,7 +515,7 @@ class SetupWizard:
 
     @staticmethod
     def _build_config(
-        providers: list[dict],
+        providers: Sequence[_Provider],
         env_vars: dict[str, str],
         master_key: str,
     ) -> str:
@@ -522,14 +546,16 @@ class SetupWizard:
                 ]
                 if p["env_key"] and p["env_key"] in env_copy:
                     lines.append(f"      api_key: os.environ/{p['env_key']}")
-                if p.get("api_base"):
-                    lines.append(f'      api_base: "{_yaml_escape(str(p["api_base"]))}"')
+                api_base = p.get("api_base")
+                if api_base:
+                    lines.append(f'      api_base: "{_yaml_escape(str(api_base))}"')
                 elif p.get("needs_api_base"):
                     azure_base_key = f"_LITELLM_AZURE_AI_API_BASE_{p['id'].upper()}"
                     if azure_base_key in env_copy:
                         lines.append(f'      api_base: "{_yaml_escape(env_copy.pop(azure_base_key))}"')
-                if p.get("api_version"):
-                    lines.append(f"      api_version: {p['api_version']}")
+                api_version = p.get("api_version")
+                if api_version:
+                    lines.append(f"      api_version: {api_version}")
 
         lines += [
             "",

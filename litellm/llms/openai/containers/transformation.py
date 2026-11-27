@@ -1,14 +1,15 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
@@ -22,6 +23,7 @@ from litellm.types.containers.main import (
 from litellm.types.router import GenericLiteLLMParams
 
 from ...base_llm.containers.transformation import BaseContainerConfig
+from ..workload_identity import resolve_openai_bearer_token
 from .utils import join_container_api_base_path
 
 if TYPE_CHECKING:
@@ -82,7 +84,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
     def __init__(self):
         super().__init__()
 
-    def get_supported_openai_params(self) -> list:
+    def get_supported_openai_params(self) -> list[str]:
         """Get the list of supported OpenAI parameters for container API."""
         return [
             "name",
@@ -95,7 +97,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         self,
         container_create_optional_params: ContainerCreateOptionalRequestParams,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(container_create_optional_params)
 
@@ -103,19 +105,21 @@ class OpenAIContainerConfig(BaseContainerConfig):
         self,
         headers: dict,
         api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            },
+        params: Final = litellm_params or GenericLiteLLMParams()
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=api_key or params.api_key,
+            api_base=params.api_base,
+            litellm_params=params.model_dump(exclude_none=True),
         )
+        headers.update({"Authorization": f"Bearer {bearer_token}"})
         return headers
 
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """Get the complete URL for OpenAI container API."""
         api_base = (
@@ -126,15 +130,15 @@ class OpenAIContainerConfig(BaseContainerConfig):
             or "https://api.openai.com/v1"
         )
 
-        return f"{api_base.rstrip('/')}/containers"
+        return join_api_base(api_base, "containers")
 
     def transform_container_create_request(
         self,
         name: str,
         container_create_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: object,
+    ) -> dict[str, object]:
         """Transform the container creation request for OpenAI API."""
         # Remove extra_headers from optional params as they're handled separately
         container_create_optional_request_params = {
@@ -165,11 +169,12 @@ class OpenAIContainerConfig(BaseContainerConfig):
             provider="openai",
         )
 
-        if not hasattr(container_obj, "_hidden_params") or container_obj._hidden_params is None:
-            container_obj._hidden_params = {}
-        if "additional_headers" not in container_obj._hidden_params:
-            container_obj._hidden_params["additional_headers"] = {}
-        container_obj._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = container_cost
+        container_hidden_params: Final = get_or_create_hidden_params(container_obj)
+        container_hidden_params.setdefault("additional_headers", {})
+        container_additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
+            "dict[str, object]", container_hidden_params["additional_headers"]
+        )
+        container_additional_headers["llm_provider-x-litellm-response-cost"] = container_cost
 
         return container_obj
 
@@ -177,12 +182,12 @@ class OpenAIContainerConfig(BaseContainerConfig):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: object,
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
         extra_query: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """Transform the container list request for OpenAI API.
 
         OpenAI API expects the following request:
@@ -221,8 +226,8 @@ class OpenAIContainerConfig(BaseContainerConfig):
         container_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: object,
+    ) -> tuple[str, dict[str, str]]:
         """Transform the OpenAI container retrieve request."""
         # For container retrieve, we just need to construct the URL
         encoded_container_id: Final = encode_url_path_segment(container_id, field_name="container_id")
@@ -248,8 +253,8 @@ class OpenAIContainerConfig(BaseContainerConfig):
         container_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: object,
+    ) -> tuple[str, dict[str, str]]:
         """Transform the container delete request for OpenAI API.
 
         OpenAI API expects the following request:
@@ -279,12 +284,12 @@ class OpenAIContainerConfig(BaseContainerConfig):
         container_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: object,
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
         extra_query: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """Transform the container file list request for OpenAI API.
 
         OpenAI API expects the following request:
@@ -325,8 +330,8 @@ class OpenAIContainerConfig(BaseContainerConfig):
         file_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: object,
+    ) -> tuple[str, dict[str, str]]:
         """Transform the container file content request for OpenAI API.
 
         OpenAI API expects the following request:
@@ -357,7 +362,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
 

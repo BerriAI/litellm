@@ -3,6 +3,7 @@ Legacy /v1/embedding handler for Bedrock Cohere.
 """
 
 import json
+from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -20,10 +21,10 @@ from litellm.types.utils import EmbeddingResponse
 from .v1_transformation import CohereEmbeddingConfig
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
-def validate_environment(api_key, headers: dict):
+def validate_environment(api_key: str | None, headers: dict[str, str]) -> dict[str, str]:
     # Create a lowercase key lookup to avoid duplicate headers with different cases
     # This is important when headers come from AWS signed requests (which use Title-Case)
     existing_keys_lower: Final = {k.lower(): k for k in headers}
@@ -41,7 +42,7 @@ def validate_environment(api_key, headers: dict):
 
 
 class CohereError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: object) -> None:
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://api.cohere.ai/v1/generate")
@@ -51,18 +52,18 @@ class CohereError(Exception):
 
 async def async_embedding(
     model: str,
-    data: dict | CohereEmbeddingRequest,
-    input: list,
+    data: dict[str, object] | CohereEmbeddingRequest,
+    input: list[str],
     model_response: litellm.utils.EmbeddingResponse,
     timeout: float | httpx.Timeout | None,
     logging_obj: LiteLLMLoggingObj,
-    optional_params: dict,
+    optional_params: Mapping[str, object],
     api_base: str,
     api_key: str | None,
-    headers: dict,
-    encoding: "tiktoken.Encoding | None",
+    headers: dict[str, str],
+    encoding: "Tokenizer | None",
     client: AsyncHTTPHandler | None = None,
-):
+) -> EmbeddingResponse:
     ## LOGGING
     logging_obj.pre_call(
         input=input,
@@ -82,7 +83,7 @@ async def async_embedding(
         )
 
     try:
-        response: Final = await client.post(api_base, headers=headers, data=json.dumps(data))
+        response: Final = await client.post(api_base, headers=headers, data=json.dumps(data), timeout=timeout)
     except httpx.HTTPStatusError as e:
         ## LOGGING
         logging_obj.post_call(
@@ -103,7 +104,7 @@ async def async_embedding(
         raise e
 
     ## PROCESS RESPONSE ##
-    return CohereEmbeddingConfig()._transform_response(
+    return CohereEmbeddingConfig().transform_response(
         response=response,
         api_key=api_key,
         logging_obj=logging_obj,
@@ -117,19 +118,19 @@ async def async_embedding(
 
 def embedding(
     model: str,
-    input: list,
+    input: list[str],
     model_response: EmbeddingResponse,
     logging_obj: LiteLLMLoggingObj,
-    optional_params: dict,
-    headers: dict,
-    encoding: "tiktoken.Encoding | None",
-    data: dict | CohereEmbeddingRequest | None = None,
+    optional_params: dict[str, object],
+    headers: dict[str, str],
+    encoding: "Tokenizer | None",
+    data: dict[str, object] | CohereEmbeddingRequest | None = None,
     complete_api_base: str | None = None,
     api_key: str | None = None,
     aembedding: bool | None = None,
     timeout: float | httpx.Timeout | None = httpx.Timeout(None),
     client: HTTPHandler | AsyncHTTPHandler | None = None,
-):
+) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
     headers = validate_environment(api_key, headers=headers)
     embed_url: Final = complete_api_base or "https://api.cohere.ai/v1/embed"
     model = model
@@ -166,9 +167,9 @@ def embedding(
     if client is None or not isinstance(client, HTTPHandler):
         client = HTTPHandler(concurrent_limit=1)
 
-    response: Final = client.post(embed_url, headers=headers, data=json.dumps(data))
+    response: Final = client.post(embed_url, headers=headers, data=json.dumps(data), timeout=timeout)
 
-    return CohereEmbeddingConfig()._transform_response(
+    return CohereEmbeddingConfig().transform_response(
         response=response,
         api_key=api_key,
         logging_obj=logging_obj,

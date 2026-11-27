@@ -6,13 +6,15 @@ Calls done in OpenAI/openai.py as OpenRouter is openai-compatible.
 Docs: https://openrouter.ai/docs/parameters
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
-import litellm
+from litellm.litellm_core_utils.core_helpers import finite_cost
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -23,9 +25,36 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+_RESPONSE_CHOICES: Final = TypeAdapter(tuple[Mapping[str, object], ...], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _non_streaming_error(response: Mapping[str, object], headers: httpx.Headers) -> OpenRouterException | None:
+    choices: Final = _RESPONSE_CHOICES.validate_python(response.get("choices") or ())
+    choice: Final = next(
+        (choice for choice in choices if choice.get("finish_reason") == "error" or choice.get("error")), None
+    )
+    if choice is None:
+        return None
+    error: Final = choice.get("error")
+    details: Final[Mapping[str, object]] = _JSON_OBJECT.validate_python(error) if isinstance(error, Mapping) else {}
+    code: Final = details.get("code")
+    message: Final = details.get("message")
+    return OpenRouterException(
+        status_code=code if isinstance(code, int) and 400 <= code < 600 else 502,
+        message=(
+            message
+            if isinstance(message, str) and message
+            else "OpenRouter returned finish_reason 'error': the provider failed during generation"
+        ),
+        headers=headers,
+        body=dict(response),
+    )
 
 
 class CacheControlSupportedModels(str, Enum):
@@ -38,29 +67,26 @@ class CacheControlSupportedModels(str, Enum):
     ZAI = "z-ai"
 
 
+def openrouter_model_supports_cache_control(model: str) -> bool:
+    model_lower: Final = model.lower()
+    return any(supported_model.value in model_lower for supported_model in CacheControlSupportedModels)
+
+
 class OpenrouterConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
-        Allow reasoning parameters for models flagged as reasoning-capable.
+        Include reasoning parameters regardless of model-map capabilities.
         """
         supported_params: Final = super().get_supported_openai_params(model=model)
-        try:
-            if litellm.supports_reasoning(model=model, custom_llm_provider="openrouter") or litellm.supports_reasoning(
-                model=model
-            ):
-                supported_params.append("reasoning_effort")
-                supported_params.append("thinking")
-        except Exception:
-            pass
-        return list(dict.fromkeys(supported_params))
+        return list(dict.fromkeys([*supported_params, "reasoning_effort", "thinking"]))
 
     def map_openai_params(
         self,
         non_default_params: dict[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         # OpenRouter expects "xhigh" instead of "max" for reasoning_effort.
         if non_default_params.get("reasoning_effort") == "max":
             non_default_params = {**non_default_params, "reasoning_effort": "xhigh"}
@@ -88,8 +114,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             bool: True if model supports cache_control (Claude or Gemini models)
         """
-        model_lower: Final = model.lower()
-        return any(supported_model.value in model_lower for supported_model in CacheControlSupportedModels)
+        return openrouter_model_supports_cache_control(model)
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
@@ -149,9 +174,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform the overall request to be sent to the API.
 
@@ -178,11 +203,11 @@ class OpenrouterConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -211,26 +236,50 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
         # Extract cost from OpenRouter response body
         # OpenRouter returns cost information in the usage object when usage.include=true
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         try:
-            response_json: Final = raw_response.json()
+            response_provider: Final = response_json.get("provider")
+            if isinstance(response_provider, str) and response_provider:
+                set_hidden_params(
+                    model_response,
+                    {**(get_hidden_params(model_response) or {}), "upstream_provider": response_provider},
+                )
             if "usage" in response_json and response_json["usage"]:
-                response_cost: Final = response_json["usage"].get("cost")
+                response_cost: Final = _JSON_OBJECT.validate_python(response_json["usage"]).get("cost")
                 if response_cost is not None:
                     # Store cost in hidden params for the cost calculator to use
-                    if not hasattr(model_response, "_hidden_params"):
-                        model_response._hidden_params = {}
-                    if "additional_headers" not in model_response._hidden_params:
-                        model_response._hidden_params["additional_headers"] = {}
-                    model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                        response_cost
+                    if not hasattr(model_response, HIDDEN_PARAMS_ATTR):
+                        set_hidden_params(model_response, {})
+                    cost_hidden_params: Final = (
+                        cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                            dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+                        )
                     )
+                    if "additional_headers" not in cost_hidden_params:
+                        cost_hidden_params["additional_headers"] = {}
+                    additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
+                        dict[str, object], cost_hidden_params["additional_headers"]
+                    )
+                    reported_cost: Final = (
+                        finite_cost(float(response_cost)) if isinstance(response_cost, str | int | float) else None
+                    )
+                    if reported_cost is not None:
+                        additional_headers["llm_provider-x-litellm-response-cost"] = reported_cost
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass
 
+        response_error: Final = _non_streaming_error(response_json, raw_response.headers)
+        if response_error is not None:
+            failed_attempt: Final = logging_obj.served_round(model_response)
+            logging_obj.record_served_rounds_for_failure(() if failed_attempt is None else (failed_attempt,))
+            raise response_error
+
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return OpenRouterException(
             message=error_message,
             status_code=status_code,
@@ -242,7 +291,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "OpenRouterChatCompletionStreamingHandler":
         return OpenRouterChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -269,13 +318,14 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                     message=error_message["message"],
                     status_code=error_message["code"],
                     headers=error_message["metadata"].get("headers", {}),
+                    body=error_chunk if isinstance(error_chunk, dict) else None,
                 )
 
             new_choices: Final = []
             for choice in chunk["choices"]:
                 choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
                 new_choices.append(choice)
-            return ModelResponseStream(
+            model_response: Final = ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
                 created=chunk["created"],
@@ -283,6 +333,12 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                 model=chunk["model"],
                 choices=new_choices,
             )
+            typed_chunk: Final[Mapping[str, object]] = cast(  # cast-ok: stream chunks are decoded JSON objects
+                Mapping[str, object], chunk
+            )
+            upstream_provider: Final[object] = typed_chunk.get("provider")
+            if isinstance(upstream_provider, str) and upstream_provider:
+                set_hidden_params(model_response, {"upstream_provider": upstream_provider})
         except KeyError as e:
             raise OpenRouterException(
                 message=f"KeyError: {e}, Got unexpected response from OpenRouter: {chunk}",
@@ -291,3 +347,5 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             )
         except Exception as e:
             raise e
+        else:
+            return model_response

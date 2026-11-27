@@ -1,0 +1,191 @@
+import asyncio
+import os
+from collections.abc import Mapping
+from types import SimpleNamespace
+from typing import Final
+
+import pytest
+
+import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from tests._module_state import collect_flushable_caches, flush_caches, restore_mutable_state, snapshot_mutable_state
+
+_LITELLM_STATE: Final = snapshot_mutable_state(litellm)
+_FLUSHABLE_CACHES: Final = collect_flushable_caches((litellm,))
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture(scope="function", autouse=True)
+def setup_and_teardown():
+    restore_mutable_state(litellm, _LITELLM_STATE)
+    flush_caches(_FLUSHABLE_CACHES)
+
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    asyncio.set_event_loop(loop)
+    yield
+
+    # Teardown code (executes after the yield point)
+    # LoggingWorker carries still-queued coroutines onto the next test's loop, where they'd log into that test's callbacks
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    loop.close()  # Close the loop created earlier
+    asyncio.set_event_loop(None)  # Remove the reference to the loop
+
+
+@pytest.fixture(scope="function", autouse=True)
+async def drain_logging_worker():
+    """
+    The logging queue is bound to the running loop, so anything left queued when a test's loop
+    goes away is carried onto the next test's loop and fires against its callbacks.
+    """
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    yield
+
+    try:
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.clear_queue(), timeout=10)
+    except asyncio.TimeoutError:
+        pass
+
+
+def pytest_collection_modifyitems(config, items):
+    # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
+    custom_logger_tests = [
+        item for item in items if "custom_logger" in item.parent.name
+    ]
+    other_tests = [item for item in items if "custom_logger" not in item.parent.name]
+
+    # Sort tests based on their names
+    custom_logger_tests.sort(key=lambda x: x.name)
+    other_tests.sort(key=lambda x: x.name)
+
+    # Reorder the items list
+    items[:] = custom_logger_tests + other_tests
+
+
+@pytest.fixture
+def config_only_mcp_manager_factory():
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    class ConfigOnlyManager(MCPServerManager):
+        def initialize_tool_name_to_mcp_server_name_mapping(self):
+            return None
+
+    return ConfigOnlyManager
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_mcp_server_registry():
+    from litellm.proxy.mcp_server.catalog import CatalogSnapshots
+    from litellm.proxy.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
+
+    saved_tools = global_mcp_tool_registry.published_tools
+    global_mcp_tool_registry.published_tools = {}
+    saved_catalog = global_mcp_server_manager.catalog
+    global_mcp_server_manager.catalog = CatalogSnapshots(global_mcp_server_manager)
+    saved_registry = dict(global_mcp_server_manager.registry)
+    saved_config_servers = dict(global_mcp_server_manager.config_mcp_servers)
+    saved_tool_mapping = dict(global_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
+    saved_oauth_slots = global_mcp_server_manager._oauth_discovery_slots
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.config_mcp_servers.clear()
+    global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+    global_mcp_server_manager._oauth_discovery_slots = ()
+    try:
+        yield
+    finally:
+        global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.registry.update(saved_registry)
+        global_mcp_server_manager.config_mcp_servers.clear()
+        global_mcp_server_manager.config_mcp_servers.update(saved_config_servers)
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.update(saved_tool_mapping)
+        global_mcp_server_manager._oauth_discovery_slots = saved_oauth_slots
+        global_mcp_server_manager.catalog = saved_catalog
+        global_mcp_tool_registry.published_tools = saved_tools
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_server_root_path():
+    saved = os.environ.pop("SERVER_ROOT_PATH", None)
+    try:
+        yield
+    finally:
+        if saved is not None:
+            os.environ["SERVER_ROOT_PATH"] = saved
+
+
+@pytest.fixture
+def _mcp_request_ctx():
+    def _mcp_request_ctx(**overrides):
+        from types import SimpleNamespace
+
+        from mcp.server.context import ServerRequestContext
+
+        kwargs = {
+            "session": SimpleNamespace(),
+            "lifespan_context": {},
+            "protocol_version": "2025-06-18",
+            "method": "",
+            "params": None,
+            "request_id": 1,
+            "meta": None,
+            "request": None,
+        }
+        kwargs.update(overrides)
+        return ServerRequestContext(**kwargs)
+
+    return _mcp_request_ctx
+
+
+class _UserCredentialsTable:
+    """The prisma actions the per-user credential helpers call, over rows kept in memory."""
+
+    def __init__(self) -> None:
+        self.rows: dict[tuple[str, str], SimpleNamespace] = {}
+        self.writes = 0
+
+    async def find_unique(self, where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
+        pair: Final = where["user_id_server_id"]
+        return self.rows.get((pair["user_id"], pair["server_id"]))
+
+    async def upsert(
+        self, where: Mapping[str, Mapping[str, str]], data: Mapping[str, Mapping[str, str]]
+    ) -> SimpleNamespace:
+        pair: Final = where["user_id_server_id"]
+        self.writes += 1
+        row: Final = SimpleNamespace(**data["create"], updated_at=self.writes)
+        self.rows = {**self.rows, (pair["user_id"], pair["server_id"]): row}
+        return row
+
+    async def update_many(self, data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        key: Final = (where["user_id"], where["server_id"])
+        existing: Final = self.rows.get(key)
+        if existing is None or existing.credential_b64 != where["credential_b64"]:
+            return 0
+        self.writes += 1
+        self.rows = {**self.rows, key: SimpleNamespace(**{**vars(existing), "updated_at": self.writes, **data})}
+        return 1
+
+
+@pytest.fixture
+def credentials_prisma(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """The proxy's prisma client, with the per-user credentials table kept in memory."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "per-user-credential-test-salt")
+    database: Final = SimpleNamespace(litellm_mcpusercredentials=_UserCredentialsTable())
+    prisma: Final = SimpleNamespace(db=database, writer_db=database)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    return prisma

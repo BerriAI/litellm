@@ -11,15 +11,18 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import sys
-from typing import TYPE_CHECKING, Any, Final, Literal
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,
 )
@@ -29,8 +32,10 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import LLMResponseTypes
 
 GUARDRAIL_NAME: Final = "aporia"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -52,25 +57,23 @@ class AporiaGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     #### CALL HOOKS - proxy only ####
-    def transform_messages(self, messages: list[dict]) -> list[dict]:
+    def transform_messages(self, messages: Sequence[Mapping[str, object]]) -> list[Mapping[str, object]]:
         supported_openai_roles: Final = ["system", "user", "assistant"]
         default_role: Final = "other"  # for unsupported roles - e.g. tool
-        new_messages: Final = []
-        for m in messages:
-            if m.get("role", "") in supported_openai_roles:
-                new_messages.append(m)
-            else:
-                new_messages.append(
-                    {
-                        "role": default_role,
-                        **{key: value for key, value in m.items() if key != "role"},
-                    }
-                )
+        return [
+            m
+            if m.get("role", "") in supported_openai_roles
+            else {
+                "role": default_role,
+                **{key: value for key, value in m.items() if key != "role"},
+            }
+            for m in messages
+        ]
 
-        return new_messages
-
-    async def prepare_aporia_request(self, new_messages: list[dict], response_string: str | None = None) -> dict:
-        data: Final[dict[str, Any]] = {}
+    async def prepare_aporia_request(
+        self, new_messages: Sequence[Mapping[str, object]] | None, response_string: str | None = None
+    ) -> dict[str, object]:
+        data: Final[dict[str, object]] = {}
         if new_messages is not None:
             data["messages"] = new_messages
         if response_string is not None:
@@ -89,8 +92,8 @@ class AporiaGuardrail(CustomGuardrail):
 
     async def make_aporia_api_request(
         self,
-        request_data: dict,
-        new_messages: list[dict],
+        request_data: dict[str, object],
+        new_messages: Sequence[Mapping[str, object]],
         response_string: str | None = None,
     ):
         data: Final = await self.prepare_aporia_request(new_messages=new_messages, response_string=response_string)
@@ -123,12 +126,13 @@ class AporiaGuardrail(CustomGuardrail):
                 "X-APORIA-API-KEY": self.aporia_api_key,
                 "Content-Type": "application/json",
             },
+            timeout=self.timeout,
         )
         verbose_proxy_logger.debug("Aporia AI response: %s", response.text)
         if response.status_code == 200:
             # check if the response was flagged
-            _json_response: Final = response.json()
-            action: str = _json_response.get("action")  # possible values are modify, passthrough, block, rephrase
+            _json_response: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
+            action: Final = _json_response.get("action")  # possible values are modify, passthrough, block, rephrase
             if action == "block":
                 raise HTTPException(
                     status_code=400,
@@ -143,7 +147,7 @@ class AporiaGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -169,7 +173,7 @@ class AporiaGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
@@ -204,7 +208,7 @@ class AporiaGuardrail(CustomGuardrail):
         ):
             return
 
-        new_messages: list[dict] | None = None
+        new_messages: list[Mapping[str, object]] | None = None
         if "messages" in data and isinstance(data["messages"], list):
             new_messages = self.transform_messages(messages=data["messages"])
 

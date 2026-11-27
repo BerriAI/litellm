@@ -27,8 +27,8 @@ from e2e_http import (
     prepare_forward,
     primed_steps,
 )
+from fixture_bundle import slug_for_test
 from fixture_canonical import MARKER_PATTERN, MARKER_PLACEHOLDER
-from fixture_mode import SESSION_TEST_KEY, current_test_key
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 LIFETIME_SECONDS: Final = 86_400
@@ -58,6 +58,19 @@ EVENT_TYPE_HEADER: Final = ":event-type"
 EVENTSTREAM_HEADERS: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
 OPENAI_JSON_PATHS: Final = frozenset({"/v1/chat/completions", "/v1/messages", "/v1/embeddings", "/v1/responses"})
 JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+TEST_SEGMENT: Final = "t"
+
+
+def scoped_edge_base(base: str, test_key: str) -> str:
+    return f"{base}/{TEST_SEGMENT}/{slug_for_test(test_key)}"
+
+
+def split_test_segment(upstream_path: str) -> tuple[str | None, str]:
+    head, _, rest = upstream_path.partition("/")
+    if head != TEST_SEGMENT:
+        return None, upstream_path
+    slug, _, remainder = rest.partition("/")
+    return slug or None, remainder
 
 
 @dataclass(frozen=True, slots=True)
@@ -517,7 +530,6 @@ class CacheEdge:
     wait_seconds: float = 2.0
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
-    test_key: Callable[[], str] = current_test_key
 
     def lookup(self, key: str) -> CacheLookup:
         deadline: Final = self.clock() + self.wait_seconds
@@ -555,9 +567,9 @@ class CacheEdge:
 
     def forward(
         self, mount: str, method: str, url: str, headers: dict[str, str], body: bytes | None, timeout: float,
+        *, test_key: str | None,
     ) -> StreamHead | NetworkError:
-        test_key: Final = self.test_key()
-        if test_key == SESSION_TEST_KEY or not cacheable_endpoint(mount, method, url, body):
+        if test_key is None or not cacheable_endpoint(mount, method, url, body):
             self.count(mount, "bypass")
             self.count(mount, "upstream_attempts")
             return forward_stream(

@@ -5,22 +5,27 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.core_helpers import subscript
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route, join_api_base
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch, LlmProviders, ModelResponse
 
-if TYPE_CHECKING:
-    import tiktoken
+from ..common_utils import merge_anthropic_beta_headers, without_caller_credential_headers
 
+if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AnthropicBatchRequestCounts(TypedDict, total=False):
@@ -61,55 +66,59 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """Validate and prepare environment-specific headers and parameters."""
-        if api_base is None and isinstance(litellm_params, dict):
-            api_base = litellm_params.get("api_base")
-        auth_header: Final = self.anthropic_model_info.get_auth_header(api_key, api_base)
+        params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
+        if api_base is None and params_mapping is not None:
+            api_base = params_mapping.get("api_base")
+        auth_header: Final = self.anthropic_model_info.get_auth_header(
+            api_key, api_base, litellm_params=params_mapping, allow_workload_identity=True
+        )
         if auth_header is None:
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
             )
-        _headers: Final = {
+        merged_beta: Final = merge_anthropic_beta_headers(
+            merge_anthropic_beta_headers(headers.get("anthropic-beta"), auth_header.get("anthropic-beta")),
+            "message-batches-2024-09-24",
+        )
+        # The deployment's own credential is applied below, so a caller-supplied one must not
+        # ride along: without this a minted federation Bearer travels beside the caller's x-api-key.
+        return {
+            **without_caller_credential_headers(headers),
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
+            **auth_header,
+            "anthropic-beta": merged_beta,
         }
-        _headers.update(auth_header)
-        # Add beta header for message batches
-        if "anthropic-beta" not in headers:
-            headers["anthropic-beta"] = "message-batches-2024-09-24"
-        headers.update(_headers)
-        return headers
 
     def get_complete_batch_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         data: CreateBatchRequest,
     ) -> str:
         """Get the complete URL for batch creation request."""
-        api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
-        if not api_base.endswith("/v1/messages/batches"):
-            api_base = f"{api_base.rstrip('/')}/v1/messages/batches"
-        return api_base
+        api_base = self.anthropic_model_info.resolve_anthropic_api_base(api_base)
+        return ensure_api_route(api_base, "v1/messages/batches")
 
     def transform_create_batch_request(
         self,
         model: str,
         create_batch_data: CreateBatchRequest,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> bytes | str | dict[str, object]:
         """
         Transform the batch creation request to Anthropic format.
@@ -123,7 +132,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LoggingClass,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> LiteLLMBatch:
         """
         Transform Anthropic MessageBatch creation response to LiteLLM format.
@@ -136,8 +145,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         self,
         api_base: str | None,
         batch_id: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for batch retrieval request.
@@ -151,15 +160,15 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         Returns:
             Complete URL for Anthropic batch retrieval: {api_base}/v1/messages/batches/{batch_id}
         """
-        api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
+        api_base = self.anthropic_model_info.resolve_anthropic_api_base(api_base)
         encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
-        return f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}"
+        return join_api_base(api_base, f"v1/messages/batches/{encoded_batch_id}")
 
     def transform_retrieve_batch_request(
         self,
         batch_id: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> bytes | str | dict[str, object]:
         """
         Transform batch retrieval request for Anthropic.
@@ -175,7 +184,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LoggingClass,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> LiteLLMBatch:
         """Transform Anthropic MessageBatch retrieval response to LiteLLM format."""
         try:
@@ -268,7 +277,9 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             metadata={},
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> "BaseLLMException":
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, str] | Headers
+    ) -> "BaseLLMException":
         """Get the appropriate error class for Anthropic."""
         from ..common_utils import AnthropicError
 
@@ -286,16 +297,18 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
         from litellm.cost_calculator import BaseTokenUsageProcessor
         from litellm.types.utils import Usage
+
+        from ..chat.transformation import response_body
 
         response_text: Final = raw_response.text.strip()
         all_usage: Final[list[Usage]] = []
@@ -308,11 +321,11 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                 if not line:
                     continue
                 try:
-                    response_json: Mapping[str, Mapping[str, dict[str, object]]] = json.loads(line)
+                    response_json = _DECODED_JSON.validate_python(json.loads(line))
                     # Update model_response with the parsed JSON
-                    completion_response = response_json["result"]["message"]
+                    completion_response = subscript(subscript(response_json, "result"), "message")
                     transformed_response = self.anthropic_chat_config.transform_parsed_response(
-                        completion_response=completion_response,
+                        completion_response=response_body(completion_response),
                         raw_response=raw_response,
                         model_response=model_response,
                     )

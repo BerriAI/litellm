@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -36,9 +36,11 @@ from litellm.proxy._types import (
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints import (
     COORDINATION_REDIS_SETTINGS_FIELDS,
     CoordinationRedisSettingsField,
@@ -198,7 +200,7 @@ async def _current_coordination_redis_settings() -> dict[str, object] | None:
 
     config_state: Final = _SETTINGS_ADAPTER.validate_python(proxy_config.get_config_state())
     general_settings: Final = config_state.get(_GENERAL_SETTINGS_PARAM_NAME)
-    if not isinstance(general_settings, dict):
+    if not isinstance(general_settings, Mapping):
         return None
     from_file: Final = general_settings.get(_COORDINATION_REDIS_KEY)
     if isinstance(from_file, dict):
@@ -213,14 +215,14 @@ def _coordination_redis_source(settings: Mapping[str, object] | None) -> Coordin
     an explicit block wins, else a plain-Redis response-cache backend is
     borrowed, else the REDIS_* environment fallback applies.
     """
-    from litellm.proxy.proxy_server import _environment_has_redis_connection_target
+    from litellm.proxy.proxy_server import environment_has_redis_connection_target
 
     if settings:
         return "coordination_redis"
     cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None
     if isinstance(cache_backend, (RedisCache, RedisClusterCache)):
         return "cache_backend"
-    if _environment_has_redis_connection_target():
+    if environment_has_redis_connection_target():
         return "environment"
     return None
 
@@ -254,23 +256,26 @@ async def _emit_coordination_redis_audit_log(
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.CONFIG_TABLE_NAME,
-                object_id=_COORDINATION_REDIS_KEY,
-                action=action,
-                updated_values=json.dumps({"settings": _redact_all_values(after_settings)}, default=str),
-                before_value=json.dumps({"settings": _redact_all_values(before_settings)}, default=str),
+            request_data=with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.CONFIG_TABLE_NAME,
+                    object_id=_COORDINATION_REDIS_KEY,
+                    action=action,
+                    updated_values=json.dumps({"settings": _redact_all_values(after_settings)}, default=str),
+                    before_value=json.dumps({"settings": _redact_all_values(before_settings)}, default=str),
+                ),
+                user_api_key_dict,
             )
         )
     )
     task.add_done_callback(_log_audit_task_exception)
 
 
-class CoordinationRedisSettingsResponse(BaseModel):
+class CoordinationRedisSettingsResponse(LiteLLMBaseModel):
     values: dict[str, object] = Field(description="Current coordination Redis settings, with credentials redacted")
     fields: list[CoordinationRedisSettingsField] = Field(
         description="List of all configurable coordination Redis settings with metadata"
@@ -280,11 +285,11 @@ class CoordinationRedisSettingsResponse(BaseModel):
     )
 
 
-class CoordinationRedisSettingsRequest(BaseModel):
+class CoordinationRedisSettingsRequest(LiteLLMBaseModel):
     settings: dict[str, object] = Field(description="Coordination Redis connection params")
 
 
-class CoordinationRedisTestResponse(BaseModel):
+class CoordinationRedisTestResponse(LiteLLMBaseModel):
     status: str = Field(description="Connection status: 'healthy' or 'unhealthy'")
     error: str | None = Field(default=None, description="Error message if the connection failed")
 
@@ -364,6 +369,11 @@ async def update_coordination_redis_settings(
     settings: Final = _merge_over_saved(request.settings, saved_settings or {})
     _validated_params(settings)
 
+    from litellm.proxy.proxy_server import proxy_config
+
+    proxy_config.reject_config_owned_writes(
+        section_name=_GENERAL_SETTINGS_PARAM_NAME, changed_keys={_COORDINATION_REDIS_KEY: settings}
+    )
     general_settings: Final = await _read_general_settings()
     before_settings: Final = general_settings.get(_COORDINATION_REDIS_KEY)
     action: Final[AUDIT_ACTIONS] = "updated" if isinstance(before_settings, dict) else "created"
@@ -410,7 +420,7 @@ async def check_coordination_redis_connection(
 
     Builds a throwaway client (never touching global state) and pings it.
     """
-    from litellm.proxy.proxy_server import _build_redis_usage_cache
+    from litellm.proxy.proxy_server import build_redis_usage_cache
 
     _enforce_proxy_admin(user_api_key_dict)
 
@@ -420,7 +430,9 @@ async def check_coordination_redis_connection(
 
     redis_cache: RedisCache | None = None
     try:
-        redis_cache = _build_redis_usage_cache(params.model_dump(exclude_none=True))
+        redis_cache = build_redis_usage_cache(  # rebind-ok: pre-existing rebinding on a rename-only line
+            params.model_dump(exclude_none=True)
+        )
         await asyncio.wait_for(redis_cache.ping(), timeout=_PING_TIMEOUT_SECONDS)
         return CoordinationRedisTestResponse(status="healthy")
     except asyncio.TimeoutError:

@@ -19,6 +19,8 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -28,9 +30,9 @@ from claude_code.cli_driver import (
 
 
 BEDROCK_CONVERSE_MODELS = [
-    "claude-haiku-4-5-bedrock-converse",
-    "claude-sonnet-4-5-bedrock-converse",
-    "claude-opus-4-7-bedrock-converse",
+    "claude-haiku-5-5-bedrock-converse",
+    "claude-sonnet-5-5-bedrock-converse",
+    "claude-opus-5-5-bedrock-converse",
 ]
 
 THINKING_ARGS = ["--effort", "max"]
@@ -55,6 +57,16 @@ def _has_thinking_block(events: Sequence[Mapping[str, Any]]) -> bool:
 
 
 @pytest.mark.covers("llm.messages.bedrock_converse.thinking.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_CONVERSE_MODELS),
+        capabilities=(Capability.REASONING,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_thinking_bedrock_converse(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with thinking
     enabled and assert a `thinking` content block was emitted."""

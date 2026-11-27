@@ -6,6 +6,7 @@ Calls done in OpenAI/openai.py as TogetherAI is openai-compatible.
 Docs: https://docs.together.ai/reference/completions-1
 """
 
+from collections.abc import Mapping
 from typing import Final, cast
 
 from litellm.llms.openai.completion.utils import is_tokens_or_list_of_tokens
@@ -16,7 +17,7 @@ from litellm.types.llms.openai import (
 )
 
 from ...openai.completion.transformation import OpenAITextCompletionConfig
-from ...openai.completion.utils import _transform_prompt
+from ...openai.completion.utils import transform_prompt
 
 
 class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
@@ -27,7 +28,7 @@ class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
         """
         TogetherAI expects a string prompt.
         """
-        initial_prompt: Final[AllPromptValues] = _transform_prompt(messages)
+        initial_prompt: Final[AllPromptValues] = transform_prompt(messages)
         ## TOGETHER AI SPECIFIC VALIDATION ##
         if isinstance(initial_prompt, list) and is_tokens_or_list_of_tokens(value=initial_prompt):
             raise ValueError("TogetherAI does not support integers as input")
@@ -44,9 +45,9 @@ class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
         self,
         model: str,
         messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         prompt: Final = self._transform_prompt(messages)
         return {
             "model": model,

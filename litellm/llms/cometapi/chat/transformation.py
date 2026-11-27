@@ -5,11 +5,12 @@ Based on OpenAI-compatible API interface implementation
 Documentation: [CometAPI Documentation Link]
 """
 
-from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -29,8 +30,8 @@ class CometAPIConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -40,7 +41,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # CometAPI-specific parameters (if any)
-        extra_body: Final[dict[str, Any]] = {}
+        extra_body: Final[dict[str, object]] = {}
         # TODO: Add CometAPI-specific parameter handling here
         # Example:
         # custom_param = non_default_params.pop("custom_param", None)
@@ -69,8 +70,8 @@ class CometAPIConfig(OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
@@ -88,8 +89,8 @@ class CometAPIConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -112,18 +113,18 @@ class CometAPIConfig(OpenAIGPTConfig):
 
         # Ensure we include /v1 prefix when missing
         if api_base.endswith("/v1"):
-            return f"{api_base}/{endpoint}"
-        if api_base.endswith("/v1/"):
-            return f"{api_base}{endpoint}"
+            return join_api_base(api_base, endpoint)
         # If user provided https://api.cometapi.com, add /v1
         if api_base == "https://api.cometapi.com":
-            return f"{api_base}/v1/{endpoint}"
+            return join_api_base(api_base, f"v1/{endpoint}")
         # Generic fallback: if '/v1' not in path, add it
         if "/v1" not in api_base.split("//", 1)[-1]:
-            return f"{api_base}/v1/{endpoint}"
-        return f"{api_base}/{endpoint}"
+            return join_api_base(api_base, f"v1/{endpoint}")
+        return join_api_base(api_base, endpoint)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         """
         Return CometAPI-specific error class
         """
@@ -138,7 +139,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "CometAPIChatCompletionStreamingHandler":
         """
         Get model response iterator for streaming responses
         """

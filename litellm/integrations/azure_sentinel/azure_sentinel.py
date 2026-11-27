@@ -18,10 +18,11 @@ import time
 import traceback
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, TypeVar
+from typing import Final, Protocol, TypeVar
 from urllib.parse import urlparse
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.integrations.batch_utils import (
@@ -50,6 +51,23 @@ MONITOR_SCOPE_BY_AUTHORITY_HOST: Final[Mapping[str, str]] = MappingProxyType(
         "login.microsoftonline.us": "https://monitor.azure.us/.default",
     }
 )
+
+
+class _OAuthTokenBody(TypedDict, total=False):
+    access_token: ReadOnly[str]
+    expires_in: ReadOnly[int]
+
+
+class _AzureSentinelLoggingKwargs(TypedDict, total=False, extra_items=object):
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
+
+
+class _OAuthTokenResponse(Protocol):
+    def json(self) -> _OAuthTokenBody: ...
+
+
+def _oauth_token_body(response: _OAuthTokenResponse) -> _OAuthTokenBody:
+    return response.json()
 
 
 class AzureSentinelLogger(CustomBatchLogger):
@@ -226,7 +244,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         if response.status_code != 200:
             raise Exception(f"Failed to get OAuth2 token: {response.status_code} - {response.text}")
 
-        token_response: Final = response.json()
+        token_response: Final = _oauth_token_body(response)
         self.oauth_token = token_response.get("access_token")
         expires_in: Final = token_response.get("expires_in", 3600)
 
@@ -237,7 +255,9 @@ class AzureSentinelLogger(CustomBatchLogger):
 
         return self.oauth_token
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _AzureSentinelLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         """
         Async Log success events to Azure Sentinel
 
@@ -264,7 +284,9 @@ class AzureSentinelLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: _AzureSentinelLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         """
         Async Log failure events to Azure Sentinel
 
@@ -337,7 +359,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
         batch_to_send: Final = tuple(self.log_queue)
-        self.log_queue = []  # mutable-ok: queue ownership is detached before the async send
+        self.log_queue = []
         try:
             undelivered: Final = await self._async_send_batch_to_api(
                 log_queue=batch_to_send,
@@ -360,7 +382,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         Sends the batch of audit logs to Azure Monitor Logs Ingestion API
         """
         batch_to_send: Final = tuple(self.audit_log_queue)
-        self.audit_log_queue = []  # mutable-ok: queue ownership is detached before the async send
+        self.audit_log_queue = []
         try:
             undelivered: Final = await self._async_send_batch_to_api(
                 log_queue=batch_to_send,
@@ -384,7 +406,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         queue: list[_QueuedPayload],
         log_type: str,
     ) -> list[_QueuedPayload]:
-        merged: Final = [*undelivered, *queue]  # mutable-ok: queue trimming returns a mutable logger queue
+        merged: Final = [*undelivered, *queue]
         overflow: Final = len(merged) - self.max_queue_size
         if overflow <= 0:
             return merged
