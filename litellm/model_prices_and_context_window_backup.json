@@ -14172,8 +14172,8 @@
         "supports_tool_choice": true
     },
     "azure_ai/Llama-3.3-70B-Instruct": {
-        "deprecation_date": "2027-01-31",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "deprecation_date": "2027-02-03",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule#meta",
         "input_cost_per_token": 7.1e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -14187,8 +14187,8 @@
     },
     "azure_ai/Llama-4-Maverick-17B-128E-Instruct-FP8": {
         "successor_model": "azure_ai/Llama-4-Scout-17B-16E-Instruct",
-        "deprecation_date": "2026-11-19",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "deprecation_date": "2027-02-03",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule#meta",
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 1000000,
@@ -14202,8 +14202,8 @@
         "supports_vision": true
     },
     "azure_ai/Llama-4-Scout-17B-16E-Instruct": {
-        "deprecation_date": "2027-01-31",
-        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "deprecation_date": "2027-02-03",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule#meta-1",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 10000000,
@@ -26933,8 +26933,6 @@
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
-        "deprecation_date": "2026-10-15",
-        "successor_model": "eu.anthropic.claude-haiku-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
         "max_input_tokens": 200000,
@@ -32609,7 +32607,6 @@
         "supports_vision": true
     },
     "gemini-embedding-001": {
-        "deprecation_date": "2028-05-20",
         "deprecation_source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions",
         "successor_model": "gemini-embedding-2",
         "input_cost_per_token": 1.5e-07,
@@ -45667,7 +45664,9 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-10-31",
+        "deprecation_source": "https://docs.mistral.ai/models/zai-glm-5-2"
     },
     "mistral/mistral-ocr-latest": {
         "supports_vision": true,
@@ -55665,7 +55664,7 @@
         "supports_tool_choice": true
     },
     "vertex_ai/claude-haiku-4-5": {
-        "deprecation_date": "2026-10-15",
+        "deprecation_date": "2027-02-28",
         "successor_model": "vertex_ai/claude-haiku-5-5",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
@@ -55700,7 +55699,7 @@
     },
     "vertex_ai/claude-haiku-4-5@20251001": {
         "successor_model": "vertex_ai/claude-haiku-5-5",
-        "deprecation_date": "2026-10-15",
+        "deprecation_date": "2027-02-28",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_creation_input_token_cost_batches": 6.25e-07,
@@ -55821,7 +55820,7 @@
     },
     "vertex_ai/claude-opus-4-5": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/opus-4-5",
-        "deprecation_date": "2026-11-24",
+        "deprecation_date": "2027-01-22",
         "successor_model": "vertex_ai/claude-opus-5-5",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -55858,7 +55857,7 @@
     "vertex_ai/claude-opus-4-5@20251101": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/opus-4-5",
         "successor_model": "vertex_ai/claude-opus-5-5",
-        "deprecation_date": "2026-11-24",
+        "deprecation_date": "2027-01-22",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_creation_input_token_cost_batches": 3.125e-06,
@@ -55895,7 +55894,6 @@
     "vertex_ai/claude-opus-4-6": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/opus-4-6",
         "successor_model": "vertex_ai/claude-opus-5-5",
-        "deprecation_date": "2027-02-05",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
@@ -55934,7 +55932,6 @@
     "vertex_ai/claude-opus-4-6@default": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/opus-4-6",
         "successor_model": "vertex_ai/claude-opus-5-5@default",
-        "deprecation_date": "2027-02-05",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
@@ -55973,7 +55970,6 @@
     "vertex_ai/claude-opus-4-7": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/opus-4-7",
         "successor_model": "vertex_ai/claude-opus-5-5",
-        "deprecation_date": "2027-04-16",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -56012,7 +56008,6 @@
     "vertex_ai/claude-opus-4-7@default": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/opus-4-7",
         "successor_model": "vertex_ai/claude-opus-5-5@default",
-        "deprecation_date": "2027-04-16",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -56051,7 +56046,6 @@
     "vertex_ai/claude-fable-5": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5",
         "successor_model": "vertex_ai/claude-fable-5-2",
-        "deprecation_date": "2027-06-08",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -56127,7 +56121,6 @@
         "prompt_cache_min_tokens": 512,
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5-1",
         "successor_model": "vertex_ai/claude-fable-5-2",
-        "deprecation_date": "2027-03-01",
         "input_cost_per_token_batches": 5e-06,
         "output_cost_per_token_batches": 2.5e-05,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
@@ -56170,7 +56163,6 @@
         "prompt_cache_min_tokens": 512,
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5-2",
         "successor_model": "vertex_ai/claude-opus-5-5",
-        "deprecation_date": "2027-11-09",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
@@ -56224,7 +56216,6 @@
     "vertex_ai/claude-fable-5@default": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5",
         "successor_model": "vertex_ai/claude-fable-5-2@default",
-        "deprecation_date": "2027-06-08",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -56300,7 +56291,6 @@
         "prompt_cache_min_tokens": 512,
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5-1",
         "successor_model": "vertex_ai/claude-fable-5-2@default",
-        "deprecation_date": "2027-03-01",
         "input_cost_per_token_batches": 5e-06,
         "output_cost_per_token_batches": 2.5e-05,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
@@ -56343,7 +56333,6 @@
         "prompt_cache_min_tokens": 512,
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5-2",
         "successor_model": "vertex_ai/claude-opus-5-5@default",
-        "deprecation_date": "2027-11-09",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
@@ -56394,7 +56383,6 @@
     "vertex_ai/claude-opus-5": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/opus-5",
         "successor_model": "vertex_ai/claude-opus-5-5",
-        "deprecation_date": "2027-01-24",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
@@ -56435,7 +56423,6 @@
     "vertex_ai/claude-opus-5@default": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/opus-5",
         "successor_model": "vertex_ai/claude-opus-5-5@default",
-        "deprecation_date": "2027-01-24",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
@@ -56559,7 +56546,6 @@
     "vertex_ai/claude-opus-4-8": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/opus-4-8",
         "successor_model": "vertex_ai/claude-opus-5-5",
-        "deprecation_date": "2027-05-28",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
@@ -56599,7 +56585,6 @@
     "vertex_ai/claude-opus-4-8@default": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/opus-4-8",
         "successor_model": "vertex_ai/claude-opus-5-5@default",
-        "deprecation_date": "2027-05-28",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
@@ -56638,7 +56623,7 @@
     },
     "vertex_ai/claude-sonnet-4-5": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
-        "deprecation_date": "2026-09-29",
+        "deprecation_date": "2026-11-30",
         "successor_model": "vertex_ai/claude-sonnet-5-5",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -56679,7 +56664,6 @@
     "vertex_ai/claude-sonnet-5": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/sonnet-5",
         "successor_model": "vertex_ai/claude-sonnet-5-5",
-        "deprecation_date": "2026-12-24",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -56754,7 +56738,7 @@
     "vertex_ai/claude-sonnet-4-5@20250929": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/partner-models",
         "successor_model": "vertex_ai/claude-sonnet-5-5",
-        "deprecation_date": "2026-09-29",
+        "deprecation_date": "2026-11-30",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
@@ -64408,7 +64392,6 @@
     "vertex_ai/claude-sonnet-5@default": {
         "deprecation_source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/sonnet-5",
         "successor_model": "vertex_ai/claude-sonnet-5-5@default",
-        "deprecation_date": "2026-12-24",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -87552,7 +87535,7 @@
         "cache_creation_input_token_cost_batches": 1.875e-06,
         "cache_read_input_token_cost_batches": 1.5e-07,
         "deprecation_date": "2026-11-30",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "successor_model": "bedrock/claude_platform/claude-sonnet-5-5",
         "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "bedrock",
