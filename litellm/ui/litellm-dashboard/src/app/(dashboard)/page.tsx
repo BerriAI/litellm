@@ -12,15 +12,29 @@ import {
   storeReturnUrl,
 } from "@/utils/returnUrlUtils";
 import { navigateToUiPage } from "@/utils/uiNavigation";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { legacyPageRedirectHref } from "@/app/(dashboard)/legacyPageRoutes";
+import { flattenNavItems } from "@/components/CommandPalette/utils";
+import { useVisibleMenuGroups } from "@/components/CommandPalette/useVisibleMenuGroups";
+import { internalUserRoles } from "@/utils/roles";
+import { uiHref } from "@/utils/uiHref";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef } from "react";
 
 function CreateKeyPageContent() {
-  const { authLoading, token } = useAuth();
+  const { authLoading, token, userRole } = useAuth();
 
   const router = useRouter();
   const searchParams = useSearchParams()!;
+  const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
+  const visibleNavItems = flattenNavItems(useVisibleMenuGroups());
+  const isInternalUser = internalUserRoles.includes(userRole);
+  const isHomeVisible = visibleNavItems.some(({ route }) => route === "home");
+  const firstVisibleRoute = visibleNavItems.find(({ route }) => route !== "home")?.route;
+  const hasConfiguredPageVisibility = uiSettings?.values?.enabled_ui_pages_internal_users != null;
+  const shouldApplyPageVisibility = isInternalUser && hasConfiguredPageVisibility;
+  const shouldRedirectHome = shouldApplyPageVisibility && !isUISettingsLoading && !isHomeVisible;
+  const homeRedirectRoute = shouldRedirectHome ? firstVisibleRoute : undefined;
 
   // Track if we've already attempted a return URL redirect to prevent race conditions
   const hasAttemptedReturnRedirectRef = useRef(false);
@@ -45,6 +59,12 @@ function CreateKeyPageContent() {
       router.replace(legacyRedirectHref);
     }
   }, [authLoading, legacyRedirectHref, router]);
+
+  useEffect(() => {
+    if (!authLoading && homeRedirectRoute) {
+      router.replace(uiHref(homeRedirectRoute));
+    }
+  }, [authLoading, homeRedirectRoute, router]);
 
   // Check for a stored return URL after successful authentication
   // This handles the case where user comes back from SSO and we need to redirect to the original URL
@@ -78,9 +98,10 @@ function CreateKeyPageContent() {
     }
   }, [token]);
 
-  const isRedirecting = redirectToLogin || legacyRedirectHref !== null;
+  const isRedirectingToPage = legacyRedirectHref !== null || Boolean(homeRedirectRoute);
+  const isRedirecting = redirectToLogin || isRedirectingToPage;
 
-  if (authLoading || isRedirecting) {
+  if (authLoading || isRedirecting || (isInternalUser && isUISettingsLoading)) {
     return <LoadingScreen />;
   }
 
