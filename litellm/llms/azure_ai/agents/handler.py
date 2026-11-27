@@ -22,7 +22,7 @@ import asyncio
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict
 
 import httpx
@@ -214,7 +214,7 @@ class AzureAIAgentsHandler:
         content: str,
         model_response: ModelResponse,
         thread_id: object,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         annotations: list[_TransformedAnnotation] | None = None,
     ) -> ModelResponse:
         """Build the ModelResponse from agent output."""
@@ -258,8 +258,8 @@ class AzureAIAgentsHandler:
         api_base: str,
         api_key: str,
         optional_params: dict[str, object],
-        headers: dict[str, str] | None,
-    ) -> tuple[dict[str, str], object, str, object, str]:
+        headers: dict[str, object] | None,  # mutable-ok: dict-typed callees take it
+    ) -> tuple[dict[str, object], object, str, object, str]:  # mutable-ok: dict-typed callees take it
         """Prepare common parameters for completion.
 
         Azure Foundry Agents API uses Bearer token authentication:
@@ -297,7 +297,7 @@ class AzureAIAgentsHandler:
     def completion(
         self,
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
@@ -306,7 +306,7 @@ class AzureAIAgentsHandler:
         litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         client: HTTPHandler | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> ModelResponse:
         """Execute synchronous completion using Azure Agent Service."""
         from litellm.llms.custom_httpx.http_handler import get_httpx_client
@@ -351,7 +351,7 @@ class AzureAIAgentsHandler:
         api_version: object,
         agent_id: str,
         thread_id: object,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         optional_params: dict[str, object],
     ) -> tuple[object, str, list[_TransformedAnnotation] | None]:
         """Execute the agent flow synchronously. Returns (thread_id, content, annotations)."""
@@ -419,7 +419,7 @@ class AzureAIAgentsHandler:
     async def acompletion(
         self,
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
@@ -428,7 +428,7 @@ class AzureAIAgentsHandler:
         litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         client: AsyncHTTPHandler | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> ModelResponse:
         """Execute asynchronous completion using Azure Agent Service."""
         import litellm
@@ -477,7 +477,7 @@ class AzureAIAgentsHandler:
         api_version: object,
         agent_id: str,
         thread_id: object,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         optional_params: dict[str, object],
     ) -> tuple[object, str, list[_TransformedAnnotation] | None]:
         """Execute the agent flow asynchronously. Returns (thread_id, content, annotations)."""
@@ -545,14 +545,14 @@ class AzureAIAgentsHandler:
     async def acompletion_stream(
         self,
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> AsyncIterator[ModelResponseStream]:
         """Execute async streaming completion using Azure Agent Service with native SSE."""
         import litellm

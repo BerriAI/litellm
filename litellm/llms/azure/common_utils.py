@@ -7,7 +7,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import closing
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, NoReturn, cast
+from typing import Final, Literal, NamedTuple, NoReturn, TypeVar, cast, overload
 
 import httpx
 from openai import APIError, AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -18,6 +18,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.litellm_core_utils.core_helpers import str_param
 from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
@@ -624,18 +625,15 @@ def get_azure_ad_token(
     # Extract parameters
     # Use `or` instead of default parameter to handle cases where key exists but value is None
     azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
-    azure_ad_token = litellm_params.get("azure_ad_token") or get_secret_str("AZURE_AD_TOKEN")
-    tenant_id: Final = litellm_params.get("tenant_id") or os.getenv("AZURE_TENANT_ID")
-    client_id: Final = litellm_params.get("client_id") or os.getenv("AZURE_CLIENT_ID")
-    client_secret: Final = litellm_params.get("client_secret") or os.getenv("AZURE_CLIENT_SECRET")
-    azure_username: Final = litellm_params.get("azure_username") or os.getenv("AZURE_USERNAME")
-    azure_password: Final = litellm_params.get("azure_password") or os.getenv("AZURE_PASSWORD")
-    scope = litellm_params.get("azure_scope") or os.getenv(
+    azure_ad_token = str_param(litellm_params, "azure_ad_token") or get_secret_str("AZURE_AD_TOKEN")
+    tenant_id: Final = str_param(litellm_params, "tenant_id") or os.getenv("AZURE_TENANT_ID")
+    client_id: Final = str_param(litellm_params, "client_id") or os.getenv("AZURE_CLIENT_ID")
+    client_secret: Final = str_param(litellm_params, "client_secret") or os.getenv("AZURE_CLIENT_SECRET")
+    azure_username: Final = str_param(litellm_params, "azure_username") or os.getenv("AZURE_USERNAME")
+    azure_password: Final = str_param(litellm_params, "azure_password") or os.getenv("AZURE_PASSWORD")
+    scope = str_param(litellm_params, "azure_scope") or os.getenv(
         "AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"
     )
-    if scope is None:
-        scope = "https://cognitiveservices.azure.com/.default"
-
     # Try to get token provider from Entra ID
     if azure_ad_token_provider is None and tenant_id and client_id and client_secret:
         verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
@@ -709,6 +707,7 @@ def get_azure_ad_token(
     return azure_ad_token
 
 
+_AzureHeaders = TypeVar("_AzureHeaders", bound="dict[str, str] | dict[str, object]")
 _AZURE_AUTH_HEADER_NAMES: Final = frozenset(("api-key", "authorization"))
 _REDACTED_AZURE_HEADER_VALUE: Final = "***REDACTED***"
 
@@ -1071,8 +1070,8 @@ class BaseAzureLLM(BaseOpenAILLM):
 
     @staticmethod
     def _base_validate_azure_environment(
-        headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
-    ) -> dict[str, str]:
+        headers: _AzureHeaders, litellm_params: GenericLiteLLMParams | None
+    ) -> _AzureHeaders:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
         # Check if api-key is already in headers; if so, use it
@@ -1099,12 +1098,28 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         return headers
 
+    @overload
     @classmethod
     def base_validate_azure_environment(
         cls,
         headers: dict[str, str],  # mutable-ok: mirrors override contract
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict[str, str]:  # mutable-ok: mirrors override contract
+    ) -> dict[str, str]: ...  # mutable-ok: mirrors override contract
+
+    @overload
+    @classmethod
+    def base_validate_azure_environment(
+        cls,
+        headers: dict[str, object],  # mutable-ok: mirrors override contract
+        litellm_params: GenericLiteLLMParams | None,
+    ) -> dict[str, object]: ...  # mutable-ok: mirrors override contract
+
+    @classmethod
+    def base_validate_azure_environment(
+        cls,
+        headers: _AzureHeaders,
+        litellm_params: GenericLiteLLMParams | None,
+    ) -> _AzureHeaders:
         return cls._base_validate_azure_environment(headers, litellm_params)
 
     @staticmethod

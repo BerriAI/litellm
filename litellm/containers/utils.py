@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Protocol, TypeVar
 
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_attributes
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import (
@@ -108,7 +108,7 @@ class ContainerRequestUtils:
     def encode_container_id_in_response(
         response_obj: T,
         custom_llm_provider: str | None,
-        litellm_metadata: Mapping[str, object] | None = None,
+        litellm_metadata: SupportsGet | None = None,
         extra_body: Mapping[str, object] | None = None,
     ) -> T:
         """

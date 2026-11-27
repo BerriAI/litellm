@@ -1175,6 +1175,118 @@ async fn replayed_history_is_cleaned_before_sending(
     assert_eq!(only_request(&upstream).await.json()["messages"], expected);
 }
 
+fn replayed_tool_round() -> Value {
+    json!([
+        {"role": "user", "content": "run it"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "text", "text": "Note.", "id": 5},
+            {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}
+        ]}
+    ])
+}
+
+fn sent_tool_round(id: &str) -> Value {
+    json!([
+        {"role": "user", "content": "run it"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "text", "text": "Note.", "id": 5},
+            {"type": "tool_result", "tool_use_id": id, "content": "ok"}
+        ]}
+    ])
+}
+
+#[rstest]
+#[case::other_model("kimi-k2", false, sent_tool_round("functions.Bash:0"))]
+#[case::other_model_python_prepared("kimi-k2", true, replayed_tool_round())]
+#[case::claude_name(MODEL, false, sent_tool_round("functions.Bash:0"))]
+#[tokio::test]
+async fn a_custom_anthropic_base_gets_the_callers_tool_use_ids_whatever_the_model_name(
+    call: MessagesCall,
+    #[case] model: &str,
+    #[case] presanitized: bool,
+    #[case] sent: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    presanitized,
+                    ..MessagesSettings::default()
+                },
+                ..MessagesShaping::default()
+            },
+            ..call
+        },
+        json!({"model": model, "messages": replayed_tool_round()}),
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.json()["messages"], sent);
+}
+
+#[rstest]
+#[case::azure("azure_ai")]
+#[case::deepseek("deepseek")]
+#[tokio::test]
+async fn providers_sharing_the_anthropic_shaping_still_rewrite_tool_use_ids(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"model": "my-deployment", "messages": replayed_tool_round()}),
+    ))
+    .await;
+
+    assert_eq!(
+        only_request(&upstream).await.json()["messages"],
+        sent_tool_round("functions_Bash_0")
+    );
+}
+
+#[rstest]
+#[case::api_base("ANTHROPIC_API_BASE")]
+#[case::base_url("ANTHROPIC_BASE_URL")]
+#[tokio::test]
+async fn an_env_anthropic_base_gets_the_callers_tool_use_ids_for_a_model_that_is_not_claude(
+    call: MessagesCall,
+    #[case] base_env: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+    let uri = upstream.uri();
+
+    run_with(
+        Arc::new(RecordingSecrets::new([
+            ("ANTHROPIC_API_KEY", "sk-env"),
+            (base_env, uri.as_str()),
+        ])),
+        with_fields(
+            call,
+            json!({"model": "kimi-k2", "messages": replayed_tool_round()}),
+        ),
+    )
+    .await
+    .expect("messages call reaches the env base");
+
+    assert_eq!(
+        only_request(&upstream).await.json()["messages"],
+        sent_tool_round("functions.Bash:0")
+    );
+}
+
 #[rstest]
 #[case::deepseek("deepseek")]
 #[case::minimax("minimax")]

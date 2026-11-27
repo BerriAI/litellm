@@ -423,6 +423,11 @@ class PreCallFacts:
     def _record(self, id: str) -> Mapping[str, object]:  # a deployment id
         return self._records(id)
 
+    def _window(self, deployment_id: str) -> int | None:
+        if deployment_id in self._windows:
+            return self._windows[deployment_id]
+        return _max_input_tokens(_router_model_info(self._registry, self._model, self._record(deployment_id)))
+
     def _needs_count(self) -> bool:
         return self._has_input and any(limit is not None for limit in self._windows.values())
 
@@ -599,7 +604,7 @@ class PreCallFacts:
     ) -> Mapping[str, object]:
         record: Final = self._record(id)
         return {
-            "max_input_tokens": self._windows.get(id),
+            "max_input_tokens": self._window(id),
             "input_tokens": count.tokens if count is not None else None,
             "estimated": count is not None and count.estimated,
             "lacks_params": bool(params) and id in self._candidates and _lacks_params(record, self._model, params),

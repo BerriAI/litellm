@@ -98,6 +98,11 @@ impl Held {
         statements.execute(self.postgres.pool()).await.unwrap();
     }
 
+    /// Where a config names this database, as `general_settings.database_url`.
+    pub fn url(&self) -> &str {
+        self.postgres.url()
+    }
+
     /// What a repository runs its queries on this database with.
     pub fn repositories(&self) -> Database {
         connected(self.postgres.url(), self.reads.clone())

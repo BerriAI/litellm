@@ -1,10 +1,11 @@
-use crate::{AuthHost, Error, KeyDenial, authn::key::KeyRecord, host::UserRow};
+use crate::{AuthHost, Error, KeyDenial, Named, authn::key::KeyRecord, host::UserRow};
 
-/// The key owner, refusing a key whose owner SCIM deactivated. An owner that cannot be read is absent.
+/// The key owner, refusing a key whose owner SCIM deactivated. An owner that cannot be read is
+/// named by its id alone.
 pub(super) async fn read<H: AuthHost>(
     host: &H,
     record: &KeyRecord,
-) -> Result<Option<UserRow<H>>, Error> {
+) -> Result<Option<Named<UserRow<H>>>, Error> {
     let Some(user_id) = record.user_id.as_deref() else {
         return Ok(None);
     };
@@ -13,6 +14,9 @@ pub(super) async fn read<H: AuthHost>(
             user_id: user_id.to_owned(),
         }
         .into()),
-        owner => Ok(owner.map(|owner| owner.row)),
+        owner => Ok(Named::of(
+            Some(user_id.to_owned()),
+            owner.map(|owner| owner.row),
+        )),
     }
 }

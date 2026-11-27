@@ -3826,6 +3826,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-call-scope"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-callbacks"
 version = "0.1.0"
 dependencies = [
@@ -3912,6 +3921,8 @@ dependencies = [
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-store",
+ "litellm-redis-testing",
+ "litellm-secret-value",
  "rstest",
  "serde",
  "serde_json",
@@ -4212,13 +4223,18 @@ dependencies = [
  "jiff",
  "litellm-at-rest",
  "litellm-auth-store",
+ "litellm-call-scope",
  "litellm-callbacks",
+ "litellm-callbacks-budgets",
  "litellm-callbacks-model-capacity",
  "litellm-callbacks-parallel-request-limiter",
+ "litellm-callbacks-spend-log",
+ "litellm-callbacks-spend-logger",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-config-load",
  "litellm-core-utils",
+ "litellm-coroutine",
  "litellm-db",
  "litellm-db-resolve",
  "litellm-db-testing",
@@ -4233,10 +4249,11 @@ dependencies = [
  "litellm-inference",
  "litellm-inference-messages",
  "litellm-license",
- "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-model-catalog-refresh",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-redis-client",
  "litellm-redis-connect",
  "litellm-redis-resolve",
@@ -4247,6 +4264,7 @@ dependencies = [
  "litellm-router-core",
  "litellm-secret-value",
  "litellm-secrets",
+ "litellm-spend-log-writer",
  "litellm-token-counter",
  "litellm-tracing",
  "litellm-yaml",
@@ -4293,12 +4311,14 @@ name = "litellm-gateway-auth-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "fancy-regex 0.19.2",
  "http 1.4.2",
  "jiff",
  "jsonwebtoken",
  "litellm-config",
  "litellm-fnmatch",
  "litellm-python-compat",
+ "litellm-router-types",
  "litellm-secret-value",
  "litellm-starlette",
  "rstest",
@@ -4308,6 +4328,7 @@ dependencies = [
  "subtle",
  "thiserror 2.0.21",
  "tokio",
+ "veil",
 ]
 
 [[package]]
@@ -4339,6 +4360,7 @@ dependencies = [
 name = "litellm-gateway-inference"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "axum",
  "bytes",
  "futures-util",
@@ -4347,6 +4369,7 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-call-scope",
  "litellm-callbacks",
  "litellm-config",
  "litellm-core-utils",
@@ -4363,6 +4386,7 @@ dependencies = [
  "litellm-inference-ocr",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-model-catalog",
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-store",
@@ -4372,6 +4396,7 @@ dependencies = [
  "litellm-secret-value",
  "litellm-secrets",
  "parking_lot",
+ "regex",
  "rstest",
  "serde",
  "serde_json",
@@ -4382,6 +4407,8 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "uuid",
+ "veil",
  "wiremock",
 ]
 
@@ -4552,6 +4579,7 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-call-scope",
  "litellm-core-utils",
  "litellm-cost",
  "litellm-env",
@@ -4803,6 +4831,7 @@ dependencies = [
  "litellm-auth-types",
  "litellm-error",
  "litellm-http",
+ "litellm-model-catalog",
  "litellm-s3",
  "litellm-secret-value",
  "percent-encoding",
@@ -4836,6 +4865,7 @@ dependencies = [
  "litellm-auth-store",
  "litellm-cache",
  "litellm-cache-response",
+ "litellm-call-scope",
  "litellm-callbacks",
  "litellm-callbacks-budgets",
  "litellm-callbacks-legacy-python",
@@ -4968,6 +4998,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-auth-types",
+ "litellm-call-scope",
  "litellm-circuit-breaker",
  "litellm-env",
  "litellm-error",
@@ -5021,7 +5052,9 @@ dependencies = [
  "jiff",
  "litellm-cache",
  "litellm-cache-memory",
+ "litellm-call-scope",
  "litellm-circuit-breaker",
+ "litellm-config",
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-testing",
@@ -5044,6 +5077,7 @@ dependencies = [
 name = "litellm-redis-testing"
 version = "0.1.0"
 dependencies = [
+ "litellm-call-scope",
  "pkcs8",
  "rcgen",
  "tempfile",
@@ -5067,6 +5101,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "jiff",
+ "litellm-call-scope",
  "litellm-core-utils",
  "litellm-db",
  "litellm-error",
@@ -5075,6 +5110,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "serde_with",
  "sqlx",
  "tokio",
  "tracing",

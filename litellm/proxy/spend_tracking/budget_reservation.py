@@ -38,6 +38,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
 from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import (
+    CLAUDE_CODE_GATEWAY_PREFIX,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -1741,7 +1742,6 @@ _PASS_THROUGH_OUTPUT_TOKEN_FIELDS: Final = (
 _OutputCapSurface: TypeAlias = Literal[
     "completion", "responses", "messages", "generate_content", "pass_through", "uncapped"
 ]
-_CLAUDE_CODE_GATEWAY_PREFIX: Final = "/claude_code_gateway"
 _INTERACTIONS_ROUTES: Final = frozenset({"/interactions", "/v1beta/interactions"})
 _GENERATE_CONTENT_ROUTE_SUFFIXES: Final = (":generateContent", ":streamGenerateContent")
 
@@ -1753,7 +1753,7 @@ def _output_cap_surface(route: str, request_body: Mapping[str, object]) -> _Outp
         return "uncapped"
     if route.endswith(_GENERATE_CONTENT_ROUTE_SUFFIXES):
         return "generate_content"
-    call_types: Final = frozenset(get_call_types_for_route(route.removeprefix(_CLAUDE_CODE_GATEWAY_PREFIX)) or ())
+    call_types: Final = frozenset(get_call_types_for_route(route.removeprefix(CLAUDE_CODE_GATEWAY_PREFIX)) or ())
     if call_types & _RESPONSES_CALL_TYPES:
         return "responses"
     if call_types & _ANTHROPIC_MESSAGES_CALL_TYPES:

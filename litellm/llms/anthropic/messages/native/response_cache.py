@@ -55,6 +55,10 @@ class AnthropicMessagesStreamCacheWriter:
         return getattr(self.stream, "has_buffered_provider_output", False) is True
 
     @property
+    def litellm_logging_obj(self) -> "LiteLLMLoggingObj | None":
+        return self.stream.litellm_logging_obj if isinstance(self.stream, AnthropicMessagesStreamingResponse) else None
+
+    @property
     def chunks(self) -> "list[ModelResponseStream] | None":
         return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
             "list[ModelResponseStream] | None", getattr(self.stream, "chunks", None)

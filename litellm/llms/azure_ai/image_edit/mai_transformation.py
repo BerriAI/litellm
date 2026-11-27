@@ -47,7 +47,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         api_key: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         headers.update(
             get_azure_ai_auth_headers(
                 api_key=AzureFoundryModelInfo.get_api_key(api_key),

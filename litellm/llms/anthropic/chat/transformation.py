@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    DROP_UNSUPPORTED_PARAMS_HINT,
     RESPONSE_FORMAT_TOOL_NAME,
     RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
@@ -1092,11 +1093,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not (litellm.drop_params or drop_params):
             speed_value: Final = optional_params.get("speed")
             raise litellm.utils.UnsupportedParamsError(
-                message=(
-                    f"{model} does not support speed={speed_value!r}. "
-                    "To drop unsupported params, set "
-                    "`litellm.drop_params = True`."
-                ),
+                message=f"{model} does not support speed={speed_value!r}. {DROP_UNSUPPORTED_PARAMS_HINT}",
                 status_code=400,
             )
         litellm.verbose_logger.warning(
@@ -1114,8 +1111,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
                     f"{model} does not support service_tier={value!r}. Anthropic accepts 'auto', "
-                    "'standard_only', or OpenAI's 'default' (sent as 'standard_only'). "
-                    "To drop unsupported params, set `litellm.drop_params = True`."
+                    f"'standard_only', or OpenAI's 'default' (sent as 'standard_only'). {DROP_UNSUPPORTED_PARAMS_HINT}"
                 ),
                 status_code=400,
             )
@@ -2172,7 +2168,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if value is None or value["type"] in ignore_response_format_types:  # value is a no-op
             return None
 
-        json_schema: Final[dict | None] = self._extract_json_schema_from_response_format(value)
+        json_schema: Final[dict[str, object] | None] = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
         """
@@ -2772,8 +2768,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
         )
+        from litellm.llms.anthropic.messages.native.utils import renames_tool_use_ids_up_front
 
         drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
+        api_base: Final = litellm_params.get("api_base") or litellm.api_base
+        rewrites_tool_use_ids: Final = renames_tool_use_ids_up_front(
+            model, self._resolved_provider, api_base if isinstance(api_base, str) else None
+        )
         translated_messages: Final = (
             list(
                 AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
@@ -2889,6 +2890,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     messages=list(self._with_pdf_links_formatted(turns)),
                     llm_provider=self._resolved_provider,
                     drop_params=drop_params,
+                    rewrites_tool_use_ids=rewrites_tool_use_ids,
                 ),
                 conversation,
                 messages,

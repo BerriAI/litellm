@@ -140,7 +140,7 @@ def test_image_edit_with_image_references_posts_a_form_vllm_omni_can_read():
     }
 
 
-@pytest.mark.parametrize("param", ["mask", "quality", "input_fidelity"])
+@pytest.mark.parametrize("param", ["mask", "markup", "quality", "input_fidelity"])
 def test_params_vllm_omni_ignores_are_not_advertised(param: str):
     supported = HostedVLLMImageEditConfig().get_supported_openai_params(MODEL)
 
@@ -181,3 +181,38 @@ def test_image_edit_rejects_quality_unless_dropped():
     assert len(captured) == 1
     assert b'name="quality"' not in captured[0].content
     assert b'name="prompt"\r\n\r\nadd a hat' in captured[0].content
+
+
+def test_image_edit_rejects_markup_unless_dropped():
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="markup"):
+        litellm.image_edit(
+            model=f"hosted_vllm/{MODEL}",
+            image=PNG_BYTES,
+            prompt="add a hat",
+            api_base="http://localhost:8091",
+            client=client,
+            markup=PNG_BYTES,
+        )
+    assert captured == []
+
+    litellm.image_edit(
+        model=f"hosted_vllm/{MODEL}",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_base="http://localhost:8091",
+        client=client,
+        markup=PNG_BYTES,
+        drop_params=True,
+    )
+
+    assert len(captured) == 1
+    assert b'name="markup"' not in captured[0].content
+    assert PNG_BYTES in captured[0].content

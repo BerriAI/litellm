@@ -64,12 +64,15 @@ impl<D: Delivery> Background<D> {
     pub(super) fn push(&self, runtime: &Handle, record: Record) {
         let sender = self.sender.get_or_init(|| {
             let (sender, records) = mpsc::channel(self.capacity);
-            drop(runtime.spawn(drain(
-                records,
-                Arc::clone(&self.held_bytes),
-                Arc::clone(&self.lost),
-                Arc::clone(&self.delivery),
-            )));
+            drop(litellm_call_scope::spawn_detached_on(
+                runtime,
+                drain(
+                    records,
+                    Arc::clone(&self.held_bytes),
+                    Arc::clone(&self.lost),
+                    Arc::clone(&self.delivery),
+                ),
+            ));
             sender
         });
         let bytes = text_bytes(&record);

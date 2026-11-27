@@ -14,6 +14,7 @@ mod region;
 use std::{collections::BTreeMap, sync::Arc};
 
 use context_window::Overflow;
+pub(crate) use context_window::named_model;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -54,6 +55,12 @@ pub struct PreCallFacts {
 }
 
 impl PreCallFacts {
+    pub(crate) fn max_input_tokens(&self, deployment_id: &str) -> Option<i64> {
+        self.deployments
+            .get(deployment_id)
+            .and_then(|facts| facts.max_input_tokens)
+    }
+
     fn of(&self, deployment: &Deployment) -> DeploymentFacts {
         self.deployments
             .get(&deployment.id)

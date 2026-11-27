@@ -8,14 +8,17 @@ import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
 import { LoaderCircle, Pencil } from "lucide-react";
 import React, { useMemo, useState } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { AddFallbacksModal } from "./AddFallbacksModal";
-import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
+import { FallbackGroupConfig } from "./FallbackGroupConfig";
+import { replaceFallbacks, toEditFallbackGroup, type FallbackEntry, type Fallbacks } from "./mapper";
+import { editFallbacksSchema } from "./schema";
 
-export type FallbackEntry = { [modelName: string]: string[] };
-export type Fallbacks = FallbackEntry[];
+export type { FallbackEntry, Fallbacks } from "./mapper";
 
 interface EditFallbacksProps {
   accessToken: string;
@@ -26,15 +29,6 @@ interface EditFallbacksProps {
   maxFallbacks?: number;
 }
 
-const toGroup = (entry: FallbackEntry): FallbackGroup => {
-  const primaryModel = Object.keys(entry)[0] ?? null;
-  return {
-    id: "edit",
-    primaryModel,
-    fallbackModels: primaryModel ? [...(entry[primaryModel] ?? [])] : [],
-  };
-};
-
 export default function EditFallbacks({
   accessToken,
   fallbackEntry,
@@ -44,7 +38,12 @@ export default function EditFallbacks({
   maxFallbacks = 10,
 }: EditFallbacksProps) {
   const { t } = useTranslation();
-  const [group, setGroup] = useState<FallbackGroup>(() => toGroup(fallbackEntry));
+  const { control, getValues } = useZodForm(editFallbacksSchema, {
+    defaultValues: { group: toEditFallbackGroup(fallbackEntry) },
+  });
+  const {
+    field: { value: group, onChange: setGroup },
+  } = useController({ control, name: "group" });
   const [isSaving, setIsSaving] = useState(false);
 
   const { data: modelGroups = [] } = useQuery({
@@ -59,19 +58,17 @@ export default function EditFallbacks({
   );
 
   const handleSave = async () => {
-    const primaryModel = group.primaryModel;
-    if (!primaryModel) {
+    const result = editFallbacksSchema.safeParse(getValues());
+    if (!result.success) {
       return;
     }
 
-    const updatedFallbacks = (value || []).map((entry) =>
-      primaryModel in entry ? { ...entry, [primaryModel]: group.fallbackModels } : entry,
-    );
+    const updatedFallbacks = replaceFallbacks(value, result.data);
 
     setIsSaving(true);
     try {
       await onChange(updatedFallbacks);
-      toast.success(t("routerSettings.editFallbacks.toasts.updated", { model: primaryModel }));
+      toast.success(t("routerSettings.editFallbacks.toasts.updated", { model: result.data.group.primaryModel }));
       onClose();
     } catch (error) {
       console.error("Error updating fallbacks:", error);

@@ -1,7 +1,7 @@
 use crate::error::InvalidCredentials;
 use crate::{
     BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, KeyHash, ModelAccessDenied,
-    PremiumRequired, RbacDenial, TeamDenial, VerifyDenial,
+    PremiumRequired, RbacDenial, RequestDenial, TeamDenial, VerifyDenial,
 };
 
 /// `ProxyErrorTypes` values a denial carries.
@@ -90,6 +90,12 @@ fn plain(denial: &impl ToString) -> PublicDenial {
 impl PremiumRequired {
     pub fn public(&self) -> PublicDenial {
         proxy(403, self, ErrorType::Auth, Some("premium_user"))
+    }
+}
+
+impl RequestDenial {
+    pub fn public(&self) -> PublicDenial {
+        http(403, self)
     }
 }
 

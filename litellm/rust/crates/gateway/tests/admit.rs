@@ -4,11 +4,17 @@
 
 mod keys;
 
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, net::SocketAddr, path::Path, sync::Arc};
 
-use axum::{body::Body, extract::Request, http::Method};
+use axum::{
+    body::Body,
+    extract::{ConnectInfo, Request},
+    http::Method,
+};
 use litellm_config::{Config, Environment};
 use litellm_gateway::{StoredConfig, host::auth::AuthStore};
+use litellm_model_catalog::{CostMap, IntegrityLimits};
+use litellm_repositories::StoredObjects;
 use rstest::rstest;
 use serde::Deserialize;
 
@@ -24,6 +30,9 @@ struct Scenario {
     /// What boot read of the config the proxy stores in its database.
     #[serde(default)]
     stored: Stored,
+    /// Which other stored objects the database holds, when `stored` is `loaded`.
+    #[serde(default)]
+    held: Held,
     requests: Vec<Sent>,
 }
 
@@ -43,14 +52,48 @@ enum Stored {
     UiSettingsUnread,
 }
 
-impl From<Stored> for StoredConfig {
-    fn from(stored: Stored) -> Self {
-        match stored {
-            Stored::Unused => Self::Unused,
-            Stored::Loaded => Self::Loaded,
-            Stored::Unread => Self::Unread,
-            Stored::UiSettingsUnread => Self::UiSettingsUnread,
+/// Each field of `StoredObjects`, `false` when the scenario leaves it out.
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Held {
+    default_on_guardrails: bool,
+    policy_attachments: bool,
+    tool_policies: bool,
+    cache_settings: bool,
+    config_overrides: bool,
+    anthropic_beta_headers_reload: bool,
+    model_cost_map_reload: bool,
+}
+
+impl From<Held> for StoredObjects {
+    fn from(held: Held) -> Self {
+        let Held {
+            default_on_guardrails,
+            policy_attachments,
+            tool_policies,
+            cache_settings,
+            config_overrides,
+            anthropic_beta_headers_reload,
+            model_cost_map_reload,
+        } = held;
+        Self {
+            default_on_guardrails,
+            policy_attachments,
+            tool_policies,
+            cache_settings,
+            config_overrides,
+            anthropic_beta_headers_reload,
+            model_cost_map_reload,
         }
+    }
+}
+
+fn stored_config(stored: Stored, held: Held) -> StoredConfig {
+    match stored {
+        Stored::Unused => StoredConfig::Unused,
+        Stored::Loaded => StoredConfig::Loaded(held.into()),
+        Stored::Unread => StoredConfig::Unread,
+        Stored::UiSettingsUnread => StoredConfig::UiSettingsUnread,
     }
 }
 
@@ -83,6 +126,8 @@ struct Sent {
     expect: Who,
     reason: Option<String>,
     over: Option<String>,
+    /// The client's TCP peer, which the IP allowlist reads.
+    peer: Option<SocketAddr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -111,9 +156,12 @@ impl Sent {
         self.headers
             .iter()
             .fold(
-                Request::builder()
-                    .method(self.method.as_str())
-                    .uri(&self.path),
+                self.peer.into_iter().fold(
+                    Request::builder()
+                        .method(self.method.as_str())
+                        .uri(&self.path),
+                    |request, peer| request.extension(ConnectInfo(peer)),
+                ),
                 |request, (name, value)| request.header(name, value),
             )
             .body(body)
@@ -124,6 +172,9 @@ impl Sent {
 #[rstest]
 #[case::mixed_groups("mixed_groups")]
 #[case::honored_settings("honored_settings")]
+#[case::allowed_routes("allowed_routes")]
+#[case::allowed_routes_unwritten("allowed_routes_unwritten")]
+#[case::allowed_ips("allowed_ips")]
 #[case::setting_for_every_request("setting_for_every_request")]
 #[case::setting_for_messages_only("setting_for_messages_only")]
 #[case::fallback_shapes("fallback_shapes")]
@@ -134,6 +185,7 @@ impl Sent {
 #[case::ui_settings_unread("ui_settings_unread")]
 #[case::environment_variables("environment_variables")]
 #[case::store_model_in_db_objects("store_model_in_db_objects")]
+#[case::store_model_in_db_nothing_held("store_model_in_db_nothing_held")]
 #[case::router_settings_by_group("router_settings_by_group")]
 #[case::groups_and_fallbacks("groups_and_fallbacks")]
 #[case::model_aliases("model_aliases")]
@@ -141,9 +193,16 @@ impl Sent {
 #[case::router_host_steps("router_host_steps")]
 #[case::callers("callers")]
 #[case::virtual_key_models("virtual_key_models")]
+#[case::user_api_key_cache_settings("user_api_key_cache_settings")]
 #[case::virtual_key_token_limits("virtual_key_token_limits")]
 #[case::dynamic_rate_limiter("dynamic_rate_limiter")]
 #[case::dynamic_rate_limiter_borrowing("dynamic_rate_limiter_borrowing")]
+#[case::messages_settings("messages_settings")]
+#[case::request_timeout_float_refuses("request_timeout_float_refuses")]
+#[case::request_timeout_beside_router_timeout("request_timeout_beside_router_timeout")]
+#[case::request_timeout_beside_router_request_timeout(
+    "request_timeout_beside_router_request_timeout"
+)]
 #[case::pre_call_checks("pre_call_checks")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
@@ -175,7 +234,7 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
         &state,
-        scenario.stored.into(),
+        stored_config(scenario.stored, scenario.held),
     ));
 
     let answered = futures_util::future::join_all(scenario.requests.iter().map(|sent| {
@@ -213,4 +272,69 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
         })
         .collect();
     assert_eq!(answered, expected);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cost_map_installed_after_boot_decides_the_next_request() {
+    litellm_gateway::install_crypto_provider();
+    let config = Config::from_yaml(
+        "model_list:
+  - model_name: latest
+    litellm_params:
+      model: anthropic/claude-installed-latest
+      api_key: provider-key
+general_settings:
+  master_key: gateway-key
+",
+    )
+    .unwrap();
+    let resources =
+        litellm_gateway::Resources::over(&config, Arc::new(|_: &str| None::<String>)).unwrap();
+    let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
+        .await
+        .unwrap();
+    let admit = Arc::new(litellm_gateway::Admit::new(
+        &config,
+        &state,
+        StoredConfig::Unused,
+    ));
+    let over = || {
+        let admit = admit.clone();
+        async move {
+            let request = Request::post("/v1/messages")
+                .header("authorization", "Bearer gateway-key")
+                .body(Body::from(
+                    r#"{"model": "latest", "max_tokens": 16, "messages": []}"#,
+                ))
+                .unwrap();
+            admit
+                .admit(request)
+                .await
+                .map(drop)
+                .map_err(|(_, reason)| String::from(reason.over))
+        }
+    };
+
+    let before = over().await;
+    state.inference.install(
+        CostMap::read(
+            br#"{
+                "claude-installed-9": {"litellm_provider": "anthropic", "mode": "chat"},
+                "claude-installed-latest": {"alias_of": "claude-installed-9"}
+            }"#,
+            None,
+            IntegrityLimits::UNCHECKED,
+        )
+        .unwrap(),
+    );
+    let after = over().await;
+    state.close().await;
+
+    assert_eq!(
+        (before, after),
+        (
+            Ok(()),
+            Err("model_list.litellm_params.model alias claude-installed-latest".to_owned())
+        )
+    );
 }

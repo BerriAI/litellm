@@ -202,6 +202,57 @@ async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages(
 }
 
 #[rstest]
+#[case::spans_cover_the_content_once(vec![vec![(0, 256)], vec![(256, 256)]], &["a".repeat(256), "a".repeat(256)])]
+#[case::spans_pass_the_content_by_one_character(vec![vec![(0, 257)], vec![(256, 256)]], &["A".to_owned(), "B".to_owned()])]
+#[case::page_repeats_one_span(vec![vec![(0, 512), (0, 512)]], &["A".to_owned()])]
+#[tokio::test]
+async fn markdown_pages_whose_span_text_passes_the_content_fall_back_to_their_lines(
+    #[case] spans_per_page: Vec<Vec<(usize, usize)>>,
+    #[case] expected: &[String],
+) {
+    let pages = spans_per_page
+        .iter()
+        .zip(["A", "B"])
+        .enumerate()
+        .map(|(index, (spans, line))| {
+            json!({
+                "pageNumber": index + 1,
+                "spans": spans
+                    .iter()
+                    .map(|&(offset, length)| json!({"offset": offset, "length": length}))
+                    .collect::<Vec<_>>(),
+                "lines": [{"content": line}]
+            })
+        })
+        .collect::<Vec<_>>();
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {
+            "content": "a".repeat(512),
+            "contentFormat": "markdown",
+            "stringIndexType": "unicodeCodePoint",
+            "pages": pages
+        }
+    }))])
+    .await;
+
+    let response = perform(ocr_request(
+        LAYOUT_MODEL,
+        &upstream.uri(),
+        json!({"outputContentFormat": "markdown"}),
+    ))
+    .await
+    .unwrap();
+
+    let markdown = response
+        .pages
+        .iter()
+        .map(|page| page.markdown.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(markdown, expected);
+}
+
+#[rstest]
 #[case::native_markdown(LAYOUT_MODEL, json!({"outputContentFormat": "markdown", "req_format": "native"}), Some("markdown"))]
 #[case::markdown_on_read(MODEL, json!({"outputContentFormat": "markdown"}), Some("markdown"))]
 #[case::text(LAYOUT_MODEL, json!({"outputContentFormat": "text"}), Some("text"))]

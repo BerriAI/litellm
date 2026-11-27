@@ -1,5 +1,6 @@
 use std::{fmt::Debug, future::Future, time::Duration};
 
+use jiff::Timestamp;
 use litellm_config::LitellmRole;
 use serde_json::Value;
 
@@ -7,8 +8,9 @@ use crate::{
     AgentIdentityFailure, Error, KeyHash, Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
-        key::{CachedTeam, Keyed},
+        key::Keyed,
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
@@ -35,6 +37,13 @@ pub trait Rows: Row {
     type Org: Row;
     /// A managed agent's context.
     type Agent: Row;
+}
+
+/// A host's row with when the host last refreshed it, if it recorded that.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Refreshed<T> {
+    pub at: Option<Timestamp>,
+    pub row: T,
 }
 
 pub type KeyRow<H> = <<H as AuthHost>::Rows as Rows>::Key;
@@ -220,7 +229,7 @@ pub trait AuthHost: Send + Sync {
     fn cached_team(
         &self,
         team_id: &str,
-    ) -> impl Future<Output = Result<Option<CachedTeam<TeamRow<Self>>>, Error>> + Send;
+    ) -> impl Future<Output = Result<Option<Refreshed<TeamRow<Self>>>, Error>> + Send;
 
     /// `get_team_object`, `None` when it reports no team.
     fn key_team(
@@ -446,4 +455,10 @@ pub trait AuthHost: Send + Sync {
         key: &KeyRow<Self>,
         team: &TeamRow<Self>,
     ) -> impl Future<Output = Result<KeyRow<Self>, Error>> + Send;
+
+    // Request body: what the body check reads before it decides.
+
+    /// The values stored under a `litellm_credential_name`, `None` when no credential has that
+    /// name.
+    fn credential(&self, name: &str) -> impl Future<Output = Result<Option<Params>, Error>> + Send;
 }

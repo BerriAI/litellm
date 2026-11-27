@@ -3130,7 +3130,7 @@ WHITE_PNG: Final = (Path(__file__).parents[4] / "white_100x100.png").read_bytes(
 @respx.mock
 @pytest.mark.parametrize("content_type,nested", [("input_image", True), ("image_url", False), ("input_file", True), ("file", True)])
 def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -> None:
-    from litellm.llms.vertex_ai.gemini.transformation import _openai_messages_may_need_sync_media_fetch
+    from litellm.llms.vertex_ai.gemini.transformation import openai_messages_may_need_sync_media_fetch
 
     image_url: Final = "https://8.8.8.8/gemini-tool-response.png"
     respx.get(image_url).mock(return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"}))
@@ -3150,7 +3150,7 @@ def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -
             content,
         ],
     })
-    assert _openai_messages_may_need_sync_media_fetch([tool_message], "vertex_ai", "gemini-3.8-flash")
+    assert openai_messages_may_need_sync_media_fetch([tool_message], "vertex_ai", "gemini-3.8-flash")
     result: Final = convert_to_gemini_tool_call_result(
         tool_message, None, supports_multimodal_function_responses=nested,
         custom_llm_provider="vertex_ai", model="gemini-3.8-flash",
@@ -3182,9 +3182,9 @@ def _assistant_with_image(url: str) -> Message:
 def test_sync_media_fetch_check_reads_pydantic_messages_and_skips_other_objects(
     message: object, needs_fetch: bool
 ) -> None:
-    from litellm.llms.vertex_ai.gemini.transformation import _openai_messages_may_need_sync_media_fetch
+    from litellm.llms.vertex_ai.gemini.transformation import openai_messages_may_need_sync_media_fetch
 
-    assert _openai_messages_may_need_sync_media_fetch([message]) is needs_fetch
+    assert openai_messages_may_need_sync_media_fetch([message]) is needs_fetch
 
 
 CLAUDE_THINKING_SIGNATURE: Final = "EqQBCkYIBxgCKkCfQ2x0b3VkZS1zaWduYXR1cmUtbm90LW1pbnRlZC1ieS1nZW1pbmkSDJ3lXf5sD+QVqpFQmRoM"

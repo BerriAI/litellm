@@ -13,15 +13,16 @@ import json
 import os
 import sys
 from types import SimpleNamespace
+from typing import Final
 
 os.environ.setdefault("LITELLM_SALT_KEY", "sk-fixture-salt")
 
 import litellm  # noqa: E402
 from litellm.proxy import proxy_server  # noqa: E402
 
-ENVIRONMENT = {"LITELLM_MASTER_KEY": "sk-master-from-env", "FIXTURE_API_KEY": "key-from-env"}
+ENVIRONMENT: Final = {"LITELLM_MASTER_KEY": "sk-master-from-env", "FIXTURE_API_KEY": "key-from-env"}
 
-ROW = {
+ROW: Final = {
     "model_id": "db-environ",
     "model_name": "os.environ/LITELLM_MASTER_KEY",
     "litellm_params": {
@@ -40,7 +41,7 @@ ROW = {
 }
 
 
-def main():
+def main() -> None:
     os.environ.update(ENVIRONMENT)
     proxy_server.llm_router = litellm.Router(model_list=[])
     row = json.loads(json.dumps(ROW))

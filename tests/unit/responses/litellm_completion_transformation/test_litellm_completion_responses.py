@@ -34,6 +34,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     ChatCompletionSession,
     LiteLLMCompletionResponsesConfig,
+    _tool_call_status,
 )
 from litellm.types.llms.base import HiddenParams
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
@@ -7121,7 +7122,7 @@ def test_a_lone_user_item_without_content_on_a_follow_up_with_no_stored_turns_is
         custom_llm_provider="bedrock",
     )
 
-    with pytest.raises(litellm.BadRequestError, match="Unable to create messages"):
+    with pytest.raises(litellm.BadRequestError, match="Previous response with id 'resp_unknown' not found"):
         asyncio.run(
             LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id="resp_unknown",
@@ -8383,6 +8384,7 @@ def test_compaction_replay_invents_no_call_for_an_output_whose_call_was_never_st
             litellm_completion_request=chat_request,
             instructions=None,
             session_lookup=no_stored_turns,
+            input_replaces_history=True,
         )
     )
 
@@ -9232,3 +9234,23 @@ def test_a_resumed_turn_that_repeats_a_shortened_call_from_history_gets_the_orig
         TOOL_CALLS_CACHE.delete_cache(key="call_again")
     calls: Final = [item for item in response.output if item.type == "function_call"]
     assert [(call.name, call.namespace) for call in calls] == [(_RESUMED_TOOL, _RESUMED_NAMESPACE)]
+
+
+@pytest.mark.parametrize(
+    ("function", "expected"),
+    (
+        (Function(name="f", arguments="{}"), "completed"),
+        ({"status": "in_progress"}, "in_progress"),
+        ({"status": ""}, "completed"),
+        ({"status": "not-a-status"}, "not-a-status"),
+        ({"status": "incomplete"}, "incomplete"),
+        ({}, "completed"),
+    ),
+)
+def test_tool_call_status_passes_the_stored_value_through(function: object, expected: str) -> None:
+    assert _tool_call_status(function) == expected
+
+
+def test_tool_call_status_rejects_a_receiver_without_get() -> None:
+    with pytest.raises(AttributeError):
+        _tool_call_status(object())

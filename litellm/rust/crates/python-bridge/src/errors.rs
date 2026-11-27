@@ -23,6 +23,13 @@ pyo3::create_exception!(
     "The provider call was already issued and the provider answered with a failure. Args are (status, body); the headers attribute holds the provider's (name, value) response headers."
 );
 
+pyo3::create_exception!(
+    _native,
+    RustDocumentFetchError,
+    PyValueError,
+    "The OCR route could not reach the caller's document, so the provider was never called."
+);
+
 const MESSAGES_REQUEST_ERROR: &str = "messages_request_error";
 /// The rejection is a parameter the model does not support, which Python raises as
 /// `UnsupportedParamsError`.
@@ -927,7 +934,7 @@ mod tests {
             value: "5".into(),
             hint: String::new(),
         }),
-        Some("claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`.")
+        Some("claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config.")
     )]
     #[case::missing_field(
         litellm_llms::Error::MissingField("max_tokens").into(),

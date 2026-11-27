@@ -2,6 +2,7 @@ import base64
 import functools
 import json
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from types import MappingProxyType
@@ -12,6 +13,10 @@ import pytest
 import respx
 
 import litellm
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -315,6 +320,34 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
         "name": "get_weather",
         "input": {},
     }
+
+
+def test_translate_streaming_openai_chunk_keeps_the_providers_tool_call_id():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                content=None,
+                role="assistant",
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="functions.Bash:0",
+                        function=Function(arguments="", name="Bash"),
+                        type="function",
+                        index=0,
+                    )
+                ],
+            ),
+        )
+    ]
+
+    block_type, content_block_start = (
+        LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
+    )
+
+    assert block_type == "tool_use"
+    assert content_block_start == {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}
 
 
 def test_translate_streaming_openai_chunk_strips_gemini_thought_from_tool_call_id():
@@ -1689,8 +1722,8 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     assert result[0]["provider_specific_fields"] == {"signature": sig}
 
 
-def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids():
-    """Cross-provider ids like ``functions.Bash:0`` must be normalized for Anthropic replay."""
+def test_translate_openai_content_to_anthropic_keeps_the_providers_tool_call_id():
+    """Kimi on vLLM stops calling tools when its ``functions.Bash:0`` comes back rewritten."""
     openai_choices = [
         Choices(
             message=Message(
@@ -1715,7 +1748,58 @@ def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids
 
     assert len(result) == 1
     assert result[0]["type"] == "tool_use"
-    assert result[0]["id"] == "functions_Bash_0"
+    assert result[0]["id"] == "functions.Bash:0"
+
+
+@pytest.mark.parametrize("tool_call_id", ("", f"{THOUGHT_SIGNATURE_SEPARATOR}sig"), ids=("empty", "signature-only"))
+def test_translate_openai_content_to_anthropic_gives_each_tool_call_without_an_id_its_own_id(tool_call_id: str):
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id=tool_call_id, type="function", function=Function(name=name, arguments="{}")
+                    )
+                    for name in ("Bash", "Read")
+                ],
+            )
+        )
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter()._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    ids = [block["id"] for block in result]
+    assert all(re.fullmatch(r"[a-zA-Z0-9_-]+", tool_use_id) for tool_use_id in ids)
+    assert len(set(ids)) == 2
+
+
+def test_translate_streaming_openai_chunk_gives_a_signature_only_tool_call_id_an_id():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                content=None,
+                role="assistant",
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id=f"{THOUGHT_SIGNATURE_SEPARATOR}sig",
+                        function=Function(arguments="", name="Bash"),
+                        type="function",
+                        index=0,
+                    )
+                ],
+            ),
+        )
+    ]
+
+    _block_type, content_block_start = (
+        LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
+    )
+
+    assert re.fullmatch(r"[a-zA-Z0-9_-]+", content_block_start["id"])
 
 
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():
@@ -2821,6 +2905,128 @@ def test_thinking_still_translated_to_reasoning_effort_for_non_claude_model():
 
     assert "thinking" not in new_kwargs
     assert new_kwargs["reasoning_effort"] == "low"
+
+
+
+@pytest.mark.parametrize(
+    "output_effort, drop_params, reasoning_effort",
+    [
+        pytest.param("low", False, "low", id="lower-effort-wins"),
+        pytest.param("high", False, "medium", id="budget-caps-a-stronger-effort"),
+        pytest.param("turbo", False, "turbo", id="unknown-effort-goes-to-the-target"),
+        pytest.param("turbo", True, "medium", id="drop-params-drops-an-unknown-effort-for-the-budget"),
+        pytest.param("none", True, "none", id="drop-params-keeps-a-known-effort"),
+        pytest.param("default", False, "medium", id="default-names-no-level-so-the-budget-decides"),
+    ],
+)
+def test_explicit_output_effort_beside_an_enabled_budget_reaches_a_non_claude_model_up_to_the_budget(
+    output_effort: str, drop_params: bool, reasoning_effort: str
+) -> None:
+    new_kwargs: Final = {"model": CACHE_CONTROL_NON_ANTHROPIC_MODEL}
+    LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+        cast(
+            Any,
+            {
+                "thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+                "output_config": {"effort": output_effort},
+            },
+        ),
+        cast(Any, new_kwargs),
+        drop_params=drop_params,
+    )
+
+    assert new_kwargs["reasoning_effort"] == reasoning_effort
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+def test_explicit_output_effort_the_model_refuses_sends_what_the_budget_alone_sends_under_drop_params(
+    openai_model_without_low_tiers: str, drop_params: bool
+) -> None:
+    def sent_effort(output_config: Mapping[str, object]) -> object:
+        new_kwargs: Final = {"model": openai_model_without_low_tiers}
+        LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+            cast(
+                Any,
+                {
+                    "thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+                    **output_config,
+                },
+            ),
+            cast(Any, new_kwargs),
+            custom_llm_provider="openai",
+            drop_params=drop_params,
+        )
+        return new_kwargs.get("reasoning_effort")
+
+    assert sent_effort({"output_config": {"effort": "low"}}) == (sent_effort({}) if drop_params else "low")
+
+
+def test_explicit_output_effort_beside_a_budget_on_a_custom_named_deployment_follows_its_base_model() -> None:
+    def sent_effort(model: str, deployment_model_info: Mapping[str, object] | None) -> object:
+        new_kwargs: Final = {"model": model}
+        LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+            cast(
+                Any,
+                {
+                    "thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET},
+                    "output_config": {"effort": "low"},
+                },
+            ),
+            cast(Any, new_kwargs),
+            custom_llm_provider="azure",
+            deployment_model_info=deployment_model_info,
+            drop_params=True,
+        )
+        return new_kwargs.get("reasoning_effort")
+
+    assert sent_effort("azure/my-pro-deployment", {"base_model": "azure/gpt-5.4-pro"}) == sent_effort(
+        "azure/gpt-5.4-pro", None
+    )
+
+
+@pytest.mark.parametrize("report_reasoning_drops", [True, False], ids=["request-path", "side-caller"])
+@pytest.mark.parametrize("output_effort", ["low", "turbo"], ids=["refused-by-the-model", "unknown"])
+def test_only_the_request_path_warns_when_drop_params_swaps_the_output_effort_for_the_budgets(
+    openai_model_without_low_tiers: str,
+    output_effort: str,
+    report_reasoning_drops: bool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    new_kwargs: Final = {"model": openai_model_without_low_tiers}
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+            cast(
+                Any,
+                {
+                    "thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+                    "output_config": {"effort": output_effort},
+                },
+            ),
+            cast(Any, new_kwargs),
+            custom_llm_provider="openai",
+            drop_params=True,
+            report_reasoning_drops=report_reasoning_drops,
+        )
+
+    assert new_kwargs["reasoning_effort"] == "medium"
+    assert any(
+        "Dropping output_config.effort" in record.getMessage() for record in caplog.records
+    ) is report_reasoning_drops
+
+
+def test_unknown_output_effort_beside_disabled_thinking_sends_none_without_a_drop_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    new_kwargs: Final = {"model": CACHE_CONTROL_NON_ANTHROPIC_MODEL}
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        LiteLLMAnthropicMessagesAdapter()._translate_thinking_to_openai(
+            cast(Any, {"thinking": {"type": "disabled"}, "output_config": {"effort": "turbo"}}),
+            cast(Any, new_kwargs),
+            drop_params=True,
+        )
+
+    assert new_kwargs["reasoning_effort"] == "none"
+    assert [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()] == []
 
 
 def test_thinking_disabled_translated_to_reasoning_effort_none_for_non_claude_model():
@@ -6771,3 +6977,59 @@ def test_unsigned_thinking_is_still_replayed_to_an_open_model_through_the_chat_a
     turns: Final = _sent_assistant_turns("deepseek/deepseek-v4-pro", {"custom_llm_provider": "deepseek"})
 
     assert [turn.get("reasoning_content") for turn in turns] == ["open model plan", "call ls"]
+
+
+def _deferred_tool_request(model: str = "claude-sonnet-5-5") -> AnthropicMessagesRequest:
+    return AnthropicMessagesRequest(
+        model=model,
+        max_tokens=100,
+        messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+        tools=[
+            {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
+            {
+                "name": "mcp__weather__get_forecast",
+                "description": "Get a forecast",
+                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "defer_loading": True,
+            },
+        ],
+    )
+
+
+@pytest.mark.parametrize("deployment_model_info", [None, {"deferred_tools": "drop"}, {"deferred_tools": "native"}])
+def test_chat_route_sends_deferred_tools_as_plain_functions_unless_passthrough(
+    deployment_model_info: Mapping[str, object] | None,
+):
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(), deployment_model_info=deployment_model_info
+    )
+
+    tools: Final = openai_request["tools"]
+    assert [tool["function"]["name"] for tool in tools] == ["Read", "mcp__weather__get_forecast"]
+    assert not any("defer_loading" in tool for tool in tools)
+    assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)
+
+
+@pytest.mark.parametrize("model", ["vertex_ai/1234567890", "1234567890"], ids=["prefixed", "bare"])
+def test_chat_route_passthrough_sends_plain_functions_to_a_vertex_psc_endpoint(model: str):
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(model),
+        custom_llm_provider="vertex_ai",
+        api_base="https://psc-endpoint.example.internal",
+        deployment_model_info={"deferred_tools": "passthrough"},
+    )
+
+    assert not any("defer_loading" in tool for tool in openai_request["tools"])
+
+
+def test_chat_route_passthrough_keeps_defer_loading_on_the_deferred_tool():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(), deployment_model_info={"deferred_tools": "passthrough"}
+    )
+
+    tools: Final = openai_request["tools"]
+    assert {tool["function"]["name"]: tool.get("defer_loading") for tool in tools} == {
+        "Read": None,
+        "mcp__weather__get_forecast": True,
+    }
+    assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)

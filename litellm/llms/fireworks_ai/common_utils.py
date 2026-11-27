@@ -129,7 +129,7 @@ class FireworksAIMixin:
         litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         api_key = self._get_api_key(api_key)
         if api_key is None:
             raise ValueError("FIREWORKS_API_KEY is not set")

@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 import CopyButton from "@/components/shared/CopyButton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { DEFAULT_MAX_WIDTH, FONT_FAMILY_MONO } from "./constants";
 
 interface TruncatedValueProps {
   value?: string;
@@ -12,7 +11,7 @@ interface TruncatedValueProps {
  * Displays a truncated value with tooltip and copy functionality.
  * Useful for displaying long IDs, URLs, or other text that may overflow.
  */
-export function TruncatedValue({ value, maxWidth = DEFAULT_MAX_WIDTH }: TruncatedValueProps) {
+export function TruncatedValue({ value, maxWidth = 180 }: TruncatedValueProps) {
   const { t } = useTranslation();
   if (!value) return <span className="text-muted-foreground">-</span>;
 
@@ -22,7 +21,7 @@ export function TruncatedValue({ value, maxWidth = DEFAULT_MAX_WIDTH }: Truncate
         <TooltipTrigger
           render={
             <span className="inline-flex items-center gap-1 align-bottom">
-              <span className="truncate text-xs" style={{ maxWidth, fontFamily: FONT_FAMILY_MONO }}>
+              <span className="truncate text-xs [font-family:monospace]" style={{ maxWidth }}>
                 {value}
               </span>
               <CopyButton

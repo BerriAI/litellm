@@ -2,6 +2,7 @@ mod admit;
 mod boot;
 mod callbacks;
 mod config_sync;
+mod cost_map;
 mod db;
 mod error;
 mod gateway_requests;
@@ -23,7 +24,9 @@ pub use callbacks::{
     Callbacks, Registered, Unregistrable,
     model_capacity::{self, ModelCapacity},
     parallel_request_limiter::{self, KeyLimiter},
+    spend_log::{SpendLog, SpendLogs},
 };
+pub use cost_map::CostMapRefresh;
 pub use error::Error;
 pub use gateway_requests::{Category, GatewayRequests};
 pub use live::{Live, Served};
@@ -93,20 +96,26 @@ const LICENSE: &str = "LITELLM_LICENSE";
 /// limiter is built, then the proxy's own key limiter. The keys' limits and the model groups'
 /// capacity are counted in `redis`'s coordination client when there is one, and in this process's
 /// memory otherwise. `variables` holds the config's `environment_variables` in front of the
-/// process's, as the limiter reads its window from them on every call.
+/// process's, as the limiter reads its window from them on every call. With a `spend_log`, the
+/// proxy's spend log callback runs last and writes each served call's row to the database.
 pub async fn build_inference(
     config: &Config,
     variables: &Environment,
     resources: &Resources,
     routing: RoutingCache,
     redis: &RedisClients,
+    spend_log: Option<&SpendLog>,
 ) -> Result<Inference, Error> {
     let counters = parallel_request_limiter::counters(redis.coordination.clone());
-    inference_over(config, variables, resources, routing, redis, counters).await
+    inference_over(
+        config, variables, resources, routing, redis, counters, spend_log,
+    )
+    .await
 }
 
 /// [`build_inference`] over the routing state and the limiters' counters a previous config's
-/// inference counted in, so a new config keeps its cooldowns and rate limit windows.
+/// inference counted in, and its spend log callback, so a new config keeps its cooldowns, rate
+/// limit windows and queued spend logs.
 pub(crate) async fn inference_over(
     config: &Config,
     variables: &Environment,
@@ -114,9 +123,10 @@ pub(crate) async fn inference_over(
     routing: impl Into<Arc<RoutingCache>>,
     redis: &RedisClients,
     counters: Arc<RateLimits>,
+    spend_log: Option<&SpendLog>,
 ) -> Result<Inference, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
-    let (router, shaping) = boot::router(config, &catalog).await?;
+    let router = boot::router(config).await?;
     let deployments = router.registry().deployments(&DeploymentFilter::default());
     let windows = host::ContextWindows::read(&catalog, &deployments).await;
     let limits = parallel_request_limiter::Settings::read(config, variables);
@@ -134,6 +144,7 @@ pub(crate) async fn inference_over(
             .iter()
             .map(|capacity| capacity.registered())
             .chain([key_limiter.registered()])
+            .chain(spend_log.map(SpendLog::registered))
             .collect(),
     )?;
     let gateway = Gateway::new(
@@ -141,10 +152,13 @@ pub(crate) async fn inference_over(
         resources.http.clone(),
         resources.secrets.clone(),
         router,
-        shaping,
+        boot::configured(&config.litellm_settings),
         routing,
         host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
-    )?;
+    )?
+    .with_body_check(litellm_gateway_inference::BodyCheck::new(
+        &config.general_settings,
+    ));
     Ok(Inference {
         gateway: Arc::new(gateway),
         key_limiter,
@@ -176,5 +190,9 @@ pub fn router(state: AppState, config: &Config) -> Router {
         state.auth(config),
         litellm_gateway_auth::authenticate::<host::NativeRows>,
     ));
+    let inference = middleware::allowlisted(
+        inference,
+        middleware::request_allowlist::Settings::from_general(&config.general_settings),
+    );
     middleware::inference(inference).merge(health::router(state))
 }

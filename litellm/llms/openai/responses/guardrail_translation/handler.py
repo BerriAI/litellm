@@ -557,6 +557,36 @@ def _scanned_tool_call_item(item: Mapping[str, object]) -> Mapping[str, object]:
     return {**item, "name": _SCANNED_TOOL_SEARCH_NAME, "arguments": json.dumps(item.get("arguments") or {})}
 
 
+def _is_tool_call_input_item(item: object) -> bool:
+    return isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
+
+
+def _write_back_history_tool_calls(
+    history_tool_call_items: Sequence[tuple[int, Mapping[str, object]]],
+    sent_tool_calls: Sequence[ChatCompletionToolCallChunk],
+    returned_tool_calls: Sequence[object] | None,
+    guardrail_name: str | None,
+) -> None:
+    if returned_tool_calls is None:
+        return
+    if len(returned_tool_calls) != len(sent_tool_calls):
+        raise unappliable_request_rewrite(guardrail_name)
+    rewrites: Final = (
+        (
+            item,
+            stream_item_field(stream_item_field(returned, "function"), "arguments"),
+            sent["function"].get("arguments"),
+        )
+        for (_, item), sent, returned in zip(history_tool_call_items, sent_tool_calls, returned_tool_calls, strict=True)
+    )
+    for item, returned_arguments, sent_arguments in rewrites:
+        if returned_arguments == sent_arguments:
+            continue
+        if not isinstance(item, dict) or not isinstance(returned_arguments, str):
+            raise unappliable_request_rewrite(guardrail_name)
+        item[_TOOL_CALL_PAYLOAD_FIELDS[str(item.get("type"))]] = returned_arguments
+
+
 def _scanned_tool_call(item: Mapping[str, object], index: int) -> ChatCompletionToolCallChunk:
     web_tool_call: Final = _hosted_web_tool_call(item, index)
     if web_tool_call is not None:
@@ -1386,18 +1416,14 @@ class OpenAIResponsesHandler(BaseTranslation):
             skip_tool=skip_tool,
             scan_only=scan_only,
         )
-        if (
-            effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
-            and not scan_only
-            and not isinstance(input_data, str)
-        ):
-            history_tool_calls: Final = [
-                _scanned_tool_call(item, item_idx)
-                for item_idx, item in enumerate(input_data)
-                if item.get("type") in _TOOL_CALL_ITEM_TYPES
-            ]
-            if history_tool_calls:
-                extracted.inputs["tool_calls"] = history_tool_calls
+        history_tool_call_items: Final = (
+            tuple((item_idx, item) for item_idx, item in enumerate(input_data) if _is_tool_call_input_item(item))
+            if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply) and not isinstance(input_data, str)
+            else ()
+        )
+        history_tool_calls: Final = [_scanned_tool_call(item, item_idx) for item_idx, item in history_tool_call_items]
+        if history_tool_calls:
+            extracted.inputs["tool_calls"] = history_tool_calls
         if not extracted.inputs.get("texts") and not extracted.inputs.get("tool_calls"):
             return data
         if scoped_structured_messages:
@@ -1433,6 +1459,12 @@ class OpenAIResponsesHandler(BaseTranslation):
                 data["instructions"] = written_back.instructions  # rebind-ok: data is an out-param
         else:
             await self._apply_guardrailed_texts(data, input_data, extracted, guardrail_to_apply, guardrailed_inputs)
+            _write_back_history_tool_calls(
+                history_tool_call_items,
+                history_tool_calls,
+                guardrailed_inputs.get("tool_calls") if history_tool_calls else None,
+                guardrail_to_apply.guardrail_name,
+            )
         verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", data.get("input"))
         return data
 

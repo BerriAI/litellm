@@ -24,7 +24,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.guardrails_ai import GuardrailsAIGuardrailConfigModel
     from litellm.types.utils import LLMResponseTypes
 
 
@@ -186,7 +186,7 @@ class GuardrailsAI(CustomGuardrail):
             "mcp_call",
         ],
     ) -> (
-        Exception | str | dict | None
+        Exception | str | dict[str, object] | None
     ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         return await self.process_input(data=data, call_type=call_type)
 
@@ -230,7 +230,7 @@ class GuardrailsAI(CustomGuardrail):
         return
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[GuardrailsAIGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.guardrails_ai import (
             GuardrailsAIGuardrailConfigModel,
         )

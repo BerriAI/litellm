@@ -7,7 +7,7 @@ import re
 import sys
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter
@@ -18,11 +18,13 @@ from litellm._logging import (
 )
 from litellm.constants import PROVIDER_ERROR_BODY_ATTRIBUTE, STRINGIFIED_NONE
 from litellm.litellm_core_utils.core_helpers import error_status_code, http_error_status
+from litellm.llms.openai.common_utils import create_may_already_exist
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
 
 LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
+SHOULD_RETRY_HEADER: Final = "x-should-retry"
 _SERVER_IS_OVERLOADED_CODE: Final = "server_is_overloaded"
 
 _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
@@ -289,11 +291,42 @@ def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | Non
     return {LITELLM_CALL_ID_HEADER: litellm_call_id}
 
 
+def failed_call_headers(
+    litellm_call_id: str | None, response_cost: float
+) -> dict[str, str]:  # mutable-ok: ProxyException.headers
+    cost_headers: Final = {"x-litellm-response-cost": str(response_cost)} if response_cost > 0 else {}
+    return {**(litellm_call_id_headers(litellm_call_id) or {}), **cost_headers}
+
+
 def with_litellm_call_id(exc: ProxyException, litellm_call_id: str | None) -> ProxyException:
     """The same error object, answering with ``x-litellm-call-id`` when it was raised without one."""
     if litellm_call_id is not None:
         exc.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
     return exc
+
+
+_CREATE_MAY_EXIST_NOTICES: Final[Mapping[Literal["file", "batch"], str]] = MappingProxyType(
+    {
+        "file": "The provider may already have created this file, so check your newest files before you send it again",
+        "batch": "The provider may already have created this batch, so check your newest batches before you send it again",
+    }
+)
+
+
+def with_notice_when_the_create_may_exist(
+    exc: ProxyException, error: BaseException, created: Literal["file", "batch"]
+) -> ProxyException:
+    if not create_may_already_exist(error):
+        return exc
+    return ProxyException(
+        message=f"{exc.message}\n\n{_CREATE_MAY_EXIST_NOTICES[created]}",
+        type=exc.type,
+        param=exc.param,
+        code=exc.code,
+        headers={**exc.headers, SHOULD_RETRY_HEADER: "false"},
+        openai_code=None if exc.openai_code is None else str(exc.openai_code),
+        provider_specific_fields=exc.provider_specific_fields,  # pyright: ignore[reportUnknownMemberType]  # ProxyException omits generic arguments
+    )
 
 
 def headers_with_litellm_call_id(headers: Mapping[str, str] | None, litellm_call_id: str) -> Mapping[str, str]:

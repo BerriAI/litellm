@@ -299,7 +299,7 @@ class AzureOpenAIConfig(BaseConfig):
         optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: dict[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
         wire_messages: Final = (
             self._with_wire_safe_prompt_cache_breakpoints(model, ordered_messages, litellm_params)

@@ -37,7 +37,7 @@ use litellm_env::Lookup;
 use litellm_error::Report;
 use litellm_repositories::{
     ConfigParam, ConfigRepository, Credential, CredentialRepository, Database, ProxyModel,
-    ProxyModelRepository, RawJson, UiSettingsRepository,
+    ProxyModelRepository, RawJson, StoredObjects, StoredObjectsRepository, UiSettingsRepository,
 };
 use litellm_secret_value::SecretValue;
 use litellm_secrets::SecretResolver;
@@ -55,14 +55,51 @@ pub(crate) type Secrets = dyn Fn() -> SecretResolver + Send + Sync;
 pub enum StoredConfig {
     /// `store_model_in_db` is off, so the proxy reads no config from its database.
     Unused,
-    /// It is on and the database was read, so the config holds what it stores.
-    Loaded,
+    /// It is on and the database was read, so the config holds what it stores, beside which kinds
+    /// of the other objects the proxy loads with it the database holds.
+    Loaded(StoredObjects),
     /// It is on, or the settings rows that may turn it on could not be read, and the database could
     /// not be read, so the native app runs the file alone and serves nothing.
     Unread,
     /// It is off and the UI settings could not be read or layered in, so the native app runs the
     /// file alone and serves nothing. No stored model is ever loaded for it.
     UiSettingsUnread,
+}
+
+/// Whether `objects` holds an `object` the proxy loads beside the stored config into something a
+/// request the native app serves reaches, while the native app does not read it. The stored
+/// `mcp_semantic_tool_filter` and `websearch_interception_params` are `litellm_settings` keys, so
+/// the settings check reads them in the layered config instead, and the native app reads the rest.
+pub(crate) fn holds(objects: StoredObjects, object: DbObject) -> bool {
+    let StoredObjects {
+        default_on_guardrails,
+        policy_attachments,
+        tool_policies,
+        cache_settings,
+        config_overrides,
+        anthropic_beta_headers_reload,
+        model_cost_map_reload,
+    } = objects;
+    match object {
+        DbObject::Guardrails => default_on_guardrails,
+        DbObject::Policies => policy_attachments,
+        DbObject::Tools => tool_policies,
+        DbObject::CacheSettings => cache_settings,
+        DbObject::ConfigOverrides => config_overrides,
+        DbObject::AnthropicBetaHeaders => anthropic_beta_headers_reload,
+        DbObject::ModelCostMap => model_cost_map_reload,
+        DbObject::SemanticFilterSettings
+        | DbObject::WebsearchInterceptionSettings
+        | DbObject::Models
+        | DbObject::Mcp
+        | DbObject::VectorStores
+        | DbObject::VectorStoreIndexes
+        | DbObject::Agents
+        | DbObject::PassThroughEndpoints
+        | DbObject::Prompts
+        | DbObject::SearchTools
+        | DbObject::SsoSettings => false,
+    }
 }
 
 /// A config the native app is built from, and whether it holds the config the proxy stores in its
@@ -81,6 +118,7 @@ pub(crate) struct Fetched {
     pub(crate) settings: SettingsRows,
     pub(crate) models: Vec<DbModel>,
     pub(crate) credentials: Vec<DbCredential>,
+    pub(crate) objects: StoredObjects,
 }
 
 /// The rows the stored config is read from.
@@ -89,6 +127,7 @@ pub(crate) trait StoredRows {
     async fn models(&self) -> Result<Vec<ProxyModel>, litellm_db::Error>;
     async fn credentials(&self) -> Result<Vec<Credential>, litellm_db::Error>;
     async fn ui_settings(&self) -> Result<Option<RawJson>, litellm_db::Error>;
+    async fn objects(&self) -> Result<StoredObjects, litellm_db::Error>;
 }
 
 impl StoredRows for Database {
@@ -112,6 +151,10 @@ impl StoredRows for Database {
 
     async fn ui_settings(&self) -> Result<Option<RawJson>, litellm_db::Error> {
         UiSettingsRepository::new(self.clone()).find().await
+    }
+
+    async fn objects(&self) -> Result<StoredObjects, litellm_db::Error> {
+        StoredObjectsRepository::new(self.clone()).find().await
     }
 }
 
@@ -176,7 +219,7 @@ pub(crate) async fn load(path: &Path, secrets: Arc<Secrets>) -> Result<Loaded, E
 /// With it off nothing stored but the UI settings is ever layered in, and they are not read again.
 fn reads_again(stored: StoredConfig) -> bool {
     match stored {
-        StoredConfig::Loaded | StoredConfig::Unread => true,
+        StoredConfig::Loaded(_) | StoredConfig::Unread => true,
         StoredConfig::Unused | StoredConfig::UiSettingsUnread => false,
     }
 }
@@ -256,7 +299,7 @@ pub(crate) async fn layered(
         Ok(config) => (
             Loaded {
                 config,
-                stored: StoredConfig::Loaded,
+                stored: StoredConfig::Loaded(fetched.objects),
                 source: None,
             },
             Some(fetched),
@@ -336,8 +379,8 @@ fn without_stored(file: Config, on: bool) -> Loaded {
     }
 }
 
-/// The stored models and credentials beside `settings`. The models are read only when
-/// `supported_db_objects`, with the stored settings under the file, loads them.
+/// The stored models, credentials and other objects beside `settings`. The models are read only
+/// when `supported_db_objects`, with the stored settings under the file, loads them.
 pub(crate) async fn fetch(
     document: &Document,
     settings: SettingsRows,
@@ -360,10 +403,12 @@ pub(crate) async fn fetch(
         .into_iter()
         .filter_map(|row| stored_credential(row, key))
         .collect();
+    let objects = rows.objects().await?;
     Ok(Fetched {
         settings,
         models,
         credentials,
+        objects,
     })
 }
 
@@ -660,6 +705,7 @@ mod tests {
             models: models.then(|| vec![model("stored", STORED)]),
             credentials: credentials.then(Vec::new),
             ui_settings: Ok(None),
+            ..Rows::default()
         }
     }
 
@@ -668,12 +714,12 @@ mod tests {
     #[case::on_in_the_file(
         &format!("{FILE}{ON}"),
         rows_with(None, true, true),
-        (StoredConfig::Loaded, vec!["file", "stored"])
+        (StoredConfig::Loaded(StoredObjects::default()), vec!["file", "stored"])
     )]
     #[case::on_in_the_stored_row(
         FILE,
         rows_with(Some(r#"{"store_model_in_db": true}"#), true, true),
-        (StoredConfig::Loaded, vec!["file", "stored"])
+        (StoredConfig::Loaded(StoredObjects::default()), vec!["file", "stored"])
     )]
     #[case::settings_unreadable_while_the_file_says_nothing(
         FILE,
@@ -698,7 +744,7 @@ mod tests {
     #[case::models_left_out_by_supported_db_objects(
         &format!("{FILE}{ON}  supported_db_objects: [mcp]\n"),
         rows_with(None, false, true),
-        (StoredConfig::Loaded, vec!["file"])
+        (StoredConfig::Loaded(StoredObjects::default()), vec!["file"])
     )]
     #[tokio::test]
     async fn the_stored_config_is_layered_in_only_when_store_model_in_db_is_on_and_it_reads(
@@ -768,6 +814,7 @@ mod tests {
                 ),
             )]),
             ui_settings: Ok(None),
+            ..Rows::default()
         };
         let file = format!("model_list: []\ngeneral_settings:\n  master_key: {MASTER_KEY}\n");
 
@@ -804,7 +851,7 @@ mod tests {
 
         assert_eq!(
             (loaded.stored, state.key_limiter.window_size()),
-            (StoredConfig::Loaded, 3600)
+            (StoredConfig::Loaded(StoredObjects::default()), 3600)
         );
         state.close().await;
     }
@@ -825,7 +872,10 @@ mod tests {
 
         assert_eq!(
             served(&loaded),
-            (StoredConfig::Loaded, vec!["file", "stored"])
+            (
+                StoredConfig::Loaded(StoredObjects::default()),
+                vec!["file", "stored"]
+            )
         );
     }
 
@@ -836,7 +886,7 @@ mod tests {
     #[case::store_model_in_db_on(
         &format!("{FILE}{ON}"),
         Ok(Some(FORWARD_HEADERS)),
-        StoredConfig::Loaded,
+        StoredConfig::Loaded(StoredObjects::default()),
         Some(true)
     )]
     #[case::store_model_in_db_off(
@@ -982,7 +1032,7 @@ mod tests {
     #[case::fips_mode_decrypts_a_value_written_in_fips_mode(
         "true",
         &[("LITELLM_SALT_KEY", FIPS_SALT_KEY)],
-        StoredConfig::Loaded,
+        StoredConfig::Loaded(StoredObjects::default()),
         Some("fips-key")
     )]
     #[case::fips_mode_without_a_salt_key_is_unread(
@@ -1006,7 +1056,7 @@ mod tests {
     #[case::fips_mode_off_keeps_the_value_it_cannot_decrypt(
         "false",
         &[("LITELLM_SALT_KEY", FIPS_SALT_KEY)],
-        StoredConfig::Loaded,
+        StoredConfig::Loaded(StoredObjects::default()),
         None
     )]
     #[tokio::test]
@@ -1033,7 +1083,7 @@ mod tests {
             .and_then(|model| model.litellm_params.api_key.as_ref())
             .map(|key| key.expose().to_owned());
         let expected = match stored {
-            StoredConfig::Loaded => Some(decrypted.unwrap_or(&ciphertext).to_owned()),
+            StoredConfig::Loaded(_) => Some(decrypted.unwrap_or(&ciphertext).to_owned()),
             _ => None,
         };
         assert_eq!((loaded.stored, api_key), (stored, expected));
@@ -1056,7 +1106,7 @@ mod tests {
         Err(()),
         (StoredConfig::Unread, true)
     )]
-    #[case::store_model_in_db_on(&format!("{FILE}{ON}"), Ok(None), (StoredConfig::Loaded, true))]
+    #[case::store_model_in_db_on(&format!("{FILE}{ON}"), Ok(None), (StoredConfig::Loaded(StoredObjects::default()), true))]
     #[tokio::test]
     async fn the_stored_config_is_read_again_only_with_store_model_in_db_on(
         #[case] yaml: &str,
@@ -1075,7 +1125,7 @@ mod tests {
             served(&loaded).1,
             vec!["file"]
                 .into_iter()
-                .chain((expected.0 == StoredConfig::Loaded).then_some("stored"))
+                .chain(matches!(expected.0, StoredConfig::Loaded(_)).then_some("stored"))
                 .collect::<Vec<_>>()
         );
     }

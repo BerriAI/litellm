@@ -188,7 +188,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate MiniMax environment and set up authentication headers
         """

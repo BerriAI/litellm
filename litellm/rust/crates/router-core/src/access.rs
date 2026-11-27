@@ -6,6 +6,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use jiff::{Timestamp, tz::TimeZone};
+use litellm_router_types::{ModelEntry, SpecialModel};
 use serde_json::Value;
 
 use crate::registry::Deployment;
@@ -168,7 +169,10 @@ pub fn filter_by_access_groups(
         return deployments;
     }
     let allowed = |name: &str| allowed_models.iter().any(|m| m == name);
-    if allowed(model) || allowed("*") || allowed("all-proxy-models") {
+    let every = allowed_models
+        .iter()
+        .any(|m| ModelEntry::of(m) == ModelEntry::Special(SpecialModel::Every));
+    if allowed(model) || every {
         return deployments;
     }
     let groups: BTreeSet<String> = model_groups()

@@ -1,7 +1,10 @@
 mod admission;
+mod affiliation;
 pub mod authn;
 pub mod authz;
+pub mod body;
 mod caller;
+pub mod client_address;
 mod commit;
 mod error;
 mod host;
@@ -10,6 +13,7 @@ mod outcome;
 mod pipeline;
 pub mod plan;
 mod public;
+pub mod record;
 mod request;
 pub mod routes;
 mod settings;
@@ -20,27 +24,30 @@ mod testing;
 mod token;
 mod value;
 
-pub use caller::{Caller, NotACaller, StoredKey};
+pub use affiliation::{Affiliation, Holder, Named, Team, TeamCopy};
+pub use caller::{Caller, Credential, NotACaller, StoredKey};
 pub use error::{
-    AgentIdentityFailure, AssertionRejection, BudgetExceeded, ClaimDenial, Error, JwtDenial,
-    KeyDenial, KeyError, KeyFailure, ModelAccessDenied, PremiumRequired, RbacDenial, Searched,
-    TeamDenial, TokenError, VerifyDenial,
+    AddressNotAllowed, AgentIdentityFailure, AssertionRejection, AuthzDenial, BudgetExceeded,
+    ClaimDenial, DeniedList, Error, JwtDenial, KeyDenial, KeyError, KeyFailure, ModelAccessDenied,
+    PremiumRequired, RbacDenial, RequestDenial, Searched, TeamDenial, TokenError, VerifyDenial,
 };
 pub use host::{
     AgentRow, AuthHost, EndUserRow, KeyRow, MembershipRow, ObjectPermissionRow, OperatorHooks,
-    OrgRow, ProjectRow, Row, Rows, TeamRow, UserRow,
+    OrgRow, ProjectRow, Refreshed, Row, Rows, TeamRow, UserRow,
 };
 pub use outcome::{Identity, KeyOutcome, Outcome, Refused};
 pub use public::{ErrorType, PublicDenial};
 pub use request::Request;
 pub use routes::{
-    ManagedRoute, MissingRouteGroup, RouteAllowlist, RouteGroup, RouteGroups, matches_wildcard,
+    ExposedRoutes, ManagedRoute, MissingRouteGroup, RouteAllowlist, RouteGroup, RouteGroups,
+    RouteNotExposed, matches_wildcard,
 };
-pub use settings::{HostFacts, Settings};
+pub use settings::{Allowlists, HostFacts, Settings};
 pub use token::{KeyHash, MasterKey, Token};
 
 use crate::{
-    authn::key::Credential,
+    authn::key::KeySource,
+    client_address::Origin,
     identity::{
         jwt::{ClaimIdentity, JwtIdentity, JwtMapping, JwtOutcome, Provisioning},
         key::KeyIdentity,
@@ -49,6 +56,18 @@ use crate::{
 };
 
 type Authenticated<H> = Result<Outcome<<H as AuthHost>::Rows>, Error>;
+
+/// Whether the proxy takes the request at all, decided before any credential is read: its address,
+/// then its route, as `pre_db_read_auth_checks` orders them.
+pub fn check_request(
+    route: &str,
+    origin: Origin<'_>,
+    allowlists: &Allowlists,
+) -> Result<(), RequestDenial> {
+    allowlists.client_addresses.permits(origin)?;
+    allowlists.exposed_routes.permits(route)?;
+    Ok(())
+}
 
 /// Which path authenticates the request, in the proxy's order. Custom auth runs before it, in the
 /// host, since it depends only on the host's configuration.
@@ -64,7 +83,7 @@ pub async fn authenticate_key<H: AuthHost>(
     key: Option<&Token>,
     settings: &Settings,
 ) -> Authenticated<H> {
-    let credential = Credential::Presented(key);
+    let credential = KeySource::Presented(key);
     key_outcome(
         pipeline::key::authenticate(
             host,
@@ -97,7 +116,7 @@ pub async fn authenticate_jwt<H: AuthHost>(
         )))),
         JwtOutcome::Finished(token) => Ok(Outcome::Authenticated(Identity::FinishedJwt(token))),
         JwtOutcome::MappedKey(key, jwt) => {
-            let credential = Credential::Resolved {
+            let credential = KeySource::Resolved {
                 key,
                 end_user_id: jwt.end_user_id.as_deref(),
             };
@@ -190,7 +209,7 @@ mod tests {
     use std::collections::HashMap;
 
     use http::Method;
-    use litellm_config::{GeneralSettings, JwtAuthSettings};
+    use litellm_config::{GeneralSettings, JwtAuthSettings, RouteList};
     use rstest::rstest;
     use serde_json::{Value, json};
 
@@ -219,6 +238,65 @@ mod tests {
             route_groups: crate::test_support::route_groups(),
         };
         Settings::new(general, facts, &|_| None)
+    }
+
+    fn allowlists() -> Allowlists {
+        let list = |entry: &str| RouteList::Valid(Box::from([entry.to_owned()]));
+        Allowlists::new(&GeneralSettings {
+            allowed_ips: Some(list("10.0.0.1")),
+            allowed_routes: Some(list("/health")),
+            ..GeneralSettings::default()
+        })
+    }
+
+    fn from(peer: &str) -> Origin<'_> {
+        Origin {
+            peer: Some(peer),
+            forwarded_for: None,
+        }
+    }
+
+    #[rstest]
+    #[case::listed_address_and_route("10.0.0.1", "/health", None)]
+    #[case::unlisted_route(
+        "10.0.0.1",
+        "/v1/messages",
+        Some("Access forbidden: Route /v1/messages not allowed")
+    )]
+    #[case::unlisted_address(
+        "10.0.0.9",
+        "/health",
+        Some("Access forbidden: IP address 10.0.0.9 not allowed.")
+    )]
+    #[case::the_address_is_refused_before_the_route(
+        "10.0.0.9",
+        "/v1/messages",
+        Some("Access forbidden: IP address 10.0.0.9 not allowed.")
+    )]
+    fn a_request_is_refused_with_the_403_the_proxy_raised(
+        #[case] peer: &str,
+        #[case] route: &str,
+        #[case] detail: Option<&str>,
+    ) {
+        let refused = check_request(route, from(peer), &allowlists())
+            .err()
+            .map(|denial| denial.public());
+
+        assert_eq!(
+            refused,
+            detail.map(|detail| PublicDenial::Http {
+                status: 403,
+                detail: detail.to_owned(),
+            })
+        );
+    }
+
+    #[rstest]
+    fn no_allowlist_takes_every_request() {
+        assert_eq!(
+            check_request("/v1/messages", from("10.0.0.9"), &Allowlists::default()),
+            Ok(())
+        );
     }
 
     #[rstest]

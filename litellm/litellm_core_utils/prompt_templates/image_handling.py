@@ -655,6 +655,11 @@ def file_id_urls_before_an_unreadable_part(
     return tuple(dict.fromkeys(url for part in readable_parts if (url := _file_id_url(part, url_starts)) is not None))
 
 
+def has_remote_media(messages: Iterable[AllMessageValues], matches: Callable[[RemoteMedia], bool]) -> bool:
+    remotes: Final = (remote for part in _message_parts(messages) if (remote := _parse_remote_part(part)) is not None)
+    return any(matches(_remote_media(remote)) for remote in remotes)
+
+
 def inline_remote_media(
     messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
     should_inline: Callable[[RemoteMedia], bool] = inline_every_remote_url,

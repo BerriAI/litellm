@@ -15,8 +15,15 @@ from litellm.containers.utils import (
     ContainerRequestUtils,
     decode_managed_container_id_for_request,
 )
-from litellm.litellm_core_utils.core_helpers import keyword_arguments
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.call_kwargs import logging_obj_of
+from litellm.litellm_core_utils.core_helpers import (
+    SupportsGet,
+    json_contains,
+    keyword_arguments,
+    require_get,
+    set_item,
+    subscript,
+)
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.main import base_llm_http_handler
 from litellm.types.containers.main import (
@@ -132,6 +139,10 @@ async def acreate_container(
         )
 
 
+def _routing_metadata(value: object) -> SupportsGet | None:
+    return require_get(value) if value else None
+
+
 # fmt: off
 
 # Overload for when acreate_container=True (returns Coroutine)
@@ -186,7 +197,7 @@ def create_container(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerObject | Coroutine[object, object, ContainerObject]:
     """Create a container using the OpenAI Container API.
 
@@ -205,8 +216,8 @@ def create_container(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -251,7 +262,7 @@ def create_container(
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model="",
             optional_params=dict(container_create_request_params),
@@ -263,14 +274,14 @@ def create_container(
         )
 
         # Set the correct call type for container creation
-        litellm_logging_obj.call_type = CallTypes.create_container.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.create_container.value
 
         container_obj = base_llm_http_handler.container_create_handler(
             name=name,
             container_create_request_params=container_create_request_params,
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
@@ -279,7 +290,7 @@ def create_container(
         encode: Final = partial(
             ContainerRequestUtils.encode_container_id_in_response,
             custom_llm_provider=custom_llm_provider,
-            litellm_metadata=kwargs.get("litellm_metadata"),
+            litellm_metadata=_routing_metadata(kwargs.get("litellm_metadata")),
             extra_body=extra_body,
         )
         if isinstance(container_obj, ContainerObject):
@@ -419,7 +430,7 @@ def list_containers(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerListResponse | Coroutine[object, object, ContainerListResponse]:
     """List containers using the OpenAI Container API.
 
@@ -427,8 +438,8 @@ def list_containers(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -464,7 +475,7 @@ def list_containers(
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model="",
             optional_params=dict(container_list_optional_params),
@@ -476,12 +487,12 @@ def list_containers(
         )
 
         # Set the correct call type
-        litellm_logging_obj.call_type = CallTypes.list_containers.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.list_containers.value
 
         return base_llm_http_handler.container_list_handler(
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             after=after,
             limit=limit,
             order=order,
@@ -611,7 +622,7 @@ def retrieve_container(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerObject | Coroutine[object, object, ContainerObject]:
     """Retrieve a container using the OpenAI Container API.
 
@@ -620,8 +631,8 @@ def retrieve_container(
     local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -662,7 +673,7 @@ def retrieve_container(
             raise ValueError(f"Container provider config not found for provider: {resolved_custom_llm_provider}")
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model="",
             optional_params={},
@@ -673,13 +684,13 @@ def retrieve_container(
         )
 
         # Set the correct call type
-        litellm_logging_obj.call_type = CallTypes.retrieve_container.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.retrieve_container.value
 
         container_obj = base_llm_http_handler.container_retrieve_handler(
             container_id=original_container_id,  # Use decoded original ID
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_query=extra_query,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
@@ -690,19 +701,19 @@ def retrieve_container(
         # If input was encoded, preserve encoding in output using the decoded model_id
         if isinstance(container_obj, ContainerObject):
             # If input was encoded, use model_id from decoded params
-            litellm_metadata = kwargs.get("litellm_metadata", {})
+            litellm_metadata: object = kwargs.get("litellm_metadata", {})
             if was_encoded and litellm_params.get("model_id"):
                 # Inject model_id from decoded container_id into litellm_metadata
                 if not litellm_metadata:
                     litellm_metadata = {}
-                if "model_info" not in litellm_metadata:
-                    litellm_metadata["model_info"] = {}
-                litellm_metadata["model_info"]["id"] = litellm_params["model_id"]
+                if not json_contains(litellm_metadata, "model_info"):
+                    set_item(litellm_metadata, "model_info", {})
+                set_item(subscript(litellm_metadata, "model_info"), "id", litellm_params["model_id"])
 
             container_obj = ContainerRequestUtils.encode_container_id_in_response(
                 response_obj=container_obj,
                 custom_llm_provider=resolved_custom_llm_provider,
-                litellm_metadata=litellm_metadata,
+                litellm_metadata=_routing_metadata(litellm_metadata),
                 extra_body=None,
             )
 
@@ -828,7 +839,7 @@ def delete_container(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteContainerResult | Coroutine[object, object, DeleteContainerResult]:
     """Delete a container using the OpenAI Container API.
 
@@ -837,8 +848,8 @@ def delete_container(
     local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -879,7 +890,7 @@ def delete_container(
             raise ValueError(f"Container provider config not found for provider: {resolved_custom_llm_provider}")
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model="",
             optional_params={},
@@ -890,13 +901,13 @@ def delete_container(
         )
 
         # Set the correct call type
-        litellm_logging_obj.call_type = CallTypes.delete_container.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.delete_container.value
 
         delete_result = base_llm_http_handler.container_delete_handler(
             container_id=original_container_id,  # Use decoded original ID
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_query=extra_query,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
@@ -907,19 +918,19 @@ def delete_container(
         # If input was encoded, preserve encoding in output using the decoded model_id
         if isinstance(delete_result, DeleteContainerResult):
             # If input was encoded, use model_id from decoded params
-            litellm_metadata = kwargs.get("litellm_metadata", {})
+            litellm_metadata: object = kwargs.get("litellm_metadata", {})
             if was_encoded and litellm_params.get("model_id"):
                 # Inject model_id from decoded container_id into litellm_metadata
                 if not litellm_metadata:
                     litellm_metadata = {}
-                if "model_info" not in litellm_metadata:
-                    litellm_metadata["model_info"] = {}
-                litellm_metadata["model_info"]["id"] = litellm_params["model_id"]
+                if not json_contains(litellm_metadata, "model_info"):
+                    set_item(litellm_metadata, "model_info", {})
+                set_item(subscript(litellm_metadata, "model_info"), "id", litellm_params["model_id"])
 
             delete_result = ContainerRequestUtils.encode_container_id_in_response(
                 response_obj=delete_result,
                 custom_llm_provider=resolved_custom_llm_provider,
-                litellm_metadata=litellm_metadata,
+                litellm_metadata=_routing_metadata(litellm_metadata),
                 extra_body=None,
             )
 
@@ -1059,7 +1070,7 @@ def list_container_files(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerFileListResponse | Coroutine[object, object, ContainerFileListResponse]:
     """List files in a container using the OpenAI Container API.
 
@@ -1068,8 +1079,8 @@ def list_container_files(
     local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -1108,7 +1119,7 @@ def list_container_files(
             raise ValueError(f"Container provider config not found for provider: {resolved_custom_llm_provider}")
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model="",
             optional_params={
@@ -1124,13 +1135,13 @@ def list_container_files(
         )
 
         # Set the correct call type
-        litellm_logging_obj.call_type = CallTypes.list_container_files.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.list_container_files.value
 
         return base_llm_http_handler.container_file_list_handler(
             container_id=original_container_id,  # Use decoded original ID
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             after=after,
             limit=limit,
             order=order,
@@ -1283,7 +1294,7 @@ def upload_container_file(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerFileObject | Coroutine[object, object, ContainerFileObject]:
     """Upload a file to a container using the OpenAI Container API.
 
@@ -1321,8 +1332,8 @@ def upload_container_file(
     local_vars: Final = locals()
     try:
         resolved_custom_llm_provider: str = custom_llm_provider
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.pop("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("async_call", False) is True
 
         # Check for mock response first
@@ -1361,7 +1372,7 @@ def upload_container_file(
             raise ValueError(f"Container provider config not found for provider: {resolved_custom_llm_provider}")
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model="",
             optional_params={"container_id": container_id},
@@ -1372,13 +1383,13 @@ def upload_container_file(
         )
 
         # Set the correct call type
-        litellm_logging_obj.call_type = CallTypes.upload_container_file.value
+        logging_obj_of(litellm_logging_obj).call_type = CallTypes.upload_container_file.value
 
         return generic_container_handler.handle(
             endpoint_name="upload_container_file",
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_query=extra_query,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,

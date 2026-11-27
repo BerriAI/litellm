@@ -15,7 +15,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
-from litellm.integrations.langfuse.langfuse import LangFuseLogger
+from litellm.integrations.langfuse.langfuse import LangFuseLogger, _chat_usage, _extract_cache_read_input_tokens
 from litellm.integrations.langfuse.langfuse_prompt_management import langfuse_client_init
 from litellm.integrations.langfuse.langfuse_sdk import (
     flush_langfuse_tracing,
@@ -495,3 +495,12 @@ async def test_langfuse_e2e_sync(langfuse_export: tuple[respx.Route, str]) -> No
     assert route.call_count == 1
     assert str(route.calls[0].request.url).endswith("/api/public/otel/v1/traces")
     assert _exported_spans(route)
+
+
+def test_langfuse_chat_usage_keeps_cache_token_reads() -> None:
+    usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12, cache_read_input_tokens=4)
+    assert _chat_usage(usage) is usage
+    assert _extract_cache_read_input_tokens(usage) == 4
+    converted: Final = _chat_usage({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+    assert isinstance(converted, litellm.Usage)
+    assert converted.get("cache_creation_input_tokens") in (None, 0)

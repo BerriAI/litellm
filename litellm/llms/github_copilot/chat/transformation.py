@@ -142,7 +142,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         return validated_headers
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get supported OpenAI parameters for GitHub Copilot.
 

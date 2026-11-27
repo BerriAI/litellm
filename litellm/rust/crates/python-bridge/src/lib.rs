@@ -92,14 +92,15 @@ mod _native {
     #[pymodule_export]
     use crate::diagnostics::{gil_stats, process_state_started, reserve_process_for_forking};
     #[pymodule_export]
-    use crate::errors::{RustBridgeDeclined, RustUpstreamError};
+    use crate::errors::{RustBridgeDeclined, RustDocumentFetchError, RustUpstreamError};
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
     #[pymodule_export]
     use crate::model_cost::{
-        NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
-        NativeModelCostMap, NativeModelCostMapState, NativeProvenance, NativeRegistered,
-        NativeRejected, NativeTableSwapped,
+        CostMapKept, CostMapRefreshStop, CostMapRefreshed, NativeCostMapSource, NativeFetchFailed,
+        NativeFetchPolicy, NativeFetched, NativeInstalled, NativeModelCostMap,
+        NativeModelCostMapState, NativeProvenance, NativeRegistered, NativeRejected,
+        NativeTableSwapped,
     };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
@@ -221,6 +222,7 @@ mod tests {
             let mut expected = vec![
                 "RustBridgeDeclined",
                 "RustUpstreamError",
+                "RustDocumentFetchError",
                 "ForkedAfterNativeRuntimeStarted",
                 "ProcessReservedForForking",
                 "ocr",
@@ -318,6 +320,9 @@ mod tests {
                 "NativeFetchPolicy",
                 "NativeFetched",
                 "NativeFetchFailed",
+                "CostMapRefreshed",
+                "CostMapRefreshStop",
+                "CostMapKept",
                 "TokenCounter",
                 "Tokenizer",
                 "RouterCoreHandle",

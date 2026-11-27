@@ -2064,7 +2064,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return headers
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:

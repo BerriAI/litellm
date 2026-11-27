@@ -100,7 +100,6 @@ async def resolve_app_hierarchy(
     route: str,
     authenticated: UserAPIKeyAuth,
 ) -> CustomerHierarchyAuth | None:
-    import litellm
     from litellm.proxy.proxy_server import get_current_spend, user_api_key_cache
 
     assertion: Final = selected_app_assertion(headers)
@@ -203,17 +202,22 @@ async def resolve_app_hierarchy(
         partial(get_current_spend, recheck_recorded_spend=True),
     )
     base: Final = hierarchy or CustomerHierarchyAuth(scopes=())
-    combined: Final = base.model_copy(
-        update={
-            "app_id": app.app_id,
-            "app_group_id": app.app_group_id,
-            "app_alias": app.alias,
-            "app_customer_margin": app.customer_margin,
-            "scopes": (*base.scopes, *app_hierarchy.scopes),
-        }
-    )
+
+    def combined(app_scopes: Sequence[CustomerScopeAuth]) -> CustomerHierarchyAuth:
+        return base.model_copy(
+            update={
+                "app_id": app.app_id,
+                "app_group_id": app.app_group_id,
+                "app_alias": app.alias,
+                "app_customer_margin": app.customer_margin,
+                "scopes": (*base.scopes, *app_scopes),
+            }
+        )
+
     try:
-        await check_customer_hierarchy_access(app_hierarchy, llm_router, request_model, route, metadata)
-    except litellm.BudgetExceededError as error:
-        raise CustomerBudgetExceededError(combined, error) from error
-    return combined
+        admitted: Final = await check_customer_hierarchy_access(
+            app_hierarchy, llm_router, request_model, route, metadata
+        )
+    except CustomerBudgetExceededError as error:
+        raise CustomerBudgetExceededError(combined(error.customer_hierarchy.scopes), error) from error
+    return combined(admitted.scopes)

@@ -20,6 +20,7 @@ from litellm import DualCache, Router
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm._internal_context import nested_tool_call_failure
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
     claim_request_stash_for_data,
@@ -2416,6 +2417,26 @@ async def test_a_reservation_at_saturation_is_refunded_when_the_proxy_refuses_th
             request_data=_prompt(words=30), original_exception=Exception("guardrail refused"), user_api_key_dict=key
         )
         assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
+async def test_a_failed_tool_call_inside_the_request_leaves_the_requests_reservation_held(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key()
+    await _check(handler, key, saturation=0.5, data=_prompt(words=30))
+    held: Final = await _team_tokens_remaining(handler)
+    assert held < 70
+    with nested_tool_call_failure():
+        await handler.async_post_call_failure_hook(
+            request_data={}, original_exception=Exception("tool failed"), user_api_key_dict=key
+        )
+    assert await _team_tokens_remaining(handler) == held
+    await handler.async_post_call_failure_hook(
+        request_data=_prompt(words=30), original_exception=Exception("request failed"), user_api_key_dict=key
+    )
+    assert await _team_tokens_remaining(handler) == 100
 
 
 @pytest.mark.asyncio

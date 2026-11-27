@@ -2926,3 +2926,72 @@ async def test_live_session_upstream_uses_the_deployment_stored_credential(monke
 @pytest.mark.asyncio
 async def test_live_session_upstream_is_none_for_a_provider_without_a_live_api() -> None:
     assert await realtime_main.live_session_upstream({"model": "xai/grok-voice", "api_key": "xai-key"}) is None
+
+
+@pytest.mark.asyncio
+async def test_arealtime_vertex_ignores_alias_project_and_credentials_that_are_not_strings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: Final = _CallCapture()
+
+    def mock_get_llm_provider(
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str | None = None,
+    ) -> tuple[str, str, str | None, str | None]:
+        return model, "vertex_ai", None, api_base
+
+    async def failing_token_refresh(**kwargs: object) -> tuple[str, str]:
+        captured.values = kwargs
+        raise ValueError("stop after credential resolution")
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main, "vertex_access_token_resolver", failing_token_refresh)
+    monkeypatch.setattr(litellm, "vertex_project", None)
+    monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+    monkeypatch.delenv("VERTEXAI_CREDENTIALS", raising=False)
+
+    with pytest.raises(ValueError, match="stop after credential resolution"):
+        await realtime_main._arealtime.__wrapped__(
+            model="gemini-live-2.5-flash",
+            websocket=MagicMock(),
+            litellm_logging_obj=FakeLogging(),
+            vertex_ai_credentials=123,
+            vertex_ai_project=456,
+            vertex_location="us-central1",
+        )
+
+    assert captured.values is not None
+    assert (captured.values["credentials"], captured.values["project_id"]) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_arealtime_calls_ignores_extra_headers_that_are_not_a_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final = _CallCapture()
+
+    async def capture_calls_handler(**kwargs: object) -> object:
+        captured.values = kwargs
+        return object()
+
+    def mock_get_llm_provider(
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str | None = None,
+    ) -> tuple[str, str, str | None, str | None]:
+        return model, "openai", None, api_base
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main.base_llm_http_handler, "async_realtime_calls_handler", capture_calls_handler)
+
+    await realtime_main.arealtime_calls.__wrapped__(
+        openai_ephemeral_key="ek_test",
+        sdp_body=b"v=0",
+        model="gpt-realtime",
+        litellm_logging_obj=FakeLogging(),
+        extra_headers="not-a-mapping",
+    )
+
+    assert captured.values is not None
+    assert captured.values["extra_headers"] is None

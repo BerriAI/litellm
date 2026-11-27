@@ -17,6 +17,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 import respx
 import httpx
+import openai
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
@@ -27,6 +28,7 @@ from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.batch_utils import rewrite_rows_naming_model
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import extract_file_data
+from litellm.llms.openai.common_utils import CreatedOnSomeDeployments
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
@@ -596,6 +598,132 @@ def test_create_file_batch_streams_from_upload_spool(monkeypatch, llm_router: Ro
         ), "non-batch upload must stay in-memory bytes"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+_UPSTREAM_FILE_UPLOAD: Final = httpx.Request("POST", "https://api.openai.com/v1/files")
+
+
+def _raised_from(error: Exception, cause: Exception) -> Exception:
+    try:
+        raise error from cause
+    except Exception as raised:
+        return raised
+
+
+_FILE_MAY_EXIST_NOTICE: Final = (
+    "\n\nThe provider may already have created this file, so check your newest files before you send it again"
+)
+
+
+@pytest.mark.parametrize(
+    "upload_error, status_code, should_retry",
+    [
+        pytest.param(
+            lambda: _raised_from(
+                openai.APITimeoutError(request=_UPSTREAM_FILE_UPLOAD), httpx.ReadTimeout("no answer in time")
+            ),
+            500,
+            "false",
+            id="read-timeout",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD),
+                httpx.RemoteProtocolError("the server closed the connection before it answered"),
+            ),
+            500,
+            "false",
+            id="connection-dropped",
+        ),
+        pytest.param(
+            lambda: openai.InternalServerError(
+                "the gateway gave up waiting", response=httpx.Response(504, request=_UPSTREAM_FILE_UPLOAD), body=None
+            ),
+            504,
+            "false",
+            id="504",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APITimeoutError(request=_UPSTREAM_FILE_UPLOAD), httpx.ConnectTimeout("no connection in time")
+            ),
+            500,
+            None,
+            id="connect-timeout",
+        ),
+        pytest.param(
+            lambda: openai.RateLimitError(
+                "slow down", response=httpx.Response(429, request=_UPSTREAM_FILE_UPLOAD), body=None
+            ),
+            429,
+            None,
+            id="rate-limited",
+        ),
+        pytest.param(
+            lambda: openai.AuthenticationError(
+                "invalid x-api-key",
+                response=httpx.Response(401, headers={"x-should-retry": "false"}, request=_UPSTREAM_FILE_UPLOAD),
+                body=None,
+            ),
+            401,
+            None,
+            id="rejected-with-should-retry-false",
+        ),
+        pytest.param(
+            lambda: _raised_from(
+                openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD),
+                CreatedOnSomeDeployments(openai.APIConnectionError(request=_UPSTREAM_FILE_UPLOAD)),
+            ),
+            500,
+            "false",
+            id="refused-by-one-deployment-after-another-created-it",
+        ),
+    ],
+)
+def test_create_file_tells_the_caller_not_to_resend_only_an_upload_the_provider_may_have_made(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    upload_error: Callable[[], Exception],
+    status_code: int,
+    should_retry: str | None,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    error: Final = upload_error()
+
+    async def failing_route_create_file(**_: object) -> OpenAIFileObject:
+        raise error
+
+    monkeypatch.setattr(fe, "route_create_file", failing_route_create_file)
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+    )
+
+    response: Final = client.post(
+        "/v1/files",
+        files={
+            "file": (
+                "batch.jsonl",
+                b'{"custom_id": "r-0", "method": "POST", "url": "/v1/chat/completions",'
+                b' "body": {"model": "gpt-batch", "messages": [{"role": "user", "content": "hi"}]}}\n',
+                "application/jsonl",
+            )
+        },
+        data={"purpose": "batch"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    notice: Final = _FILE_MAY_EXIST_NOTICE if should_retry == "false" else ""
+    assert response.status_code == status_code
+    assert response.headers.get("x-should-retry") == should_retry
+    assert response.json()["error"]["message"] == getattr(error, "message", str(error)) + notice
 
 
 @pytest.mark.flaky(retries=3, delay=2)

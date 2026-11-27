@@ -270,7 +270,7 @@ class MistralConfig(OpenAIGPTConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         requested: Final = _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params)
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
         reasoning_level: Final = (
@@ -965,7 +965,7 @@ class MistralConfig(OpenAIGPTConfig):
         optional_params: Mapping[str, object],
         litellm_params: dict[str, object],
         headers: dict[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the overall request to be sent to the API.
 

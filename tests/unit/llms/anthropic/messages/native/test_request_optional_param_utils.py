@@ -127,14 +127,25 @@ def test_temperature_1_kept_for_unsupported_model(monkeypatch):
     assert result == {"temperature": 1}
 
 
-def test_sampling_param_raises_clean_400_without_drop_params(monkeypatch):
+@pytest.mark.parametrize(
+    ("model", "params", "refused"),
+    [
+        ("claude-opus-4-7", {"temperature": 0.3}, "does not support temperature"),
+        ("claude-sonnet-4-6", {"speed": "fast"}, "does not support speed"),
+    ],
+)
+def test_unsupported_param_raises_clean_400_naming_both_drop_params_settings(monkeypatch, model, params, refused):
     monkeypatch.setattr(litellm, "drop_params", False)
-    with pytest.raises(litellm.utils.UnsupportedParamsError, match="does not support temperature"):
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match=refused) as raised:
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params={"temperature": 0.3},
-            model="claude-opus-4-7",
+            params=params,
+            model=model,
             drop_params=False,
         )
+
+    assert str(raised.value.message).endswith(
+        "set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
+    )
 
 
 def test_the_thread_field_survives_optional_param_filtering():
