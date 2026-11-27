@@ -5,6 +5,7 @@ A fake async HTTP client stands in for the provider, so no network is used.
 Real-network tests live in tests/integration/sandbox/test_sandbox_providers.py.
 """
 
+import subprocess
 import sys
 import types
 from collections.abc import Callable
@@ -15,9 +16,11 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.sandbox.transformation import (
+    SANDBOX_MAX_OUTPUT_BYTES,
     ContainerHandle,
     estimate_sandbox_cost,
     get_sandbox_prices,
+    shell_command,
 )
 from litellm.llms.blaxel.sandbox.transformation import MIN_TTL_SECONDS
 
@@ -130,13 +133,38 @@ async def test_tensorlake_waits_for_the_process_and_joins_output_lines():
     assert all(url.startswith("https://tl_1.sandbox.example/") for url in polls)
 
 
+def _run_locally(command: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=30, check=False)
+
+
 @pytest.mark.asyncio
-async def test_python_code_is_quoted_into_one_shell_argument():
+async def test_the_command_sent_to_the_sandbox_runs_the_code_with_its_streams_and_exit_code():
     client = FakeHTTPClient(_boat)
     handle = await litellm.acreate_sandbox(provider="boat", api_key="k", client=client)
-    await litellm.arun_code(provider="boat", container=handle, code="print('a b'); print(\"c\")", client=client)
+    code = "import sys; print('a b'); print(\"c\"); print('bad', file=sys.stderr); sys.exit(3)"
+    await litellm.arun_code(provider="boat", container=handle, code=code, client=client)
 
-    assert client.calls[-1][3] == {"command": "python3 -c 'print('\"'\"'a b'\"'\"'); print(\"c\")'"}
+    ran = _run_locally(client.calls[-1][3]["command"])
+    assert (ran.stdout, ran.stderr, ran.returncode) == ("a b\nc\n", "bad\n", 3)
+
+
+@pytest.mark.parametrize("stream", ["", " >&2"])
+def test_a_command_that_never_stops_printing_is_ended_one_byte_past_the_cap(stream):
+    ran = _run_locally(shell_command(f"yes{stream}", "bash", max_output_bytes=1000))
+    assert len(ran.stdout + ran.stderr) == 1001
+    assert ran.returncode != 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["stdout", "stderr"])
+async def test_output_past_the_cap_is_refused_instead_of_returned(field):
+    oversized = "x" * (SANDBOX_MAX_OUTPUT_BYTES + 1)
+
+    def route(method: str, url: str, json: object) -> object:
+        return {"stdout": "", "stderr": "", "exitCode": 0, field: oversized} if url.endswith("/commands") else {}
+
+    with pytest.raises(ValueError, match="exceeded"):
+        await litellm.arun_code(provider="boat", container="bx_1", code="1", api_key="k", client=FakeHTTPClient(route))
 
 
 @pytest.mark.asyncio
@@ -338,7 +366,7 @@ async def test_modal_lifecycle_goes_through_the_sdk(monkeypatch):
     cpu_request, cpu_limit = record["create"]["cpu"]
     memory_request, memory_limit = record["create"]["memory"]
     assert cpu_request == cpu_limit and memory_request == memory_limit
-    assert record["exec"][-1] == "exit 3"
+    assert _run_locally(record["exec"][-1]).returncode == 3
     assert (result.stdout, result.stderr, result.exit_code) == ("out\n", "err\n", 3)
     assert deleted is True and record["terminated"] is True
     assert (await litellm.asandbox_cost(provider="modal", container=handle)).source == "estimate"

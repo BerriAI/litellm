@@ -94,12 +94,23 @@ def estimate_sandbox_cost(container: ContainerHandle | str, now: float | None = 
     return SandboxCost(cost_usd=per_second * seconds, source="estimate", seconds=seconds)
 
 
-def shell_command(code: str, language: str) -> str:
+def shell_command(code: str, language: str, max_output_bytes: int = SANDBOX_MAX_OUTPUT_BYTES) -> str:
+    """
+    Wraps the code so the sandbox itself stops each output stream one byte past the cap,
+    which ends the command instead of letting it stream without limit into our memory.
+    """
     if language == "bash":
-        return code
-    if language == "python":
-        return f"python3 -c {shlex.quote(code)}"
-    raise ValueError(f"Unsupported sandbox language: {language}. Use 'python' or 'bash'.")
+        command = code
+    elif language == "python":
+        command = f"python3 -c {shlex.quote(code)}"
+    else:
+        raise ValueError(f"Unsupported sandbox language: {language}. Use 'python' or 'bash'.")
+    limit: Final = max_output_bytes + 1
+    capped: Final = (
+        f"exec 3> >(head -c {limit}); out=$!; exec 4> >(head -c {limit} >&2); err=$!; "
+        f"bash -c {shlex.quote(command)} >&3 2>&4; code=$?; exec 3>&- 4>&-; wait $out $err; exit $code"
+    )
+    return f"bash -c {shlex.quote(capped)}"
 
 
 class CodeExecutionResult(LiteLLMPydanticObjectBase):
@@ -177,6 +188,10 @@ class BaseSandboxConfig:
 
     @staticmethod
     def _shell_result(stdout: str, stderr: str, exit_code: int | None) -> CodeExecutionResult:
+        if max(len(stdout.encode("utf-8")), len(stderr.encode("utf-8"))) > SANDBOX_MAX_OUTPUT_BYTES:
+            raise ValueError(
+                f"Sandbox output exceeded {SANDBOX_MAX_OUTPUT_BYTES} bytes; aborting to avoid unbounded memory use."
+            )
         return CodeExecutionResult.model_validate(
             {
                 "stdout": stdout,

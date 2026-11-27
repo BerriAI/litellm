@@ -55,6 +55,7 @@ Documentation = "https://docs.litellm.ai"
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
 switchyard = ["nemo-switchyard==0.4.0a1"]
+modal = ["modal==1.6.4"]
 proxy = [
     "audioop-lts>=0.2.2,<1; python_version >= '3.13'",
     "sqlalchemy>=2.0.49,<2.1",
@@ -286,6 +287,7 @@ proxy-dev = [
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
     "nemo-switchyard==0.4.0a1",
+    "modal==1.6.4",
     "backports-zstd==1.8.0; python_version < '3.14'",
     "httptools>=0.7.1,<0.8",
     "semver>=3.0.4,<4",

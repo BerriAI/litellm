@@ -1,5 +1,5 @@
 """
-Modal sandbox provider. Modal has no public REST API, so this goes through the `modal` SDK (`pip install modal`).
+Modal sandbox provider. Modal has no public REST API, so this goes through the `modal` SDK (`pip install 'litellm[modal]'`).
 """
 
 import importlib
@@ -65,7 +65,9 @@ class ModalSandboxConfig(BaseSandboxConfig):
         try:
             modal: Final = importlib.import_module("modal")
         except ImportError as e:
-            raise ImportError("The Modal sandbox provider needs the modal SDK. Run `pip install modal`.") from e
+            raise ImportError(
+                "The Modal sandbox provider needs the modal SDK. Run `pip install 'litellm[modal]'`."
+            ) from e
         return modal, await modal.Client.from_credentials.aio(token_id, token_secret)
 
     async def _sandbox(self, container: ContainerHandle | str, api_key: str | None) -> _ModalSandbox:
