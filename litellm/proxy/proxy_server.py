@@ -641,7 +641,12 @@ from litellm.proxy.common_utils.token_count_log import (
     logged_token_count,
     rejected_token_count,
 )
-from litellm.proxy.common_utils.tripo_error_payload import tripo_error_json_response, uses_tripo_error_envelope
+from litellm.proxy.common_utils.tripo_error_payload import (
+    tripo_error_json_response,
+    tripo_rate_limit_json_response,
+    uses_tripo_error_envelope,
+    uses_tripo_rate_limit_envelope,
+)
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     budget_windows_absent_cache_key,
@@ -2433,6 +2438,8 @@ async def otlp_http_exception_handler(connection: Request | WebSocket, exc: Star
         return anthropic_error_json_response(
             proxy_exception_from_http_exception(exc, dict(exc.headers or {})), connection
         )
+    if uses_tripo_rate_limit_envelope(connection, exc):
+        return tripo_rate_limit_json_response(connection, exc)
     return await http_exception_handler(connection, exc)
 
 

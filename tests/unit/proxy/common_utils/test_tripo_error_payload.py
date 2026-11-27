@@ -11,6 +11,13 @@ _MISSING_KEY: Final = "Authentication Error, No api key passed in."
 _MALFORMED_KEY: Final = "Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix."
 _UNKNOWN_TOKEN: Final = "Authentication Error, Invalid proxy server token passed."
 _BLOCKED_KEY: Final = "Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin."
+_OTHER_AUTH: Final = "Authentication Error, Key is over a limit this mapper does not own."
+_BUDGET: Final = "Budget has been exceeded! Key=alias Current cost: 1.5, Max budget: 1.0"
+_EXPIRED: Final = "Authentication Error - Expired Key. Key Expiry time 2020-01-01 and current time 2026-01-01"
+_MODEL_ACCESS: Final = (
+    "The requested model 'tripo/task' is not available for this API key, or the model name is invalid. "
+    "Check the models available to you and try again."
+)
 
 
 def _request(path: str, root_path: str = "") -> Request:
@@ -95,13 +102,42 @@ async def test_malformed_json_on_tripo_route_uses_tripo_body() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/cn.tripo/v3/generation/text-to-model", "/tripo/v3/generation/text-to-model"])
+@pytest.mark.parametrize(
+    ("message", "error_type", "status_code", "code", "suggestion"),
+    [
+        (_BUDGET, ProxyErrorTypes.budget_exceeded, 422, 9101, "Check the configured budget"),
+        (_BLOCKED_KEY, ProxyErrorTypes.auth_error, 401, 9102, "Unblock the key or use a different key"),
+        (_EXPIRED, ProxyErrorTypes.expired_key, 401, 9103, "Use a key that has not expired"),
+        (_MODEL_ACCESS, ProxyErrorTypes.key_model_access_denied, 403, 9104, "Grant this caller access to the model"),
+        (_MODEL_ACCESS, ProxyErrorTypes.team_model_access_denied, 403, 9104, "Grant this caller access to the model"),
+    ],
+)
+async def test_proxy_gate_failures_on_tripo_routes_keep_the_status_and_original_message(
+    path: str, message: str, error_type: str, status_code: int, code: int, suggestion: str
+) -> None:
+    response: Final = await openai_exception_handler(_request(path), _proxy_error(message, error_type, status_code))
+    body: Final = json.loads(response.body)
+
+    assert response.status_code == status_code
+    assert body["code"] == code
+    assert body["status"] == "error"
+    assert body["message"] == message
+    assert body["suggestion"] == suggestion
+    assert len(body["request_id"]) == 32
+    assert "error" not in body
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("path", "message", "error_type", "code"),
     [
         ("/v1/chat/completions", _MISSING_KEY, ProxyErrorTypes.auth_error, 401),
-        ("/cn.tripo/v3/generation/text-to-model", _BLOCKED_KEY, ProxyErrorTypes.auth_error, 401),
-        ("/cn.tripo/v3/generation/text-to-model", "Budget exceeded", ProxyErrorTypes.budget_exceeded, 429),
-        ("/tripo/v3/generation/text-to-model", "Key expired", ProxyErrorTypes.expired_key, 401),
+        ("/v1/chat/completions", _BLOCKED_KEY, ProxyErrorTypes.auth_error, 401),
+        ("/v1/chat/completions", _BUDGET, ProxyErrorTypes.budget_exceeded, 422),
+        ("/v1/chat/completions", _EXPIRED, ProxyErrorTypes.expired_key, 401),
+        ("/v1/chat/completions", _MODEL_ACCESS, ProxyErrorTypes.key_model_access_denied, 403),
+        ("/cn.tripo/v3/generation/text-to-model", _OTHER_AUTH, ProxyErrorTypes.auth_error, 401),
         ("/v1/chat/completions", "Invalid JSON payload: bad", "invalid_request_error", 400),
     ],
 )
@@ -128,3 +164,49 @@ async def test_messages_route_keeps_the_anthropic_envelope() -> None:
     assert response.status_code == 401
     assert body["type"] == "error"
     assert body["error"]["message"] == _MISSING_KEY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/cn.tripo/v3/generation/text-to-model", "/tripo/v3/generation/text-to-model"])
+async def test_proxy_rate_limit_on_tripo_route_uses_tripo_body(path: str) -> None:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.proxy_server import otlp_http_exception_handler
+
+    detail: Final = "Rate limit exceeded for api_key: alias. Limit type: requests. Current limit: 2, Remaining: 0."
+    response: Final = await otlp_http_exception_handler(
+        _request(path),
+        ProxyRateLimitError(detail=detail, headers={"retry-after": "60"}),
+    )
+    body: Final = json.loads(response.body)
+
+    assert response is not None
+    assert response.status_code == 429
+    assert body["code"] == 9105
+    assert body["status"] == "error"
+    assert body["message"] == detail
+    assert body["suggestion"] == "Retry after the limit resets"
+    assert response.headers["retry-after"] == "60"
+    assert "detail" not in body
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_on_other_routes_and_other_http_errors_on_tripo_keep_their_body() -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.proxy_server import otlp_http_exception_handler
+
+    limited: Final = await otlp_http_exception_handler(
+        _request("/v1/chat/completions"),
+        ProxyRateLimitError(detail="Rate limit exceeded for api_key: alias."),
+    )
+    unavailable: Final = await otlp_http_exception_handler(
+        _request("/cn.tripo/v3/generation/text-to-model"),
+        HTTPException(status_code=503, detail="No Tripo use_in_pass_through deployment configured for cn"),
+    )
+
+    assert limited is not None and unavailable is not None
+    assert json.loads(limited.body) == {"detail": "Rate limit exceeded for api_key: alias."}
+    assert json.loads(unavailable.body) == {
+        "detail": "No Tripo use_in_pass_through deployment configured for cn"
+    }
