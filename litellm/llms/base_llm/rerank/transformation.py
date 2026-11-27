@@ -17,6 +17,16 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def per_token_rerank_cost(billed_units: RerankBilledUnits | None, model_info: ModelInfo | None) -> tuple[float, float]:
+    if model_info is None or billed_units is None:
+        return 0.0, 0.0
+    input_cost_per_token: Final = model_info.get("input_cost_per_token")
+    total_tokens: Final = billed_units.get("total_tokens")
+    if input_cost_per_token is None or total_tokens is None:
+        return 0.0, 0.0
+    return input_cost_per_token * total_tokens, 0.0
+
+
 class BaseRerankConfig(ABC):
     @abstractmethod
     def validate_environment(

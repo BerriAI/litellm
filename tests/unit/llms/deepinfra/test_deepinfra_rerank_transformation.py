@@ -4,11 +4,14 @@ Based on the test patterns from other rerank providers and the current DeepInfra
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from litellm.types.rerank import (
     OptionalRerankParams,
@@ -301,3 +304,32 @@ class TestDeepinfraRerankTransform:
 
         # Should use the original error message when JSON parsing fails
         assert "Invalid JSON error message" in str(exc_info.value)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_rerank_bills_deployment_input_cost_per_token_on_reported_input_tokens(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    input_tokens: Final = 1000
+    input_cost_per_token: Final = 1e-08
+    respx_mock.post("https://api.deepinfra.com/v1/inference/Qwen/Qwen3-Reranker-0.6B").mock(
+        return_value=httpx.Response(200, json={"scores": [0.9, 0.1], "input_tokens": input_tokens})
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "reranker",
+                "litellm_params": {
+                    "model": "deepinfra/Qwen/Qwen3-Reranker-0.6B",
+                    "api_key": "test_key",
+                    "input_cost_per_token": input_cost_per_token,
+                    "output_cost_per_token": 0.0,
+                },
+            }
+        ]
+    )
+
+    response: Final = await router.arerank(model="reranker", query="hello", documents=["hello", "world"])
+
+    assert response._hidden_params["response_cost"] == pytest.approx(input_tokens * input_cost_per_token)
