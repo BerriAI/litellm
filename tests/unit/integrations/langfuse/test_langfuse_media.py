@@ -232,7 +232,7 @@ def test_new_media_is_registered_with_its_trace_put_to_storage_and_confirmed():
     requests: list[httpx.Request] = []
     uploader = _uploader(_langfuse(requests))
 
-    assert uploader.submit((_upload(),)) is True
+    uploader.submit((_upload(),))
 
     assert uploader.drain(5_000) is True
     assert uploader.failed_uploads == 0
@@ -405,12 +405,12 @@ def test_a_registration_that_does_not_reach_langfuse_is_sent_again_after_each_de
 
     uploader = _uploader(transport, delays=(0.0, 0.0))
 
-    assert uploader.submit((_upload(),)) is True
+    uploader.submit((_upload(),))
     assert uploader.drain(5_000) is True
 
     assert [request.method for request in requests] == ["POST", "POST", "POST", "PUT", "PATCH"]
     assert uploader.failed_uploads == 0
-    assert uploader.submit((_upload(),)) is True
+    uploader.submit((_upload(),))
 
 
 def test_a_registration_that_never_reaches_langfuse_fails_that_upload_only(caplog):
@@ -429,7 +429,7 @@ def test_a_registration_that_never_reaches_langfuse_fails_that_upload_only(caplo
     assert [request.method for request in requests] == ["POST", "POST"]
     assert uploader.failed_uploads == 1
     assert "langfuse unreachable" in caplog.text
-    assert uploader.submit((_upload(),)) is True
+    uploader.submit((_upload(),))
 
 
 def test_a_failed_registration_is_logged_without_its_headers_and_the_next_upload_still_runs(caplog):
@@ -492,32 +492,34 @@ def test_drain_reports_uploads_still_running_at_the_deadline():
     assert uploader.drain(5_000) is True
 
 
-def test_a_group_that_does_not_fit_as_a_whole_queues_none_of_its_uploads():
+def test_media_that_does_not_fit_in_the_queue_is_not_uploaded_while_the_rest_is(caplog):
     requests: list[httpx.Request] = []
     uploader = _uploader(_langfuse(requests, upload_url=None), max_queued_bytes=9)
 
-    assert uploader.submit((_upload(), _upload())) is False
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        uploader.submit((_upload(), _upload()))
+        assert uploader.drain(5_000) is True
 
-    assert uploader.drain(5_000) is True
-    assert requests == []
-    assert uploader.submit((_upload(),)) is True
-    assert uploader.drain(5_000) is True
     assert len(requests) == 1
+    assert uploader.failed_uploads == 1
+    assert "the upload queue is full" in caplog.text
 
 
-def test_media_that_does_not_fit_next_to_the_waiting_uploads_is_turned_away_until_they_finish():
+def test_media_that_does_not_fit_next_to_the_waiting_uploads_is_not_uploaded_until_they_finish():
     """Each waiting upload holds its decoded payload, so the bytes are what is capped."""
     release, started = threading.Event(), threading.Event()
     uploader = _blocked_uploader(release, started, max_queued_bytes=5)
-    assert uploader.submit((_upload(),)) is True
+    uploader.submit((_upload(),))
     assert started.wait(5)
 
-    assert uploader.submit((_upload(),)) is False
+    uploader.submit((_upload(),))
+    assert uploader.failed_uploads == 1
 
     release.set()
     assert uploader.drain(5_000) is True
-    assert uploader.submit((_upload(),)) is True
+    uploader.submit((_upload(),))
     assert uploader.drain(5_000) is True
+    assert uploader.failed_uploads == 1
 
 
 def test_shutdown_ends_the_upload_thread_after_the_queued_uploads():
@@ -559,7 +561,7 @@ def test_after_a_fork_the_child_uploads_on_its_own_thread_without_the_parents_qu
     restart_uploads_in_forked_child()
 
     try:
-        assert uploader.submit((_upload(field="output"),)) is True
+        uploader.submit((_upload(field="output"),))
         assert uploader.drain(5_000) is True
         assert [request.method for request in requests] == ["POST", "PUT", "PATCH"]
         assert json.loads(requests[0].content)["field"] == "output"

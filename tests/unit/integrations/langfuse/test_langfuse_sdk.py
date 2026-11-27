@@ -1797,9 +1797,8 @@ class _RecordingUploader:
         self.failed_uploads = 0
         self.calls: list[str] = []
 
-    def submit(self, uploads: Sequence[MediaUpload]) -> bool:
+    def submit(self, uploads: Sequence[MediaUpload]) -> None:
         self.uploads.extend(uploads if self.accepts else ())
-        return self.accepts
 
     def drain(self, timeout_millis: int) -> bool:
         self.calls.append("drain")
@@ -1916,14 +1915,16 @@ def test_a_span_whose_media_cannot_be_extracted_is_exported_unchanged(monkeypatc
     assert "exporting it unchanged: extraction bug" in caplog.text
 
 
-def test_media_the_uploader_has_no_room_for_stays_inline_in_the_span():
+def test_media_the_uploader_has_no_room_for_still_leaves_the_span_with_a_reference():
+    """Keeping the payload inline while uploads are stuck would bring back the trace size the references remove."""
     tracing, exporter = _media_channel(_RecordingUploader(accepts=False))
 
     tracing.tracer.start_span("generation", attributes={A.OBSERVATION_INPUT: json.dumps(_image_messages())}).end()
-    assert tracing.flush() is True
+    tracing.flush()
 
-    exported = json.loads(_only_span(exporter, "generation").attributes[A.OBSERVATION_INPUT])
-    assert exported == _image_messages()
+    exported = _only_span(exporter, "generation").attributes[A.OBSERVATION_INPUT]
+    assert "@@@langfuseMedia:type=image/png|id=" in exported
+    assert ";base64," not in exported
 
 
 def test_flush_is_false_while_media_is_still_uploading():

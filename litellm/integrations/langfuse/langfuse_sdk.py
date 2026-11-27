@@ -893,7 +893,7 @@ class _MediaExtractingExporter(SpanExporter):
         return _with_attributes(span, {**attributes, **replaced}) if replaced else span
 
     def _with_references(self, key: str, value: AttributeValue, trace_id: str, observation_id: str) -> str | None:
-        """``None`` leaves the attribute as it is: it holds no media, or the uploader had no room for all of it."""
+        """``None`` leaves the attribute as it is, because it holds no media."""
         field: Final = _media_field(key)
         if field is None or not isinstance(value, str):
             return None
@@ -907,7 +907,10 @@ class _MediaExtractingExporter(SpanExporter):
             )
             for media in found
         )
-        return serialized if uploads and self.uploader.submit(uploads) else None
+        if not uploads:
+            return None
+        self.uploader.submit(uploads)
+        return serialized
 
     def shutdown(self) -> None:
         self.exporter.shutdown()

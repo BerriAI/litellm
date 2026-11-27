@@ -23,6 +23,7 @@ from langfuse.api.core.api_error import ApiError
 from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.constants import LANGFUSE_MEDIA_QUEUE_MAX_BYTES
 
 __all__ = ("Media", "MediaField", "MediaUpload", "MediaUploader", "extract_media", "restart_uploads_in_forked_child")
 
@@ -30,7 +31,6 @@ MediaField: TypeAlias = Literal["input", "output", "metadata"]
 
 _REFERENCE_PREFIX: Final = "@@@langfuseMedia:"
 _MAX_DEPTH: Final = 10
-_MAX_QUEUED_BYTES: Final = 100 * 1024 * 1024
 _IDLE_POLL_SECONDS: Final = 1.0
 _DRAIN_POLL_SECONDS: Final = 0.01
 _URL_SAFE_TO_STANDARD: Final = str.maketrans("-_", "+/")
@@ -224,7 +224,7 @@ class MediaUploader:
         client: Callable[[], httpx.Client],
         timeout: float,
         delays: Sequence[float],
-        max_queued_bytes: int = _MAX_QUEUED_BYTES,
+        max_queued_bytes: int = LANGFUSE_MEDIA_QUEUE_MAX_BYTES,
     ) -> None:
         self._api_for: Final = api
         self._current_client: Final = client
@@ -234,6 +234,7 @@ class MediaUploader:
         self._max_queued_bytes: Final = max_queued_bytes
         self._backlog = self._started_backlog()
         self.failed_uploads = 0
+        self._failures: Final = threading.Lock()
         _LIVE_UPLOADERS.add(self)
 
     def _started_backlog(self) -> _Backlog:
@@ -245,16 +246,22 @@ class MediaUploader:
         self._backlog.closed.set()
         self._backlog = self._started_backlog()
 
-    def submit(self, uploads: Sequence[MediaUpload]) -> bool:
-        """All of ``uploads`` or none: ``False`` when they do not fit next to the payloads still waiting, and the
-        caller has to keep them inline."""
-        size: Final = sum(len(upload.media.content) for upload in uploads)
+    def submit(self, uploads: Sequence[MediaUpload]) -> None:
+        """Queues each of ``uploads`` that fits next to the payloads still waiting. One that does not fit is not
+        uploaded and counts as a failed upload, which is what the Langfuse SDK does when its queue is full."""
         backlog: Final = self._backlog
-        if not backlog.reserve(size, self._max_queued_bytes):
-            return False
         for upload in uploads:
-            backlog.queue.put_nowait(upload)
-        return True
+            if backlog.reserve(len(upload.media.content), self._max_queued_bytes):
+                backlog.queue.put_nowait(upload)
+            else:
+                self._not_uploaded(upload, "the upload queue is full, LANGFUSE_MEDIA_QUEUE_MAX_BYTES sets its size")
+
+    def _not_uploaded(self, upload: MediaUpload, failure: str) -> None:
+        with self._failures:
+            self.failed_uploads += 1
+        verbose_logger.warning(
+            "Langfuse media %s of trace %s was not uploaded: %s", upload.media.media_id, upload.trace_id, failure
+        )
 
     def drain(self, timeout_millis: int) -> bool:
         """``True`` once every submitted upload has been attempted, ``False`` if ``timeout_millis`` passes first."""
@@ -279,13 +286,7 @@ class MediaUploader:
         try:
             failure: Final = self._failure(upload)
             if failure is not None:
-                self.failed_uploads += 1
-                verbose_logger.warning(
-                    "Langfuse media %s of trace %s was not uploaded: %s",
-                    upload.media.media_id,
-                    upload.trace_id,
-                    failure,
-                )
+                self._not_uploaded(upload, failure)
         finally:
             backlog.release(len(upload.media.content))
             backlog.queue.task_done()
