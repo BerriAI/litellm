@@ -1,9 +1,9 @@
 # With the budget reservation disabled, a key's own budget is checked natively at read time
 # (`callbacks/budget_check.rs`), so a key that holds `max_budget`, `budget_duration` or
 # `budget_reset_at` is served. `admit` lets a key over its budget through, since the native app
-# refuses it with Python's error. Every other budget a key can hold still goes to Python. Nothing is
-# priced while the reservation is disabled, so a model group the cost map does not name is served
-# too, and the budget check treats it as paid.
+# refuses it with Python's error. Every other budget a key can hold still goes to Python. Admission
+# needs no price while the reservation is disabled, so a model group the cost map does not name is
+# served too, and the budget check treats it as paid.
 config:
   model_list:
     - model_name: claude-haiku-5-5

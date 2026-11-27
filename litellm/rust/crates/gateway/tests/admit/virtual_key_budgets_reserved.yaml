@@ -1,6 +1,6 @@
-# With the budget reservation on, a native call would hold against a key's budget, and until a
-# native call is priced that hold is never settled. So a key with any budget still goes to Python,
-# and one without is served.
+# With the budget reservation on, Python reserves what a call may cost against a key's budget
+# before the call runs, and the gateway reserves nothing. So a key with any budget still goes to
+# Python, and one without is served.
 config:
   model_list:
     - model_name: claude

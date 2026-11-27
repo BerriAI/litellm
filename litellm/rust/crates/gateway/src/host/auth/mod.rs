@@ -396,9 +396,8 @@ impl AuthHost for NativeAuthHost {
 
     /// A key's own budget is enforced by `BudgetCheck` at read time, so it is served while the
     /// check is registered and the budget reservation is disabled.
-    // TODO(#54329): serve it with the reservation on too once a native call carries its cost. Until
-    // then a hold is never settled, so it leaves its input cost on the key's counter and no row in
-    // the database, and the counter drifts above the spend Python reads
+    // TODO(#54354): serve it with the reservation on too once the gateway reserves against a budget
+    // before the call, as Python does with it on
     async fn key_budgets(&self, key: &Key, _: Option<&UserRecord>, _: bool) -> Result<(), Error> {
         match key
             .budget
