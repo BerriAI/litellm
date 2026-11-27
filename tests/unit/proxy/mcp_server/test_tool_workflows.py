@@ -19,7 +19,7 @@ from litellm.proxy.mcp_server.tool_search import (
     mcp_proxy_tool_id,
     with_mcp_proxy_identity,
 )
-from litellm.proxy.mcp_server.tool_workflows import check_tool_workflow, find_workflow_sources
+from litellm.proxy.mcp_server.tool_workflows import WorkflowLimitError, check_tool_workflow, find_workflow_sources
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -76,6 +76,16 @@ def test_workflow_source_discovery_orders_verified_candidates() -> None:
 
     assert tuple(source.name for source, _ in sources) == ("fetch", "extra-input")
     assert all(check.binding_fields == ("issue_id",) for _, check in sources)
+
+
+def test_workflow_rejects_oversized_untrusted_schema_before_comparison() -> None:
+    fields: Final = [f"field_{index}" for index in range(60_000)]
+    large_target: Final = CREATE.model_copy(update={"input_schema": {"type": "object", "required": fields}})
+
+    with pytest.raises(WorkflowLimitError, match="required exceeds the 256-field limit"):
+        check_tool_workflow(FETCH, large_target)
+    with pytest.raises(WorkflowLimitError, match="required exceeds the 256-field limit"):
+        find_workflow_sources((FETCH, large_target), large_target)
 
 
 @pytest.mark.parametrize(

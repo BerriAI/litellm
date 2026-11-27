@@ -9,6 +9,13 @@ from mcp.types import Tool
 _PRIMITIVE_TYPES: Final = frozenset({"string", "integer", "number", "boolean"})
 _INPUT_FIELD_KEYS: Final = frozenset({"type", "title", "description"})
 _OBJECT_KEYS: Final = frozenset({"type", "properties", "required", "title", "description", "additionalProperties"})
+MAX_WORKFLOW_TOOLS: Final = 1024
+_MAX_SCHEMA_FIELDS: Final = 256
+_MAX_SCHEMA_KEYS: Final = 16
+
+
+class WorkflowLimitError(ValueError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,11 +44,22 @@ def _properties(schema: Mapping[str, object]) -> Mapping[str, object]:
     return cast(Mapping[str, object], properties)
 
 
+def _check_schema_limits(schema: Mapping[str, object]) -> None:
+    if len(schema) > _MAX_SCHEMA_KEYS:
+        raise WorkflowLimitError("Workflow schema exceeds the 16-key limit")
+    for name in ("required", "properties"):
+        value = schema.get(name)
+        if isinstance(value, (list, tuple, Mapping)) and len(value) > _MAX_SCHEMA_FIELDS:
+            raise WorkflowLimitError(f"Workflow schema {name} exceeds the 256-field limit")
+
+
 def _compatible_field(source: object, target: object) -> bool:
     if not isinstance(source, Mapping) or not isinstance(target, Mapping):
         return False
     source_schema: Final = cast(Mapping[str, object], source)
     target_schema: Final = cast(Mapping[str, object], target)
+    if len(source_schema) > _MAX_SCHEMA_KEYS or len(target_schema) > _MAX_SCHEMA_KEYS:
+        return False
     if not set(source_schema).issubset(_INPUT_FIELD_KEYS) or not set(target_schema).issubset(_INPUT_FIELD_KEYS):
         return False
     source_type: Final = source_schema.get("type")
@@ -53,6 +71,8 @@ def check_tool_workflow(first: Tool, second: Tool) -> WorkflowCheck:
     first_input: Final = first.input_schema
     first_output: Final = first.output_schema or {}
     second_input: Final = second.input_schema
+    for schema in (first_input, first_output, second_input):
+        _check_schema_limits(schema)
     first_required: Final = _required_fields(first_input)
     second_required: Final = _required_fields(second_input)
     output_required: Final = frozenset(_required_fields(first_output))
@@ -73,14 +93,17 @@ def check_tool_workflow(first: Tool, second: Tool) -> WorkflowCheck:
         if simple_schemas
         else ()
     )
+    binding_set: Final = frozenset(bindings)
     return WorkflowCheck(
         binding_fields=bindings,
         first_step_inputs=first_required,
-        second_step_inputs=tuple(field for field in second_required if field not in bindings),
+        second_step_inputs=tuple(field for field in second_required if field not in binding_set),
     )
 
 
 def find_workflow_sources(catalog: Sequence[Tool], target: Tool) -> tuple[tuple[Tool, WorkflowCheck], ...]:
+    if len(catalog) > MAX_WORKFLOW_TOOLS:
+        raise WorkflowLimitError("Workflow catalog exceeds the 1024-tool limit")
     candidates: Final = tuple(
         (source, check)
         for source in catalog

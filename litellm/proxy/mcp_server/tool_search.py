@@ -690,7 +690,12 @@ async def handle_mcp_proxy_tool(
     )
 
     if name in (MCP_PROXY_WORKFLOW_TOOL_NAME, MCP_PROXY_WORKFLOW_SOURCES_TOOL_NAME):
-        from litellm.proxy.mcp_server.tool_workflows import check_tool_workflow, find_workflow_sources
+        from litellm.proxy.mcp_server.tool_workflows import (
+            MAX_WORKFLOW_TOOLS,
+            WorkflowLimitError,
+            check_tool_workflow,
+            find_workflow_sources,
+        )
 
         workflow_settings: Final = mcp_tool_search_settings()
         if not isinstance(workflow_settings, MCPToolSearchSettings) or not workflow_settings.enable_workflow_discovery:
@@ -721,6 +726,8 @@ async def handle_mcp_proxy_tool(
             mcp_proxy_mode=True,
             use_tool_list_cache=False,
         )
+        if len(workflow_listing.tools) > MAX_WORKFLOW_TOOLS:
+            return _text_tool_result("Workflow catalog exceeds the 1024-tool limit", is_error=True)
         available: Final = MappingProxyType({mcp_proxy_tool_id(tool): tool for tool in workflow_listing.tools})
         if name == MCP_PROXY_WORKFLOW_SOURCES_TOOL_NAME:
             target_id: Final = cast(str, target_id_arg)
@@ -729,7 +736,10 @@ async def handle_mcp_proxy_tool(
             target: Final = available.get(target_id)
             if target is None:
                 return _text_tool_result("Unknown or unauthorized target_tool_id", is_error=True)
-            sources: Final = find_workflow_sources(workflow_listing.tools, target)
+            try:
+                sources: Final = find_workflow_sources(workflow_listing.tools, target)
+            except WorkflowLimitError as exc:
+                return _text_tool_result(str(exc), is_error=True)
             return _text_tool_result(
                 json.dumps(
                     {
@@ -756,7 +766,10 @@ async def handle_mcp_proxy_tool(
         second: Final = available.get(tool_ids[1])
         if first is None or second is None:
             return _text_tool_result("Unknown or unauthorized tool_id", is_error=True)
-        check: Final = check_tool_workflow(first, second)
+        try:
+            check: Final = check_tool_workflow(first, second)
+        except WorkflowLimitError as exc:
+            return _text_tool_result(str(exc), is_error=True)
         return _text_tool_result(
             json.dumps(
                 {
