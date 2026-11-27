@@ -18,13 +18,14 @@ import json
 import logging
 import threading
 import time
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
 from types import FrameType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
+from weakref import WeakValueDictionary
 
 from pydantic import TypeAdapter
 
@@ -195,6 +196,12 @@ def _caller_frames(first: FrameType) -> Iterator[FrameType]:
         frame = frame.f_back
 
 
+def _get_caller_frame(frame: FrameType | None) -> FrameType | None:
+    if frame is None or frame.f_back is None:
+        return None
+    return frame.f_back.f_back
+
+
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
     Get the function names of the nearest meaningful callers of the cache method.
@@ -211,15 +218,7 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         A string with format "caller_function [<- grandparent_function]"
     """
     try:
-        current_frame: Final = inspect.currentframe()
-        if current_frame is None:
-            return "unknown"
-
-        # Skip this function and the immediate caller (which sets call_type)
-        f_back: Final = current_frame.f_back
-        if f_back is None:
-            return "unknown"
-        first: Final = f_back.f_back
+        first: Final = _get_caller_frame(inspect.currentframe())
         if first is None:
             return "unknown"
         frames: Final = _caller_frames(first)
@@ -643,7 +642,9 @@ class RedisCache(BaseCache):
         # redis namespaces
         self.namespace = namespace
         # for high traffic, we store the redis results in memory and then batch write to redis
-        self.redis_batch_writing_buffer: list[tuple[str, object]] = []
+        self.redis_batch_writing_buffer: Final = deque[tuple[str, object, int | None]]()
+        self._batch_buffer_lock: Final = threading.Lock()
+        self._batch_flush_locks: Final = WeakValueDictionary[int | None, asyncio.Lock]()
         if redis_flush_size is None:
             self.redis_flush_size: int = 100
         else:
@@ -1420,14 +1421,25 @@ class RedisCache(BaseCache):
             _record_swallowed_redis_failure(self._health, e)
 
     @_redis_circuit_breaker_guard
-    async def batch_cache_write(self, key: str, value: object, **kwargs: object):
-        print_verbose(
-            f"in batch cache writing for redis buffer size={len(self.redis_batch_writing_buffer)}",
-        )
-        key = self.check_and_fix_namespace(key=key)
-        self.redis_batch_writing_buffer.append((key, value))
-        if len(self.redis_batch_writing_buffer) >= self.redis_flush_size:
-            await self.flush_cache_buffer()  # logging done in here
+    async def batch_cache_write(self, key: str, value: object, scoped_ttl: int | None = None, **kwargs: object):
+        async with self._batch_flush_lock():
+            with self._batch_buffer_lock:
+                self.redis_batch_writing_buffer.append((key, value, scoped_ttl))
+                should_flush: Final = (
+                    scoped_ttl is not None or len(self.redis_batch_writing_buffer) >= self.redis_flush_size
+                )
+            if should_flush:
+                await self._flush_cache_buffer()
+
+    def _batch_flush_lock(self) -> asyncio.Lock:
+        loop_token: Final = running_loop_token()
+        with self._batch_buffer_lock:
+            lock: Final = self._batch_flush_locks.get(loop_token)
+            if lock is not None:
+                return lock
+            new_lock: Final = asyncio.Lock()
+            self._batch_flush_locks[loop_token] = new_lock
+            return new_lock
 
     @staticmethod
     async def _incrbyfloat_with_ttl(
@@ -1593,9 +1605,23 @@ class RedisCache(BaseCache):
         return total
 
     async def flush_cache_buffer(self):
-        print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")
-        await self.async_set_cache_pipeline(self.redis_batch_writing_buffer)
-        self.redis_batch_writing_buffer = []
+        async with self._batch_flush_lock():
+            await self._flush_cache_buffer()
+
+    async def _flush_cache_buffer(self) -> None:
+        with self._batch_buffer_lock:
+            entries: Final = tuple(self.redis_batch_writing_buffer)
+            self.redis_batch_writing_buffer.clear()
+        print_verbose(f"flushing to redis....reached size of buffer {len(entries)}")
+        try:
+            if any(ttl is not None for _, _, ttl in entries):
+                await self.async_set_cache_pipeline_with_ttls(entries)
+            else:
+                await self.async_set_cache_pipeline(tuple((key, value) for key, value, _ in entries))
+        except BaseException:
+            with self._batch_buffer_lock:
+                self.redis_batch_writing_buffer.extendleft(reversed(entries))
+            raise
 
     def _get_cache_logic(self, cached_response: bytes | str | None):
         """

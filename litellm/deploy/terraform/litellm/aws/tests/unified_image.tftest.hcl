@@ -54,6 +54,11 @@ run "proxy_config_wraps_the_fetch_around_the_same_component" {
   }
 
   assert {
+    condition     = !can(yamldecode(aws_s3_object.proxy_config[0].content).litellm_settings.turn_off_message_logging)
+    error_message = "The module must not override the message logging configuration by default."
+  }
+
+  assert {
     condition = alltrue([
       for component, args in local.component_args :
       join(" ", local.component_overrides[component].entryPoint) == "sh -c" &&
@@ -69,5 +74,29 @@ run "proxy_config_wraps_the_fetch_around_the_same_component" {
       !can(jsondecode(aws_ecs_task_definition.ui.container_definitions)[0].entryPoint),
     ])
     error_message = "The metrics sidecar and the UI never read the proxy config and must keep the plain image entrypoint."
+  }
+}
+
+run "message_logging_opt_out_preserves_other_proxy_settings" {
+  command = plan
+
+  variables {
+    turn_off_message_logging = true
+    proxy_config = {
+      model_list = []
+      litellm_settings = {
+        drop_params              = true
+        turn_off_message_logging = false
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      yamldecode(aws_s3_object.proxy_config[0].content).litellm_settings.turn_off_message_logging &&
+      yamldecode(aws_s3_object.proxy_config[0].content).litellm_settings.drop_params &&
+      length(yamldecode(aws_s3_object.proxy_config[0].content).model_list) == 0
+    )
+    error_message = "Enabling the logging opt-out must redact messages without dropping other settings from the deployed proxy config."
   }
 }

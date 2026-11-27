@@ -16,10 +16,11 @@ These are distinct from the A2A agent registry at /v1/agents.
 
 import json
 from collections.abc import Mapping
-from typing import Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -31,7 +32,38 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_query_params,
 )
 
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
 router: Final = APIRouter(tags=["gemini managed agents"])
+
+
+class _SelectDataGenerator(Protocol):
+    def __call__(
+        self,
+        response: object,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict[str, object],  # mutable-ok: mirrors proxy_server.select_data_generator
+        request: Request | None = None,
+        *,
+        responses_stream_errors: bool = False,
+    ) -> object: ...
+
+
+class _ProxyServerImports(TypedDict):
+    general_settings: ReadOnly[dict[str, object]]  # mutable-ok: the proxy's own settings dict
+    llm_router: ReadOnly["Router | None"]
+    proxy_config: ReadOnly["ProxyConfig"]
+    proxy_logging_obj: ReadOnly["ProxyLogging"]
+    select_data_generator: ReadOnly[_SelectDataGenerator]
+    user_api_base: ReadOnly[str | None]
+    user_max_tokens: ReadOnly[int | None]
+    user_model: ReadOnly[str | None]
+    user_request_timeout: ReadOnly[float | None]
+    user_temperature: ReadOnly[float | None]
+    version: ReadOnly[str | None]
 
 
 def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -112,7 +144,7 @@ def _merge_query_params_into_data(data: dict[str, object], request: Request) -> 
     return data
 
 
-def _proxy_server_imports():
+def _proxy_server_imports() -> _ProxyServerImports:
     from litellm.proxy.proxy_server import (  # noqa: PLC0415
         general_settings,
         llm_router,
@@ -127,7 +159,7 @@ def _proxy_server_imports():
         version,
     )
 
-    return dict(
+    return _ProxyServerImports(
         general_settings=general_settings,
         llm_router=llm_router,
         proxy_config=proxy_config,

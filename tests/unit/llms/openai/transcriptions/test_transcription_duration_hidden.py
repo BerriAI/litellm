@@ -127,7 +127,7 @@ class TestCostCalculatorReadsDurationFromHiddenParams:
     """The cost calculator should read duration from _hidden_params via completion_cost()."""
 
     @patch(  # test-quality-ok: isolates duration selection from the model pricing table
-        "litellm.cost_calculator.openai_cost_per_second"
+        "litellm.llms.openai.cost_calculation.cost_per_second"
     )
     def test_completion_cost_prefers_provider_usage_duration_over_measured_duration(self, mock_cost_fn):
         mock_cost_fn.return_value = (0.001, 0.0)
@@ -181,7 +181,7 @@ class TestCostCalculatorReadsDurationFromHiddenParams:
 
         assert actual == pytest.approx(60.0 * 0.0125)
 
-    @patch("litellm.cost_calculator.openai_cost_per_second")
+    @patch("litellm.llms.openai.cost_calculation.cost_per_second")
     def test_completion_cost_uses_hidden_params_duration(self, mock_cost_fn):
         """
         completion_cost() should pass the duration from _hidden_params to
@@ -206,7 +206,7 @@ class TestCostCalculatorReadsDurationFromHiddenParams:
         _, kwargs = mock_cost_fn.call_args
         assert kwargs["duration"] == 17.5
 
-    @patch("litellm.cost_calculator.openai_cost_per_second")
+    @patch("litellm.llms.openai.cost_calculation.cost_per_second")
     def test_completion_cost_falls_back_to_response_duration(self, mock_cost_fn):
         """
         When _hidden_params doesn't have duration (e.g. verbose_json response
@@ -231,7 +231,7 @@ class TestCostCalculatorReadsDurationFromHiddenParams:
         _, kwargs = mock_cost_fn.call_args
         assert kwargs["duration"] == 42.7
 
-    @patch("litellm.cost_calculator.openai_cost_per_second")
+    @patch("litellm.llms.openai.cost_calculation.cost_per_second")
     def test_completion_cost_defaults_to_zero_duration(self, mock_cost_fn):
         """When neither hidden params nor response has duration, use 0.0."""
         mock_cost_fn.return_value = (0.0, 0.0)

@@ -21,6 +21,7 @@ pub enum Estimate {
     NoBody,
     Tokens(i64),
     Failed,
+    Unpriced,
 }
 
 pub trait CounterStore: Send + Sync {
@@ -152,7 +153,7 @@ pub trait CapacityHost: Send + Sync {
     fn estimate_tokens<'a>(
         &'a self,
         tpm_share: i64,
-        model: &'a str,
+        model: Option<&'a str>,
         call_type: Option<&'a str>,
     ) -> SeamFuture<'a, Estimate>;
     fn post_call_success<'a>(&'a self, headers: &'a [(String, Value)]) -> SeamFuture<'a, ()>;
@@ -259,7 +260,7 @@ impl<D: HostTransport> CapacityHost for JsonHost<D> {
     fn estimate_tokens<'a>(
         &'a self,
         tpm_share: i64,
-        model: &'a str,
+        model: Option<&'a str>,
         call_type: Option<&'a str>,
     ) -> SeamFuture<'a, Estimate> {
         self.invoke(

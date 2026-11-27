@@ -13,6 +13,7 @@ import litellm
 from litellm.images.fan_out import image_request_count
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.common_utils import (
     get_vertex_base_url,
@@ -127,12 +128,12 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         headers = headers or {}
         litellm_params = litellm_params or {}
 
@@ -259,13 +260,16 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
         usage_metadata: Final = _JSON_DICT.validate_python(response_json.get("usageMetadata") or {})
         traffic_type: Final = usage_metadata.get("trafficType") if usage_metadata else None
-        return ImageResponse(
+        model_response: Final = ImageResponse(
             data=data_list,
             usage=transform_gemini_image_usage(usage_metadata) if usage_metadata else None,
             hidden_params={"provider_specific_fields": {"traffic_type": traffic_type}}
             if isinstance(traffic_type, str) and traffic_type
             else {},
         )
+        if not data_list:
+            raise empty_image_response_error(response_json, model, "vertex_ai", raw_response, model_response)
+        return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | Sequence[FileTypes | None]) -> list[HttpxPartType]:
         images: Final[Sequence[object]] = image if isinstance(image, list) else [image]

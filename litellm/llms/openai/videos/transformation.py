@@ -232,7 +232,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> VideoObject:
         """Transform the OpenAI video creation response."""
         video_obj: Final = VideoObject.model_validate(raw_response.json())

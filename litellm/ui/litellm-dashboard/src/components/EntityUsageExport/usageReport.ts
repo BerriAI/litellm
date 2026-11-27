@@ -102,7 +102,7 @@ export const buildUsageReportHtml = ({
   ];
   const headers = [
     t("usage.export.report.columns.date"),
-    t(`usage.export.modal.entities.${entityType}`),
+    t(`usage.entityLabels.title.${entityType}`),
     ...(breakdown ? [breakdown.label] : []),
     t("usage.export.report.columns.spend"),
     t("usage.export.report.columns.requests"),

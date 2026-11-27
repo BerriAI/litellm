@@ -380,3 +380,37 @@ def test_ollama_embeddings_sends_extra_body_fields_at_the_documented_places(embe
         "options": {"num_ctx": 2048},
     }
     assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_sdk_embedding_looks_up_the_model_at_the_call_api_base_with_its_key(
+    embedding_route: respx.Route, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from litellm.utils import cached_get_model_info_helper
+
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama-default.test:11434")
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    default_lookups: Final = respx_mock.post("http://ollama-default.test:11434/api/show").respond(
+        200, json={"template": "", "model_info": {}}
+    )
+    call_lookups: Final = respx_mock.post("http://ollama.test/api/show", json={"name": "embed-probe"}).respond(
+        200, json={"template": "", "model_info": {}}
+    )
+    litellm.get_model_info.cache_clear()
+    cached_get_model_info_helper.cache_clear()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as success_logging:
+            monkeypatch.setattr("litellm.utils.executor", success_logging)
+            litellm.embedding(
+                model="ollama/embed-probe", input="hello", api_base="http://ollama.test", api_key="call-key"
+            )
+    finally:
+        litellm.get_model_info.cache_clear()
+        cached_get_model_info_helper.cache_clear()
+
+    assert embedding_route.called
+    assert call_lookups.called
+    assert {call.request.headers.get("authorization") for call in call_lookups.calls} == {"Bearer call-key"}
+    assert not default_lookups.called

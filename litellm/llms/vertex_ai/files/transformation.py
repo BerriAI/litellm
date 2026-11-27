@@ -77,6 +77,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VERTEX_SHARED_REQUEST_TIERS,
     VertexGeminiConfig,
     malformed_without_output_message,
+    requests_audio_mime_type,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     embed_content_config_fields,
@@ -2025,6 +2026,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
         # Transform successful response using existing transformation
         vertex_response: Final = vertex_output.get("response", {})
+        vertex_request: Final = vertex_output.get("request")
 
         # Extract model from response
         model = vertex_response.get("modelVersion", "gemini-1.5-flash-001")
@@ -2041,6 +2043,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 model=model,
                 logging_obj=logging_obj,
                 raw_response=mock_httpx_response,
+                keeps_requested_audio_format=isinstance(vertex_request, Mapping)
+                and requests_audio_mime_type(vertex_request),
             )
 
             malformed: Final = malformed_without_output_message(transformed_response)

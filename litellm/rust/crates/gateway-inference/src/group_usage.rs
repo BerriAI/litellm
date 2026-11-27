@@ -5,14 +5,13 @@ use std::{sync::Arc, time::SystemTime};
 
 use axum::{
     extract::{Request, State},
-    http::{HeaderName, HeaderValue},
     middleware::Next,
     response::Response,
 };
 use litellm_redis_store::{Number, router_usage::Kind};
 use litellm_router_core::{Deployment, UsageWindow, health::current_minute};
 
-use crate::{Gateway, headers::Routing, routing::Host, routing_cache::counter};
+use crate::{Gateway, headers::Routing, record, routing::Host, routing_cache::counter};
 
 const TOKENS: [&str; 2] = ["x-ratelimit-remaining-tokens", "x-ratelimit-limit-tokens"];
 const REQUESTS: [&str; 2] = [
@@ -128,28 +127,27 @@ async fn group_headers<H: Host>(gateway: &Gateway<H>, group: &str) -> Vec<(&'sta
         .collect()
 }
 
-/// Adds the served group's remaining-usage headers a response does not carry yet, as
-/// `apply_remaining_usage_headers` does.
+/// Writes the served group's remaining-usage headers to the call's record as defaults, which
+/// `headers::render_response_headers` sends only where nothing else set a header of the same name,
+/// as `apply_remaining_usage_headers` does.
 pub(crate) async fn told<H: Host>(
     State(gateway): State<Arc<Gateway<H>>>,
     request: Request,
     next: Next,
 ) -> Response {
-    let mut response = next.run(request).await;
-    let Some(group) = response
-        .extensions()
-        .get::<Routing>()
-        .and_then(Routing::counted_group)
-        .map(str::to_owned)
-    else {
+    let response = next.run(request).await;
+    let Some(group) = record::read(|entries| {
+        entries
+            .routing()
+            .and_then(Routing::counted_group)
+            .map(str::to_owned)
+    })
+    .flatten() else {
         return response;
     };
     for (name, value) in group_headers(&gateway, &group).await {
-        if let Ok(value) = HeaderValue::from_str(&value.to_json()) {
-            response
-                .headers_mut()
-                .entry(HeaderName::from_static(name))
-                .or_insert(value);
+        if let Err(error) = record::default_header(name, value.to_json()) {
+            tracing::error!(%error, header = name, "model group usage header was not written");
         }
     }
     response

@@ -58,8 +58,8 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """
@@ -80,8 +80,8 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         self,
         api_base: str | None,
         optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        data: dict[str, object] | list[dict] | None = None,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint.
@@ -92,8 +92,8 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to Firecrawl API format.
 
@@ -150,7 +150,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform Firecrawl API response to LiteLLM unified SearchResponse format.

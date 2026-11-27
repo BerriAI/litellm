@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from enum import Enum
 from typing import Final, Literal, Optional, Union
 
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -56,6 +57,12 @@ DEFAULT_CACHING_SUPPORTED_CALL_TYPES: tuple[CachingSupportedCallTypes, ...] = (
     "anthropic_messages",
     "aanthropic_messages",
 )
+
+
+class CallerMessageCount(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    count: int = Field(ge=0)
 
 
 class RedisPipelineIncrementOperation(TypedDict):

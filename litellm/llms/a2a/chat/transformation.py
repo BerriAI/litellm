@@ -147,7 +147,7 @@ class A2AConfig(BaseConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to A2A parameters.
 

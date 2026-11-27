@@ -38,7 +38,7 @@ GUARDRAIL_NAME: Final = "aporia"
 _DECODED_JSON: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.aporia_ai import AporiaGuardrailConfigModel
 
 
 class AporiaGuardrail(CustomGuardrail):
@@ -92,7 +92,7 @@ class AporiaGuardrail(CustomGuardrail):
 
     async def make_aporia_api_request(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         new_messages: Sequence[Mapping[str, object]],
         response_string: str | None = None,
     ):
@@ -173,7 +173,7 @@ class AporiaGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
@@ -222,7 +222,7 @@ class AporiaGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("Aporia AI: not running guardrail. No messages in data")
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[AporiaGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.aporia_ai import (
             AporiaGuardrailConfigModel,
         )

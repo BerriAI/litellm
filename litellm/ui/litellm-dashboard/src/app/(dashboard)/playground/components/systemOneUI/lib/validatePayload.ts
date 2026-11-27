@@ -113,7 +113,7 @@ const requireContext = <T>(
 
 export function validateSystemOnePayload(
   raw: string,
-  endpoint: DecisionEndpoint = "/typesafe/v1/systemone",
+  endpoint?: DecisionEndpoint,
   t: TFunction = i18n.t.bind(i18n),
 ): SystemOnePayloadValidation {
   const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;

@@ -462,6 +462,10 @@ def get_original_file_id(encoded_id: str) -> str:
         return encoded_id
 
 
+def provider_upload_model_id(custom_llm_provider: str) -> str:
+    return f"_provider_upload_{custom_llm_provider}"
+
+
 _GEMINI_FILES_HOST: Final = "generativelanguage.googleapis.com"
 
 
@@ -1253,7 +1257,7 @@ async def handle_model_based_routing(
     file_id: str,
     request: "Request",  # FastAPI Request object
     llm_router: Optional["Router"],  # Router instance
-    data: dict,
+    data: dict[str, object],
     user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
     resolves_managed_file_ids: bool = False,
@@ -1539,7 +1543,7 @@ class FileCreationParams:
 
 async def extract_file_creation_params(
     request: "Request",
-    request_body: dict | None = None,
+    request_body: dict[str, object] | None = None,
     target_model_names_form: str | None = None,
     target_storage_form: str | None = None,
 ) -> FileCreationParams:

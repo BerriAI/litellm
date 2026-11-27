@@ -11,9 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ParseKeys } from "i18next";
-import React, { useCallback, useEffect, useLayoutEffect, useState } from "react";
-import { useForm } from "react-hook-form";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { FieldGroup } from "@/components/ui/field";
@@ -27,33 +27,23 @@ import {
   asText,
   GuardrailField,
   labelWithHint,
-  readRecord,
-  requiredRule,
   type GuardrailFormValues,
   LoggingOnlyScopeField,
   SkipMessageSelect,
 } from "./GuardrailFormField";
-import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
+import ContentFilterManager from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
 import { GuardrailSettingsActions } from "./GuardrailSettingsActions";
 import { GuardrailModeCard } from "./GuardrailModeDisplay";
 import { GuardrailReadOnlyDetails } from "./GuardrailReadOnlyDetails";
 import {
-  getLoggingOnlyScopeUpdate,
   getGuardrailLogoAndName,
   guardrail_provider_map,
-  loggingOnlyContinueFromParams,
-  loggingOnlyScopeToChoice,
-  skipSystemMessageToChoice,
-  skipToolMessageToChoice,
-  streamScopeByModeFromConfig,
-  streamScopeForUpdate,
   supportsDirectionalLoggingOnlyScope,
   toModeArray,
-  type SkipSystemMessageChoice,
-  type SkipToolMessageChoice,
-  type GuardrailStreamScope,
 } from "./guardrail_info_helpers";
+import { buildGuardrailUpdatePayload, guardrailInfoToFormValues } from "./guardrailInfoMapper";
+import { createGuardrailInfoSchema } from "./guardrailInfoSchema";
 import { GuardrailStreamScopeCaption, StreamScopeFormField } from "./StreamScopeFields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
@@ -86,7 +76,17 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   const [guardrailProviderSpecificParams, setGuardrailProviderSpecificParams] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
-  const form = useForm<GuardrailFormValues>({ defaultValues: {} });
+  const guardrailProvider = guardrailData?.litellm_params?.guardrail ?? null;
+  const schema = useMemo(
+    () =>
+      createGuardrailInfoSchema({
+        guardrailProvider,
+        providerParams: guardrailProviderSpecificParams,
+        t,
+      }),
+    [guardrailProvider, guardrailProviderSpecificParams, t],
+  );
+  const form = useZodForm(schema, { defaultValues: {} });
   const [selectedPiiEntities, setSelectedPiiEntities] = useState<string[]>([]);
   const [selectedPiiActions, setSelectedPiiActions] = useState<{ [key: string]: string }>({});
   const [guardrailSettings, setGuardrailSettings] = useState<{
@@ -126,7 +126,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>(emptyToolPermissionConfig);
   const [toolPermissionDirty, setToolPermissionDirty] = useState(false);
   const [customCodeModalVisible, setCustomCodeModalVisible] = useState(false);
-  const guardrailProvider = guardrailData?.litellm_params?.guardrail ?? null;
   const directionalScopeSupported = supportsDirectionalLoggingOnlyScope(guardrailSettings, guardrailProvider);
 
   // Content Filter data ref (managed by ContentFilterManager)
@@ -232,36 +231,15 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     fetchGuardrailUISettings();
   }, [guardrailId, accessToken]);
 
+  const { setValue } = form;
+
   useEffect(() => {
     if (!guardrailData) return;
-    form.setValue("guardrail_name", guardrailData.guardrail_name);
-    form.setValue("default_on", guardrailData.litellm_params?.default_on);
-    const storedParams = guardrailData.litellm_params;
-    form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(storedParams?.logging_only_scope));
-    form.setValue("logging_only_continue_on_input_failure", loggingOnlyContinueFromParams(storedParams));
-    form.setValue(
-      "skip_system_message_choice",
-      skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail),
-    );
-    form.setValue(
-      "skip_tool_message_choice",
-      skipToolMessageToChoice(guardrailData.litellm_params?.skip_tool_message_in_guardrail),
-    );
-    form.setValue(
-      "stream_scope_by_mode",
-      streamScopeByModeFromConfig(
-        guardrailData.litellm_params?.stream_scope,
-        toModeArray(guardrailData.litellm_params?.mode),
-      ),
-    );
-    form.setValue(
-      "guardrail_info",
-      guardrailData.guardrail_info ? JSON.stringify(guardrailData.guardrail_info, null, 2) : "",
-    );
-    if (guardrailData.litellm_params?.optional_params) {
-      form.setValue("optional_params", guardrailData.litellm_params.optional_params);
-    }
-  }, [guardrailData, guardrailProviderSpecificParams, form]);
+    const mapped = guardrailInfoToFormValues(guardrailData);
+    Object.entries(mapped).forEach(([key, value]) => {
+      setValue(key, value);
+    });
+  }, [guardrailData, guardrailProviderSpecificParams, setValue]);
 
   const resetToolPermissionEditor = useCallback(() => {
     if (guardrailData?.litellm_params?.guardrail === "tool_permission") {
@@ -307,188 +285,20 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     try {
       if (!accessToken) return;
 
-      const { logging_only_scope_choice: scopeChoice, logging_only_continue_on_input_failure: continueFlag } = values;
-      const updateData: any = {
-        litellm_params: getLoggingOnlyScopeUpdate(guardrailData.litellm_params, scopeChoice, continueFlag),
+      const updateParams = {
+        values,
+        guardrailData,
+        selectedPiiEntities,
+        selectedPiiActions,
+        hasUnsavedContentFilterChanges,
+        contentFilterData: contentFilterDataRef.current,
+        toolPermissionConfig,
+        toolPermissionDirty,
+        guardrailProviderSpecificParams,
       };
+      const updateData = buildGuardrailUpdatePayload(updateParams);
 
-      if (values.guardrail_name !== guardrailData.guardrail_name) {
-        updateData.guardrail_name = values.guardrail_name;
-      }
-
-      // Only include default_on if it has changed
-      if (values.default_on !== guardrailData.litellm_params?.default_on) {
-        updateData.litellm_params.default_on = values.default_on;
-      }
-
-      const modes = toModeArray(guardrailData.litellm_params?.mode);
-      const nextStreamScope = streamScopeForUpdate(
-        modes,
-        (values.stream_scope_by_mode as Record<string, GuardrailStreamScope> | undefined) ?? {},
-        guardrailData.litellm_params?.stream_scope,
-      );
-      if (nextStreamScope !== undefined) {
-        updateData.litellm_params.stream_scope = nextStreamScope;
-      }
-
-      const prevSkipChoice = skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail);
-      const nextSkipChoice = values.skip_system_message_choice as SkipSystemMessageChoice | undefined;
-      if (nextSkipChoice !== undefined && nextSkipChoice !== prevSkipChoice) {
-        if (nextSkipChoice === "inherit") {
-          updateData.litellm_params.skip_system_message_in_guardrail = null;
-        } else if (nextSkipChoice === "yes") {
-          updateData.litellm_params.skip_system_message_in_guardrail = true;
-        } else {
-          updateData.litellm_params.skip_system_message_in_guardrail = false;
-        }
-      }
-
-      const prevSkipToolChoice = skipToolMessageToChoice(guardrailData.litellm_params?.skip_tool_message_in_guardrail);
-      const nextSkipToolChoice = values.skip_tool_message_choice as SkipToolMessageChoice | undefined;
-      if (nextSkipToolChoice !== undefined && nextSkipToolChoice !== prevSkipToolChoice) {
-        if (nextSkipToolChoice === "inherit") {
-          updateData.litellm_params.skip_tool_message_in_guardrail = null;
-        } else if (nextSkipToolChoice === "yes") {
-          updateData.litellm_params.skip_tool_message_in_guardrail = true;
-        } else {
-          updateData.litellm_params.skip_tool_message_in_guardrail = false;
-        }
-      }
-
-      // Only include guardrail_info if it has changed
-      const originalGuardrailInfo = guardrailData.guardrail_info;
-      const newGuardrailInfo = values.guardrail_info ? JSON.parse(asText(values.guardrail_info)) : undefined;
-      if (JSON.stringify(originalGuardrailInfo) !== JSON.stringify(newGuardrailInfo)) {
-        updateData.guardrail_info = newGuardrailInfo;
-      }
-
-      // Only add PII entities config if there are changes
-      const originalPiiConfig = guardrailData.litellm_params?.pii_entities_config || {};
-      const newPiiEntitiesConfig: { [key: string]: string } = {};
-
-      selectedPiiEntities.forEach((entity) => {
-        newPiiEntitiesConfig[entity] = selectedPiiActions[entity] || "MASK";
-      });
-
-      // Only update if PII config has changed
-      if (JSON.stringify(originalPiiConfig) !== JSON.stringify(newPiiEntitiesConfig)) {
-        updateData.litellm_params.pii_entities_config = newPiiEntitiesConfig;
-      }
-
-      // Only add Content Filter patterns if there are changes
-      if (guardrailData.litellm_params?.guardrail === "litellm_content_filter" && hasUnsavedContentFilterChanges) {
-        const formattedData = formatContentFilterDataForAPI(
-          contentFilterDataRef.current.patterns || [],
-          contentFilterDataRef.current.blockedWords || [],
-          contentFilterDataRef.current.categories || [],
-          contentFilterDataRef.current.competitorIntentEnabled,
-          contentFilterDataRef.current.competitorIntentConfig,
-        );
-
-        updateData.litellm_params.patterns = formattedData.patterns;
-        updateData.litellm_params.blocked_words = formattedData.blocked_words;
-        updateData.litellm_params.categories = formattedData.categories;
-        updateData.litellm_params.competitor_intent_config = formattedData.competitor_intent_config ?? null;
-      }
-
-      if (guardrailData.litellm_params?.guardrail === "tool_permission") {
-        const originalRules = guardrailData.litellm_params?.rules || [];
-        const currentRules = toolPermissionConfig.rules || [];
-        const rulesChanged = JSON.stringify(originalRules) !== JSON.stringify(currentRules);
-
-        const originalDefault = (guardrailData.litellm_params?.default_action || "deny").toLowerCase();
-        const currentDefault = (toolPermissionConfig.default_action || "deny").toLowerCase();
-        const defaultChanged = originalDefault !== currentDefault;
-
-        const originalOnDisallowed = (guardrailData.litellm_params?.on_disallowed_action || "block").toLowerCase();
-        const currentOnDisallowed = (toolPermissionConfig.on_disallowed_action || "block").toLowerCase();
-        const onDisallowedChanged = originalOnDisallowed !== currentOnDisallowed;
-
-        const originalMessage = guardrailData.litellm_params?.violation_message_template || "";
-        const currentMessage = toolPermissionConfig.violation_message_template || "";
-        const messageChanged = originalMessage !== currentMessage;
-
-        if (toolPermissionDirty || rulesChanged || defaultChanged || onDisallowedChanged || messageChanged) {
-          updateData.litellm_params.rules = currentRules;
-          updateData.litellm_params.default_action = currentDefault;
-          updateData.litellm_params.on_disallowed_action = currentOnDisallowed;
-          updateData.litellm_params.violation_message_template = currentMessage || null;
-        }
-      }
-
-      /******************************
-       * Add provider-specific params (reusing logic from add_guardrail_form.tsx)
-       * ----------------------------------
-       * The backend exposes exactly which extra parameters a provider
-       * accepts via `/guardrails/ui/provider_specific_params`.
-       * Instead of copying every unknown form field, we fetch the list for
-       * the selected provider and ONLY pass those recognised params.
-       ******************************/
-
-      // Get the current provider from the guardrail data
-      const currentProvider = Object.keys(guardrail_provider_map).find(
-        (key) => guardrail_provider_map[key] === guardrailData.litellm_params?.guardrail,
-      );
-
-      // Use pre-fetched provider params to copy recognised params
-      const isToolPermissionGuardrail = guardrailData.litellm_params?.guardrail === "tool_permission";
-      if (guardrailProviderSpecificParams && currentProvider && !isToolPermissionGuardrail) {
-        const providerKey = guardrail_provider_map[currentProvider]?.toLowerCase();
-        const providerSpecificParams = guardrailProviderSpecificParams[providerKey] || {};
-
-        const allowedParams = new Set<string>();
-
-        // Add root-level parameters (like api_key, api_base, api_version)
-        Object.keys(providerSpecificParams).forEach((paramName) => {
-          if (paramName !== "optional_params") {
-            allowedParams.add(paramName);
-          }
-        });
-
-        // Add nested parameters from optional_params.fields
-        if (providerSpecificParams.optional_params && providerSpecificParams.optional_params.fields) {
-          Object.keys(providerSpecificParams.optional_params.fields).forEach((paramName) => {
-            allowedParams.add(paramName);
-          });
-        }
-
-        allowedParams.forEach((paramName) => {
-          if (paramName === "patterns" || paramName === "blocked_words" || paramName === "categories") {
-            return;
-          }
-          // Check for both direct parameter name and nested optional_params object
-          const directValue = values[paramName];
-          const paramValue =
-            directValue === undefined || directValue === null || directValue === ""
-              ? readRecord(values.optional_params, paramName)
-              : directValue;
-
-          // Get the original value for comparison
-          const originalValue = guardrailData.litellm_params?.[paramName];
-
-          // Check if the value has changed from the original
-          const hasChanged = JSON.stringify(paramValue) !== JSON.stringify(originalValue);
-
-          // Include if value has changed and has a meaningful value, OR if user explicitly cleared a value
-          if (hasChanged) {
-            if (paramValue !== undefined && paramValue !== null && paramValue !== "") {
-              // User set a new value
-              updateData.litellm_params[paramName] = paramValue;
-            } else if (originalValue !== undefined && originalValue !== null && originalValue !== "") {
-              // User cleared an existing value - set to null to indicate removal
-              updateData.litellm_params[paramName] = null;
-            }
-          }
-        });
-      }
-
-      // Remove empty litellm_params object if no parameters were changed
-      if (Object.keys(updateData.litellm_params).length === 0) {
-        delete updateData.litellm_params;
-      }
-
-      // Only proceed with update if there are actual changes
-      if (Object.keys(updateData).length === 0) {
+      if (!updateData) {
         toast.info(t("guardrails.info.toasts.noChanges"));
         setIsEditing(false);
         return;
@@ -733,7 +543,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                           control={form.control}
                           name="guardrail_name"
                           label={t("guardrails.info.settings.nameLabel")}
-                          rules={requiredRule(t("guardrails.info.settings.nameRequired"))}
                         >
                           {({ ref, value, ...field }) => (
                             <Input

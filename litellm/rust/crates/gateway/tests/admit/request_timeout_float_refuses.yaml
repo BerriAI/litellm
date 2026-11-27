@@ -1,0 +1,20 @@
+# Python fails every call on a request_timeout that float() refuses, where the native call would
+# run with none.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  litellm_settings:
+    request_timeout: soon
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: litellm_settings.request_timeout

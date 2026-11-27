@@ -165,7 +165,7 @@ impl RustSpendLogWriter {
         crate::execution::run_async(
             py,
             async move {
-                match tokio::spawn(pass).await {
+                match litellm_call_scope::spawn_detached(pass).await {
                     Ok(result) => result.map_err(PassError::Database),
                     Err(error) => Err(PassError::Aborted(error.to_string())),
                 }

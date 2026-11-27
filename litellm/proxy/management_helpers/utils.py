@@ -880,7 +880,7 @@ async def _emit_management_endpoint_otel_span(
         )
 
         route = get_request_route(http_request)
-        request_body: dict = (  # rebind-ok: pre-existing rebinding on a rename-only line
+        request_body: dict[str, object] = (  # rebind-ok: pre-existing rebinding on a rename-only line
             await read_request_body(request=http_request) if log_payload else {}
         )
     else:

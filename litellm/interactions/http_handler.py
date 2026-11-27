@@ -152,7 +152,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             stream=stream,
         )
 
-        data: Final = interactions_api_config.transform_request(
+        data: Final[dict[str, object]] = interactions_api_config.transform_request(  # mutable-ok: the callee's own dict
             model=model,
             agent=agent,
             input=input,
@@ -248,7 +248,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             stream=stream,
         )
 
-        data: Final = interactions_api_config.transform_request(
+        data: Final[dict[str, object]] = interactions_api_config.transform_request(  # mutable-ok: the callee's own dict
             model=model,
             agent=agent,
             input=input,

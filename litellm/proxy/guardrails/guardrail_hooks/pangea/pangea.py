@@ -36,7 +36,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.pangea import PangeaGuardrailConfigModel
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -226,7 +226,7 @@ class PangeaHandler(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: str,
     ):
         event_type: Final = GuardrailEventHooks.pre_call
@@ -315,7 +315,7 @@ class PangeaHandler(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         # This union isn't actually correct -- it can get other response types depending on the API called
         response: LLMResponseTypes,
@@ -349,7 +349,7 @@ class PangeaHandler(CustomGuardrail):
             ) from e
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[PangeaGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.pangea import (
             PangeaGuardrailConfigModel,
         )

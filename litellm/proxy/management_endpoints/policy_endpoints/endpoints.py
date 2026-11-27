@@ -123,7 +123,7 @@ class ApplyPoliciesListResult(TypedDict):
 async def apply_policies(
     policy_names: list[str] | None,
     inputs: GenericGuardrailAPIInputs,
-    request_data: dict,
+    request_data: dict[str, object],
     input_type: Literal["request", "response"],
     proxy_logging_obj: "LiteLLMLoggingObj",
     guardrail_names: list[str] | None = None,
@@ -1153,7 +1153,7 @@ async def suggest_policy_templates(
     data: SuggestTemplatesRequest,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> dict:
+) -> dict[str, object]:
     """
     Use AI to suggest policy templates based on attack examples and descriptions.
 

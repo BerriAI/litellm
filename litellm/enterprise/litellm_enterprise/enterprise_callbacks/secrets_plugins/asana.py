@@ -15,7 +15,7 @@ class AsanaSecretDetector(RegexBasedDetector):
         return "Asana Secrets"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Asana Client ID
             re.compile(

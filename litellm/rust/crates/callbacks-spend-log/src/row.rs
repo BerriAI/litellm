@@ -270,7 +270,10 @@ fn stored_user_email(auth: &RowAuthFacts) -> Value {
 /// are aware.
 fn duration_ms(start: &Timestamp, end: &Timestamp) -> Option<i64> {
     match (start.raw, end.raw) {
-        (Some(IsoDateTime::Aware(start)), Some(IsoDateTime::Aware(end)))
+        (
+            Some(IsoDateTime::Aware { utc: start, .. }),
+            Some(IsoDateTime::Aware { utc: end, .. }),
+        )
         | (Some(IsoDateTime::Naive(start)), Some(IsoDateTime::Naive(end))) => {
             Some(((end - start) as f64 / 1e6 * 1000.0) as i64)
         }

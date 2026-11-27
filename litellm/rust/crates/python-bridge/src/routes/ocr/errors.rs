@@ -7,7 +7,7 @@ use pyo3::{
     prelude::*,
 };
 
-use crate::errors::{by_fault, upstream_error};
+use crate::errors::{RustDocumentFetchError, by_fault, upstream_error};
 
 const REQUEST_FORMAT_ERROR: &str = "ocr_request_format_error";
 
@@ -41,6 +41,9 @@ fn native(py: Python<'_>, error: Error) -> PyResult<PyErr> {
         }
         (Error::FileRead { cause, .. }, None) => {
             PyOSError::new_err(Report::new(cause.as_ref()).to_string())
+        }
+        (_, None) if error.is_unreachable_document() => {
+            RustDocumentFetchError::new_err(Report::new(&error).to_string())
         }
         (_, None) => by_fault(error.is_request(), &error),
     };
@@ -168,6 +171,40 @@ mod tests {
     }
 
     #[rstest]
+    #[tokio::test]
+    async fn an_unreachable_document_is_a_document_fetch_error() {
+        use litellm_http::{Client, media::MediaFetcher};
+        use litellm_llms::base_llm::ocr::{
+            document::inline_remote_document, transformation::OcrConnection,
+        };
+        use litellm_llms_types::formats::ocr::OcrDocument;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let error = inline_remote_document(
+            &MediaFetcher::for_test(Client::for_test()),
+            OcrDocument::DocumentUrl {
+                document_url: format!("http://{address}/document.pdf"),
+                extra_fields: Default::default(),
+            },
+            &OcrConnection::default(),
+        )
+        .await
+        .unwrap_err();
+        Python::initialize();
+        Python::attach(|py| {
+            let mapped = to_pyerr(error);
+            assert!(
+                mapped.is_instance_of::<RustDocumentFetchError>(py),
+                "{mapped}"
+            );
+            assert!(mapped.is_instance_of::<PyValueError>(py), "{mapped}");
+            assert_eq!(status_code(py, &mapped), Some(400));
+        });
+    }
+
+    #[rstest]
     #[case::missing_document_url(Error::MissingDocumentUrl)]
     #[case::invalid_features(Error::Features)]
     #[case::invalid_provider(Error::InvalidProvider("unknown".into()))]
@@ -179,6 +216,7 @@ mod tests {
             assert!(mapped.is_instance_of::<PyValueError>(py));
             assert_eq!(mapped.value(py).to_string(), report);
             assert_eq!(status_code(py, &mapped), Some(400));
+            assert!(!mapped.is_instance_of::<RustDocumentFetchError>(py));
         });
     }
 

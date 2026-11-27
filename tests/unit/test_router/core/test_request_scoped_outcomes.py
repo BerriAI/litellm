@@ -8,7 +8,7 @@ check's cooldown and a failed fallback hop's cooldown.
 
 import asyncio
 from collections.abc import Callable, Iterable, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Final
 
 import httpx
@@ -28,6 +28,7 @@ from tests.unit.test_router.core.retries_health_helpers import (
     attempt_sync,
     cooled_down,
     fresh,
+    usage_since,
 )
 from tests.unit.test_router.core.scripted_host import Call, deployment, rate_limit, server_error
 from tests.unit.test_router.core.streaming_helpers import chat_stream, collect_texts, request_logging
@@ -465,8 +466,11 @@ async def test_a_binding_records_an_async_success(make_core: MakeCore, host: Req
     assert successes(core, "d1") == 1
 
 
-async def test_a_binding_leaves_a_sync_success_uncounted(make_core: MakeCore, host: RequestLoggingHost) -> None:
+async def test_a_binding_leaves_a_sync_success_uncounted(
+    make_core: MakeCore, host: RequestLoggingHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """``_core_bind_to_request_logging`` does not bind ``sync_deployment_callback_on_success``."""
+    started: Final = datetime.now(timezone.utc)
     core: Final = weighted_pair(make_core, rpm=100)
     observed(core)
     bound: Final = request_logging()
@@ -475,7 +479,7 @@ async def test_a_binding_leaves_a_sync_success_uncounted(make_core: MakeCore, ho
     _ = attempt_sync(core, litellm_logging_obj=bound)
 
     assert successes(core, "d1") is None
-    assert await core.health().usage("g") == (10, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (10, 1)
 
 
 async def test_a_binding_records_a_sync_failure_with_no_request(make_core: MakeCore, host: RequestLoggingHost) -> None:

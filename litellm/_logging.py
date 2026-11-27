@@ -29,6 +29,7 @@ from litellm.constants import (
     MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
     QUANTITY_FIELD_NAME_WORDS,
+    TRUNCATED_BASE64_MARKER,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
@@ -168,11 +169,11 @@ def _names_a_credential_header(key: str | None) -> bool:
     return key is not None and key.strip().lower().replace("_", "-") in CREDENTIAL_HEADER_NAMES
 
 
-def _names_a_credential_field(key: str | None) -> bool:
+def _names_a_credential_field(key: str | None, value: object) -> bool:
     if key is None:
         return False
     words: Final = frozenset(_FIELD_NAME_BOUNDARY.sub(" ", key).lower().split())
-    if words & QUANTITY_FIELD_NAME_WORDS:
+    if words & QUANTITY_FIELD_NAME_WORDS and not isinstance(value, str):
         return False
     compact: Final = "".join(character for character in key.lower() if character.isalnum())
     return bool(words & CREDENTIAL_FIELD_NAME_WORDS) or any(
@@ -200,7 +201,7 @@ def _redacted_embedded_json(key: str | None, value: str, depth: int) -> str:
 
 
 def _redacted_client_field(key: str | None, value: object, depth: int = 0) -> object:
-    if _names_a_credential_header(key) or _names_a_credential_field(key):
+    if _names_a_credential_header(key) or _names_a_credential_field(key, value):
         return REDACTED
     if isinstance(value, str):
         return redact_internal_details(redact_structured_value(key, _redacted_embedded_json(key, value, depth)))
@@ -425,7 +426,7 @@ def _replace_base64_run(match: "re.Match[str]") -> str:
     run: Final = match.group(0)
     if not _looks_like_base64(run):
         return run
-    return f"[base64_data truncated: {format_base64_size(len(run))}]"
+    return f"{TRUNCATED_BASE64_MARKER}{format_base64_size(len(run))}]"
 
 
 def _collapse_base64_runs(text: str, limit: int) -> str:

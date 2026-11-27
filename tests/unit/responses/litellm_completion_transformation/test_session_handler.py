@@ -1959,31 +1959,41 @@ async def test_previous_response_replays_a_call_to_a_self_named_member_an_earlie
     assert names.called == [sent_name]
 
 
-def _kept_in_cold_storage(stored_turn: Mapping[str, object]) -> dict[str, object]:
+TRUNCATED_ROW: Final = json.dumps({LITELLM_TRUNCATED_PAYLOAD_FIELD: True})
+STORED_ROWS: Final = (
+    pytest.param(TRUNCATED_ROW, id="truncated_row"),
+    pytest.param("{}", id="prompts_not_stored"),
+)
+
+
+def _kept_in_cold_storage(stored_turn: Mapping[str, object], stored_request: str = TRUNCATED_ROW) -> dict[str, object]:
     return {
         **stored_turn,
         "metadata": json.dumps({"cold_storage_object_key": "cold/long-member-turn.json"}),
-        "proxy_server_request": json.dumps({LITELLM_TRUNCATED_PAYLOAD_FIELD: True}),
+        "proxy_server_request": stored_request,
     }
 
 
-def _cold_storage_object(declared_name: str) -> dict[str, object]:
+def _cold_storage_object(
+    declared_name: str, earlier_input: tuple[Mapping[str, object], ...] = ()
+) -> dict[str, object]:
     return {
-        "messages": [{"role": "user", "content": "Fetch document N-42"}],
+        "messages": [*earlier_input, {"role": "user", "content": "Fetch document N-42"}],
         "model_parameters": {
             "tools": [{"type": "function", "function": {"name": declared_name, "parameters": {"type": "object"}}}]
         },
     }
 
 
+@pytest.mark.parametrize("stored_request", STORED_ROWS)
 async def test_previous_response_replays_a_long_member_call_from_a_turn_kept_in_cold_storage(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, stored_request: str
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
     response_id: Final = _long_member_response_id()
     stored: Final = _StoredSpendLogs(
-        (_kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools)),)
+        (_kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools), stored_request),)
     )
 
     with patch.object(session_handler, "COLD_STORAGE_HANDLER") as cold_storage:
@@ -1991,6 +2001,93 @@ async def test_previous_response_replays_a_long_member_call_from_a_turn_kept_in_
             return_value=_cold_storage_object(truncate_tool_name(LONG_MEMBER_FULL_NAME))
         )
         await _answer_the_long_member_call(stored, response_id, _sent_as_tools(LONG_NAMESPACE_TOOL))
+
+
+JOINED_MEMBER_CALL_REPLAY: Final = (
+    {"type": "function_call", "call_id": "call_0", "name": LONG_MEMBER_FULL_NAME, "arguments": '{"doc_id": "N-41"}'},
+    {"type": "function_call_output", "call_id": "call_0", "output": "schema for N-41"},
+)
+
+
+@pytest.mark.parametrize("stored_request", STORED_ROWS)
+async def test_previous_response_replays_a_stored_input_call_from_a_turn_kept_in_cold_storage(
+    monkeypatch: pytest.MonkeyPatch, stored_request: str
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    response_id: Final = _long_member_response_id()
+    stored: Final = _StoredSpendLogs(
+        (_kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools), stored_request),)
+    )
+    sent: Final = _sent_as_tools(LONG_NAMESPACE_TOOL)
+    sent_name: Final = truncate_tool_name(LONG_MEMBER_FULL_NAME)
+
+    with patch.object(session_handler, "COLD_STORAGE_HANDLER") as cold_storage:
+        cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=_cold_storage_object(sent_name, JOINED_MEMBER_CALL_REPLAY)
+        )
+        names: Final = await _tool_names_sent_to_gemini(
+            stored, response_id, [*sent.next_input, LONG_MEMBER_CALL_OUTPUT], sent.tools
+        )
+
+    assert sent_name in names.declared
+    assert names.called == names.answered == [sent_name, sent_name]
+
+
+SELF_NAMED_MEMBER_CALL_REPLAY: Final = (
+    {
+        "type": "function_call",
+        "call_id": "call_0",
+        "name": "lookup_document",
+        "namespace": "lookup_document",
+        "arguments": '{"doc_id": "N-41"}',
+    },
+    {"type": "function_call_output", "call_id": "call_0", "output": "document N-41"},
+)
+
+
+async def test_previous_response_replays_a_stored_self_named_member_call_from_a_turn_kept_in_cold_storage(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-self-named-cold"
+    )
+    stored: Final = _StoredSpendLogs(
+        (
+            _kept_in_cold_storage(
+                {
+                    "request_id": response_id,
+                    "call_type": "aresponses",
+                    "session_id": "self-named-cold-session",
+                    "response": {
+                        "id": "chatcmpl-self-named-cold",
+                        "object": "chat.completion",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": "Document N-41 is a lease."},
+                            }
+                        ],
+                    },
+                }
+            ),
+        )
+    )
+    sent_name: Final = chat_member_name("lookup_document", "lookup_document")
+
+    with patch.object(session_handler, "COLD_STORAGE_HANDLER") as cold_storage:
+        cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=_cold_storage_object(sent_name, SELF_NAMED_MEMBER_CALL_REPLAY)
+        )
+        names: Final = await _tool_names_sent_to_gemini(
+            stored, response_id, [{"role": "user", "content": "Summarize it"}], [SELF_NAMED_NAMESPACE_TOOL]
+        )
+
+    assert sent_name in names.declared
+    assert names.called == names.answered == [sent_name]
 
 
 LONG_FUNCTION: Final = "lookup_" + "document_tool_schema_" * 4

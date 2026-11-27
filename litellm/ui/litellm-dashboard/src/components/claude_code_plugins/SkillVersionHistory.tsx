@@ -1,13 +1,17 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Controller } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import { apiClient } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { ApiError } from "@/lib/http/client";
 import type { components } from "@/lib/http/schema";
+import { toSkillRestorePayload } from "./skill-restore/mapper";
+import { skillRestoreSchema } from "./skill-restore/schema";
 
 type Versions = components["schemas"]["SkillHubVersions"];
 type PublishedVersion = components["schemas"]["SkillHubVersion"];
@@ -68,7 +72,7 @@ function RestoreVersion({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [newVersion, setNewVersion] = useState("");
+  const { control, getValues } = useZodForm(skillRestoreSchema, { defaultValues: { newVersion: "" } });
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const restore = async () => {
@@ -79,11 +83,7 @@ function RestoreVersion({
       const restored = await apiClient.post<Skill>(
         `/skill-hub/skills/${encodeURIComponent(skill.name)}/versions/${encodeURIComponent(version.id)}/restore`,
         {
-          body: {
-            expected_skill_id: skill.id,
-            expected_updated_at: skill.updated_at ?? null,
-            version: newVersion.trim() || null,
-          } satisfies components["schemas"]["SkillHubRestore"],
+          body: toSkillRestorePayload(skillRestoreSchema.parse(getValues()), skill),
           accessToken,
         },
       );
@@ -121,7 +121,17 @@ function RestoreVersion({
           >
             <label className="block space-y-2">
               <span>{t("claudeCodePlugins.skillDetail.history.newVersion")}</span>
-              <Input value={newVersion} onChange={(event) => setNewVersion(event.target.value)} disabled={restoring} />
+              <Controller
+                control={control}
+                name="newVersion"
+                render={({ field }) => (
+                  <Input
+                    value={field.value}
+                    onChange={(event) => field.onChange(event.target.value)}
+                    disabled={restoring}
+                  />
+                )}
+              />
             </label>
             <p className="text-sm text-muted-foreground">{t("claudeCodePlugins.skillDetail.history.versionHint")}</p>
             {error && <p role="alert">{error}</p>}

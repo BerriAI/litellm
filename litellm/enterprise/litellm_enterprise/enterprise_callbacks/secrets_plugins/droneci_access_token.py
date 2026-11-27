@@ -15,7 +15,7 @@ class DroneciAccessTokenDetector(RegexBasedDetector):
         return "Droneci Access Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Droneci Access Token
             re.compile(

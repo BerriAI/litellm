@@ -7,19 +7,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import difflib
 import fnmatch
 import inspect
 import itertools
+import math
 import os
 import re
 import sys
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, reduce
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, get_args
+from unittest.mock import patch
 
 import yaml
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -202,7 +205,195 @@ def _env_findings(config: Mapping[str, object], environ: Mapping[str, str]) -> I
             yield Finding("warning", path, f"environment variable {name} is not set")
 
 
-def _model_list_findings(model_list: object) -> Iterator[Finding]:
+_ALTERNATIVE_AUTH: Final = re.compile(r"role|profile|(?<!session_)token|credentials")
+_SECRET_NAME: Final = re.compile(r"KEY|SECRET|TOKEN")
+_UNMAPPED_MODEL_KEYS: Final = ("input_cost_per_token", "output_cost_per_token", "max_input_tokens", "max_output_tokens")
+
+
+@cache
+def _model_info_types() -> Mapping[str, frozenset[type]]:
+    import litellm
+    from litellm.types.router import ModelInfo as RouterModelInfo
+    from litellm.types.utils import ModelInfo
+
+    entries: Final = [entry for name, entry in litellm.model_cost.items() if name != "sample_spec"]
+    names: Final = (
+        frozenset(itertools.chain.from_iterable(entries))
+        | frozenset(ModelInfo.__annotations__)
+        | frozenset(RouterModelInfo.model_fields)
+    )
+    return MappingProxyType(
+        {name: frozenset(type(entry[name]) for entry in entries if entry.get(name) is not None) for name in names}
+    )
+
+
+def _number(value: object, *, parse_text: bool) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    if parse_text and isinstance(value, str):
+        with contextlib.suppress(ValueError):
+            return float(value)
+    return None
+
+
+def _is_price_key(key: str) -> bool:
+    return "cost" in key or "_multiplier" in key or key.endswith("_pricing")
+
+
+def _model_info_findings(
+    model: str,
+    params: Mapping[str, object],
+    model_info: Mapping[str, object],
+    path: PathKey,
+    *,
+    require_explicit_prices: bool,
+) -> Iterator[Finding]:
+    import litellm
+    from litellm.types.router import ModelInfo as RouterModelInfo
+    from litellm.types.utils import CustomPricingLiteLLMParams
+    from litellm.utils import get_model_info_helper
+
+    info_path: Final = (*path, "model_info")
+    types: Final = _model_info_types()
+    yield from _unknown_keys(model_info, info_path, frozenset(types), only_typos=True)
+    yield from _type_findings(RouterModelInfo, model_info, info_path)
+    for key, value in model_info.items():
+        seen: Final = types.get(key, frozenset())
+        if not seen or not seen <= {int, float} or value is None:
+            continue
+        if isinstance(value, str) and value.startswith(_ENV_PREFIX):
+            continue
+        number: Final = _number(value, parse_text=key in RouterModelInfo.model_fields)
+        if number is None:
+            if key not in RouterModelInfo.model_fields:
+                yield Finding("warning", (*info_path, key), f"unexpected value: expected a number, got {value!r}")
+        elif isinstance(number, float) and not math.isfinite(number):
+            yield Finding("warning", (*info_path, key), f"unexpected value: must be a finite number, got {value!r}")
+        elif number < 0:
+            yield Finding("warning", (*info_path, key), f"unexpected value: must not be negative, got {value!r}")
+    base_model: Final = model_info.get("base_model")
+    lookup: Final = base_model if isinstance(base_model, str) and base_model else model
+    if "*" in lookup:
+        return
+    mapped: Mapping[str, object] | None
+    try:
+        mapped = litellm.model_cost.get(get_model_info_helper(model=lookup, catalog_only=True)["key"])
+    except Exception:  # noqa: BLE001  # get_model_info_helper raises a bare Exception for unmapped models
+        mapped = None
+    if mapped is None:
+        missing: Final = [
+            key
+            for key in _UNMAPPED_MODEL_KEYS
+            if model_info.get(key) is None and (params.get(key) is None or "cost" not in key)
+        ]
+        if missing:
+            yield Finding(
+                "warning",
+                info_path if model_info else path,
+                f"{lookup} is not in LiteLLM's model cost map, so cost tracking and token limits need "
+                f"model_info.base_model or model_info.{', model_info.'.join(missing)}",
+            )
+        return
+    if not require_explicit_prices:
+        return
+    unset: Final = sorted(
+        key
+        for key, value in mapped.items()
+        if _is_price_key(key)
+        and value is not None
+        and model_info.get(key) is None
+        and (params.get(key) is None or key not in CustomPricingLiteLLMParams.model_fields)
+    )
+    if unset:
+        yield Finding(
+            "error",
+            info_path if model_info else path,
+            f"{lookup} would take these prices from LiteLLM's model cost map, set them in model_info: "
+            f"{', '.join(unset)}",
+        )
+
+
+_PROVIDER_LOGINS: Final = {
+    "azure": (
+        ("tenant_id", "AZURE_TENANT_ID"),
+        ("client_id", "AZURE_CLIENT_ID"),
+        ("client_secret", "AZURE_CLIENT_SECRET"),
+    ),
+    "openai": (
+        ("openai_identity_provider_id", "OPENAI_IDENTITY_PROVIDER_ID"),
+        ("openai_service_account_id", "OPENAI_SERVICE_ACCOUNT_ID"),
+        ("openai_identity_token_file", "OPENAI_IDENTITY_TOKEN_FILE"),
+    ),
+}
+_LOGIN_PARAMS: Final = frozenset(param for login in _PROVIDER_LOGINS.values() for param, _ in login)
+
+
+def _with_declared(environ: Mapping[str, str], item: tuple[object, object]) -> Mapping[str, str]:
+    text: Final = "" if item[1] is None else str(item[1])
+    value: Final = environ.get(text.removeprefix(_ENV_PREFIX)) if text.startswith(_ENV_PREFIX) else text
+    return environ if value is None else {**environ, str(item[0]): value}
+
+
+def _effective_environ(declared: Mapping[str, object], environ: Mapping[str, str]) -> Mapping[str, str]:
+    return reduce(_with_declared, declared.items(), environ)
+
+
+def _provider_model(params: Mapping[str, object], model: str) -> str:
+    provider: Final = params.get("custom_llm_provider")
+    if not isinstance(provider, str) or not provider or model.startswith(f"{provider}/"):
+        return model
+    return f"{provider}/{model}"
+
+
+def _credential_findings(
+    model: str, params: Mapping[str, object], path: PathKey, environ: Mapping[str, str]
+) -> Iterator[Finding]:
+    import litellm
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+    from litellm.types.router import GenericLiteLLMParams
+
+    if declared_authenticating_provider(model) is not None or params.get("litellm_credential_name") is not None:
+        return
+
+    def given(name: str) -> str | None:
+        return None if params.get(name) is None else str(params[name])
+
+    with patch.dict(os.environ, {name: value for name, value in environ.items() if value}, clear=True):
+        try:
+            required: Final[list[str]] = litellm.validate_environment(
+                model=model, api_key=given("api_key"), api_base=given("api_base"), api_version=given("api_version")
+            )["missing_keys"]
+        except Exception:  # noqa: BLE001  # an unrecognized provider has no known requirements
+            return
+    missing: Final = [name for name in required if not environ.get(name)]
+    prefixes: Final = {name.partition("_")[0].lower() for name in missing}
+    provider: Final = prefixes | {prefix.removesuffix("ai") for prefix in prefixes}
+    fields: Final = [name for name in GenericLiteLLMParams.model_fields if name.partition("_")[0] in provider | {"api"}]
+    set_params: Final = {key for key, value in params.items() if value is not None}
+    has_other_auth: Final = any(
+        _ALTERNATIVE_AUTH.search(key) for key in set_params.intersection(fields) - _LOGIN_PARAMS
+    ) or any(
+        name in provider and all(param in set_params or environ.get(env_name) for param, env_name in login)
+        for name, login in _PROVIDER_LOGINS.items()
+    )
+    for name in missing:
+        setting: Final = name.lower().partition("_")[2]
+        names: Final = [field for field in fields if setting in (field, field.partition("_")[2])]
+        if (
+            set_params.intersection(names)
+            or (has_other_auth and _SECRET_NAME.search(name))
+            or (name.endswith("_TOKEN") and "api_key" in set_params)
+        ):
+            continue
+        hint: Final = f" or litellm_params.{names[0]}" if names else ""
+        yield Finding("warning", path, f"{model} needs {name} in the environment{hint}")
+
+
+def _model_list_findings(
+    model_list: object, environ: Mapping[str, str], *, require_explicit_prices: bool
+) -> Iterator[Finding]:
     import litellm
     from litellm.types.router import GenericLiteLLMParams
 
@@ -233,6 +424,19 @@ def _model_list_findings(model_list: object) -> Iterator[Finding]:
         model = params.get("model")
         if not isinstance(model, str) or not model:
             yield Finding("error", (*path, "litellm_params"), "missing model")
+            continue
+        provider_model: Final = _provider_model(params, model)
+        yield from _credential_findings(provider_model, params, (*path, "litellm_params"), environ)
+        if entry.get("model_info") is None:
+            model_info: Mapping[str, object] = {}
+        elif (parsed_info := _mapping(entry["model_info"])) is None:
+            yield Finding("error", (*path, "model_info"), "must be a mapping")
+            continue
+        else:
+            model_info = parsed_info
+        yield from _model_info_findings(
+            provider_model, params, model_info, path, require_explicit_prices=require_explicit_prices
+        )
 
 
 def _model_names(config: Mapping[str, object]) -> frozenset[str]:
@@ -322,10 +526,17 @@ def _section_findings(config: Mapping[str, object], known_models: frozenset[str]
         yield from _fallback_findings(router_settings, ("router_settings",), known_models)
 
 
-def lint_config(config: Mapping[str, object], environ: Mapping[str, str]) -> Iterator[Finding]:
+def lint_config(
+    config: Mapping[str, object], environ: Mapping[str, str], *, require_explicit_prices: bool = False
+) -> Iterator[Finding]:
     yield from _unknown_keys(config, (), _known_top_level_keys())
     if config.get("model_list") is not None:
-        yield from _model_list_findings(config["model_list"])
+        declared: Final = _mapping(config.get("environment_variables")) or {}
+        yield from _model_list_findings(
+            config["model_list"],
+            _effective_environ(declared, environ),
+            require_explicit_prices=require_explicit_prices,
+        )
     yield from _section_findings(config, _model_names(config))
     yield from _env_findings(config, environ)
 
@@ -370,7 +581,9 @@ def _included_duplicates(location: str, line: int | None) -> Iterator[Finding]:
             )
 
 
-def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, ...]:
+def lint_file(
+    config_path: Path, environ: Mapping[str, str], *, require_explicit_prices: bool = False
+) -> tuple[Finding, ...]:
     try:
         text: Final = config_path.read_text(encoding="utf-8")
         root_node: Final = yaml.compose(text, Loader=yaml.SafeLoader)
@@ -400,7 +613,10 @@ def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, .
     replaced: Final = frozenset(
         key for key, value in included_items if not (isinstance(config.get(key), list) and isinstance(value, list))
     )
-    located: Final = (_located(found, lines, replaced, "include" in config) for found in lint_config(merged, environ))
+    located: Final = (
+        _located(found, lines, replaced, "include" in config)
+        for found in lint_config(merged, environ, require_explicit_prices=require_explicit_prices)
+    )
     included_duplicates: Final = itertools.chain.from_iterable(
         _included_duplicates(location, lines.get(("include",))) for location in locations
     )
@@ -432,10 +648,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser: Final = argparse.ArgumentParser(description="Lint a LiteLLM proxy config.yaml without starting the proxy.")
     parser.add_argument("config", type=Path, help="Path to the config.yaml to check")
     parser.add_argument("--strict", action="store_true", help="Exit 1 on warnings as well as errors")
+    parser.add_argument(
+        "--require-explicit-prices",
+        action="store_true",
+        help="Exit 1 when a model leaves out a price that LiteLLM's model cost map has for it",
+    )
     args: Final = parser.parse_args(argv)
     config_path: Final[Path] = args.config
     strict: Final[bool] = args.strict
-    findings: Final = lint_file(config_path, os.environ)
+    require_explicit_prices: Final[bool] = args.require_explicit_prices
+    findings: Final = lint_file(config_path, os.environ, require_explicit_prices=require_explicit_prices)
     errors: Final = sum(finding.severity == "error" for finding in findings)
     warnings: Final = len(findings) - errors
     report: Final = (

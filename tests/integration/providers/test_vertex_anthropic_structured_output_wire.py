@@ -219,7 +219,6 @@ _PASS_THROUGH_ROUTES: Final = (
     "cohere",
     "vllm",
     "mistral",
-    "typesafe",
     "openrouter",
     "azure",
     "openai",
@@ -980,8 +979,6 @@ def _pass_through_call(route: str, marker: str, key: str) -> _PassThroughCall:
             return _PassThroughCall("/vllm/v1/chat/completions", chat, "/v1/chat/completions", bearer)
         case "mistral":
             return _PassThroughCall("/mistral/v1/chat/completions", chat, "/v1/chat/completions", bearer)
-        case "typesafe":
-            return _PassThroughCall("/typesafe/v1/chat/completions", chat, "/v1/chat/completions", bearer)
         case "openrouter":
             return _PassThroughCall("/openrouter/v1/chat/completions", chat, "/v1/chat/completions", bearer)
         case "azure":

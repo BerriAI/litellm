@@ -96,11 +96,59 @@ def qualified_member_name(namespace: str, name: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class BridgedToolNames:
-    full_name_by_sent_name: tuple[tuple[str, str], ...]
+class NamespaceMember:
+    namespace: str
+    name: str
 
-    def as_mapping(self) -> Mapping[str, str]:
-        return dict(self.full_name_by_sent_name)
+    @property
+    def full_name(self) -> str:
+        return qualified_member_name(self.namespace, self.name)
+
+    @property
+    def returned_namespace(self) -> str:
+        return self.namespace
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredTopLevelTool:
+    """A top-level function sent with defer_loading, which the Responses API returns as namespace == name."""
+
+    name: str
+
+    @property
+    def full_name(self) -> str:
+        return self.name
+
+    @property
+    def returned_namespace(self) -> str:
+        return self.name
+
+
+BridgedTool: TypeAlias = NamespaceMember | DeferredTopLevelTool
+
+
+@dataclass(frozen=True, slots=True)
+class BridgedToolNames:
+    """The tool the caller gets back for each name a bridged request let the provider call."""
+
+    tool_by_sent_name: tuple[tuple[str, BridgedTool], ...]
+
+    def tools(self) -> Mapping[str, BridgedTool]:
+        return MappingProxyType(dict(self.tool_by_sent_name))
+
+
+_NO_BRIDGED_TOOLS: Final = MappingProxyType[str, BridgedTool]({})
+
+
+def full_names_by_sent_name(tools: Mapping[str, BridgedTool]) -> Mapping[str, str]:
+    return MappingProxyType({sent_name: tool.full_name for sent_name, tool in tools.items()})
+
+
+def recorded_bridged_tools(call_details: object) -> Mapping[str, BridgedTool]:
+    """The bridged tools a request's logging object recorded, which a client cannot set from its own JSON."""
+    fields: Final = as_str_mapping(call_details)
+    recorded: Final = None if fields is None else fields.get(BRIDGED_TOOL_NAMES_KWARG)
+    return recorded.tools() if isinstance(recorded, BridgedToolNames) else _NO_BRIDGED_TOOLS
 
 
 @dataclass(frozen=True, slots=True)

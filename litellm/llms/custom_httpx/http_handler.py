@@ -19,8 +19,9 @@ import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
+from httpx._client import UseClientDefault
 from httpx._config import DEFAULT_LIMITS
-from httpx._types import CertTypes, RequestFiles
+from httpx._types import CertTypes, QueryParamTypes, RequestFiles
 from httpx._utils import get_environment_proxies
 from pydantic import TypeAdapter
 
@@ -54,6 +55,8 @@ from litellm.llms.custom_httpx.http2_graceful_goaway import drain_http2_connecti
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
+    from botocore.awsrequest import HTTPHeaders
+
     from litellm import LlmProviders
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObject,
@@ -78,6 +81,39 @@ _AIOHTTP_SUPPORTS_SOCKET_FACTORY: Final = "socket_factory" in inspect.signature(
 _AddrInfo: TypeAlias = tuple[int | socket.AddressFamily, int | socket.SocketKind, int, str, tuple[object, ...]]
 
 _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes]
+_OptionalRequestHeaders: TypeAlias = "Mapping[str, object] | HTTPHeaders | None"
+_RequestParams: TypeAlias = Mapping[str, object] | QueryParamTypes
+
+
+def _query_params_of(params: _RequestParams | None) -> httpx.QueryParams:
+    return httpx.QueryParams(params)  # pyright: ignore[reportArgumentType]  # httpx handles a non-primitive value itself
+
+
+def _build_request(
+    client: httpx.Client | httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    params: _RequestParams | None,
+    headers: _OptionalRequestHeaders,
+    data: Mapping[str, object] | None = None,
+    json: object = None,
+    files: RequestFiles | None = None,
+    content: _RequestContent | None = None,
+    timeout: float | httpx.Timeout | UseClientDefault | None = USE_CLIENT_DEFAULT,
+) -> httpx.Request:
+    return client.build_request(
+        method,
+        url,
+        params=params,  # pyright: ignore[reportArgumentType]  # httpx handles a non-primitive value itself
+        headers=headers,  # pyright: ignore[reportArgumentType]  # httpx raises its own TypeError on a non-str value
+        data=data,
+        json=json,
+        files=files,
+        content=content,
+        timeout=timeout,
+    )
+
 
 _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
@@ -656,6 +692,16 @@ async def _with_current_bearer(
     return MappingProxyType({**headers, auth_key: f"Bearer {current.access_token.get_secret_value()}"})
 
 
+async def _with_refreshed_bearer(
+    headers: _OptionalRequestHeaders, url: str, engine: JwtBearerTokenExchangeEngine
+) -> _OptionalRequestHeaders:
+    return await _with_current_bearer(
+        headers,  # pyright: ignore[reportArgumentType]  # the refresh reads only a str Authorization value
+        url,
+        engine,
+    )
+
+
 async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn:
     """Raise a MaskedHTTPStatusError for async HTTP handlers."""
     if stream:
@@ -775,6 +821,7 @@ class AsyncHTTPHandler:
         follow_redirects: bool = True,
         http2: bool = False,
         token_exchange_engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
+        client: httpx.AsyncClient | None = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -784,12 +831,17 @@ class AsyncHTTPHandler:
         self.token_exchange_engine = token_exchange_engine
         self.follow_redirects = follow_redirects
         self.http2 = http2
-        self._owns_client = True
-        self._client = self.create_client(
-            timeout=timeout,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-            shared_session=shared_session,
+        self._owns_client = client is None
+        self._keeps_callers_client = client is not None
+        self._client = (
+            self.create_client(
+                timeout=timeout,
+                event_hooks=event_hooks,
+                ssl_verify=ssl_verify,
+                shared_session=shared_session,
+            )
+            if client is None
+            else client
         )
         self.client_alias = client_alias
 
@@ -887,8 +939,8 @@ class AsyncHTTPHandler:
     async def get(
         self,
         url: str,
-        params: dict | None = None,
-        headers: dict | None = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
         max_response_bytes: int | None = None,
@@ -896,8 +948,8 @@ class AsyncHTTPHandler:
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
-        query: Final = httpx.QueryParams(params).merge(HTTPHandler.extract_query_params(url))
-        request_headers: Final = httpx.Headers(headers)
+        query: Final = _query_params_of(params).merge(HTTPHandler.extract_query_params(url))
+        request_headers: Final = httpx.Headers(headers)  # pyright: ignore[reportArgumentType]  # httpx raises its own TypeError on a non-str value
 
         if stream:
             return await self._send_streaming_get(
@@ -1009,9 +1061,9 @@ class AsyncHTTPHandler:
         self,
         url: str,
         data: Mapping[str, object] | str | bytes | None = None,
-        json: dict | None = None,
-        params: dict | None = None,
-        headers: dict | None = None,
+        json: object = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         logging_obj: LiteLLMLoggingObject | None = None,
@@ -1026,7 +1078,8 @@ class AsyncHTTPHandler:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
 
-            req: Final = self.client.build_request(
+            req: Final = _build_request(
+                self.client,
                 "POST",
                 url,
                 data=request_data,
@@ -1043,6 +1096,8 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except httpx.ConnectError:
+            if self._keeps_callers_client:
+                raise
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
@@ -1070,9 +1125,9 @@ class AsyncHTTPHandler:
         self,
         url: str,
         data: Mapping[str, object] | str | bytes | None = None,
-        json: dict | None = None,
-        params: dict | None = None,
-        headers: Mapping[str, str] | None = None,
+        json: object = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
@@ -1087,7 +1142,8 @@ class AsyncHTTPHandler:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
 
-            req: Final = self.client.build_request(
+            req: Final = _build_request(
+                self.client,
                 "PUT",
                 url,
                 data=request_data,
@@ -1105,13 +1161,14 @@ class AsyncHTTPHandler:
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
                 retry_data, retry_content = _prepare_request_data_and_content(data, content)
-                retry: Final = new_client.build_request(
+                retry: Final = _build_request(
+                    new_client,
                     "PUT",
                     url,
                     data=retry_data,
                     json=json,
                     params=params,
-                    headers=await _with_current_bearer(headers, url, self.token_exchange_engine),
+                    headers=await _with_refreshed_bearer(headers, url, self.token_exchange_engine),
                     timeout=timeout,
                     content=retry_content,
                 )
@@ -1134,9 +1191,9 @@ class AsyncHTTPHandler:
         self,
         url: str,
         data: Mapping[str, object] | str | bytes | None = None,
-        json: dict | None = None,
-        params: dict | None = None,
-        headers: dict | None = None,
+        json: object = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
@@ -1149,7 +1206,8 @@ class AsyncHTTPHandler:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
 
-            req: Final = self.client.build_request(
+            req: Final = _build_request(
+                self.client,
                 "PATCH",
                 url,
                 data=request_data,
@@ -1190,9 +1248,9 @@ class AsyncHTTPHandler:
         self,
         url: str,
         data: Mapping[str, object] | str | bytes | None = None,
-        json: dict | None = None,
-        params: dict | None = None,
-        headers: dict | None = None,
+        json: object = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
@@ -1204,7 +1262,8 @@ class AsyncHTTPHandler:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
             request_data, request_content = _prepare_request_data_and_content(data, content)
 
-            req: Final = self.client.build_request(
+            req: Final = _build_request(
+                self.client,
                 "DELETE",
                 url,
                 data=request_data,
@@ -1247,9 +1306,9 @@ class AsyncHTTPHandler:
         method: str,
         client: httpx.AsyncClient,
         data: Mapping[str, object] | str | bytes | None = None,
-        json: dict | None = None,
-        params: dict | None = None,
-        headers: dict | None = None,
+        json: object = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         stream: bool = False,
         content: _RequestContent | None = None,
     ):
@@ -1261,13 +1320,14 @@ class AsyncHTTPHandler:
         # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
         request_data, request_content = _prepare_request_data_and_content(data, content)
 
-        req: Final = client.build_request(
+        req: Final = _build_request(
+            client,
             method,
             url,
             data=request_data,
             json=json,
             params=params,
-            headers=await _with_current_bearer(headers, url, self.token_exchange_engine),
+            headers=await _with_refreshed_bearer(headers, url, self.token_exchange_engine),
             content=request_content,
         )
         response: Final = await client.send(req, stream=stream)
@@ -1680,8 +1740,8 @@ class HTTPHandler:
     def get(
         self,
         url: str,
-        params: dict | None = None,
-        headers: Mapping[str, Any] | None = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
@@ -1689,7 +1749,7 @@ class HTTPHandler:
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
-        query: Final = httpx.QueryParams(params).merge(self.extract_query_params(url))
+        query: Final = _query_params_of(params).merge(self.extract_query_params(url))
 
         if stream:
             return self._send_streaming_get(
@@ -1709,7 +1769,7 @@ class HTTPHandler:
         response: Final = self.client.get(
             url,
             params=query,
-            headers=headers,
+            headers=headers,  # pyright: ignore[reportArgumentType]  # httpx raises its own TypeError on a non-str value
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
@@ -1721,12 +1781,13 @@ class HTTPHandler:
         url: str,
         *,
         params: httpx.QueryParams,
-        headers: Mapping[str, str] | None,
+        headers: _OptionalRequestHeaders,
         timeout: httpx.Timeout,
         max_bytes: int,
         follow_redirects: bool,
     ) -> httpx.Response:
-        request: Final = self.client.build_request(
+        request: Final = _build_request(
+            self.client,
             "GET",
             url,
             headers=MappingProxyType({**(headers or {}), "accept-encoding": "identity"}),
@@ -1782,13 +1843,18 @@ class HTTPHandler:
         url: str,
         *,
         params: httpx.QueryParams,
-        headers: Mapping[str, str] | None,
+        headers: _OptionalRequestHeaders,
         follow_redirects: bool | None,
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         start_time: Final = time.time()
-        request: Final = self.client.build_request(
-            "GET", url, params=params, headers=headers, timeout=USE_CLIENT_DEFAULT if timeout is None else timeout
+        request: Final = _build_request(
+            self.client,
+            "GET",
+            url,
+            params=params,
+            headers=headers,
+            timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
         )
         try:
             response: Final = self.client.send(
@@ -1822,9 +1888,9 @@ class HTTPHandler:
         self,
         url: str,
         data: Mapping[str, object] | str | bytes | None = None,
-        json: dict | str | list | None = None,
-        params: dict | None = None,
-        headers: dict | None = None,
+        json: object = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         stream: bool = False,
         timeout: float | httpx.Timeout | None = None,
         files: dict | RequestFiles | None = None,
@@ -1837,7 +1903,8 @@ class HTTPHandler:
             request_data, request_content = _prepare_request_data_and_content(data, content)
 
             if timeout is not None:
-                req = self.client.build_request(
+                req = _build_request(
+                    self.client,
                     "POST",
                     url,
                     data=request_data,
@@ -1849,7 +1916,8 @@ class HTTPHandler:
                     content=request_content,
                 )
             else:
-                req = self.client.build_request(
+                req = _build_request(
+                    self.client,
                     "POST",
                     url,
                     data=request_data,
@@ -1875,9 +1943,9 @@ class HTTPHandler:
         self,
         url: str,
         data: Mapping[str, object] | str | bytes | None = None,
-        json: dict | str | None = None,
-        params: dict | None = None,
-        headers: Mapping[str, str] | None = None,
+        json: object = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         stream: bool = False,
         timeout: float | httpx.Timeout | None = None,
         content: _RequestContent | None = None,
@@ -1888,7 +1956,8 @@ class HTTPHandler:
             request_data, request_content = _prepare_request_data_and_content(data, content)
 
             if timeout is not None:
-                req = self.client.build_request(
+                req = _build_request(
+                    self.client,
                     "PATCH",
                     url,
                     data=request_data,
@@ -1899,7 +1968,8 @@ class HTTPHandler:
                     content=request_content,
                 )
             else:
-                req = self.client.build_request(
+                req = _build_request(
+                    self.client,
                     "PATCH",
                     url,
                     data=request_data,
@@ -1924,9 +1994,9 @@ class HTTPHandler:
         self,
         url: str,
         data: Mapping[str, object] | str | bytes | None = None,
-        json: dict | str | None = None,
-        params: dict | None = None,
-        headers: Mapping[str, str] | None = None,
+        json: object = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         stream: bool = False,
         timeout: float | httpx.Timeout | None = None,
         content: _RequestContent | None = None,
@@ -1937,7 +2007,8 @@ class HTTPHandler:
             request_data, request_content = _prepare_request_data_and_content(data, content)
 
             if timeout is not None:
-                req = self.client.build_request(
+                req = _build_request(
+                    self.client,
                     "PUT",
                     url,
                     data=request_data,
@@ -1948,7 +2019,8 @@ class HTTPHandler:
                     content=request_content,
                 )
             else:
-                req = self.client.build_request(
+                req = _build_request(
+                    self.client,
                     "PUT",
                     url,
                     data=request_data,
@@ -1972,9 +2044,9 @@ class HTTPHandler:
         self,
         url: str,
         data: Mapping[str, object] | str | bytes | None = None,
-        json: dict | None = None,
-        params: dict | None = None,
-        headers: dict | None = None,
+        json: object = None,
+        params: _RequestParams | None = None,
+        headers: _OptionalRequestHeaders = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
@@ -1985,7 +2057,8 @@ class HTTPHandler:
             request_data, request_content = _prepare_request_data_and_content(data, content)
 
             if timeout is not None:
-                req = self.client.build_request(
+                req = _build_request(
+                    self.client,
                     "DELETE",
                     url,
                     data=request_data,
@@ -1996,7 +2069,8 @@ class HTTPHandler:
                     content=request_content,
                 )
             else:
-                req = self.client.build_request(
+                req = _build_request(
+                    self.client,
                     "DELETE",
                     url,
                     data=request_data,
@@ -2157,3 +2231,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
 
 
 _get_httpx_client = get_httpx_client
+
+
+def handler_for_httpx_client(client: httpx.Client | httpx.AsyncClient) -> HTTPHandler | AsyncHTTPHandler:
+    return AsyncHTTPHandler(client=client) if isinstance(client, httpx.AsyncClient) else HTTPHandler(client=client)

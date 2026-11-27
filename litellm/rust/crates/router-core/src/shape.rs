@@ -59,6 +59,8 @@ mod tests {
             scope: 0,
             max_retries: 0,
             model_group_size: 1,
+            refused_ids: Vec::new(),
+            provider_refused_window: false,
         }
     }
 
