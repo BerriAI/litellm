@@ -288,17 +288,18 @@ impl RouterCoreHandle {
     /// `RouterModelInfoQuery` document), driven like `start`: its steps are `model_info`
     /// lookups, and it ends with `done` (`info`: the merged map or None, `user_keys`: the keys
     /// whose values are the deployment's own).
-    fn router_model_info(&self, query: &Bound<'_, PyAny>) -> PyResult<RouterCall> {
+    fn router_model_info(&self, py: Python<'_>, query: &Bound<'_, PyAny>) -> PyResult<RouterCall> {
         let query: litellm_router_core::model_info::RouterModelInfoQuery =
             serde_json::from_value(document(query)?)
                 .map_err(|error| PyValueError::new_err(format!("bad model-info query: {error}")))?;
         let router = self.router.clone();
-        Ok(RouterCall::new(async move {
+        let logger = crate::logger::capture(py);
+        Ok(RouterCall::new(logger.instrument(async move {
             router
                 .router_model_info(&PythonRouterHost, &query)
                 .await
                 .map(Finish::RouterModelInfo)
-        }))
+        })))
     }
 
     /// `get_deployment_model_info` for deployment `model_id` serving `model_name`, driven like

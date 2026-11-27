@@ -276,8 +276,7 @@ impl ModelCapacity {
             Err(error) => Err(error),
         };
         if let Err(error) = released {
-            let message = format!("{FAILURE_HOOK_ERROR}: {}", error.python_message());
-            let _ = self.engine.host.log("error", &message);
+            tracing::error!("{FAILURE_HOOK_ERROR}: {}", error.python_message());
         }
         Ok(None)
     }
@@ -329,8 +328,7 @@ impl ModelCapacity {
                     )
                     .await
                 {
-                    let message = format!("Error in dynamic rate limiter success event: {error}");
-                    let _ = self.engine.host.log("error", &message);
+                    tracing::error!("Error in dynamic rate limiter success event: {error}");
                 }
                 Ok(None)
             }

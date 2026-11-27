@@ -11791,6 +11791,54 @@ class TestAzureBaseModelFallbackLogging:
         )
         assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]
 
+    @pytest.mark.parametrize(
+        ("deployment_model", "level", "expected"),
+        [
+            (
+                "azure/gpt-4o-mini",
+                logging.DEBUG,
+                [
+                    (
+                        logging.DEBUG,
+                        "Azure deployment 'gpt-4o-mini' has no base_model set; using 'azure/gpt-4o-mini' from the "
+                        "model cost map for max tokens, cost tracking, etc.",
+                    )
+                ],
+            ),
+            ("azure/gpt-4o-mini", logging.ERROR, []),
+            (
+                "azure/unmappable-deployment",
+                logging.ERROR,
+                [
+                    (
+                        logging.ERROR,
+                        "Could not identify azure model 'unmappable-deployment'. Set azure 'base_model' for accurate "
+                        "max tokens, cost tracking, etc.- "
+                        "https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
+                    )
+                ],
+            ),
+            ("azure/unmappable-deployment", logging.CRITICAL, []),
+        ],
+    )
+    def test_a_missing_base_model_is_reported_on_the_router_logger_at_its_level(
+        self,
+        deployment_model: str,
+        level: int,
+        expected: list[tuple[int, str]],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        router: Final = self._router_with_azure_deployment(deployment_model)
+
+        with caplog.at_level(level, logger="LiteLLM Router"):
+            router.get_router_model_info(deployment=None, received_model_name="my-group", id="azure-base-model-test-id")
+
+        assert [
+            (record.levelno, record.getMessage())
+            for record in caplog.records
+            if record.name == "LiteLLM Router" and "base_model" in record.getMessage()
+        ] == expected
+
 
 @pytest.mark.parametrize(
     "model,provider,expected",
