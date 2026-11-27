@@ -26,7 +26,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows, write_rows
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import OwnedState, owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 _AUDIENCE: Final = "litellm-integration"
@@ -148,6 +148,7 @@ class _GlobalFallbackRuntime:
     strict_issuer: str
     permissive_issuer: str
     auto_register_issuer: str
+    jwks_url: str
 
 
 def _proxy_config(
@@ -653,7 +654,7 @@ def issuer_without_global_fallback(
             eventually(lambda: _model_is_available(gateway, model), bool, seconds=30)
             _assert_upstream_requests(upstream, ())
             yield _GlobalFallbackRuntime(
-                gateway, upstream, model, private_key, strict_issuer, permissive_issuer, auto_register_issuer
+                gateway, upstream, model, private_key, strict_issuer, permissive_issuer, auto_register_issuer, jwks_url
             )
 
 
@@ -684,6 +685,36 @@ def test_disabling_global_mapping_fallback_rejects_issuer_jwt_with_only_a_global
 
         prompt: Final = "issuer with a newly created scoped mapping"
         _assert_chat(gateway, runtime.model, token, prompt, sha256(key.encode()).hexdigest())
+        _assert_upstream_requests(runtime.upstream, (_expected_chat_request(runtime.model, prompt),))
+
+
+def test_a_cached_strict_miss_does_not_hide_a_global_mapping_from_a_permissive_replica(
+    issuer_without_global_fallback: _GlobalFallbackRuntime,
+    tmp_path: Path,
+) -> None:
+    runtime: Final = issuer_without_global_fallback
+    gateway: Final = runtime.gateway
+    client_id: Final = "integration-client-" + uuid.uuid4().hex
+    token: Final = _signed_jwt(runtime.private_key, client_id, runtime.strict_issuer)
+    config: Final = _proxy_config(
+        tmp_path, runtime.model, runtime.upstream.url, (_issuer_config(runtime.strict_issuer, runtime.jwks_url),)
+    )
+    with (
+        owned_proxy(
+            gateway, tmp_path / "permissive", {}, config=config, state=OwnedState.SHARED_WITH_WORKER
+        ) as permissive,
+        gateway.scenario() as scenario,
+    ):
+        key: Final = _create_key(gateway, runtime.model)
+        scenario.cleanups.callback(delete_key_if_present, gateway, key)
+        mapping: Final = _create_mapping(gateway, key, client_id)
+        scenario.cleanups.callback(_delete_mapping_if_present, gateway, mapping.id)
+        _assert_unmapped(_chat(gateway, runtime.model, token, "cold strict miss"), client_id)
+        _assert_unmapped(_chat(gateway, runtime.model, token, "cached strict miss"), client_id)
+        _assert_upstream_requests(runtime.upstream, ())
+
+        prompt: Final = "permissive replica with the same issuer and claim"
+        _assert_chat(permissive, runtime.model, token, prompt, sha256(key.encode()).hexdigest())
         _assert_upstream_requests(runtime.upstream, (_expected_chat_request(runtime.model, prompt),))
 
 
