@@ -44,7 +44,7 @@ def _fake_streamed_model_response(payload: object) -> ModelResponse:
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
-    headers: dict[str, str],
+    headers: Mapping[str, object],
     data: str,
     model: str,
     messages: Sequence[object],
@@ -81,7 +81,7 @@ async def make_call(
 def make_sync_call(
     client: HTTPHandler | None,
     api_base: str,
-    headers: dict[str, str],
+    headers: Mapping[str, object],
     data: str,
     model: str,
     messages: Sequence[object],
@@ -243,7 +243,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         acompletion: object = None,
         litellm_params: dict[str, object] = {},
         logger_fn: object = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         custom_endpoint: bool | None = None,

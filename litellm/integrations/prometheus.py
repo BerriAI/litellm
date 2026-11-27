@@ -50,8 +50,13 @@ from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions
     SharedPrometheusSeriesAdmissions,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    float_of,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    has_attributes,
+    require_attributes,
+    require_get,
+    subscript,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_custom_provider
 from litellm.litellm_core_utils.service_tier_utils import (
@@ -305,6 +310,28 @@ _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS: Final = 60.0
 _ADDITIONAL_HEADERS: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 _LOGGED_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _NO_LOGGED_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _is_dict(value: object) -> bool:
+    return isinstance(value, dict)
+
+
+def _set_gauge_value(series: Gauge | NoOpMetric, value: object) -> None:
+    if isinstance(value, (int, float)):
+        series.set(value)
+    elif not isinstance(series, NoOpMetric):
+        series.set(float_of(value))
+
+
+def _subscriptable_payload(value: object) -> StandardLoggingPayload:
+    if has_attributes(value, StandardLoggingPayload, "__getitem__", "get"):
+        return value
+    subscript(value, "metadata")
+    return require_attributes(value, StandardLoggingPayload, "__getitem__", "get")
+
+
+def _logged_payload_or_none(value: object) -> StandardLoggingPayload | None:
+    return None if value is None else require_attributes(value, StandardLoggingPayload, "get")
 
 
 def _logged_fields(value: object) -> Mapping[str, object]:
@@ -1799,24 +1826,27 @@ class PrometheusLogger(CustomLogger):
         counter.labels(**_labels).inc(amount)
         self._track_end_user_metric_series(counter, metric_name, _labels)
 
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ):
         # Define prometheus client
         verbose_logger.debug(
             "prometheus Logging - Enters success logging function (kwargs keys: %s)",
-            list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,
+            list(kwargs.keys()) if _is_dict(kwargs) else type(kwargs).__name__,
         )
 
         # unpack kwargs
-        standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
 
-        if standard_logging_payload is None or not isinstance(standard_logging_payload, dict):
-            raise ValueError(f"standard_logging_object is required, got={standard_logging_payload}")
+        if standard_logging_object is None or not _is_dict(standard_logging_object):
+            raise ValueError(f"standard_logging_object is required, got={standard_logging_object}")
+        standard_logging_payload: Final = require_attributes(standard_logging_object, StandardLoggingPayload, "get")
 
         if self._should_skip_metrics_for_invalid_key(kwargs=kwargs, standard_logging_payload=standard_logging_payload):
             return
 
-        model: Final = kwargs.get("model", "")
-        litellm_params: Final = kwargs.get("litellm_params", {}) or {}
+        logged_model: Final = kwargs.get("model", "")
+        litellm_params: Final = require_attributes(kwargs.get("litellm_params", {}) or {}, dict[str, object], "get")
         _metadata: Final = litellm_params.get("metadata") or {}
         get_end_user_id_for_cost_tracking: Final = get_cached_end_user_id_for_cost_tracking()
 
@@ -1834,13 +1864,10 @@ class PrometheusLogger(CustomLogger):
         combined_metadata: Final = _get_combined_custom_metadata_from_standard_logging_payload(
             standard_logging_payload=standard_logging_payload
         )
-        if standard_logging_payload is not None and isinstance(standard_logging_payload, dict):
-            _tags = standard_logging_payload["request_tags"]
-        else:
-            _tags = []
+        _tags: Final = standard_logging_payload["request_tags"]
 
         print_verbose(
-            f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
+            f"inside track_prometheus_metrics, model {logged_model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
         )
 
         enum_values: Final = UserAPIKeyLabelValues(
@@ -1858,8 +1885,8 @@ class PrometheusLogger(CustomLogger):
             user=user_id,
             user_email=standard_logging_payload["metadata"]["user_api_key_user_email"],
             status_code="200",
-            model=model,
-            litellm_model_name=model,
+            model=logged_model,
+            litellm_model_name=logged_model,
             tags=_tags,
             model_id=standard_logging_payload["model_id"],
             api_base=standard_logging_payload["api_base"],
@@ -1880,6 +1907,7 @@ class PrometheusLogger(CustomLogger):
             user_api_key = hash_token(user_api_key)
 
         label_context: Final = PrometheusLabelFactoryContext(enum_values)  # amortized per request.
+        model: Final = enum_values.model
 
         # increment total LLM requests and spend metric
         self._increment_top_level_request_and_spend_metrics(
@@ -2734,8 +2762,8 @@ class PrometheusLogger(CustomLogger):
         self,
         user_api_key: str | None,
         user_api_key_alias: str | None,
-        kwargs: dict,
-        metadata: dict,
+        kwargs: dict[str, object],
+        metadata: object,
         model_id: str | None = None,
     ):
         from litellm.proxy.common_utils.callback_utils import (
@@ -2747,19 +2775,19 @@ class PrometheusLogger(CustomLogger):
         model_group: Final = get_model_group_from_litellm_kwargs(kwargs)
         remaining_requests_variable_name: Final = f"litellm-key-remaining-requests-{model_group}"
         remaining_tokens_variable_name: Final = f"litellm-key-remaining-tokens-{model_group}"
-        standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
 
-        remaining_requests = metadata.get(remaining_requests_variable_name)
+        remaining_requests = require_get(metadata).get(remaining_requests_variable_name)
         if remaining_requests is None:
             remaining_requests = self._get_remaining_from_v3_rate_limit_headers(
-                standard_logging_payload=standard_logging_payload, rate_limit_type="requests"
+                standard_logging_payload=_logged_payload_or_none(standard_logging_object), rate_limit_type="requests"
             )
         if remaining_requests is None:
             remaining_requests = sys.maxsize
-        remaining_tokens = metadata.get(remaining_tokens_variable_name)
+        remaining_tokens = require_get(metadata).get(remaining_tokens_variable_name)
         if remaining_tokens is None:
             remaining_tokens = self._get_remaining_from_v3_rate_limit_headers(
-                standard_logging_payload=standard_logging_payload, rate_limit_type="tokens"
+                standard_logging_payload=_logged_payload_or_none(standard_logging_object), rate_limit_type="tokens"
             )
         if remaining_tokens is None:
             remaining_tokens = sys.maxsize
@@ -2781,14 +2809,16 @@ class PrometheusLogger(CustomLogger):
             enum_values=enum_values,
             label_context=label_context,
         )
-        self.litellm_remaining_api_key_requests_for_model.labels(**requests_labels).set(remaining_requests)
+        _set_gauge_value(
+            self.litellm_remaining_api_key_requests_for_model.labels(**requests_labels), remaining_requests
+        )
 
         tokens_labels: Final = prometheus_label_factory(
             supported_enum_labels=self.get_labels_for_metric("litellm_remaining_api_key_tokens_for_model"),
             enum_values=enum_values,
             label_context=label_context,
         )
-        self.litellm_remaining_api_key_tokens_for_model.labels(**tokens_labels).set(remaining_tokens)
+        _set_gauge_value(self.litellm_remaining_api_key_tokens_for_model.labels(**tokens_labels), remaining_tokens)
 
     @staticmethod
     def _get_input_sequence_length(
@@ -2943,23 +2973,26 @@ class PrometheusLogger(CustomLogger):
     ) -> None:
         self.set_llm_deployment_failure_metrics(dict(kwargs))
 
-    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
-            list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,
+            list(kwargs.keys()) if _is_dict(kwargs) else type(kwargs).__name__,
         )
 
-        standard_logging_payload: Final[StandardLoggingPayload] = kwargs.get("standard_logging_object", {})
+        standard_logging_object: Final = kwargs.get("standard_logging_object", {})
 
-        if self._should_skip_metrics_for_invalid_key(kwargs=kwargs, standard_logging_payload=standard_logging_payload):
+        if self._should_skip_metrics_for_invalid_key(kwargs=kwargs, standard_logging_payload=standard_logging_object):
             return
 
         model: Final = kwargs.get("model", "")
 
-        litellm_params: Final = kwargs.get("litellm_params", {}) or {}
+        litellm_params: Final = require_attributes(kwargs.get("litellm_params", {}) or {}, dict[str, object], "get")
         get_end_user_id_for_cost_tracking: Final = get_cached_end_user_id_for_cost_tracking()
 
         end_user_id: Final = get_end_user_id_for_cost_tracking(litellm_params, service_type="prometheus")
+        standard_logging_payload: Final = _subscriptable_payload(standard_logging_object)
         user_id: Final = standard_logging_payload["metadata"]["user_api_key_user_id"]
         user_api_key: Final = standard_logging_payload["metadata"]["user_api_key_hash"]
         user_api_key_alias: Final = standard_logging_payload["metadata"]["user_api_key_alias"]
@@ -3078,7 +3111,7 @@ class PrometheusLogger(CustomLogger):
     def _is_invalid_api_key_request(
         self,
         status_code: int | None,
-        exception: Exception | None = None,
+        exception: object = None,
     ) -> bool:
         """
         Determine if a request has an invalid API key based on status code and exception.
@@ -3116,10 +3149,10 @@ class PrometheusLogger(CustomLogger):
 
     def _should_skip_metrics_for_invalid_key(
         self,
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
         user_api_key_dict: UserAPIKeyAuth | None = None,
         enum_values: UserAPIKeyLabelValues | None = None,
-        standard_logging_payload: dict | StandardLoggingPayload | None = None,
+        standard_logging_payload: object = None,
         exception: Exception | None = None,
     ) -> bool:
         """
@@ -3147,19 +3180,18 @@ class PrometheusLogger(CustomLogger):
             exception=exception,
         )
 
-        if exception is None and kwargs:
-            exception = kwargs.get("exception")
+        raised: Final = kwargs.get("exception") if exception is None and kwargs else exception
 
-        if isinstance(exception, openai.APIError) and _is_deployment_failure(
-            exception, _LOGGED_FIELDS.validate_python(kwargs or {})
+        if isinstance(raised, openai.APIError) and _is_deployment_failure(
+            raised, _LOGGED_FIELDS.validate_python(kwargs or {})
         ):
             return False
 
-        if self._is_invalid_api_key_request(status_code, exception=exception):
+        if self._is_invalid_api_key_request(status_code, exception=raised):
             verbose_logger.debug(
                 "Skipping Prometheus metrics for invalid API key request: status_code=%s, exception=%s",
                 status_code,
-                type(exception).__name__ if exception else None,
+                type(raised).__name__ if raised else None,
             )
             return True
 
@@ -3485,7 +3517,7 @@ class PrometheusLogger(CustomLogger):
             "user_agent": _metadata.get("user_agent") or _litellm_params_metadata.get("user_agent"),
         }
 
-    def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
+    def set_llm_deployment_failure_metrics(self, request_kwargs: dict[str, object]):
         """
         Sets Failure metrics when an LLM API call fails
 
@@ -3506,8 +3538,10 @@ class PrometheusLogger(CustomLogger):
         """
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
-            standard_logging_payload: Final[StandardLoggingPayload] = request_kwargs.get("standard_logging_object", {})
-            _litellm_params: Final = request_kwargs.get("litellm_params", {}) or {}
+            standard_logging_payload: Final = require_attributes(
+                request_kwargs.get("standard_logging_object", {}), StandardLoggingPayload, "get"
+            )
+            _litellm_params: Final = require_get(request_kwargs.get("litellm_params", {}) or {})
             litellm_model_name: Final = request_kwargs.get("model", None)
             model_group = standard_logging_payload.get("model_group", None)
             api_base: Final = standard_logging_payload.get("api_base", None)
@@ -3516,18 +3550,18 @@ class PrometheusLogger(CustomLogger):
 
             # Fallback: model_id from litellm_metadata.model_info
             if model_id is None:
-                _model_info: Final = (
-                    (_litellm_params.get("litellm_metadata") or {}).get("model_info")
-                    or (_litellm_params.get("metadata") or {}).get("model_info")
+                _model_info: Final = require_get(
+                    require_get(_litellm_params.get("litellm_metadata") or {}).get("model_info")
+                    or require_get(_litellm_params.get("metadata") or {}).get("model_info")
                     or {}
                 )
                 model_id = _model_info.get("id")
 
             # Fallback: model_group from litellm_metadata
             if model_group is None:
-                model_group = (_litellm_params.get("litellm_metadata") or {}).get("model_group") or (
-                    _litellm_params.get("metadata") or {}
-                ).get("model_group")
+                model_group = require_get(_litellm_params.get("litellm_metadata") or {}).get(
+                    "model_group"
+                ) or require_get(_litellm_params.get("metadata") or {}).get("model_group")
 
             llm_provider: Final = _litellm_params.get("custom_llm_provider", None)
 
@@ -4084,7 +4118,7 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.warning("Error recording check batch cost error metric: %s", e)
 
     @staticmethod
-    def _get_exception_class_name(exception: Exception) -> str:
+    def _get_exception_class_name(exception: object) -> str:
         # Some exception types pin the ``exception_class`` label to a legacy
         # value for back-compat with existing dashboards (e.g. proxy-side 429s
         # keep reporting as "HTTPException"). Honor that opt-in marker before
@@ -4237,10 +4271,10 @@ class PrometheusLogger(CustomLogger):
     def set_litellm_deployment_state(
         self,
         state: int,
-        litellm_model_name: str,
-        model_id: str | None,
-        api_base: str | None,
-        api_provider: str,
+        litellm_model_name: object,
+        model_id: object,
+        api_base: object,
+        api_provider: object,
     ):
         """
         Set the deployment state.
@@ -4259,10 +4293,10 @@ class PrometheusLogger(CustomLogger):
 
     def set_deployment_healthy(
         self,
-        litellm_model_name: str,
-        model_id: str | None,
-        api_base: str | None,
-        api_provider: str,
+        litellm_model_name: object,
+        model_id: object,
+        api_base: object,
+        api_provider: object,
     ):
         self.set_litellm_deployment_state(0, litellm_model_name, model_id, api_base, api_provider)
 
@@ -4270,10 +4304,10 @@ class PrometheusLogger(CustomLogger):
         self,
         *,
         refused_prompt: bool,
-        litellm_model_name: str,
-        model_id: str | None,
-        api_base: str | None,
-        api_provider: str,
+        litellm_model_name: object,
+        model_id: object,
+        api_base: object,
+        api_provider: object,
     ) -> None:
         set_state: Final = self.set_deployment_healthy if refused_prompt else self.set_deployment_partial_outage
         set_state(
@@ -4282,19 +4316,19 @@ class PrometheusLogger(CustomLogger):
 
     def set_deployment_partial_outage(
         self,
-        litellm_model_name: str,
-        model_id: str | None,
-        api_base: str | None,
-        api_provider: str,
+        litellm_model_name: object,
+        model_id: object,
+        api_base: object,
+        api_provider: object,
     ):
         self.set_litellm_deployment_state(1, litellm_model_name, model_id, api_base, api_provider)
 
     def set_deployment_complete_outage(
         self,
-        litellm_model_name: str,
-        model_id: str | None,
-        api_base: str | None,
-        api_provider: str,
+        litellm_model_name: object,
+        model_id: object,
+        api_base: object,
+        api_provider: object,
     ):
         self.set_litellm_deployment_state(2, litellm_model_name, model_id, api_base, api_provider)
 
@@ -5536,7 +5570,7 @@ def _custom_labels_of_an_answer_without_an_image(
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(
-    standard_logging_payload: dict | None,
+    standard_logging_payload: object,
 ) -> dict[str, object]:
     """
     Combine the metadata sources that can supply custom Prometheus labels.

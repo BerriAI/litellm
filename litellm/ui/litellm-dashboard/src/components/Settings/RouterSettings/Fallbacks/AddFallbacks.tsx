@@ -5,18 +5,20 @@
  */
 
 import React, { useEffect, useState } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { AddFallbacksModal } from "./AddFallbacksModal";
-import { FallbackGroup } from "./FallbackGroupConfig";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
+import { appendFallbacks, newFallbackGroups, type Fallbacks } from "./mapper";
+import { addFallbacksSchema, incompleteFallbackGroups } from "./schema";
 
-export type FallbackEntry = { [modelName: string]: string[] };
-export type Fallbacks = FallbackEntry[];
+export type { FallbackEntry, Fallbacks } from "./mapper";
 
 interface AddFallbacksProps {
   accessToken: string;
@@ -31,27 +33,20 @@ export default function AddFallbacks({ accessToken, value = [], onChange, disabl
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [modalKey, setModalKey] = useState(0); // Key to force remount of form when modal opens
   const [isSaving, setIsSaving] = useState(false);
-  const [groups, setGroups] = useState<FallbackGroup[]>([
-    {
-      id: "1",
-      primaryModel: null,
-      fallbackModels: [],
-    },
-  ]);
+  const { control, getValues, reset } = useZodForm(addFallbacksSchema, {
+    defaultValues: { groups: newFallbackGroups() },
+  });
+  const {
+    field: { value: groups, onChange: setGroups },
+  } = useController({ control, name: "groups" });
 
   // Reset groups state and increment modal key when modal opens
   useEffect(() => {
     if (isModalVisible) {
-      setGroups([
-        {
-          id: "1",
-          primaryModel: null,
-          fallbackModels: [],
-        },
-      ]);
+      reset({ groups: newFallbackGroups() });
       setModalKey((prev) => prev + 1); // Force remount of form
     }
-  }, [isModalVisible]);
+  }, [isModalVisible, reset]);
 
   useEffect(() => {
     const loadModels = async () => {
@@ -72,40 +67,27 @@ export default function AddFallbacks({ accessToken, value = [], onChange, disabl
   const handleCancel = () => {
     setIsModalVisible(false);
     // Reset to initial state
-    setGroups([
-      {
-        id: "1",
-        primaryModel: null,
-        fallbackModels: [],
-      },
-    ]);
+    reset({ groups: newFallbackGroups() });
   };
 
   const handleSaveAll = async () => {
-    // Validation
-    const invalidGroups = groups.filter((g) => !g.primaryModel || g.fallbackModels.length === 0);
-    if (invalidGroups.length > 0) {
-      toast.error(t("routerSettings.addFallbacks.toasts.incomplete", { count: invalidGroups.length }));
+    const values = getValues();
+    const result = addFallbacksSchema.safeParse(values);
+    if (!result.success) {
+      toast.error(
+        t("routerSettings.addFallbacks.toasts.incomplete", { count: incompleteFallbackGroups(values.groups).length }),
+      );
       return;
     }
 
-    // Create fallback objects in the format expected by the API
-    const newFallbacks = groups.map((g) => ({
-      [g.primaryModel!]: g.fallbackModels,
-    }));
-
-    // Get current fallbacks from form value, or an empty array if it's null/undefined
-    const currentFallbacks = value || [];
-
-    // Add new fallbacks to the current fallbacks
-    const updatedFallbacks = [...currentFallbacks, ...newFallbacks];
+    const updatedFallbacks = appendFallbacks(value, result.data);
 
     // Call onChange to update the form value and wait for it to complete
     if (onChange) {
       setIsSaving(true);
       try {
         await onChange(updatedFallbacks);
-        toast.success(t("routerSettings.addFallbacks.toasts.added", { count: groups.length }));
+        toast.success(t("routerSettings.addFallbacks.toasts.added", { count: result.data.groups.length }));
         handleCancel();
       } catch (error) {
         // Error handling is done in handleFallbacksChange, so we don't need to show another notification here

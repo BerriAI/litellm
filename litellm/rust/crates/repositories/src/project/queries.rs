@@ -11,26 +11,26 @@ use crate::{RawJson, budget::Budget, utc_timestamp};
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(serde::Serialize)]
 pub struct Project {
-    project_id: String,
-    project_alias: Option<String>,
-    description: Option<String>,
-    team_id: Option<String>,
-    budget_id: Option<String>,
-    metadata: RawJson,
-    models: Vec<String>,
-    spend: f64,
-    model_spend: RawJson,
-    model_rpm_limit: RawJson,
-    model_tpm_limit: RawJson,
-    blocked: bool,
-    object_permission_id: Option<String>,
+    pub project_id: String,
+    pub project_alias: Option<String>,
+    pub description: Option<String>,
+    pub team_id: Option<String>,
+    pub budget_id: Option<String>,
+    pub metadata: RawJson,
+    pub models: Vec<String>,
+    pub spend: f64,
+    pub model_spend: RawJson,
+    pub model_rpm_limit: RawJson,
+    pub model_tpm_limit: RawJson,
+    pub blocked: bool,
+    pub object_permission_id: Option<String>,
     #[serde(with = "utc_timestamp")]
-    created_at: NaiveDateTime,
-    created_by: String,
+    pub created_at: NaiveDateTime,
+    pub created_by: String,
     #[serde(with = "utc_timestamp")]
-    updated_at: NaiveDateTime,
-    updated_by: String,
-    litellm_budget_table: Option<Json<Budget>>,
+    pub updated_at: NaiveDateTime,
+    pub updated_by: String,
+    pub litellm_budget_table: Option<Json<Budget>>,
 }
 
 pub(super) async fn find_project(

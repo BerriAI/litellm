@@ -242,12 +242,12 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         bearer_token: Final = resolve_openai_bearer_token(
             api_key=api_key, api_base=api_base, litellm_params=litellm_params
         )

@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { Controller } from "react-hook-form";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { fetchClient } from "@/lib/http/api";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -19,6 +21,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { Team, Member } from "./customerHierarchyForms";
+import { toMemberMoveBody } from "./customer-member-move/mapper";
+import { memberMoveSchema } from "./customer-member-move/schema";
 
 async function teamChoices(organizationId: string, signal: AbortSignal, page = 1): Promise<Team[]> {
   if (page > 1_000) throw new Error("Customer team list is incomplete");
@@ -116,18 +120,24 @@ function MoveForm({
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [teams, setTeams] = useState(member.parent_team_ids);
+  const { control, watch, getValues } = useZodForm(memberMoveSchema, {
+    defaultValues: { teams: member.parent_team_ids },
+  });
+  const teams = watch("teams");
   const [error, setError] = useState<string | null>(null);
   const dirty = JSON.stringify(teams) !== JSON.stringify(member.parent_team_ids);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!teams.length || !dirty) return;
+    const fields = getValues();
+    const parsed = memberMoveSchema.safeParse(fields);
+    const body = parsed.success ? parsed.data : toMemberMoveBody(fields);
     setPending(true);
     setError(null);
     try {
       await fetchClient.PATCH("/management/v1/customer_members/{customer_member_id}", {
         params: { path: { customer_member_id: member.customer_member_id } },
-        body: { parent_team_ids: teams },
+        body,
       });
       void queryClient.invalidateQueries({ queryKey: ["customer-hierarchy"] });
       void queryClient.invalidateQueries({ queryKey: ["get", "/management/v1/customer_portal/limits"] });
@@ -147,7 +157,13 @@ function MoveForm({
           <DialogDescription>{member.alias || member.customer_member_id}</DialogDescription>
         </DialogHeader>
         <fieldset disabled={pending}>
-          <CustomerMemberTeams organizationId={organizationId} value={teams} onChange={setTeams} />
+          <Controller
+            control={control}
+            name="teams"
+            render={({ field }) => (
+              <CustomerMemberTeams organizationId={organizationId} value={field.value} onChange={field.onChange} />
+            )}
+          />
         </fieldset>
         {!teams.length && (
           <p role="alert" className="text-sm text-destructive">

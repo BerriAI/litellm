@@ -128,12 +128,12 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         headers = headers or {}
         litellm_params = litellm_params or {}
 

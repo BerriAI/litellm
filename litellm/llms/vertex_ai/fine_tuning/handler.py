@@ -166,7 +166,7 @@ class VertexFineTuningAPI(VertexLLM):
     async def acreate_fine_tuning_job(
         self,
         fine_tuning_url: str,
-        headers: dict,
+        headers: Mapping[str, object],
         request_data: FineTuneJobCreate,
     ):
         try:

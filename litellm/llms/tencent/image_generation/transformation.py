@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, overload
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -74,7 +74,15 @@ def tokenhub_image_url(api_base: str | None) -> str:
     return join_api_base(ensure_api_route(base, "v1"), TOKENHUB_IMAGE_PATH)
 
 
-def tokenhub_image_headers(headers: Mapping[str, str], api_key: str | None, model: str) -> Mapping[str, str]:
+@overload
+def tokenhub_image_headers(headers: Mapping[str, str], api_key: str | None, model: str) -> Mapping[str, str]: ...
+
+
+@overload
+def tokenhub_image_headers(headers: Mapping[str, object], api_key: str | None, model: str) -> Mapping[str, object]: ...
+
+
+def tokenhub_image_headers(headers: Mapping[str, object], api_key: str | None, model: str) -> Mapping[str, object]:
     resolved_api_key: Final = api_key or get_secret_str("TENCENT_API_KEY")
     if not resolved_api_key:
         raise AuthenticationError(
