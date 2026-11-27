@@ -4951,6 +4951,7 @@ class LlmProviders(str, Enum):
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
     HOSTINGER_ROUTER = "hostinger_router"
+    ZEROG = "0g"
     ZEROGPU = "zerogpu"
     DARKBLOOM = "darkbloom"
     META = "meta"

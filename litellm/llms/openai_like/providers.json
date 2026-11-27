@@ -397,5 +397,15 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "0g": {
+    "base_url": "https://router-api.0g.ai/v1",
+    "api_key_env": "OG_API_KEY",
+    "api_base_env": "OG_API_BASE",
+    "user_agent": "litellm/{version} Python/{python}",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    }
   }
 }

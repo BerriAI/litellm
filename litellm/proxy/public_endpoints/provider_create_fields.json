@@ -4638,6 +4638,34 @@
     "default_model_placeholder": "zai/glm-4.5"
   },
   {
+    "provider": "ZEROG",
+    "provider_display_name": "0G Private Computer",
+    "litellm_provider": "0g",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://router-api.0g.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "0g/glm-5.3-flash"
+  },
+  {
     "provider": "ZeroGPU",
     "provider_display_name": "ZeroGPU",
     "litellm_provider": "zerogpu",
