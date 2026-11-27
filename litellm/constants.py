@@ -1169,6 +1169,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://inference.runanywhere.ai/v1",
     "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
+    "https://api.openinference.ai/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
 ]
@@ -1244,6 +1245,7 @@ openai_compatible_providers: Final[list[str]] = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "openinference",
     "openinfer",
     "darkbloom",
     "vispark",

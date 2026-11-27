@@ -713,6 +713,7 @@ qwen_ai_platform_models: Set[str] = set()
 moonshot_models: Set[str] = set()
 publicai_models: Set[str] = set()
 darkbloom_models: Set[str] = set()
+openinference_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
@@ -1016,6 +1017,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             publicai_models.add(key)
         elif value.get("litellm_provider") == "darkbloom":
             darkbloom_models.add(key)
+        elif value.get("litellm_provider") == "openinference":
+            openinference_models.add(key)
         elif value.get("litellm_provider") == "openinfer":
             openinfer_models.add(key)
         elif value.get("litellm_provider") == "kyma":
@@ -1225,6 +1228,7 @@ def _known_models() -> frozenset[str]:
         | moonshot_models
         | publicai_models
         | darkbloom_models
+        | openinference_models
         | openinfer_models
         | kyma_models
         | streamlake_models
@@ -1366,6 +1370,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "moonshot": moonshot_models,
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
+        "openinference": openinference_models,
         "openinfer": openinfer_models,
         "kyma": kyma_models,
         "streamlake": streamlake_models,

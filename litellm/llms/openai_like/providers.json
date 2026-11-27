@@ -273,6 +273,11 @@
     "api_key_env": "REKA_API_KEY",
     "api_base_env": "REKA_API_BASE"
   },
+  "openinference": {
+    "base_url": "https://api.openinference.ai/v1",
+    "api_key_env": "OPENINFERENCE_API_KEY",
+    "api_base_env": "OPENINFERENCE_API_BASE"
+  },
   "openinfer": {
     "base_url": "https://api.openinfer.ai/v1",
     "api_key_env": "OPENINFER_API_KEY",
