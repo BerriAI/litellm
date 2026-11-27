@@ -16,12 +16,11 @@ mod model;
 mod router;
 
 use axum::http::request::Parts;
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Authenticated;
 use serde_json::{Map, Value};
 
-pub(super) use model::alias;
-
 use super::{Admit, Refused};
+use crate::host::NativeRows;
 
 /// Why one request goes to Python: the reason the client is told, and the setting or trait behind
 /// it, which only the log names.
@@ -40,10 +39,14 @@ impl Reason {
     }
 }
 
-pub(super) type Authenticated = Result<AuthenticatedRequest, litellm_gateway_auth::Error>;
+pub(super) type Authentication = Result<Authenticated<NativeRows>, litellm_gateway_auth::Error>;
 pub(super) type Fields = Map<String, Value>;
 
-pub(super) const HEAD: &[fn(&Admit, &Parts) -> Option<Reason>] =
-    &[config::settings, head::route, head::headers];
-pub(super) const CALLER: &[fn(&Admit, &Authenticated) -> Option<Reason>] = &[caller::caller];
+pub(super) const HEAD: &[fn(&Admit, &Parts) -> Option<Reason>] = &[
+    config::settings,
+    head::route,
+    head::forwarded_for,
+    head::headers,
+];
+pub(super) const CALLER: &[fn(&Admit, &Authentication) -> Option<Reason>] = &[caller::caller];
 pub(super) const BODY: &[fn(&Admit, &Fields) -> Option<Reason>] = &[body::fields, model::model];

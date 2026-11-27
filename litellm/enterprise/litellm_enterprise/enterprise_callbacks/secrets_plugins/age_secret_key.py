@@ -15,7 +15,7 @@ class AgeSecretKeyDetector(RegexBasedDetector):
         return "Age Secret Key"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             re.compile(r"""AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}"""),
         ]

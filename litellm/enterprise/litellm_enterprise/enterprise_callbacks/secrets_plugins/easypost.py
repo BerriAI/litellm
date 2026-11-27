@@ -15,7 +15,7 @@ class EasyPostDetector(RegexBasedDetector):
         return "EasyPost Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # EasyPost API token
             re.compile(r"""(?i)\bEZAK[a-z0-9]{54}"""),

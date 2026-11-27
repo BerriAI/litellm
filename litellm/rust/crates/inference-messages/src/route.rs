@@ -1,12 +1,10 @@
-use std::convert::Infallible;
-
 use bytes::Bytes;
 use litellm_host::{
     call::{HostedCompletion, HostedMachine, hosted_call},
     protocol::Protocol,
 };
 
-use super::{Error, MessagesBody, MessagesCall};
+use super::{Error, MessagesBody, MessagesCall, MessagesHostCall};
 
 pub type MessagesOutput = HostedCompletion<MessagesBody>;
 
@@ -23,7 +21,7 @@ impl Protocol for Messages {
     type Response = MessagesBody;
     type Error = Error;
     type Request = MessagesCall;
-    type HostCall = Infallible;
+    type HostCall = MessagesHostCall;
     type Chunk = Bytes;
     type StreamHead = MessagesStreamHead;
 
@@ -42,7 +40,7 @@ pub type MessagesMachine = HostedMachine<Messages>;
 
 impl super::MessagesRoute {
     pub fn machine(
-        self,
+        mut self,
         request: super::MessagesCall,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> MessagesMachine {
@@ -53,7 +51,7 @@ impl super::MessagesRoute {
         hosted_call(
             request,
             observers,
-            move |call, _, interceptors, observers| async move {
+            move |call, services, interceptors, observers| async move {
                 let context = litellm_inference::context::CallContext::new(
                     &interceptors,
                     litellm_inference::CallOptions {
@@ -61,7 +59,8 @@ impl super::MessagesRoute {
                         observers,
                     },
                 );
-                self.run(call, context).await
+                let route = std::mem::take(&mut self.host_services).serve(self, services);
+                route.run(call, context).await
             },
         )
     }

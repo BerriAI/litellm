@@ -390,7 +390,7 @@ async def get_marketplace(request: Request, key: str | None = None):
             where=visibility.where()
         )
 
-        plugin_list: Final = []
+        plugin_list: Final[list[_MarketplaceEntry]] = []
         for plugin in plugins:
             if not visibility.allows(plugin):
                 continue
@@ -713,7 +713,7 @@ async def list_visible_plugins(enabled_only: bool, user_api_key_dict: UserAPIKey
             where={"enabled": True} if enabled_only else visibility.where()
         )
 
-        plugin_list: Final = []
+        plugin_list: Final[list[PluginListItem]] = []
         for p in plugins:
             if not visibility.allows(p):
                 continue

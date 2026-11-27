@@ -1,5 +1,5 @@
 import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAccess";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -61,23 +61,32 @@ export function ProjectsPage() {
 
   if (!premiumUser) {
     return (
-      <div className="mx-4 mt-4">
-        <p className="text-sm text-muted-foreground">
-          <Trans
-            i18nKey="projects.page.enterpriseNotice"
-            components={{
-              pricing: (
-                <a
-                  href="https://www.litellm.ai/#pricing"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary underline-offset-4 hover:underline"
-                />
-              ),
-            }}
-          />
-        </p>
-      </div>
+      <>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Folder />
+            {t("projects.page.title")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("projects.page.description")}</PageHeaderDescription>
+        </PageHeader>
+        <PageContent>
+          <p className="text-sm text-muted-foreground">
+            <Trans
+              i18nKey="projects.page.enterpriseNotice"
+              components={{
+                pricing: (
+                  <a
+                    href="https://www.litellm.ai/#pricing"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline-offset-4 hover:underline"
+                  />
+                ),
+              }}
+            />
+          </p>
+        </PageContent>
+      </>
     );
   }
 
@@ -86,7 +95,7 @@ export function ProjectsPage() {
   }
 
   return (
-    <Page>
+    <>
       <PageHeader>
         <PageHeaderTitle>
           <Folder />
@@ -139,6 +148,6 @@ export function ProjectsPage() {
       </PageContent>
 
       <CreateProjectModal isOpen={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} />
-    </Page>
+    </>
   );
 }

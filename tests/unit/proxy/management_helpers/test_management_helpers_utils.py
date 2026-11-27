@@ -331,7 +331,7 @@ async def test_handle_budget_for_entity_updates_with_existing_budget_id_in_reque
 
     assert budget_id == "budget-1"
     budget_update.assert_awaited_once_with(
-        where={"budget_id": "budget-1"},
+        where={"budget_id": "budget-1", "rollover_max_budget": None},
         data={"budget_id": "budget-1", "max_budget": 20.0, "updated_by": "admin"},
     )
 

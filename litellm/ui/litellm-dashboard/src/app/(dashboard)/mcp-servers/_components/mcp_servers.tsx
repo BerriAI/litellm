@@ -1,5 +1,5 @@
 import { isAdminRole, isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
 import { CircleHelp, Plug, Search, Server } from "lucide-react";
@@ -19,9 +19,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useQueryState } from "nuqs";
 import { useTranslation } from "react-i18next";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
@@ -48,18 +47,13 @@ import MCPToolSearchSettings from "@/components/Settings/AdminSettings/MCPToolSe
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "@/components/mcp_tools/ByokCredentialModal";
-import { getSecureItem } from "@/utils/secureStorage";
-import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
 import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 import UserEnvVarsModal from "./UserEnvVarsModal";
 import { listMCPUserEnvVarStatus } from "@/components/networking";
+import { type McpServerSortKey, useMcpServersUrlState } from "./useMcpServersUrlState";
 
-const ALL_FILTER_VALUE = "all";
-
-export type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
-
-const SORT_OPTIONS: { value: SortKey; labelKey: ParseKeys }[] = [
+const SORT_OPTIONS: { value: McpServerSortKey; labelKey: ParseKeys }[] = [
   { value: "created_desc", labelKey: "mcpServers.servers.sort.options.createdDesc" },
   { value: "updated_desc", labelKey: "mcpServers.servers.sort.options.updatedDesc" },
   { value: "name_asc", labelKey: "mcpServers.servers.sort.options.nameAsc" },
@@ -85,7 +79,7 @@ const compareByTimestampDesc = (a: string | null | undefined, b: string | null |
   return tb - ta;
 };
 
-export const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): number => {
+export const compareServers = (a: MCPServer, b: MCPServer, sort: McpServerSortKey): number => {
   switch (sort) {
     case "name_asc":
       return compareByName(a, b);
@@ -103,24 +97,12 @@ export const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): numbe
   }
 };
 
-const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
+type AccessGroupEntry = string | { name?: string } | null;
 
-// Server id stashed by the Tools tab before an OBO OAuth redirect, read once at
-// mount so the redirect returns straight to that server's Tools tab.
-const readToolsOAuthServerId = (): string | null => {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  try {
-    const stored = getSecureItem(TOOLS_OAUTH_UI_STATE_KEY);
-    if (!stored) {
-      return null;
-    }
-    return JSON.parse(stored)?.serverId ?? null;
-  } catch {
-    return null;
-  }
-};
+const accessGroupName = (group: AccessGroupEntry) => (typeof group === "string" ? group : group?.name);
+
+const inAccessGroup = (server: MCPServer, group: string): boolean =>
+  (server.mcp_access_groups ?? []).some((entry: AccessGroupEntry) => accessGroupName(entry) === group);
 
 function DeleteServerDialog({
   open,
@@ -177,6 +159,11 @@ function DeleteServerDialog({
   );
 }
 
+const roleAccess = (role: string | null) => ({
+  isAdmin: role !== null && isAdminRole(role),
+  canViewLiveConnections: role !== null && isProxyAdminTierRole(role),
+});
+
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
   const { t } = useTranslation();
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
@@ -205,31 +192,35 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     });
   }, [mcpServers, healthStatuses]);
 
-  // state
+  const { isAdmin, canViewLiveConnections } = roleAccess(userRole);
+  const {
+    tab,
+    setTab,
+    team: selectedTeam,
+    setTeam,
+    accessGroup: selectedMcpAccessGroup,
+    setAccessGroup,
+    search: searchQuery,
+    setSearch,
+    sort: sortKey,
+    setSort,
+    selectedServerId,
+    selectedServer,
+    editServer,
+    openServer,
+    closeServer,
+    envVarsDeepLinkId,
+    clearEnvVarsDeepLink,
+  } = useMcpServersUrlState({ isAdmin, canViewLiveConnections }, serversWithHealth, mcpServers !== undefined);
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  // Server whose Tools tab should be reopened after an OBO OAuth redirect; read
-  // once from sessionStorage so the restored server selection is correct on the
-  // first render. Cleared when the user navigates back to the list (handleBack)
-  // so a later visit to the same server defaults to Overview, not the Tools tab.
-  const [toolsTabServerId, setToolsTabServerId] = useState<string | null>(readToolsOAuthServerId);
-  const [selectedServerId, setSelectedServerId] = useState<string | null>(toolsTabServerId);
-  const [editServer, setEditServer] = useState(false);
-  const [selectedTeam, setSelectedTeam] = useState<string>("all");
-  const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
-  const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
   const [isImportVisible, setImportVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
-  const [fillEnvVarsParam, setFillEnvVarsParam] = useQueryState("fill_env_vars");
-  // Per-user env-var fill modal target + deep-link source captured once from the URL.
   const [envVarsModalServer, setEnvVarsModalServer] = useState<MCPServer | null>(null);
-  const [deepLinkServerId, setDeepLinkServerId] = useState<string | null>(() => fillEnvVarsParam);
-  const [searchQuery, setSearchQuery] = useState<string>("");
-  const [sortKey, setSortKey] = useState<SortKey>("created_desc");
   const isInternalUser = userRole === "Internal User";
 
   const stdioEnabled = useMcpStdioEnabled();
@@ -257,47 +248,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     [envVarStatuses],
   );
 
-  useEffect(() => {
-    if (fillEnvVarsParam !== null) setFillEnvVarsParam(null);
-  }, [fillEnvVarsParam, setFillEnvVarsParam]);
-
   const deepLinkServer = useMemo(
-    () => (deepLinkServerId ? serversWithHealth.find((s) => s.server_id === deepLinkServerId) ?? null : null),
-    [deepLinkServerId, serversWithHealth],
+    () => (envVarsDeepLinkId ? serversWithHealth.find((s) => s.server_id === envVarsDeepLinkId) ?? null : null),
+    [envVarsDeepLinkId, serversWithHealth],
   );
   const activeEnvVarsServer = envVarsModalServer ?? deepLinkServer;
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    try {
-      const stored = getSecureItem(EDIT_OAUTH_UI_STATE_KEY);
-      if (!stored) {
-        return;
-      }
-      const parsed = JSON.parse(stored);
-      if (parsed?.serverId) {
-        setSelectedServerId(parsed.serverId);
-        setEditServer(true);
-      }
-    } catch (err) {
-      console.error("Failed to restore MCP edit view state", err);
-    }
-  }, []);
-
-  // The restored server id was consumed by the initializer above; remove the
-  // one-shot sessionStorage key so a full page reload doesn't reopen the Tools
-  // tab (removeItem only, no setState).
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      try {
-        window.sessionStorage.removeItem(TOOLS_OAUTH_UI_STATE_KEY);
-      } catch {
-        // ignore storage errors
-      }
-    }
-  }, []);
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
@@ -351,46 +306,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
 
   const sortOptions = useMemo(() => SORT_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) })), [t]);
 
-  // Filtering logic for both team and access group
-  const filterServers = useCallback(
-    (teamId: string, group: string) => {
-      if (!serversWithHealth) return setFilteredServers([]);
-      let filtered = serversWithHealth;
-      if (teamId === "personal") {
-        setFilteredServers([]);
-        return;
-      }
-      if (teamId !== "all") {
-        filtered = filtered.filter((server) => server.teams?.some((team) => team.team_id === teamId));
-      }
-      if (group !== "all") {
-        filtered = filtered.filter((server) =>
-          server.mcp_access_groups?.some((g: string | { name?: string } | null) =>
-            typeof g === "string" ? g === group : g?.name === group,
-          ),
-        );
-      }
-      setFilteredServers(filtered);
-    },
-    [serversWithHealth],
-  );
-
-  // Handle team filter change
-  const handleTeamChange = (teamId: string) => {
-    setSelectedTeam(teamId);
-    filterServers(teamId, selectedMcpAccessGroup);
-  };
-
-  // Handle MCP access group filter change
-  const handleMcpAccessGroupChange = (group: string) => {
-    setSelectedMcpAccessGroup(group);
-    filterServers(selectedTeam, group);
-  };
-
-  // Initial and effect-based filtering (trigger on query data updates and health data updates)
-  useEffect(() => {
-    filterServers(selectedTeam, selectedMcpAccessGroup);
-  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup, filterServers]);
+  const filteredServers = useMemo(() => {
+    if (selectedTeam === "personal") return [];
+    return serversWithHealth
+      .filter((server) => selectedTeam === "all" || server.teams?.some((team) => team.team_id === selectedTeam))
+      .filter((server) => selectedMcpAccessGroup === "all" || inAccessGroup(server, selectedMcpAccessGroup));
+  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup]);
 
   // Search + sort layer applied on top of the team/access-group filters.
   const displayedServers = useMemo(() => {
@@ -420,13 +341,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
       setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
       toast.success(t("mcpServers.servers.toasts.deleted"));
-      // If the user is currently viewing the detail page of the server they
-      // just deleted, return them to the All Servers list. Otherwise the
-      // detail view would stay mounted, fall back to an empty stub server,
-      // and show a phantom "Unnamed Server" page.
       if (selectedServerId === serverIdToDelete) {
-        setEditServer(false);
-        setSelectedServerId(null);
+        closeServer();
       }
       refetch();
     } catch (error) {
@@ -446,38 +362,15 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
   // Find the server to delete from the servers list
   const serverToDelete = mcpServers?.find((server) => server.server_id === serverIdToDelete);
 
-  const handleCreateSuccess = (newMcpServer: MCPServer) => {
-    setFilteredServers((prev) => [...prev, newMcpServer]);
+  const handleCreateSuccess = () => {
     setModalVisible(false);
     refetch();
   };
 
-  // Memoize the selected server to prevent unnecessary re-renders
-  const selectedServer = React.useMemo(() => {
-    return (
-      filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
-        server_id: "",
-        server_name: "",
-        alias: "",
-        url: "",
-        transport: "",
-        auth_type: "",
-        created_at: "",
-        created_by: "",
-        updated_at: "",
-        updated_by: "",
-      }
-    );
-  }, [filteredServers, selectedServerId]);
-
-  // Memoize the onBack callback to prevent unnecessary re-renders
   const handleBack = React.useCallback(() => {
-    setEditServer(false);
-    setSelectedServerId(null);
-    // Drop the post-redirect one-shot so re-selecting that server opens Overview.
-    setToolsTabServerId(null);
+    closeServer();
     refetch();
-  }, [refetch]);
+  }, [closeServer, refetch]);
 
   if (!accessToken || !userRole || !userID) {
     return <div className="p-6 text-center text-muted-foreground">{t("mcpServers.servers.missingAuth")}</div>;
@@ -485,358 +378,348 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
 
   return (
     <TooltipProvider>
-      <Page className="h-full">
-        <PageContent>
-          <DeleteServerDialog
-            open={isDeleteModalOpen}
-            onOpenChange={(open) => !open && cancelDelete()}
-            server={serverToDelete}
-            isDeleting={isDeletingServer}
-            onConfirm={confirmDelete}
-          />
-          <CreateMCPServer
-            userRole={userRole}
-            userID={userID}
-            accessToken={accessToken}
-            onCreateSuccess={handleCreateSuccess}
-            isModalVisible={isModalVisible}
-            setModalVisible={setModalVisible}
-            availableAccessGroups={uniqueMcpAccessGroups}
-            existingServers={mcpServers}
-            prefillData={prefillData}
-            stdioEnabled={stdioEnabled}
-            onBackToDiscovery={() => {
-              setModalVisible(false);
-              setPrefillData(null);
-              setDiscoveryVisible(true);
-            }}
-          />
-          <PageHeader>
-            <PageHeaderTitle>
-              <Server />
-              {t("mcpServers.servers.header.title")}
-              {filteredServers.length > 0 && <Badge variant="secondary">{filteredServers.length}</Badge>}
-            </PageHeaderTitle>
-            <PageHeaderDescription>{t("mcpServers.servers.header.subtitle")}</PageHeaderDescription>
-            <PageHeaderControls className="flex-wrap">
-              <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
-                <Plug />
-                {t("mcpServers.servers.header.myConnections")}
-              </Link>
-              {isAdminRole(userRole) ? (
-                <>
-                  <Button className="shrink-0" variant="secondary" onClick={() => setImportVisible(true)}>
-                    {t("mcpServers.servers.header.importFromJson")}
-                  </Button>
-                  <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
-                    {t("mcpServers.servers.header.addServer")}
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  className="shrink-0"
-                  onClick={() => {
-                    setPrefillData(null);
-                    setModalVisible(true);
-                  }}
-                  variant="secondary"
-                >
-                  {t("mcpServers.servers.header.submitServer")}
-                </Button>
-              )}
-            </PageHeaderControls>
-          </PageHeader>
-          <ImportMCPServers
-            accessToken={accessToken}
-            open={isImportVisible}
-            onClose={() => setImportVisible(false)}
-            onImported={() => refetch()}
-          />
-          <MCPDiscovery
-            isVisible={isDiscoveryVisible}
-            onClose={() => setDiscoveryVisible(false)}
-            onSelectServer={(server: DiscoverableMCPServer) => {
-              setPrefillData(server);
-              setDiscoveryVisible(false);
-              setModalVisible(true);
-            }}
-            onCustomServer={() => {
-              setPrefillData(null);
-              setDiscoveryVisible(false);
-              setModalVisible(true);
-            }}
-            accessToken={accessToken}
-          />
-          <Tabs defaultValue="servers" className="w-full gap-6">
-            <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0">
-              <TabsTrigger value="servers" className="flex-none rounded-none px-4 py-2">
-                {t("mcpServers.servers.tabs.allServers")}
-              </TabsTrigger>
-              <TabsTrigger value="toolsets" className="flex-none rounded-none px-4 py-2">
-                {t("mcpServers.servers.tabs.toolsets")}
-              </TabsTrigger>
-              <TabsTrigger value="connect" className="flex-none rounded-none px-4 py-2">
-                {t("mcpServers.servers.tabs.connect")}
-              </TabsTrigger>
-              {isAdminRole(userRole) && (
-                <>
-                  <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
-                    {t("mcpServers.servers.tabs.semanticFilter")}
-                  </TabsTrigger>
-
-                  <TabsTrigger value="tool-search" className="flex-none rounded-none px-4 py-2">
-                    {t("mcpServers.servers.tabs.toolSearch")}
-                  </TabsTrigger>
-
-                  <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
-                    {t("mcpServers.servers.tabs.networkSettings")}
-                  </TabsTrigger>
-
-                  <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
-                    {t("mcpServers.servers.tabs.submitted")}
-                  </TabsTrigger>
-                </>
-              )}
-              {isProxyAdminTierRole(userRole) && (
-                <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
-                  {t("mcpServers.servers.tabs.liveConnections")}
-                </TabsTrigger>
-              )}
-            </TabsList>
-            <TabsContent value="servers" keepMounted>
-              {selectedServerId ? (
-                <MCPServerView
-                  key={selectedServerId}
-                  mcpServer={selectedServer}
-                  onBack={handleBack}
-                  isProxyAdmin={isAdminRole(userRole)}
-                  isEditing={editServer}
-                  accessToken={accessToken}
-                  userID={userID}
-                  userRole={userRole}
-                  isViewOnly={isViewOnly}
-                  availableAccessGroups={uniqueMcpAccessGroups}
-                  existingServers={mcpServers}
-                  initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
-                  stdioEnabled={stdioEnabled}
-                />
-              ) : (
-                <div className="w-full h-full">
-                  <div className="w-full">
-                    <div className="flex flex-col space-y-4">
-                      <div className="flex items-center gap-6 rounded-lg border border-border bg-card px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-medium whitespace-nowrap text-muted-foreground">
-                            {t("mcpServers.servers.filters.team.label")}
-                          </p>
-                          <Select
-                            items={teamSelectItems}
-                            value={selectedTeam}
-                            onValueChange={(v: string | null) => handleTeamChange(v ?? ALL_FILTER_VALUE)}
-                          >
-                            <SelectTrigger className="w-55" aria-label={t("mcpServers.servers.filters.team.label")}>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="all">{teamSelectItems.all}</SelectItem>
-                              <SelectItem value="personal">{t("mcpServers.servers.filters.team.personal")}</SelectItem>
-                              {uniqueTeams.map((team) => (
-                                <SelectItem key={team.team_id} value={team.team_id}>
-                                  {team.team_alias || team.team_id}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="h-6 w-px bg-border" />
-                        <div className="flex items-center gap-2">
-                          <p className="flex items-center text-sm font-medium whitespace-nowrap text-muted-foreground">
-                            {t("mcpServers.servers.filters.accessGroup.label")}
-                            <Tooltip>
-                              <TooltipTrigger
-                                render={
-                                  <CircleHelp
-                                    className="ml-1 size-3.5 text-muted-foreground"
-                                    aria-label={t("mcpServers.servers.filters.accessGroup.helpLabel")}
-                                  />
-                                }
-                              />
-                              <TooltipContent>{t("mcpServers.servers.filters.accessGroup.help")}</TooltipContent>
-                            </Tooltip>
-                          </p>
-                          <Select
-                            items={accessGroupSelectItems}
-                            value={selectedMcpAccessGroup}
-                            onValueChange={(v: string | null) => handleMcpAccessGroupChange(v ?? ALL_FILTER_VALUE)}
-                          >
-                            <SelectTrigger
-                              className="w-55"
-                              aria-label={t("mcpServers.servers.filters.accessGroup.label")}
-                            >
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="all">{t("mcpServers.servers.filters.accessGroup.all")}</SelectItem>
-                              {uniqueMcpAccessGroups.map((group) => (
-                                <SelectItem key={group} value={group}>
-                                  {group}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-4 flex flex-wrap items-center gap-3">
-                    <InputGroup className="max-w-80">
-                      <InputGroupAddon>
-                        <Search className="size-4 text-muted-foreground" />
-                      </InputGroupAddon>
-                      <InputGroupInput
-                        placeholder={t("mcpServers.servers.searchPlaceholder")}
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                      />
-                    </InputGroup>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium whitespace-nowrap text-muted-foreground">
-                        {t("mcpServers.servers.sort.label")}
-                      </p>
-                      <Select
-                        items={sortOptions}
-                        value={sortKey}
-                        onValueChange={(v: string | null) => setSortKey((v ?? "created_desc") as SortKey)}
-                      >
-                        <SelectTrigger className="w-55">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {sortOptions.map((opt) => (
-                            <SelectItem key={opt.value} value={opt.value}>
-                              {opt.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="ml-auto text-xs text-muted-foreground">
-                      {t("mcpServers.servers.resultCount", {
-                        shown: displayedServers.length,
-                        total: filteredServers.length,
-                      })}
-                    </div>
-                  </div>
-                  <div className="mt-4 w-full">
-                    {isLoadingServers ? (
-                      <div className="flex items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card p-12">
-                        <UiLoadingSpinner className="size-6 text-muted-foreground" />
-                        <p className="text-sm text-muted-foreground">{t("mcpServers.servers.loading")}</p>
-                      </div>
-                    ) : displayedServers.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
-                        <p className="text-sm text-muted-foreground">
-                          {filteredServers.length === 0
-                            ? t("mcpServers.servers.empty.noServers")
-                            : t("mcpServers.servers.empty.noMatches")}
-                        </p>
-                      </div>
-                    ) : (
-                      <div
-                        data-testid="mcp-servers-grid"
-                        className="grid auto-rows-fr grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
-                      >
-                        {displayedServers.map((server) => (
-                          <MCPServerCard
-                            key={server.server_id}
-                            server={server}
-                            missingUserFields={missingFieldsByServer[server.server_id]}
-                            hasUserFields={serversWithUserFields.has(server.server_id)}
-                            isLoadingHealth={isLoadingHealth}
-                            isRechecking={recheckingServerIds?.has(server.server_id)}
-                            onClick={() => {
-                              setSelectedServerId(server.server_id);
-                              setEditServer(true);
-                            }}
-                            onRecheckHealth={
-                              recheckServerHealth ? () => recheckServerHealth(server.server_id) : undefined
-                            }
-                            onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
-                            onOpenFillFields={() => setEnvVarsModalServer(server)}
-                            onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
-                            stdioEnabled={stdioEnabled}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </TabsContent>
-            <TabsContent value="toolsets" keepMounted>
-              <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />
-            </TabsContent>
-            <TabsContent value="connect" keepMounted>
-              <MCPConnect />
-            </TabsContent>
-            {isAdminRole(userRole) && (
+      <PageContent>
+        <DeleteServerDialog
+          open={isDeleteModalOpen}
+          onOpenChange={(open) => !open && cancelDelete()}
+          server={serverToDelete}
+          isDeleting={isDeletingServer}
+          onConfirm={confirmDelete}
+        />
+        <CreateMCPServer
+          userRole={userRole}
+          userID={userID}
+          accessToken={accessToken}
+          onCreateSuccess={handleCreateSuccess}
+          isModalVisible={isModalVisible}
+          setModalVisible={setModalVisible}
+          availableAccessGroups={uniqueMcpAccessGroups}
+          existingServers={mcpServers}
+          prefillData={prefillData}
+          stdioEnabled={stdioEnabled}
+          onBackToDiscovery={() => {
+            setModalVisible(false);
+            setPrefillData(null);
+            setDiscoveryVisible(true);
+          }}
+        />
+        <PageHeader>
+          <PageHeaderTitle>
+            <Server />
+            {t("mcpServers.servers.header.title")}
+            {filteredServers.length > 0 && <Badge variant="secondary">{filteredServers.length}</Badge>}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("mcpServers.servers.header.subtitle")}</PageHeaderDescription>
+          <PageHeaderControls className="flex-wrap">
+            <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
+              <Plug />
+              {t("mcpServers.servers.header.myConnections")}
+            </Link>
+            {isAdmin ? (
               <>
-                <TabsContent value="semantic-filter" keepMounted>
-                  <MCPSemanticFilterSettings accessToken={accessToken} />
-                </TabsContent>
+                <Button className="shrink-0" variant="secondary" onClick={() => setImportVisible(true)}>
+                  {t("mcpServers.servers.header.importFromJson")}
+                </Button>
+                <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
+                  {t("mcpServers.servers.header.addServer")}
+                </Button>
+              </>
+            ) : (
+              <Button
+                className="shrink-0"
+                onClick={() => {
+                  setPrefillData(null);
+                  setModalVisible(true);
+                }}
+                variant="secondary"
+              >
+                {t("mcpServers.servers.header.submitServer")}
+              </Button>
+            )}
+          </PageHeaderControls>
+        </PageHeader>
+        <ImportMCPServers
+          accessToken={accessToken}
+          open={isImportVisible}
+          onClose={() => setImportVisible(false)}
+          onImported={() => refetch()}
+        />
+        <MCPDiscovery
+          isVisible={isDiscoveryVisible}
+          onClose={() => setDiscoveryVisible(false)}
+          onSelectServer={(server: DiscoverableMCPServer) => {
+            setPrefillData(server);
+            setDiscoveryVisible(false);
+            setModalVisible(true);
+          }}
+          onCustomServer={() => {
+            setPrefillData(null);
+            setDiscoveryVisible(false);
+            setModalVisible(true);
+          }}
+          accessToken={accessToken}
+        />
+        <Tabs value={tab} onValueChange={setTab} className="w-full gap-6">
+          <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0">
+            <TabsTrigger value="servers" className="flex-none rounded-none px-4 py-2">
+              {t("mcpServers.servers.tabs.allServers")}
+            </TabsTrigger>
+            <TabsTrigger value="toolsets" className="flex-none rounded-none px-4 py-2">
+              {t("mcpServers.servers.tabs.toolsets")}
+            </TabsTrigger>
+            <TabsTrigger value="connect" className="flex-none rounded-none px-4 py-2">
+              {t("mcpServers.servers.tabs.connect")}
+            </TabsTrigger>
+            {isAdmin && (
+              <>
+                <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
+                  {t("mcpServers.servers.tabs.semanticFilter")}
+                </TabsTrigger>
 
-                <TabsContent value="tool-search" keepMounted>
-                  <MCPToolSearchSettings accessToken={accessToken} />
-                </TabsContent>
+                <TabsTrigger value="tool-search" className="flex-none rounded-none px-4 py-2">
+                  {t("mcpServers.servers.tabs.toolSearch")}
+                </TabsTrigger>
 
-                <TabsContent value="network-settings" keepMounted>
-                  <MCPNetworkSettings accessToken={accessToken} />
-                </TabsContent>
+                <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
+                  {t("mcpServers.servers.tabs.networkSettings")}
+                </TabsTrigger>
 
-                <TabsContent value="submitted" keepMounted>
-                  <MCPSubmissionsTab accessToken={accessToken} />
-                </TabsContent>
+                <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
+                  {t("mcpServers.servers.tabs.submitted")}
+                </TabsTrigger>
               </>
             )}
-            {isProxyAdminTierRole(userRole) && (
-              <TabsContent value="connections">
-                <MCPGatewaySessionsTab
-                  accessToken={accessToken}
-                  canTerminate={isProxyAdminRole(userRole) && !isViewOnly}
-                />
-              </TabsContent>
+            {canViewLiveConnections && (
+              <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
+                {t("mcpServers.servers.tabs.liveConnections")}
+              </TabsTrigger>
             )}
-          </Tabs>
+          </TabsList>
+          <TabsContent value="servers" keepMounted>
+            {selectedServer ? (
+              <MCPServerView
+                key={selectedServer.server_id}
+                mcpServer={selectedServer}
+                onBack={handleBack}
+                isProxyAdmin={isAdmin}
+                isEditing={editServer}
+                accessToken={accessToken}
+                userID={userID}
+                userRole={userRole}
+                isViewOnly={isViewOnly}
+                availableAccessGroups={uniqueMcpAccessGroups}
+                existingServers={mcpServers}
+                stdioEnabled={stdioEnabled}
+              />
+            ) : (
+              <div className="w-full h-full">
+                <div className="w-full">
+                  <div className="flex flex-col space-y-4">
+                    <div className="flex items-center gap-6 rounded-lg border border-border bg-card px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium whitespace-nowrap text-muted-foreground">
+                          {t("mcpServers.servers.filters.team.label")}
+                        </p>
+                        <Select
+                          items={teamSelectItems}
+                          value={selectedTeam}
+                          onValueChange={(v: string | null) => setTeam(v)}
+                        >
+                          <SelectTrigger className="w-55" aria-label={t("mcpServers.servers.filters.team.label")}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">{teamSelectItems.all}</SelectItem>
+                            <SelectItem value="personal">{t("mcpServers.servers.filters.team.personal")}</SelectItem>
+                            {uniqueTeams.map((team) => (
+                              <SelectItem key={team.team_id} value={team.team_id}>
+                                {team.team_alias || team.team_id}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="h-6 w-px bg-border" />
+                      <div className="flex items-center gap-2">
+                        <p className="flex items-center text-sm font-medium whitespace-nowrap text-muted-foreground">
+                          {t("mcpServers.servers.filters.accessGroup.label")}
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <CircleHelp
+                                  className="ml-1 size-3.5 text-muted-foreground"
+                                  aria-label={t("mcpServers.servers.filters.accessGroup.helpLabel")}
+                                />
+                              }
+                            />
+                            <TooltipContent>{t("mcpServers.servers.filters.accessGroup.help")}</TooltipContent>
+                          </Tooltip>
+                        </p>
+                        <Select
+                          items={accessGroupSelectItems}
+                          value={selectedMcpAccessGroup}
+                          onValueChange={(v: string | null) => setAccessGroup(v)}
+                        >
+                          <SelectTrigger
+                            className="w-55"
+                            aria-label={t("mcpServers.servers.filters.accessGroup.label")}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">{t("mcpServers.servers.filters.accessGroup.all")}</SelectItem>
+                            {uniqueMcpAccessGroups.map((group) => (
+                              <SelectItem key={group} value={group}>
+                                {group}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <InputGroup className="max-w-80">
+                    <InputGroupAddon>
+                      <Search className="size-4 text-muted-foreground" />
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      placeholder={t("mcpServers.servers.searchPlaceholder")}
+                      value={searchQuery}
+                      onChange={(e) => setSearch(e.target.value)}
+                    />
+                  </InputGroup>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium whitespace-nowrap text-muted-foreground">
+                      {t("mcpServers.servers.sort.label")}
+                    </p>
+                    <Select items={sortOptions} value={sortKey} onValueChange={(v: string | null) => setSort(v)}>
+                      <SelectTrigger className="w-55">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {sortOptions.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="ml-auto text-xs text-muted-foreground">
+                    {t("mcpServers.servers.resultCount", {
+                      shown: displayedServers.length,
+                      total: filteredServers.length,
+                    })}
+                  </div>
+                </div>
+                <div className="mt-4 w-full">
+                  {isLoadingServers ? (
+                    <div className="flex items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card p-12">
+                      <UiLoadingSpinner className="size-6 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">{t("mcpServers.servers.loading")}</p>
+                    </div>
+                  ) : displayedServers.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
+                      <p className="text-sm text-muted-foreground">
+                        {filteredServers.length === 0
+                          ? t("mcpServers.servers.empty.noServers")
+                          : t("mcpServers.servers.empty.noMatches")}
+                      </p>
+                    </div>
+                  ) : (
+                    <div
+                      data-testid="mcp-servers-grid"
+                      className="grid auto-rows-fr grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
+                    >
+                      {displayedServers.map((server) => (
+                        <MCPServerCard
+                          key={server.server_id}
+                          server={server}
+                          missingUserFields={missingFieldsByServer[server.server_id]}
+                          hasUserFields={serversWithUserFields.has(server.server_id)}
+                          isLoadingHealth={isLoadingHealth}
+                          isRechecking={recheckingServerIds?.has(server.server_id)}
+                          onClick={() => openServer(server.server_id)}
+                          onRecheckHealth={
+                            recheckServerHealth ? () => recheckServerHealth(server.server_id) : undefined
+                          }
+                          onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
+                          onOpenFillFields={() => setEnvVarsModalServer(server)}
+                          onDelete={isAdmin ? () => handleDelete(server.server_id) : undefined}
+                          stdioEnabled={stdioEnabled}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </TabsContent>
+          <TabsContent value="toolsets" keepMounted>
+            <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />
+          </TabsContent>
+          <TabsContent value="connect" keepMounted>
+            <MCPConnect />
+          </TabsContent>
+          {isAdmin && (
+            <>
+              <TabsContent value="semantic-filter" keepMounted>
+                <MCPSemanticFilterSettings accessToken={accessToken} />
+              </TabsContent>
 
-          {byokModalServer && (
-            <ByokCredentialModal
-              server={byokModalServer}
-              open={!!byokModalServer}
-              onClose={() => setByokModalServer(null)}
-              onSuccess={(_serverId) => {
-                refetch();
-                setByokModalServer(null);
-              }}
-            />
+              <TabsContent value="tool-search" keepMounted>
+                <MCPToolSearchSettings accessToken={accessToken} />
+              </TabsContent>
+
+              <TabsContent value="network-settings" keepMounted>
+                <MCPNetworkSettings accessToken={accessToken} />
+              </TabsContent>
+
+              <TabsContent value="submitted" keepMounted>
+                <MCPSubmissionsTab accessToken={accessToken} />
+              </TabsContent>
+            </>
           )}
+          {canViewLiveConnections && (
+            <TabsContent value="connections">
+              <MCPGatewaySessionsTab
+                accessToken={accessToken}
+                canTerminate={isProxyAdminRole(userRole) && !isViewOnly}
+              />
+            </TabsContent>
+          )}
+        </Tabs>
 
-          {/* Per-user env-var fill modal — backed by /v1/mcp/server/{id}/user-env-vars */}
-          <UserEnvVarsModal
-            server={activeEnvVarsServer}
-            open={!!activeEnvVarsServer}
-            accessToken={accessToken}
-            onClose={() => {
-              setEnvVarsModalServer(null);
-              setDeepLinkServerId(null);
-            }}
-            onSaved={() => {
-              // Refresh the bulk status so the red "N user fields missing" footer
-              // on each card clears once the user has filled in their values.
-              refetchEnvVarStatus();
+        {byokModalServer && (
+          <ByokCredentialModal
+            server={byokModalServer}
+            open={!!byokModalServer}
+            onClose={() => setByokModalServer(null)}
+            onSuccess={(_serverId) => {
+              refetch();
+              setByokModalServer(null);
             }}
           />
-        </PageContent>
-      </Page>
+        )}
+
+        {/* Per-user env-var fill modal — backed by /v1/mcp/server/{id}/user-env-vars */}
+        <UserEnvVarsModal
+          server={activeEnvVarsServer}
+          open={!!activeEnvVarsServer}
+          accessToken={accessToken}
+          onClose={() => {
+            setEnvVarsModalServer(null);
+            clearEnvVarsDeepLink();
+          }}
+          onSaved={() => {
+            // Refresh the bulk status so the red "N user fields missing" footer
+            // on each card clears once the user has filled in their values.
+            refetchEnvVarStatus();
+          }}
+        />
+      </PageContent>
     </TooltipProvider>
   );
 };

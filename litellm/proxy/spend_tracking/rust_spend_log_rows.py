@@ -20,6 +20,7 @@ from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     DEFAULT_MAX_RECURSE_DEPTH,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import (
     claude_subscription_usage,
@@ -70,6 +71,7 @@ _REQUEST_METADATA_KEYS: Final = frozenset(
         "session_id",
         "trace_id",
         SESSION_ID_GENERATED_METADATA_KEY,
+        SESSION_ID_INHERITED_METADATA_KEY,
     }
 )
 _MESSAGE_REDACTION_HEADERS: Final = frozenset({"litellm-disable-message-redaction", *MESSAGE_REDACTION_ENABLE_HEADERS})
@@ -518,7 +520,17 @@ def uses_spend_logs_ledger() -> bool:
 
 @lru_cache(maxsize=8)
 def _row_builder(config: SpendLogRowConfig) -> _native.RustSpendLogRowBuilder:
-    return _native.RustSpendLogRowBuilder(token_redactor=_token_redactor(), **config._asdict())
+    return _native.RustSpendLogRowBuilder(
+        token_redactor=_token_redactor(),
+        latest_turn_only=config.latest_turn_only,
+        redact_tokens=config.redact_tokens,
+        drop_requester_ip_address=config.drop_requester_ip_address,
+        omit_missing_session_id=config.omit_missing_session_id,
+        max_string_length_prompt_in_db=config.max_string_length_prompt_in_db,
+        disable_end_user_cost_tracking=config.disable_end_user_cost_tracking,
+        request_correlation_in_logs=config.request_correlation_in_logs,
+        turn_off_message_logging=config.turn_off_message_logging,
+    )
 
 
 def spendlogs_payload_rust(

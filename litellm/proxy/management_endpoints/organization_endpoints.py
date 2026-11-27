@@ -412,6 +412,7 @@ async def new_organization(
     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - max_budget: *Optional[float]* - Max budget for org
+    - rollover_max_budget: *Optional[float]* - Does not enable rollover for organization spend. Leave unset for organization budgets.
     - tpm_limit: *Optional[int]* - Max tpm limit for org
     - rpm_limit: *Optional[int]* - Max rpm limit for org
     - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
@@ -1095,7 +1096,7 @@ async def delete_organization(
     team_ids_in_deleted_orgs: Final = tuple(team.team_id for team in teams_in_deleted_orgs)
     raise_if_teams_hold_ptu_shares(team_ids_in_deleted_orgs, llm_router)
 
-    deleted_orgs: Final = []
+    deleted_orgs: Final[list[PrismaOrganizationTable]] = []
     for organization_id in data.organization_ids:
         async with prisma_client.tx() as transaction:
             _ = await transaction.query_raw(_LOCK_ORG_TEAMS_SQL, organization_id)

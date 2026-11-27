@@ -1,0 +1,125 @@
+# With `enable_pre_call_checks` the router drops each deployment a prompt does not fit, by the
+# deployment's `model_info.max_input_tokens` over the cost map's window. A request stays native
+# while the native app reads a window for every deployment the request can reach, from the
+# deployment or the bundled cost map. The proxy's own cost map may hold a window the bundled one
+# does not.
+#
+# How the prompt is counted sends nothing to Python. The native app holds a prompt to its own
+# estimate, which is close to the proxy's count and not equal to it: a tool call, a tool result,
+# media and a model the proxy counts on an OpenAI encoding all stay native.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        id: small
+        max_input_tokens: 1000
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        id: large
+        max_input_tokens: 200000
+    - model_name: backed
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: unlisted
+      litellm_params:
+        model: anthropic/in-house-9
+        api_key: provider-key
+    - model_name: unlisted-with-a-window
+      litellm_params:
+        model: anthropic/in-house-9
+        api_key: provider-key
+      model_info:
+        max_input_tokens: 1000
+    - model_name: backed-by-unlisted
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: openai-named
+      litellm_params:
+        model: anthropic/gpt-4o
+        api_key: provider-key
+      model_info:
+        max_input_tokens: 1000
+  router_settings:
+    enable_pre_call_checks: true
+    fallbacks:
+      - backed: [claude]
+      - backed-by-unlisted: [unlisted]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: a prompt of text
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: rust
+
+  - name: a system block, tools and thinking
+    headers: {authorization: Bearer gateway-key}
+    body:
+      model: claude
+      max_tokens: 16
+      system: [{type: text, text: Answer briefly.}]
+      tools: [{name: get_weather, input_schema: {type: object, properties: {city: {type: string}}}}]
+      messages:
+        - {role: user, content: [{type: text, text: hi}]}
+        - {role: assistant, content: [{type: thinking, thinking: hmm, signature: abc}, {type: text, text: hello}]}
+        - {role: user, content: again}
+    expect: rust
+
+  - name: a group that falls back to deployments with windows
+    headers: {authorization: Bearer gateway-key}
+    body: {model: backed, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: rust
+
+  - name: a tool call and its result, estimated as their text
+    headers: {authorization: Bearer gateway-key}
+    body:
+      model: claude
+      max_tokens: 16
+      messages:
+        - {role: user, content: weather?}
+        - {role: assistant, content: [{type: tool_use, id: toolu_1, name: get_weather, input: {city: Paris}}]}
+        - {role: user, content: [{type: tool_result, tool_use_id: toolu_1, content: sunny}]}
+    expect: rust
+
+  - name: an image, estimated at a flat count
+    headers: {authorization: Bearer gateway-key}
+    body:
+      model: claude
+      max_tokens: 16
+      messages:
+        - role: user
+          content: [{type: image, source: {type: base64, media_type: image/png, data: AA==}}]
+    expect: rust
+
+  - name: a model the bundled cost map does not list, with a window of its own
+    headers: {authorization: Bearer gateway-key}
+    body: {model: unlisted-with-a-window, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: rust
+
+  - name: a model the bundled cost map does not list, with no window of its own
+    headers: {authorization: Bearer gateway-key}
+    body: {model: unlisted, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: python
+    reason: model
+    over: model_list.model_info.max_input_tokens
+
+  - name: a group that falls back to it
+    headers: {authorization: Bearer gateway-key}
+    body: {model: backed-by-unlisted, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: python
+    reason: model
+    over: 'router_settings fallback to unlisted: model_list.model_info.max_input_tokens'
+
+  - name: a model the proxy counts on an OpenAI encoding, estimated on the default one
+    headers: {authorization: Bearer gateway-key}
+    body: {model: openai-named, max_tokens: 16, messages: [{role: user, content: hi}]}
+    expect: rust

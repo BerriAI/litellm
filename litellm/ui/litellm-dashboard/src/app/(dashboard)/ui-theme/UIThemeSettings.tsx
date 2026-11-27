@@ -1,7 +1,8 @@
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { Palette } from "lucide-react";
 import React, { useState, useEffect } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,6 +12,9 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { resolveThemeImages, useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toUIThemeFields, toUIThemeUpdate } from "./mapper";
+import { uiThemeSchema } from "./schema";
 
 interface UIThemeSettingsProps {
   userID: string | null;
@@ -21,9 +25,10 @@ interface UIThemeSettingsProps {
 const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, accessToken }) => {
   const { t } = useTranslation();
   const { setLogoUrl, setLogoUrlDark, setFaviconUrl } = useTheme();
-  const [logoUrlInput, setLogoUrlInput] = useState<string>("");
-  const [logoUrlDarkInput, setLogoUrlDarkInput] = useState<string>("");
-  const [faviconUrlInput, setFaviconUrlInput] = useState<string>("");
+  const { control, getValues, reset } = useZodForm(uiThemeSchema, { defaultValues: toUIThemeFields() });
+  const { field: logoUrl } = useController({ control, name: "logoUrl" });
+  const { field: logoUrlDark } = useController({ control, name: "logoUrlDark" });
+  const { field: faviconUrl } = useController({ control, name: "faviconUrl" });
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -46,9 +51,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
       if (response.ok) {
         const data = await response.json();
         const images = resolveThemeImages(data, proxyBaseUrl);
-        setLogoUrlInput(data.values?.logo_url || "");
-        setLogoUrlDarkInput(data.values?.logo_url_dark || "");
-        setFaviconUrlInput(data.values?.favicon_url || "");
+        reset(toUIThemeFields(data.values));
         setLogoUrl(images.logoUrl);
         setLogoUrlDark(images.logoUrlDark);
         setFaviconUrl(images.faviconUrl);
@@ -59,6 +62,9 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   };
 
   const handleSave = async () => {
+    const draft = uiThemeSchema.safeParse(getValues());
+    if (!draft.success) return;
+    const payload = toUIThemeUpdate(draft.data);
     setLoading(true);
     try {
       const proxyBaseUrl = getProxyBaseUrl();
@@ -69,17 +75,13 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
           [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          logo_url: logoUrlInput || null,
-          logo_url_dark: logoUrlDarkInput || null,
-          favicon_url: faviconUrlInput || null,
-        }),
+        body: JSON.stringify(payload),
       });
       if (response.ok) {
         toast.success(t("uiTheme.settings.toasts.updated"));
-        setLogoUrl(logoUrlInput || null);
-        setLogoUrlDark(logoUrlDarkInput || null);
-        setFaviconUrl(faviconUrlInput || null);
+        setLogoUrl(payload.logo_url);
+        setLogoUrlDark(payload.logo_url_dark);
+        setFaviconUrl(payload.favicon_url);
       } else {
         throw new Error("Failed to update settings");
       }
@@ -92,9 +94,8 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   };
 
   const handleReset = async () => {
-    setLogoUrlInput("");
-    setLogoUrlDarkInput("");
-    setFaviconUrlInput("");
+    const defaults = toUIThemeFields();
+    reset(defaults);
     setLogoUrl(null);
     setLogoUrlDark(null);
     setFaviconUrl(null);
@@ -108,7 +109,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
           [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ logo_url: null, logo_url_dark: null, favicon_url: null }),
+        body: JSON.stringify(toUIThemeUpdate(defaults)),
       });
       if (response.ok) {
         toast.success(t("uiTheme.settings.toasts.reset"));
@@ -128,76 +129,74 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   }
 
   return (
-    <Page>
-      <PageContent>
-        <PageHeader>
-          <PageHeaderTitle>
-            <Palette />
-            {t("uiTheme.settings.title")}
-          </PageHeaderTitle>
-          <PageHeaderDescription>{t("uiTheme.settings.description")}</PageHeaderDescription>
-        </PageHeader>
-        <Card className="w-full max-w-4xl">
-          <CardContent className="space-y-6">
-            <div>
-              <Label htmlFor="ui-theme-logo-url" className="mb-2">
-                {t("uiTheme.settings.logoUrl.label")}
-              </Label>
-              <Input
-                id="ui-theme-logo-url"
-                placeholder="https://example.com/logo.png"
-                value={logoUrlInput}
-                onChange={(event) => {
-                  setLogoUrlInput(event.target.value);
-                  setLogoUrl(event.target.value || null);
-                }}
-              />
-              <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.logoUrl.hint")}</p>
-            </div>
-            <div>
-              <Label htmlFor="ui-theme-logo-url-dark" className="mb-2">
-                {t("uiTheme.settings.logoUrlDark.label")}
-              </Label>
-              <Input
-                id="ui-theme-logo-url-dark"
-                placeholder="https://example.com/logo-dark.png"
-                value={logoUrlDarkInput}
-                onChange={(event) => {
-                  setLogoUrlDarkInput(event.target.value);
-                  setLogoUrlDark(event.target.value || null);
-                }}
-              />
-              <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.logoUrlDark.hint")}</p>
-            </div>
-            <div>
-              <Label htmlFor="ui-theme-favicon-url" className="mb-2">
-                {t("uiTheme.settings.faviconUrl.label")}
-              </Label>
-              <Input
-                id="ui-theme-favicon-url"
-                placeholder="https://example.com/favicon.ico"
-                value={faviconUrlInput}
-                onChange={(event) => {
-                  setFaviconUrlInput(event.target.value);
-                  setFaviconUrl(event.target.value || null);
-                }}
-              />
-              <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.faviconUrl.hint")}</p>
-            </div>
-            <div className="flex gap-3 pt-4">
-              <Button onClick={handleSave} disabled={loading}>
-                {loading && <UiLoadingSpinner className="size-4" />}
-                {t("uiTheme.settings.saveButton")}
-              </Button>
-              <Button variant="outline" onClick={handleReset} disabled={loading}>
-                {loading && <UiLoadingSpinner className="size-4" />}
-                {t("uiTheme.settings.resetButton")}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </PageContent>
-    </Page>
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Palette />
+          {t("uiTheme.settings.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("uiTheme.settings.description")}</PageHeaderDescription>
+      </PageHeader>
+      <Card className="w-full max-w-4xl">
+        <CardContent className="space-y-6">
+          <div>
+            <Label htmlFor="ui-theme-logo-url" className="mb-2">
+              {t("uiTheme.settings.logoUrl.label")}
+            </Label>
+            <Input
+              id="ui-theme-logo-url"
+              placeholder="https://example.com/logo.png"
+              value={logoUrl.value}
+              onChange={(event) => {
+                logoUrl.onChange(event);
+                setLogoUrl(event.target.value || null);
+              }}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.logoUrl.hint")}</p>
+          </div>
+          <div>
+            <Label htmlFor="ui-theme-logo-url-dark" className="mb-2">
+              {t("uiTheme.settings.logoUrlDark.label")}
+            </Label>
+            <Input
+              id="ui-theme-logo-url-dark"
+              placeholder="https://example.com/logo-dark.png"
+              value={logoUrlDark.value}
+              onChange={(event) => {
+                logoUrlDark.onChange(event);
+                setLogoUrlDark(event.target.value || null);
+              }}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.logoUrlDark.hint")}</p>
+          </div>
+          <div>
+            <Label htmlFor="ui-theme-favicon-url" className="mb-2">
+              {t("uiTheme.settings.faviconUrl.label")}
+            </Label>
+            <Input
+              id="ui-theme-favicon-url"
+              placeholder="https://example.com/favicon.ico"
+              value={faviconUrl.value}
+              onChange={(event) => {
+                faviconUrl.onChange(event);
+                setFaviconUrl(event.target.value || null);
+              }}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">{t("uiTheme.settings.faviconUrl.hint")}</p>
+          </div>
+          <div className="flex gap-3 pt-4">
+            <Button onClick={handleSave} disabled={loading}>
+              {loading && <UiLoadingSpinner className="size-4" />}
+              {t("uiTheme.settings.saveButton")}
+            </Button>
+            <Button variant="outline" onClick={handleReset} disabled={loading}>
+              {loading && <UiLoadingSpinner className="size-4" />}
+              {t("uiTheme.settings.resetButton")}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </PageContent>
   );
 };
 

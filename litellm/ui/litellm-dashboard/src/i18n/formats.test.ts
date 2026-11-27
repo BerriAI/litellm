@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { cachedFormat } from "./formats";
+import { cachedFormat, localTimestampParts, formatDateWithEnglishPattern } from "./formats";
 import i18n from "./i18n";
 import en from "./locales/en.json";
 
@@ -105,6 +105,18 @@ describe("format keys in English", () => {
 });
 
 describe("format keys in another UI language", () => {
+  it("uses Chinese date order and 24-hour time without changing the English clock", async () => {
+    const local = new Date(2026, 11, 12, 13, 45, 23);
+    const options = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" } as const;
+    expect(localTimestampParts(local, "en")).toEqual({ date: "Dec 12, 2026", time: "1:45 PM" });
+    expect(localTimestampParts(local, "zh-CN")).toEqual({ date: "2026年12月12日", time: "13:45" });
+    expect(formatDateWithEnglishPattern(local, "en", "Dec 12, 1:45 PM", options)).toBe("Dec 12, 1:45 PM");
+    expect(formatDateWithEnglishPattern(local, "zh-CN", "Dec 12, 1:45 PM", options)).toBe("12月12日 13:45");
+    await useLanguage("zh-CN");
+    expect(i18n.t("format.monthDayTime", { val: local })).toBe("12月12日 13:45:23");
+    expect(i18n.t("format.timestamp", { val: local })).toBe("2026年12月12日 13:45:23");
+  });
+
   it("follows the selected UI language even when its bundle has no format keys", async () => {
     const english = i18n.t("format.number", { val: 9123456.5 });
     await useLanguage("de");

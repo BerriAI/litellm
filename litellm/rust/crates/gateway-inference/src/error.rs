@@ -1,20 +1,26 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::{
-    Extension, Json,
-    response::{IntoResponse, Response},
+    Json,
+    response::{AppendHeaders, IntoResponse, Response},
 };
+use litellm_gateway_auth_core::AuthzDenial;
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use litellm_llms_types::formats::messages::MessagesErrorType;
 use litellm_python_compat::{Value as PyValue, repr::repr};
+use litellm_router_core::FailureKind;
 use serde_json::{Map, Value, json};
 
-use crate::headers::Routing;
+use crate::{
+    headers::Routing,
+    hooks::{HookError, Refusal},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
-    Auth(#[from] litellm_gateway_auth::Error),
+    /// The auth core found a model list of the caller's that does not reach the model.
+    #[error("operation is not permitted")]
+    ModelAccess(#[from] AuthzDenial),
     #[error("invalid request body")]
     InvalidBody(#[from] BodyError),
     #[error(
@@ -29,8 +35,18 @@ pub enum Error {
     NoDeployments(#[from] NoDeployments),
     #[error(transparent)]
     Routing(litellm_router_core::Error),
+    #[error("{}", .0.message)]
+    Refused(Refusal),
+    #[error(transparent)]
+    Callback(litellm_error::Source),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
+    /// The request body check refused the body, as Python's authentication refuses it.
+    #[error("Authentication Error, {0}")]
+    BodyRejected(litellm_gateway_auth_core::body::Rejection),
+    /// The host could not read a stored credential the body names, so the body is not checked.
+    #[error("could not read the stored credentials the request body names")]
+    Credentials(#[source] litellm_gateway_auth_core::Error),
     #[error("unexpected HTTP host operation")]
     Internal,
 }
@@ -108,13 +124,10 @@ impl IntoResponse for Error {
 pub struct Ended {
     pub error: Box<Error>,
     pub routing: Option<Routing>,
-}
-
-impl Ended {
-    /// What the routing headers layer reads off the response.
-    pub(crate) fn routing(&self) -> Option<Extension<Routing>> {
-        self.routing.clone().map(Extension)
-    }
+    /// The deployment whose attempt raised `error`, which names its timeout as Python's
+    /// `failure.timeout` does. It differs from `routing` when a retry that took over a failed
+    /// stream raised the error, since the call keeps the routing of the stream that failed.
+    pub raised_on: Option<String>,
 }
 
 impl<E: Into<Error>> From<E> for Ended {
@@ -122,13 +135,38 @@ impl<E: Into<Error>> From<E> for Ended {
         Self {
             error: Box::new(error.into()),
             routing: None,
+            raised_on: None,
         }
     }
 }
 
-impl IntoResponse for Ended {
-    fn into_response(self) -> Response {
-        (self.routing(), *self.error).into_response()
+/// The envelope a route answers an error in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ErrorFormat {
+    Anthropic,
+    OpenAi,
+}
+
+impl Ended {
+    pub(crate) fn response(self, format: ErrorFormat, request_id: Option<&str>) -> Response {
+        match format {
+            ErrorFormat::OpenAi => (*self.error).into_response(),
+            ErrorFormat::Anthropic => (
+                self.error.status(),
+                AppendHeaders(self.error.retry_after()),
+                Json(self.error.body(request_id)),
+            )
+                .into_response(),
+        }
+    }
+}
+
+impl From<HookError> for Error {
+    fn from(ended: HookError) -> Self {
+        match ended {
+            HookError::Refused(refusal) => Self::Refused(refusal),
+            HookError::Failed(failure) => Self::Callback(failure),
+        }
     }
 }
 
@@ -144,28 +182,90 @@ impl From<litellm_host_http::Error<InferenceError>> for Error {
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::Auth(error) => error.status(),
+            Self::ModelAccess(_) => StatusCode::FORBIDDEN,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
-            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::BodyRejected(_) => StatusCode::UNAUTHORIZED,
+            Self::Internal | Self::Callback(_) | Self::Credentials(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
             Self::Routing(error) => routing_status(error),
+            Self::Refused(refusal) => refusal.status,
+        }
+    }
+
+    /// Whether the proxy raises this error inside the route's handler, where its response carries
+    /// the proxy's error headers. A model the caller may not reach and a body that cannot be read
+    /// are refused before the handler runs.
+    pub(crate) fn in_handler(&self) -> bool {
+        !matches!(
+            self,
+            Self::ModelAccess(_) | Self::InvalidBody(_) | Self::BodyTooLarge
+        )
+    }
+
+    pub(crate) fn raised_by_provider(&self) -> bool {
+        matches!(self, Self::Route(_) | Self::Ocr(_))
+    }
+
+    /// The provider's response headers on the error, empty for an error no provider responded.
+    pub(crate) fn provider_headers(&self) -> Vec<(String, String)> {
+        match self {
+            Self::Route(error) => error.upstream_headers().to_vec(),
+            Self::Ocr(error) => error
+                .upstream_response()
+                .into_iter()
+                .flat_map(|(_, _, headers)| headers.iter())
+                .filter_map(|(name, value)| {
+                    Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+                })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
     pub fn openai_response(self) -> Response {
-        (self.status(), Json(self.openai_body())).into_response()
+        let body = Json(self.openai_body());
+        match self {
+            Self::Refused(refusal) => (
+                refusal.status,
+                AppendHeaders(crate::rate_limited::header_pairs(refusal.headers)),
+                body,
+            )
+                .into_response(),
+            other => (other.status(), AppendHeaders(other.retry_after()), body).into_response(),
+        }
     }
 
+    /// `retry-after` in whole seconds on a refusal the router made itself, as it refuses a
+    /// deployment past its declared rate limits.
+    pub(crate) fn retry_after(&self) -> Option<(HeaderName, HeaderValue)> {
+        let Self::Routing(error) = self else {
+            return None;
+        };
+        let after = error.refused()?.resets_in;
+        let seconds = after.as_secs() + u64::from(after.subsec_nanos() > 0);
+        Some((RETRY_AFTER, HeaderValue::from(seconds)))
+    }
+
+    /// A refusal names its own `type` and `code` when the proxy's exception does.
     fn openai_body(&self) -> Value {
         let status = self.status();
+        let (kind, code) = match self {
+            Self::Refused(refusal) => (refusal.kind.clone(), refusal.code.clone()),
+            _ => (None, None),
+        };
         json!({"error": {
             "message": self.message(),
-            "type": MessagesErrorType::for_status(status.as_u16()),
+            "type": kind.map_or_else(
+                || json!(MessagesErrorType::for_status(status.as_u16())),
+                Value::from,
+            ),
             "param": null,
-            "code": status.as_u16(),
+            "code": code.map_or_else(|| json!(status.as_u16()), Value::from),
         }})
     }
 
@@ -196,17 +296,29 @@ impl Error {
 
     fn message(&self) -> String {
         match self {
-            Self::Auth(error) => error.to_string(),
+            Self::Refused(refusal) => refusal.message.clone(),
+            Self::ModelAccess(_) | Self::BodyRejected(_) => self.to_string(),
+            Self::Routing(error) if let Some(refused) = rate_limit_refusal(error) => refused,
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
             | Self::Route(_)
             | Self::Ocr(_)
             | Self::NoDeployments(_)
             | Self::Routing(_)
+            | Self::Callback(_)
             | Self::BodyTooLarge
+            | Self::Credentials(_)
             | Self::Internal => litellm_error::Report::new(self).to_string(),
         }
     }
+}
+
+/// The message Python's proxy answers a pre-call check's `RateLimitError` with.
+fn rate_limit_refusal(error: &litellm_router_core::Error) -> Option<String> {
+    error.refused()?;
+    let failure = error.attempt()?;
+    let detail = failure.detail.as_deref()?;
+    (failure.kind == FailureKind::RateLimit).then(|| format!("litellm.{}: {detail}", failure.kind))
 }
 
 fn route_status(error: &InferenceError) -> StatusCode {
@@ -215,6 +327,9 @@ fn route_status(error: &InferenceError) -> StatusCode {
     }
     if let Some((status, _)) = error.upstream_response() {
         return StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    }
+    if error.timeout().is_some() {
+        return StatusCode::REQUEST_TIMEOUT;
     }
     if error.is_missing_credential() {
         return StatusCode::UNAUTHORIZED;
@@ -490,22 +605,5 @@ mod tests {
         assert_eq!(message.matches(&cause).count(), 1, "{message}");
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["code"], 400);
-    }
-
-    fn auth_outage() -> Error {
-        Error::Auth(litellm_gateway_auth::Error::Unavailable(
-            litellm_error::Source::new(std::io::Error::other("private-backend-detail")),
-        ))
-    }
-
-    #[rstest]
-    #[case::openai(auth_outage().openai_body()["error"]["message"].clone())]
-    #[case::anthropic(auth_outage().body(None)["error"]["message"].clone())]
-    #[case::anthropic_sse(Value::from(auth_outage().sse_frame()))]
-    fn an_auth_failure_hides_its_backend_cause(#[case] rendered: Value) {
-        let top = auth_outage().to_string();
-        let rendered = rendered.to_string();
-        assert!(rendered.contains(&top), "{rendered}");
-        assert!(!rendered.contains("private-backend-detail"), "{rendered}");
     }
 }

@@ -10,7 +10,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { cn } from "@/lib/cva.config";
 import { makeMCPPublicCall } from "../../networking";
 import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
+import { toMcpPublicationRequest } from "./makeMcpPublicMapper";
+import { makeMcpPublicSchema } from "./makeMcpPublicSchema";
 
 const STEP_TITLES: ParseKeys[] = ["aiHub.makeMcpPublic.steps.selectServers", "aiHub.makeMcpPublic.steps.confirm"];
 
@@ -32,11 +35,6 @@ interface MakeMCPPublicFormProps {
   onSuccess: () => void;
 }
 
-interface PublicationSelection {
-  readonly catalog: MCPServerData[];
-  readonly serverIds: Set<string>;
-}
-
 const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   visible,
   onClose,
@@ -46,11 +44,12 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 }) => {
   const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0);
-  const [selection, setSelection] = useState<PublicationSelection | null>(null);
+  const [selectionCatalog, setSelectionCatalog] = useState<MCPServerData[] | null>(null);
+  const { getValues, setValue, watch } = useZodForm(makeMcpPublicSchema, { defaultValues: { serverIds: [] } });
   const [loading, setLoading] = useState(false);
-  const selectedServers = selection?.serverIds ?? new Set<string>();
+  const selectedServers = new Set(watch("serverIds"));
   const hasPublicationMetadata = mcpHubData.every((server) => typeof server.mcp_info?.is_public_explicit === "boolean");
-  const canManagePublication = hasPublicationMetadata && selection?.catalog === mcpHubData;
+  const canManagePublication = hasPublicationMetadata && selectionCatalog === mcpHubData;
   const publicationYaml = [
     "litellm_settings:",
     "  public_mcp_hub_strict_whitelist: true",
@@ -61,12 +60,13 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 
   const handleClose = () => {
     setCurrentStep(0);
-    setSelection(null);
+    setSelectionCatalog(null);
+    setValue("serverIds", []);
     onClose();
   };
 
   const handleNext = () => {
-    if (!canManagePublication) return;
+    if (!canManagePublication || !makeMcpPublicSchema.safeParse(getValues()).success) return;
     if (currentStep === 0) {
       setCurrentStep(1);
     }
@@ -85,35 +85,39 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
     } else {
       newSelection.delete(serverId);
     }
-    setSelection({ catalog: mcpHubData, serverIds: newSelection });
+    setValue("serverIds", Array.from(newSelection));
   };
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       const allServerIds = mcpHubData.map((server) => server.server_id);
-      setSelection({ catalog: mcpHubData, serverIds: new Set(allServerIds) });
+      setValue("serverIds", Array.from(new Set(allServerIds)));
     } else {
-      setSelection({ catalog: mcpHubData, serverIds: new Set() });
+      setValue("serverIds", []);
     }
   };
 
   useEffect(() => {
     if (!visible || !hasPublicationMetadata) {
-      setSelection(null);
+      setSelectionCatalog(null);
+      setValue("serverIds", []);
       return;
     }
     const publicServerIds = mcpHubData
       .filter((server) => server.mcp_info.is_public_explicit === true)
       .map((server) => server.server_id);
-    setSelection({ catalog: mcpHubData, serverIds: new Set(publicServerIds) });
+    setSelectionCatalog(mcpHubData);
+    setValue("serverIds", Array.from(new Set(publicServerIds)));
     setCurrentStep(0);
-  }, [visible, mcpHubData, hasPublicationMetadata]);
+  }, [visible, mcpHubData, hasPublicationMetadata, setValue]);
 
   const handleSubmit = async () => {
     if (!canManagePublication) return;
+    const result = makeMcpPublicSchema.safeParse(getValues());
+    if (!result.success) return;
     setLoading(true);
     try {
-      const serverIdsToMakePublic = Array.from(selectedServers);
+      const { mcp_server_ids: serverIdsToMakePublic } = toMcpPublicationRequest(result.data);
 
       // Make batch API call for all servers
       await makeMCPPublicCall(accessToken, serverIdsToMakePublic);

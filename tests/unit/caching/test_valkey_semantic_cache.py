@@ -237,6 +237,27 @@ def test_get_cache_misses_below_threshold():
     assert metadata["semantic-similarity"] == pytest.approx(0.5)
 
 
+def test_valkey_semantic_lookup_rejects_score_below_request_cutoff():
+    from litellm.constants import SEMANTIC_CACHE_POLICY_KEY
+    from litellm.types.semantic_cache import SemanticCacheParams, SemanticCachePolicy
+
+    client = MagicMock()
+    client.ft.return_value.search.return_value = _search_result(0.1)
+    cache = _make_cache(sync_client=client, similarity_threshold=0.8)
+    cache._get_embedding = MagicMock(return_value=[1.0, 0.0])
+    result = cache.get_cache(
+        "cache-key",
+        messages=[{"role": "user", "content": "Similar request"}],
+        cache={
+            SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(
+                scope="key", params=SemanticCacheParams(similarity_threshold=0.95)
+            )
+        },
+    )
+
+    assert result is None
+
+
 def test_get_cache_misses_when_no_docs():
     sync_client = MagicMock()
     sync_client.ft.return_value.search.return_value = SimpleNamespace(docs=[])

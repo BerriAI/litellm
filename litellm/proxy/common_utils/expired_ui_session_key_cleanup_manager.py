@@ -6,7 +6,7 @@ Deletes expired virtual keys created for LiteLLM dashboard sessions.
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -27,6 +27,9 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 
+if TYPE_CHECKING:
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
 
 class _ExpiredSessionKeyRow(Protocol):
     @property
@@ -42,8 +45,8 @@ class ExpiredUISessionKeyCleanupManager:
         self,
         prisma_client: PrismaClient,
         user_api_key_cache: UserApiKeyCache,
-        pod_lock_manager=None,
-    ):
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> None:
         self.prisma_client = prisma_client
         self.user_api_key_cache = user_api_key_cache
         self.pod_lock_manager = pod_lock_manager

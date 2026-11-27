@@ -4,8 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NuqsAdapter } from "nuqs/adapters/react";
-import { renderWithProviders as render } from "@/../tests/test-utils";
-import MCPServers, { compareServers, type SortKey } from "./mcp_servers";
+import { chooseSelectOption, fireEvent, renderWithProviders as render } from "@/../tests/test-utils";
+import MCPServers, { compareServers } from "./mcp_servers";
+import type { McpServerSortKey } from "./useMcpServersUrlState";
 import type { MCPServer } from "@/components/mcp_tools/types";
 import * as networking from "@/components/networking";
 
@@ -31,9 +32,13 @@ vi.mock("@/components/networking", () => ({
   storeMCPUserEnvVars: vi.fn(),
   clearMCPUserEnvVars: vi.fn(),
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
+  listMCPTools: vi.fn().mockResolvedValue({ tools: [] }),
+  callMCPTool: vi.fn(),
+  getMCPOAuthUserCredentialStatus: vi.fn().mockResolvedValue(null),
   fetchMCPGatewaySessions: vi.fn(),
   terminateMCPGatewaySessions: vi.fn(),
   getUiConfig: vi.fn().mockResolvedValue({}),
+  getMCPSemanticFilterSettings: vi.fn().mockResolvedValue({}),
 }));
 
 const stubUiConfig = (config: object) =>
@@ -80,7 +85,7 @@ describe("compareServers", () => {
     ]);
   });
 
-  it.each<SortKey>(["created_desc", "updated_desc", "name_asc", "health"])(
+  it.each<McpServerSortKey>(["created_desc", "updated_desc", "name_asc", "health"])(
     "breaks equal timestamps and names by ID for %s regardless of input order",
     (sort) => {
       const servers = [
@@ -109,7 +114,7 @@ describe("compareServers", () => {
     }
   });
 
-  it.each<SortKey>(["created_desc", "updated_desc", "health"])(
+  it.each<McpServerSortKey>(["created_desc", "updated_desc", "health"])(
     "keeps timestamped servers before missing timestamps for %s",
     (sort) => {
       const servers = [
@@ -349,10 +354,9 @@ describe("MCPServers", () => {
     );
     await screen.findByTestId("mcp-servers-grid");
     const search = screen.getByPlaceholderText("Search by name, alias, URL, or ID");
-    await userEvent.type(search, "  NEEDLE  ");
+    fireEvent.change(search, { target: { value: "  NEEDLE  " } });
     expect(screen.getByTestId("mcp-servers-grid")).toBeVisible();
-    await userEvent.clear(search);
-    await userEvent.type(search, "no-match");
+    fireEvent.change(search, { target: { value: "no-match" } });
     expect(screen.queryByTestId("mcp-servers-grid")).not.toBeInTheDocument();
     expect(screen.getByText("No servers match the current filters or search.")).toBeVisible();
   });
@@ -681,13 +685,7 @@ describe("MCPServers", () => {
     expect(screen.getByText("Team B Server")).toBeInTheDocument();
     expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
 
-    const teamSelect = screen.getByRole("combobox", { name: "Team" });
-
-    await userEvent.click(teamSelect);
-
-    // Pick the "Team A" option once the listbox opens
-    const teamAOption = await screen.findByText("Team A");
-    await userEvent.click(teamAOption);
+    await chooseSelectOption(userEvent, screen.getByRole("combobox", { name: "Team" }), "Team A");
 
     // Wait for filtering to complete
     await waitFor(() => {

@@ -200,6 +200,20 @@ impl Deployment {
         }
     }
 
+    /// The deployment's own `cooldown_time`: `model_info` first, then `litellm_params`
+    /// (`_first_present(model_info, litellm_params, key="cooldown_time")`).
+    pub fn cooldown_time(&self) -> Option<f64> {
+        self.model_info
+            .cooldown_time
+            .or_else(|| self.params_cooldown_time())
+    }
+
+    /// `litellm_params.cooldown_time` when it is a number. `_first_present` skips a bool or a
+    /// string, as `Value::as_f64` reads none.
+    pub(crate) fn params_cooldown_time(&self) -> Option<f64> {
+        self.raw_params.get("cooldown_time").and_then(Value::as_f64)
+    }
+
     /// The deployment's own `litellm_params.num_retries`, written as a count or as its digits.
     /// A call to the deployment carries it, so it is the retry budget of a level whose first
     /// attempt failed here, and of a stream this deployment served.
@@ -242,16 +256,38 @@ impl Deployment {
         self.model_info.raw.get("mode").and_then(Value::as_str) == Some("batch")
     }
 
-    /// `_cannot_run_batches`: an Azure (or Azure AI) deployment not declared batch-capable, by
-    /// its `custom_llm_provider`, else its model's provider prefix.
-    pub(crate) fn cannot_run_batches(&self) -> bool {
+    fn is_azure(&self) -> bool {
         let provider = self.params.custom_llm_provider.as_deref().or_else(|| {
             self.params
                 .model
                 .split_once('/')
                 .map(|(provider, _)| provider)
         });
-        matches!(provider, Some("azure" | "azure_ai")) && !self.is_batch_capable()
+        matches!(provider, Some("azure" | "azure_ai"))
+    }
+
+    /// `_cannot_run_batches`: an Azure (or Azure AI) deployment not declared batch-capable, by
+    /// its `custom_llm_provider`, else its model's provider prefix.
+    pub(crate) fn cannot_run_batches(&self) -> bool {
+        self.is_azure() && !self.is_batch_capable()
+    }
+
+    pub(crate) fn serves_only_batches(&self) -> bool {
+        self.is_azure() && self.is_batch_capable()
+    }
+
+    /// Whether `peer` could take this deployment's place: on a batch or file call (`batch_call`)
+    /// any peer can, while on every other call a deployment serving only batches stands in only
+    /// for another deployment serving only batches.
+    pub(crate) fn shares_calls_with(&self, peer: &Deployment, batch_call: bool) -> bool {
+        batch_call || self.serves_only_batches() || !peer.serves_only_batches()
+    }
+
+    pub(crate) fn peers_in(&self, group: &[Arc<Deployment>], batch_call: bool) -> usize {
+        group
+            .iter()
+            .filter(|peer| self.shares_calls_with(peer, batch_call))
+            .count()
     }
 
     pub(crate) fn supports_web_search(&self) -> bool {
@@ -1015,7 +1051,7 @@ impl Registry {
     }
 
     /// The group `model_group_alias` rewrites `name` to.
-    pub(crate) fn alias_of(&self, name: &str) -> Option<&str> {
+    pub fn alias_of(&self, name: &str) -> Option<&str> {
         self.aliases.get(name).map(String::as_str)
     }
 
@@ -1292,6 +1328,23 @@ mod tests {
         let deployment = Deployment::from_spec(spec("primary", params, json!({}))).unwrap();
 
         assert_eq!(deployment.num_retries(), expected);
+    }
+
+    #[rstest]
+    #[case::model_info_first(json!(5), json!({"cooldown_time": 9}), Some(9.0))]
+    #[case::then_litellm_params(json!(0.5), json!({}), Some(0.5))]
+    #[case::a_string_is_skipped(json!("5"), json!({}), None)]
+    #[case::a_bool_is_skipped(json!(true), json!({}), None)]
+    #[case::a_skipped_model_info_falls_through(json!(5), json!({"cooldown_time": "9"}), Some(5.0))]
+    fn a_deployments_own_cooldown_time_is_the_first_number_set(
+        #[case] params_cooldown: Value,
+        #[case] info: Value,
+        #[case] expected: Option<f64>,
+    ) {
+        let params = json!({"model": "a/b", "cooldown_time": params_cooldown});
+        let deployment = Deployment::from_spec(spec("primary", params, info)).unwrap();
+
+        assert_eq!(deployment.cooldown_time(), expected);
     }
 
     #[rstest]

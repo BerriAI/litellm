@@ -290,6 +290,10 @@ impl Error {
         self.is_request().then_some(400)
     }
 
+    pub fn is_unreachable_document(&self) -> bool {
+        matches!(self, Self::DocumentDownload(error) if error.is_unreachable_media())
+    }
+
     pub fn is_request(&self) -> bool {
         match self {
             Self::EmptyFile
@@ -313,7 +317,8 @@ impl Error {
             | Self::Params(_)
             | Self::Headers(_) => true,
             Self::Auth(error) => error.is_request(),
-            Self::Http(error) | Self::DocumentDownload(error) => error.is_request(),
+            Self::Http(error) => error.is_request(),
+            Self::DocumentDownload(error) => error.is_request() || error.is_unreachable_media(),
             Self::Provider { .. }
             | Self::FileRead { .. }
             | Self::DocumentTask(_)
@@ -344,7 +349,7 @@ impl Error {
             | Self::InvalidPollUrl { .. }
             | Self::PollOrigin
             | Self::PollTimeout => true,
-            Self::Http(error) | Self::DocumentDownload(error) => error.is_response(),
+            Self::Http(error) => error.is_response(),
             Self::Provider { .. }
             | Self::EmptyFile
             | Self::FileRead { .. }
@@ -372,7 +377,8 @@ impl Error {
             | Self::HostCall
             | Self::Auth(_)
             | Self::Params(_)
-            | Self::Headers(_) => false,
+            | Self::Headers(_)
+            | Self::DocumentDownload(_) => false,
         }
     }
 }

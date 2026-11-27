@@ -9,7 +9,7 @@ Provides:
 import base64
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 from urllib.parse import urlsplit
@@ -104,6 +104,18 @@ def _as_string_keyed_mapping(value: object) -> Mapping[str, object] | None:
     return None
 
 
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _as_list(value: object) -> Sequence[object] | None:
+    if isinstance(value, list):
+        return value
+    return None
+
+
 def _response_attr(source: object, name: str) -> object:
     return getattr(source, name, None)
 
@@ -125,16 +137,18 @@ def _append_payload_to_scan_stack(
     value: object,
     next_depth: int,
 ) -> None:
+    entry: Final[tuple[object, int]] = (value, next_depth)
+    items: Final = _as_list(value)
     if isinstance(value, dict):
         if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
             _raise_vector_store_scan_depth_exceeded()
-        payload_stack.append((value, next_depth))
-    elif isinstance(value, list):
+        payload_stack.append(entry)
+    elif items is not None:
         if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
-            if any(isinstance(item, (dict, list)) for item in value):
+            if any(isinstance(item, (dict, list)) for item in items):
                 _raise_vector_store_scan_depth_exceeded()
             return
-        payload_stack.append((value, next_depth))
+        payload_stack.append(entry)
 
 
 def _collect_vector_store_ids_from_payload(payload: object) -> set[str]:
@@ -146,8 +160,10 @@ def _collect_vector_store_ids_from_payload(payload: object) -> set[str]:
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
             _raise_vector_store_scan_depth_exceeded()
 
-        if isinstance(current_payload, dict):
-            for key, value in current_payload.items():
+        current_fields = _as_dict(current_payload)
+        current_items = _as_list(current_payload)
+        if current_fields is not None:
+            for key, value in current_fields.items():
                 if key == "vector_store_id":
                     if not isinstance(value, str) or not value:
                         raise HTTPException(
@@ -162,8 +178,8 @@ def _collect_vector_store_ids_from_payload(payload: object) -> set[str]:
                         value=value,
                         next_depth=depth + 1,
                     )
-        elif isinstance(current_payload, list):
-            for item in current_payload:
+        elif current_items is not None:
+            for item in current_items:
                 _append_payload_to_scan_stack(
                     payload_stack=payload_stack,
                     value=item,

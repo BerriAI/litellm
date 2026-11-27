@@ -1,10 +1,12 @@
 import asyncio
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -29,9 +31,9 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_object_from_cache,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_cache
+from litellm.proxy.management_helpers.access_group_team_sync import AccessGroupSyncTx, invalidate_access_group_cache
 from litellm.proxy.management_helpers.resource_display_names import (
     agent_display_names,
     key_display_names,
@@ -39,7 +41,7 @@ from litellm.proxy.management_helpers.resource_display_names import (
     vector_store_display_names,
 )
 from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
-from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
+from litellm.proxy.utils import PrismaClient, ProxyLogging, get_prisma_client_or_throw
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.table_repositories import TeamRepository
@@ -49,6 +51,7 @@ from litellm.types.access_group import (
     AccessGroupResponse,
     AccessGroupUpdateRequest,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma import Json
@@ -160,7 +163,7 @@ class _AgentAccessGroupsData(TypedDict):
     access_group_ids: ReadOnly[Sequence[str]]
 
 
-class _AccessGroupTx(Protocol):
+class _AccessGroupTx(AccessGroupSyncTx, Protocol):
     @property
     def litellm_accessgrouptable(self) -> _AccessGroupTable: ...
 
@@ -188,6 +191,79 @@ class _AccessGroupTransaction(Protocol):
 
 def _access_group_transaction(prisma_client: PrismaClient) -> _AccessGroupTransaction:
     return prisma_client.db.tx()
+
+
+class _PinnedAssignments(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+    assigned_team_ids: tuple[str, ...] | None
+    assigned_key_ids: tuple[str, ...] | None
+
+
+class _TeamMembership(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+    team_id: str
+    attached: bool
+
+
+_TeamMemberships: Final = TypeAdapter(tuple[_TeamMembership, ...])
+
+
+_CHANGED_TEAMS: Final = """
+WITH attached AS (
+    SELECT unnest(assigned_team_ids) AS team_id FROM "LiteLLM_AccessGroupTable" WHERE access_group_id = $2
+    UNION
+    SELECT team_id FROM "LiteLLM_TeamTable" WHERE access_group_ids @> ARRAY[$2]::text[]
+)
+SELECT t.team_id FROM "LiteLLM_TeamTable" t
+WHERE EXISTS (SELECT 1 FROM "LiteLLM_AccessGroupTable" WHERE access_group_id = $2)
+  AND (t.team_id = ANY($1::text[])) <> (t.team_id IN (SELECT team_id FROM attached WHERE team_id IS NOT NULL))
+ORDER BY t.team_id COLLATE "C" FOR UPDATE OF t
+"""
+
+
+async def _pin_assignment(
+    tx: _AccessGroupTx, group_id: str, requested: Sequence[str] | None, new_name: str | None
+) -> tuple[_PinnedAssignments, frozenset[str]] | None:
+    if requested:
+        await _require_teams_exist(tx, requested, group_id=group_id)
+    if requested is not None and new_name is not None:
+        conflict: Final = await tx.query_raw(
+            'SELECT 1 FROM "LiteLLM_AccessGroupTable" target '
+            'JOIN "LiteLLM_AccessGroupTable" owner ON owner.access_group_id <> target.access_group_id '
+            "WHERE target.access_group_id = $1 AND owner.access_group_name = $2",
+            group_id,
+            new_name,
+        )
+        if conflict:
+            raise HTTPException(status_code=409, detail=f"Access group '{new_name}' already exists")
+    rows: Final = await tx.query_raw(_CHANGED_TEAMS, requested, group_id) if requested is not None else ()
+    pinned: Final = await tx.query_raw(
+        "SELECT array_remove(assigned_team_ids, NULL) AS assigned_team_ids, "
+        'array_remove(assigned_key_ids, NULL) AS assigned_key_ids FROM "LiteLLM_AccessGroupTable" '
+        "WHERE access_group_id = $1 FOR UPDATE",
+        group_id,
+    )
+    if not pinned:
+        raise HTTPException(status_code=404, detail=f"Access group '{group_id}' not found")
+    existing: Final = _PinnedAssignments.model_validate(pinned[0])
+    if requested is None:
+        return existing, frozenset()
+    attached: Final = await _checked_team_membership(tx, group_id, existing.assigned_team_ids or (), requested)
+    locked: Final = frozenset(row["team_id"] for row in rows)
+    return (existing, attached) if (attached ^ frozenset(requested)).issubset(locked) else None
+
+
+@asynccontextmanager
+async def _locked_assignment(
+    client: PrismaClient, group_id: str, requested: Sequence[str] | None, *, new_name: str | None = None
+) -> AsyncGenerator[tuple[_AccessGroupTx, _PinnedAssignments, frozenset[str]], None]:
+    """Lock changed teams before the group. Retry if the pinned group requires another team lock."""
+    for _ in range(3):
+        async with _access_group_transaction(client) as tx:
+            if (assignment := await _pin_assignment(tx, group_id, requested, new_name)) is not None:
+                yield tx, *assignment
+                return
+    raise HTTPException(status_code=409, detail="Team assignments changed concurrently. Retry the request.")
 
 
 def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -319,25 +395,42 @@ async def _teams_touching(team_table: _TeamTable, records: Sequence[_AccessGroup
     return await team_table.find_many(where={"OR": (carrying, listed)})
 
 
-async def _attached_team_ids_for(
-    team_table: _TeamTable, records: Sequence[_AccessGroupRecord]
-) -> Mapping[str, tuple[str, ...]]:
-    if not records:
-        return MappingProxyType({})
-    return _attached_team_ids_by_group(records, await _teams_touching(team_table, records))
+async def _checked_team_membership(
+    tx: _AccessGroupTx, group_id: str, stored: Sequence[str], requested: Sequence[str]
+) -> frozenset[str]:
+    rows: Final = _TeamMemberships.validate_python(
+        await tx.query_raw(
+            "SELECT team_id, (team_id = ANY($2::text[]) OR access_group_ids @> ARRAY[$1]::text[]) IS TRUE AS attached "
+            'FROM "LiteLLM_TeamTable" WHERE team_id = ANY($3::text[]) OR access_group_ids @> ARRAY[$1]::text[]',
+            group_id,
+            stored,
+            (*stored, *requested),
+        )
+    )
+    _reject_missing_teams(frozenset(requested).difference(row.team_id for row in rows))
+    return frozenset(row.team_id for row in rows if row.attached)
 
 
-async def _require_teams_exist(tx: _AccessGroupTx, team_ids: Sequence[str]) -> None:
+def _reject_missing_teams(missing: frozenset[str]) -> None:
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Unknown team ids: {', '.join(sorted(missing))}")
+
+
+async def _require_teams_exist(
+    tx: _AccessGroupTx, team_ids: Sequence[str], *, lock: bool = False, group_id: str | None = None
+) -> None:
     if not team_ids:
         return
-    where: Final = {"team_id": {"in": team_ids}}
-    found: Final = await tx.litellm_teamtable.find_many(where=where)
-    missing: Final = frozenset(team_ids) - frozenset(team.team_id for team in found)
-    if missing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown team ids: {', '.join(sorted(missing))}",
-        )
+    query: Final = 'SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = ANY($1::text[])'
+    rows: Final = await tx.query_raw(query + (' ORDER BY team_id COLLATE "C" FOR UPDATE' if lock else ""), team_ids)
+    missing: Final = frozenset(team_ids).difference(row["team_id"] for row in rows)
+    if (
+        missing
+        and group_id is not None
+        and not await tx.litellm_accessgrouptable.find_unique(where={"access_group_id": group_id})
+    ):
+        raise HTTPException(status_code=404, detail=f"Access group '{group_id}' not found")
+    _reject_missing_teams(missing)
 
 
 def _record_to_access_group_table(record: _AccessGroupRecord) -> LiteLLM_AccessGroupTable:
@@ -453,8 +546,8 @@ def _detach_access_group_from_agent_registry(agent_ids: Sequence[str], access_gr
 async def _patch_team_caches_add_access_group(
     team_ids: list[str],
     access_group_id: str,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
 ) -> None:
     """Patch cached team objects to include access_group_id."""
     for team_id in team_ids:
@@ -482,8 +575,8 @@ async def _patch_team_caches_add_access_group(
 async def _patch_team_caches_remove_access_group(
     team_ids: list[str],
     access_group_id: str,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
 ) -> None:
     """Patch cached team objects to remove access_group_id."""
     for team_id in team_ids:
@@ -506,8 +599,8 @@ async def _patch_team_caches_remove_access_group(
 async def _patch_key_caches_add_access_group(
     key_tokens: list[str],
     access_group_id: str,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
 ) -> None:
     """Patch cached key objects to include access_group_id."""
     for token in key_tokens:
@@ -535,8 +628,8 @@ async def _patch_key_caches_add_access_group(
 async def _patch_key_caches_remove_access_group(
     key_tokens: list[str],
     access_group_id: str,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
 ) -> None:
     """Patch cached key objects to remove access_group_id."""
     for token in key_tokens:
@@ -582,7 +675,9 @@ async def create_access_group(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Access group '{data.access_group_name}' already exists",
                 )
+            # Report unknown teams before waiting on busy team rows
             await _require_teams_exist(tx, data.assigned_team_ids or ())
+            await _require_teams_exist(tx, data.assigned_team_ids or (), lock=True)
 
             record: Final = await tx.litellm_accessgrouptable.create(
                 data={
@@ -683,7 +778,7 @@ async def update_access_group(
     prisma_client: Final = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
     update_fields: Final = _explicitly_set_fields(data)
-    update_data: Final[dict] = {"updated_by": user_api_key_dict.user_id}
+    update_data: Final[dict[str, object]] = {"updated_by": user_api_key_dict.user_id}
     for field, value in update_fields.items():
         if field in (
             "assigned_team_ids",
@@ -708,23 +803,11 @@ async def update_access_group(
 
     try:
         tx: _AccessGroupTx
-        async with _access_group_transaction(prisma_client) as tx:
-            # Read inside the transaction so delta computation is consistent with the write,
-            # avoiding a TOCTOU race where a concurrent update could make deltas stale.
-            existing: Final = await tx.litellm_accessgrouptable.find_unique(where={"access_group_id": access_group_id})
-            if existing is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Access group '{access_group_id}' not found",
-                )
-            await _require_teams_exist(tx, data.assigned_team_ids or ())
-
-            attached: Final = await _attached_team_ids_for(tx.litellm_teamtable, (existing,))
-            old_team_ids: Final[set[str]] = set(attached[access_group_id])
+        requested: Final = (data.assigned_team_ids or ()) if "assigned_team_ids" in update_fields else None
+        locked: Final = _locked_assignment(prisma_client, access_group_id, requested, new_name=data.access_group_name)
+        async with locked as (tx, existing, old_team_ids):
             old_key_ids: Final[set[str]] = set(existing.assigned_key_ids or [])
-            new_team_ids: Final[set[str]] = (
-                set(data.assigned_team_ids or []) if "assigned_team_ids" in update_fields else old_team_ids
-            )
+            new_team_ids: Final = frozenset(requested or ())
             new_key_ids: Final[set[str]] = (
                 set(data.assigned_key_ids or []) if "assigned_key_ids" in update_fields else old_key_ids
             )
@@ -779,27 +862,11 @@ async def delete_access_group(
     prisma_client: Final = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        affected_team_ids: list[str] = []
         affected_key_tokens: list[str] = []
 
         tx: _AccessGroupTx
-        async with _access_group_transaction(prisma_client) as tx:
-            existing: Final = await tx.litellm_accessgrouptable.find_unique(where={"access_group_id": access_group_id})
-            if existing is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Access group '{access_group_id}' not found",
-                )
-
-            # Union of: teams that have this access_group_id in their own access_group_ids
-            # AND teams listed in assigned_team_ids (handles out-of-sync data from before this sync was added)
-            teams_with_group: Final = await tx.litellm_teamtable.find_many(
-                where={"access_group_ids": {"hasSome": [access_group_id]}}
-            )
-            all_affected_team_ids: Final[set[str]] = {team.team_id for team in teams_with_group} | set(
-                existing.assigned_team_ids or []
-            )
-            affected_team_ids = list(all_affected_team_ids)
+        async with _locked_assignment(prisma_client, access_group_id, ()) as (tx, existing, attached):
+            affected_team_ids: Final = list(attached.union(existing.assigned_team_ids or ()))
 
             # Union of: keys that have this access_group_id in their own access_group_ids
             # AND keys listed in assigned_key_ids (handles out-of-sync data)
@@ -811,7 +878,7 @@ async def delete_access_group(
             )
             affected_key_tokens = list(all_affected_key_tokens)
 
-            await _sync_access_group_on_teams(tx, (), affected_team_ids, access_group_id)
+            await _sync_access_group_on_teams(tx, (), tuple(attached), access_group_id)
             await _sync_access_group_on_keys(tx, (), affected_key_tokens, access_group_id)
 
             detached_agent_ids: Final = await _detach_access_group_from_agents(tx, access_group_id)

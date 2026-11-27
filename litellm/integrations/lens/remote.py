@@ -95,10 +95,10 @@ class RemoteTraceStore:
     def __init__(self, client: httpx.AsyncClient) -> None:
         self.client: Final = client
 
-    async def forward_spans(self, body: bytes, headers: Mapping[str, str]) -> tuple[int, bytes] | None:
-        """Hand an agent's own OTLP spans to Lens unchanged; None when Lens cannot be reached."""
+    async def forward(self, path: str, body: bytes, headers: Mapping[str, str]) -> tuple[int, bytes] | None:
+        """Hand an agent's own OTLP export to Lens unchanged; None when Lens cannot be reached."""
         try:
-            response: Final = await self.client.post("/v1/traces", content=body, headers=dict(headers))
+            response: Final = await self.client.post(path, content=body, headers=dict(headers))
         except httpx.HTTPError:
             return None
         return response.status_code, response.content
@@ -173,6 +173,20 @@ class RemoteTraceStore:
                 "trace_id": trace_id,
                 "trace_ref": trace_ref,
                 "span_id": span_id,
+            }
+        )
+
+    async def get_conversation(
+        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None, page_size: int | None
+    ) -> JsonValue:
+        return await self._read(
+            {
+                "operation": "conversation",
+                "scope": scope,
+                "trace_id": trace_id,
+                "trace_ref": trace_ref,
+                "cursor": cursor,
+                "page_size": page_size,
             }
         )
 

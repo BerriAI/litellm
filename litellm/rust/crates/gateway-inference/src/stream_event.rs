@@ -3,11 +3,16 @@
 //! `stream_outcome`, for the tokens and the failure it tells the router, and to `stream_hold`, for
 //! whether the stream has begun to answer.
 
+use litellm_core_utils::core_helpers::usage_from_parts;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
+
 /// The tokens an event's `usage` counts.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Counts {
     pub(crate) input_tokens: Option<u64>,
     pub(crate) output_tokens: Option<u64>,
+    pub(crate) cache_creation_input_tokens: Option<u64>,
+    pub(crate) cache_read_input_tokens: Option<u64>,
 }
 
 impl Counts {
@@ -16,12 +21,29 @@ impl Counts {
         Self {
             input_tokens: self.input_tokens.or(earlier.input_tokens),
             output_tokens: self.output_tokens.or(earlier.output_tokens),
+            cache_creation_input_tokens: self
+                .cache_creation_input_tokens
+                .or(earlier.cache_creation_input_tokens),
+            cache_read_input_tokens: self
+                .cache_read_input_tokens
+                .or(earlier.cache_read_input_tokens),
         }
     }
 
-    /// The input plus the output.
+    /// The counts as Python's litellm `Usage` holds a Messages answer's: the cache tokens folded
+    /// into `prompt_tokens`, the reads also named as `cached_tokens`.
+    pub(crate) fn messages_usage(self) -> ChatCompletionsUsage {
+        usage_from_parts(
+            self.input_tokens.unwrap_or(0),
+            self.output_tokens.unwrap_or(0),
+            self.cache_read_input_tokens.unwrap_or(0),
+            self.cache_creation_input_tokens.unwrap_or(0),
+        )
+    }
+
+    /// The input plus the output, the input with the cache tokens Anthropic reports beside it.
     pub(crate) fn total(self) -> u64 {
-        self.input_tokens.unwrap_or(0) + self.output_tokens.unwrap_or(0)
+        self.messages_usage().total_tokens
     }
 }
 

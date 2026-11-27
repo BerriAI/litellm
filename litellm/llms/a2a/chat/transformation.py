@@ -150,11 +150,11 @@ class A2AConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to A2A parameters.
 
@@ -170,14 +170,14 @@ class A2AConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set headers for A2A requests.
 
@@ -204,8 +204,8 @@ class A2AConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -237,10 +237,10 @@ class A2AConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform OpenAI request to A2A JSON-RPC 2.0 format.
 
@@ -281,7 +281,7 @@ class A2AConfig(BaseConfig):
         params: Final = (
             {"message": a2a_message} if stream else {"message": a2a_message, "configuration": {"blocking": True}}
         )
-        request_data: Final = {
+        request_data: Final[dict[str, object]] = {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
@@ -296,10 +296,10 @@ class A2AConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

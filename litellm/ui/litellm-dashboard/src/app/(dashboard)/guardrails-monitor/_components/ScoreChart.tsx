@@ -27,6 +27,10 @@ export function ScoreChart({ data }: ScoreChartProps) {
               data={chartData}
               index="date"
               categories={["passed", "blocked"]}
+              categoryLabels={{
+                passed: t("guardrailsMonitor.scoreChart.passed"),
+                blocked: t("guardrailsMonitor.scoreChart.blocked"),
+              }}
               colors={["green", "red"]}
               valueFormatter={(v) => v.toLocaleString()}
               yAxisWidth={48}

@@ -15,7 +15,7 @@ class GitterAccessTokenDetector(RegexBasedDetector):
         return "Gitter Access Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Gitter Access Token
             re.compile(

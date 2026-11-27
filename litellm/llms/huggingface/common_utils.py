@@ -12,7 +12,7 @@ HF_HUB_URL: Final = "https://huggingface.co"
 class HuggingFaceError(BaseLLMException):
     def __init__(
         self,
-        status_code,
+        status_code: int,
         message,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,

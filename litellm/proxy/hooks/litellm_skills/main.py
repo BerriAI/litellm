@@ -187,9 +187,9 @@ class SkillsInjectionHook(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Process skills from container.skills before the LLM call.
 
@@ -252,9 +252,9 @@ class SkillsInjectionHook(CustomLogger):
     def _process_for_messages_api(
         self,
         data: dict,
-        litellm_skills: list[LiteLLM_SkillsTable],
+        litellm_skills: Sequence[LiteLLM_SkillsTable],
         use_anthropic_format: bool = True,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process skills for messages API (Anthropic format tools).
 
@@ -324,8 +324,8 @@ class SkillsInjectionHook(CustomLogger):
     def _process_non_anthropic_model(
         self,
         data: dict,
-        litellm_skills: list[LiteLLM_SkillsTable],
-    ) -> dict:
+        litellm_skills: Sequence[LiteLLM_SkillsTable],
+    ) -> dict[str, object]:
         """
         Process skills for non-Anthropic models (OpenAI format tools).
 
@@ -509,7 +509,7 @@ class SkillsInjectionHook(CustomLogger):
 
     def _extract_tool_calls(self, response: object) -> Sequence[Mapping[str, object]]:
         """Extract tool calls from response, handling both formats."""
-        tool_calls: Final = []
+        tool_calls: Final[list[dict[str, object]]] = []
 
         # Get content - handle both dict and object responses
         response_mapping: Final = _dict_or_none(response)
@@ -602,7 +602,7 @@ class SkillsInjectionHook(CustomLogger):
                 if isinstance(current_response, dict)
                 else getattr(current_response, "content", [])
             )
-            content_blocks = []
+            content_blocks: list[object] = []
             for block in raw_content or []:
                 if isinstance(block, dict):
                     content_blocks.append(block)
@@ -950,7 +950,7 @@ print('No executable skill module found')
     def _attach_files_to_response(
         self,
         response: Any,
-        generated_files: list[dict[str, object]],
+        generated_files: Sequence[Mapping[str, object]],
     ) -> LLMResponseTypes:
         """
         Attach generated files to the response object.

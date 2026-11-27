@@ -12,6 +12,7 @@ use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
+use crate::anthropic::messages::handler::shape_anthropic_messages_request;
 use crate::{
     Error,
     anthropic::{
@@ -19,7 +20,8 @@ use crate::{
         beta_headers::BetaPolicy,
         common_utils::{API_KEY_PLACEMENT, existing_betas, strip_trailing_slashes},
         messages::transformation::{
-            ANTHROPIC_MESSAGES_CONFIG, update_headers_with_safeguards_beta,
+            ANTHROPIC_MESSAGES_CONFIG, drop_sampling_params_removed_by_requested_version,
+            update_headers_with_safeguards_beta,
         },
     },
     azure_ai::common_utils::{
@@ -165,7 +167,7 @@ impl MessagesDialect for AzureAiMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn tool_custom_field(&self, model: &str) -> ToolCustomField {
@@ -178,6 +180,16 @@ impl MessagesDialect for AzureAiMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
         ANTHROPIC_MESSAGES_CONFIG.transform_anthropic_messages_request(request, context)
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        _url: &str,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -1510,6 +1522,36 @@ mod tests {
                 &|_| None
             ),
             ["AZURE_AD_TOKEN", "AZURE_API_BASE"]
+        );
+    }
+
+    #[rstest]
+    #[case::sdk_2("2026-10-21", None)]
+    #[case::sdk_1("2023-06-01", Some(1.0))]
+    fn temperature_follows_the_forwarded_api_version(
+        #[case] version: &str,
+        #[case] temperature: Option<f64>,
+    ) {
+        let body = AZURE_AI_MESSAGES_CONFIG
+            .request_body(
+                request_from(json!({
+                    "model": "claude-test",
+                    "max_tokens": 16,
+                    "temperature": 1.0,
+                    "messages": [{"role": "user", "content": "hi"}]
+                })),
+                &vec![("anthropic-version".to_string(), version.to_string())],
+                "https://team.services.ai.azure.com/anthropic/v1/messages",
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            body.params
+                .temperature
+                .as_ref()
+                .and_then(litellm_llms_types::recognized::Recognized::known)
+                .copied(),
+            temperature
         );
     }
 }

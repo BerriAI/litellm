@@ -8,13 +8,14 @@
 import os
 import sys
 
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import json
 import sys
+from collections.abc import Mapping, Sequence
 from typing import Final, List, Literal, Optional
 
 from fastapi import HTTPException
@@ -51,10 +52,12 @@ class AporiaGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     #### CALL HOOKS - proxy only ####
-    def transform_messages(self, messages: List[dict]) -> List[dict]:
+    def transform_messages(
+        self, messages: Sequence[Mapping[str, object]]
+    ) -> List[Mapping[str, object]]:
         supported_openai_roles = ["system", "user", "assistant"]
         default_role = "other"  # for unsupported roles - e.g. tool
-        new_messages = []
+        new_messages: List[Mapping[str, object]] = []
         for m in messages:
             if m.get("role", "") in supported_openai_roles:
                 new_messages.append(m)
@@ -69,8 +72,10 @@ class AporiaGuardrail(CustomGuardrail):
         return new_messages
 
     async def prepare_aporia_request(
-        self, new_messages: List[dict], response_string: Optional[str] = None
-    ) -> dict:
+        self,
+        new_messages: Sequence[Mapping[str, object]],
+        response_string: Optional[str] = None,
+    ) -> dict[str, object]:
         data: dict[str, object] = {}
         if new_messages is not None:
             data["messages"] = new_messages
@@ -89,7 +94,9 @@ class AporiaGuardrail(CustomGuardrail):
         return data
 
     async def make_aporia_api_request(
-        self, new_messages: List[dict], response_string: Optional[str] = None
+        self,
+        new_messages: Sequence[Mapping[str, object]],
+        response_string: Optional[str] = None,
     ):
         data = await self.prepare_aporia_request(
             new_messages=new_messages, response_string=response_string
@@ -144,7 +151,7 @@ class AporiaGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -193,7 +200,7 @@ class AporiaGuardrail(CustomGuardrail):
         ):
             return
 
-        new_messages: Optional[List[dict]] = None
+        new_messages: Optional[List[Mapping[str, object]]] = None
         if "messages" in data and isinstance(data["messages"], list):
             new_messages = self.transform_messages(messages=data["messages"])
 

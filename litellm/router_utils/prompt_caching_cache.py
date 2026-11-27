@@ -16,7 +16,7 @@ from typing_extensions import TypedDict
 from litellm._internal_context import service_target
 from litellm.caching.caching import DualCache
 from litellm.constants import PROMPT_CACHE_LOOKBACK_POSITIONS
-from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+from litellm.litellm_core_utils.logging_utils import truncate_base64_data_uris_in_messages
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
@@ -284,7 +284,7 @@ class PromptCachingCache:
             return []
 
         # Build the cacheable prefix: all messages up to and including the last cacheable message
-        cacheable_prefix: Final = []
+        cacheable_prefix: Final[list[AllMessageValues]] = []
 
         for msg_idx, message in enumerate(messages):
             if msg_idx < last_cacheable_message_idx:
@@ -342,9 +342,10 @@ class PromptCachingCache:
         Claude Code re-sends a previously marked message. `position` counts a run of consecutive
         tool_use (or tool_result) blocks as one, matching the provider's lookback window.
 
-        The prefix is hashed in the shape the success event sees it, with long base64 data URIs
-        already replaced by their size placeholder, so a request carrying the raw image bytes
-        derives the same keys the write side stored.
+        Long base64 data URIs are hashed as their size placeholder, so a request carrying the raw
+        image bytes derives the same keys a write side holding the placeholder stored. Anthropic
+        base64 source data is hashed whole, so two different documents of the same size keep
+        separate pins.
         """
         boundary: Final = _tool_boundary_position(tools)
         if not messages:
@@ -354,7 +355,7 @@ class PromptCachingCache:
             *_positions_of(
                 _PREFIX_ADAPTER.validate_python(
                     to_jsonable_python(
-                        truncate_base64_in_messages(PromptCachingCache.extract_cacheable_prefix(messages)),
+                        truncate_base64_data_uris_in_messages(PromptCachingCache.extract_cacheable_prefix(messages)),
                         serialize_unknown=True,
                         bytes_mode="base64",
                     )

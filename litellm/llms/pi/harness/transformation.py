@@ -387,7 +387,7 @@ def build_models_json(model: str, base_url: str, thinking: PiThinkingLevel | Non
     # pi clamps --thinking to "off" unless the model declares reasoning, and offers xhigh/max only when
     # thinkingLevelMap names them. Declaring reasoning without a requested level would make pi send its
     # default reasoning_effort on every call, so it is declared only when a level is asked for
-    reasoning: Final = (
+    reasoning: Final[Mapping[str, object]] = (
         MappingProxyType({"reasoning": True, "thinkingLevelMap": PI_THINKING_LEVEL_MAP})
         if thinking is not None and thinking != "off"
         else MappingProxyType({})

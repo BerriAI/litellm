@@ -445,6 +445,10 @@ OWNED_NAMES_NOT_SEEDED: Final = MappingProxyType(
         "attempted_targets": "holds the router's fallback bookkeeping, not request input",
     }
 )
+VECTOR_STORE_ROUTING_SEEDS: Final[Mapping[str, object]] = MappingProxyType(
+    {"vector_store_id": "vs_wire", "vector_store_ids": ["vs_wire"]}
+)
+CHAT_WALK_SEEDS: Final[Mapping[str, object]] = MappingProxyType({**WALK_SEEDS, **VECTOR_STORE_ROUTING_SEEDS})
 EMBEDDING_WALK_SEEDS: Final[Mapping[str, object]] = MappingProxyType(
     {
         **WALK_SEEDS,
@@ -531,12 +535,13 @@ API_BASE_CHAT_PROVIDERS: Final = (
     "cometapi", "compactifai", "coralbricks", "cortecs", "custom", "custom_openai", "darkbloom", "dashscope",
     "databricks", "databricks_agent", "datarobot", "deepinfra", "deepseek", "docker_model_runner", "edenai",
     "empiriolabs", "empower", "featherless_ai", "fireworks_ai", "friendliai", "galadriel", "gemini", "github",
-    "groq", "helicone", "heroku", "hosted_vllm", "hostinger_router", "huggingface", "hyperbolic", "inception",
-    "inferenceapis", "kyma", "lambda_ai", "langflow", "langgraph", "lemonade", "libertai", "litellm_proxy",
+    "groq", "helicone", "heroku", "hosted_vllm", "hostinger_router", "huawei_maas", "huggingface", "hyperbolic",
+    "inception", "inferenceapis", "kyma", "lambda_ai", "langflow", "langgraph", "lemonade", "libertai", "litellm_proxy",
     "llamafile", "lm_studio", "maritalk", "meta", "meta_llama", "minimax", "mistral", "modelscope", "moonshot",
     "morph", "nadir", "nano-gpt", "nebius", "neosantara", "novita", "nscale", "nvidia_nim", "ollama", "ollama_chat",
-    "oobabooga", "openai", "opencode_go", "openinfer", "openrouter", "ovhcloud", "parasail", "perplexity", "petals",
-    "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "sail",
+    "oobabooga", "openai", "opencode_go", "openinfer", "openrouter", "ovhcloud", "parasail", "perplexity",
+    "perplexity_orchestrator", "petals",
+    "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "resetdata", "sail",
     "sambanova", "sarvam", "scaleway", "scx-ai", "snowflake", "streamlake", "synthetic", "tencent", "tensormesh",
     "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "v0",
     "vercel_ai_gateway", "vispark", "volcengine", "wally", "wandb", "xai", "xiaomi_mimo", "xinference", "zai",
@@ -568,6 +573,7 @@ CHAT_ROUTES: Final = MappingProxyType(
             streams=False,
         ),
         "gradient_ai": Route("gradient_ai/wire-model"),
+        "litellm_proxy": Route("litellm_proxy/wire-model", protocol_fields=frozenset(VECTOR_STORE_ROUTING_SEEDS)),
         "nlp_cloud": Route("nlp_cloud/chatdolphin", base_suffix="/"),
         "predibase": Route("predibase/wire-model", MappingProxyType({**SYNTHETIC_KEY, "predibase_tenant_id": "wire"})),
         "ragflow": Route("ragflow/chat/wire-chat/wire-model"),
@@ -725,10 +731,10 @@ def test_every_chat_route_keeps_internal_params_out_of_the_provider_body(
         pytest.skip(CHAT_ROUTE_BUGS[route_id])
 
     bodies: Final = _walked_bodies(
-        CHAT_ROUTES[route_id], WALK_SEEDS, lambda parameters: _complete({**parameters, "stream": stream})
+        CHAT_ROUTES[route_id], CHAT_WALK_SEEDS, lambda parameters: _complete({**parameters, "stream": stream})
     )
 
-    _assert_only_provider_fields(bodies, WALK_SEEDS, CHAT_ROUTES[route_id])
+    _assert_only_provider_fields(bodies, CHAT_WALK_SEEDS, CHAT_ROUTES[route_id])
 
 
 @pytest.mark.allow_hosts(["127.0.0.1"])

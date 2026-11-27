@@ -1,7 +1,7 @@
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from typing import Final
+from typing import Final, Protocol
 
 import click
 import requests
@@ -37,6 +37,20 @@ class _ErrorBodyView(TypedDict):
     body: ReadOnly[_StreamErrorBody]
 
 
+class _ConsolePrinter(Protocol):
+    """The one rich Console method the chat helpers call."""
+
+    def print(
+        self,
+        *objects: object,
+        end: str = ...,
+        style: str | None = ...,
+        emoji: bool | None = ...,
+        markup: bool | None = ...,
+        highlight: bool | None = ...,
+    ) -> None: ...
+
+
 def _get_available_models(ctx: click.Context) -> Sequence[Mapping[str, object]]:
     """Get list of available models from the proxy server"""
     try:
@@ -53,7 +67,7 @@ def _get_available_models(ctx: click.Context) -> Sequence[Mapping[str, object]]:
         return []
 
 
-def _select_model(console: Console, available_models: Sequence[Mapping[str, object]]) -> str | None:
+def _select_model(console: _ConsolePrinter, available_models: Sequence[Mapping[str, object]]) -> str | None:
     """Interactive model selection"""
     if not available_models:
         console.print("[yellow]No models available or could not fetch models list.[/yellow]")
@@ -242,7 +256,7 @@ def chat(
         console.print("\n[yellow]Chat session interrupted.[/yellow]")
 
 
-def _show_help(console: Console):
+def _show_help(console: _ConsolePrinter):
     """Show help for interactive chat commands"""
     help_text: Final = """
 [bold]Interactive Chat Commands:[/bold]
@@ -264,7 +278,7 @@ def _show_help(console: Console):
     console.print(Panel(help_text, title="Help"))
 
 
-def _show_history(console: Console, messages: list[dict[str, str]]):
+def _show_history(console: _ConsolePrinter, messages: list[dict[str, str]]):
     """Show conversation history"""
     if not messages:
         console.print("[yellow]No conversation history.[/yellow]")
@@ -286,7 +300,7 @@ def _show_history(console: Console, messages: list[dict[str, str]]):
             )
 
 
-def _save_conversation(console: Console, messages: list[dict[str, str]], command: str):
+def _save_conversation(console: _ConsolePrinter, messages: list[dict[str, str]], command: str):
     """Save conversation to a file"""
     parts: Final = command.split()
     if len(parts) < 2:
@@ -305,7 +319,7 @@ def _save_conversation(console: Console, messages: list[dict[str, str]], command
         console.print(f"[red]Error saving conversation: {e}[/red]")
 
 
-def _load_conversation(console: Console, command: str, system: str | None) -> list[dict[str, str]]:
+def _load_conversation(console: _ConsolePrinter, command: str, system: str | None) -> list[dict[str, str]]:
     """Load conversation from a file"""
     parts: Final = command.split()
     if len(parts) < 2:
@@ -333,7 +347,7 @@ def _load_conversation(console: Console, command: str, system: str | None) -> li
 
 
 def _handle_special_commands(
-    console: Console,
+    console: _ConsolePrinter,
     user_input: str,
     messages: list[dict[str, str]],
     system: str | None,
@@ -387,7 +401,7 @@ def _stream_chunk_content(chunk: object) -> str:
 
 
 def _stream_response(
-    console: Console,
+    console: _ConsolePrinter,
     client: ChatClient,
     model: str,
     messages: list[dict[str, str]],

@@ -269,8 +269,8 @@ class TestInventoryRoutes:
         )
         every = [*listing.success, *listing.failure, *listing.success_and_failure]
         assert every, "/callbacks/list reported no active logging callbacks; the proxy always runs the db logger"
-        assert "_ProxyDBLogger" in every, (
-            f"/callbacks/list omitted the always-on _ProxyDBLogger spend logger; got {every}"
+        assert {"_ProxyDBLogger", "spend_log"} & set(every), (
+            f"/callbacks/list omitted the always-on spend logger; got {every}"
         )
 
     @pytest.mark.covers("mgmt.tool_management.list.happy_path")

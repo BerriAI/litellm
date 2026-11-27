@@ -16,10 +16,12 @@ use litellm_router_types::LitellmParams;
 use serde::de::Error as _;
 use serde_json::Value;
 
+use crate::anthropic::messages::handler::shape_anthropic_messages_request;
 use crate::{
     Error, ErrorDetail,
     anthropic::messages::transformation::{
-        ANTHROPIC_MESSAGES_CONFIG, transform_messages_request, update_headers_with_safeguards_beta,
+        ANTHROPIC_MESSAGES_CONFIG, drop_sampling_params_removed_by_requested_version,
+        transform_messages_request, update_headers_with_safeguards_beta,
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
@@ -153,7 +155,7 @@ impl MessagesDialect for BedrockClaudePlatformMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn tool_custom_field(&self, model: &str) -> ToolCustomField {
@@ -168,7 +170,7 @@ impl MessagesDialect for BedrockClaudePlatformMessagesConfig {
         params: &LitellmParams,
     ) -> Result<MessagesRequest, Error> {
         if let Some(type_name) = params.claude_platform.ignored_override_type() {
-            litellm_tracing::warn!(
+            tracing::warn!(
                 "bedrock/claude_platform: ignoring claude_platform_unsupported_params of type {type_name}; expected a list of param names. Using the default unsupported-param set."
             );
         }
@@ -190,6 +192,16 @@ impl MessagesDialect for BedrockClaudePlatformMessagesConfig {
             without_route_prefix(request),
             &context.warning_dropped_disabled_thinking(),
         )
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        _url: &str,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -311,7 +323,7 @@ fn without_params(request: MessagesRequest, names: &[&str]) -> Result<MessagesRe
         .into_iter()
         .partition(|(name, _)| names.contains(&name.as_str()));
     if !dropped.is_empty() {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "bedrock/claude_platform: dropping unsupported Messages API param(s) {} from the request body; the Claude Platform on AWS endpoint rejects unknown fields. The request will proceed without them.",
             python_tuple(dropped.iter().map(|(name, _)| name.as_str()))
         );
@@ -641,5 +653,36 @@ mod tests {
     ) {
         assert_eq!(is_claude_platform_route(model), platform);
         assert_eq!(logged_model(model), logged);
+    }
+
+    #[rstest]
+    #[case::sdk_2("2026-10-21", None)]
+    #[case::sdk_1("2023-06-01", Some(1.0))]
+    fn temperature_follows_the_forwarded_api_version(
+        #[case] version: &str,
+        #[case] temperature: Option<f64>,
+    ) {
+        let body = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .request_body(
+                serde_json::from_value(json!({
+                    "model": "claude-test",
+                    "max_tokens": 16,
+                    "temperature": 1.0,
+                    "messages": [{"role": "user", "content": "hi"}]
+                }))
+                .unwrap(),
+                &vec![("anthropic-version".to_string(), version.to_string())],
+                "https://aws-external-anthropic.us-west-2.api.aws/v1/messages",
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            body.params
+                .temperature
+                .as_ref()
+                .and_then(litellm_llms_types::recognized::Recognized::known)
+                .copied(),
+            temperature
+        );
     }
 }

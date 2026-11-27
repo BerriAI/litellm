@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import inspect
 import json
 import time
 import traceback
@@ -25,8 +26,9 @@ from typing import (
     runtime_checkable,
 )
 
+import anyio
 import httpx
-from openai._streaming import SSEDecoder
+from openai._streaming import ServerSentEvent, SSEDecoder
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs
 
@@ -34,6 +36,8 @@ import litellm
 from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
+    RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS,
+    RESPONSES_API_UNCLAIMED_STREAM_CLOSE_GRACE_SECONDS,
     RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
     STREAM_SSE_DONE_STRING,
 )
@@ -65,6 +69,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_r
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
+from litellm.litellm_core_utils.socket_logging import track_socket_logging
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -75,6 +80,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequest
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
+    ErrorEventError,
     ResponseAPIUsage,
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
@@ -94,6 +100,7 @@ if TYPE_CHECKING:
         ResponsesBackendWebSocket,
         ResponsesClientWebSocket,
         ResponsesWebSocketRequestDefaults,
+        ResponsesWsQuotaRefund,
     )
     from litellm.types.router import LiteLLM_Params
 
@@ -105,7 +112,7 @@ class ProjectQuotaCallback(Protocol):
         requested_model: str | None,
         estimated_input_tokens: int,
         estimated_output_tokens: int,
-    ) -> None: ...
+    ) -> ResponsesWsQuotaRefund | None: ...
 
 
 class TokenLimitCallback(Protocol):
@@ -248,10 +255,20 @@ async def _finish_even_if_cancelled(work: Awaitable[None]) -> None:
 def spawn_logging_task(
     running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
 ) -> asyncio.Task[object]:
-    task: Final = running_loop.create_task(coroutine)
+    task: Final = running_loop.create_task(track_socket_logging(coroutine))
     _PENDING_LOGGING_TASKS.add(task)
     task.add_done_callback(_PENDING_LOGGING_TASKS.discard)
     task.add_done_callback(lambda done: _log_background_task_failure(done, task_name=task_name))
+    return task
+
+
+_UNCLAIMED_STREAM_CLOSES: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdlib strong-ref set for rooted tasks
+
+
+def _spawn_rooted(coroutine: Coroutine[object, object, None]) -> asyncio.Task[None]:
+    task: Final = asyncio.get_running_loop().create_task(coroutine)
+    _UNCLAIMED_STREAM_CLOSES.add(task)
+    task.add_done_callback(_UNCLAIMED_STREAM_CLOSES.discard)
     return task
 
 
@@ -337,6 +354,12 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
     return _status_code_for_error_fields(error_type, error_code), message
 
 
+def _provider_error_fields(error_obj: object) -> Mapping[str, object]:
+    if isinstance(error_obj, ErrorEventError):
+        return error_obj.model_dump(exclude_none=True)
+    return error_obj if _is_json_object(error_obj) else {}
+
+
 def map_stream_error_to_exception(
     error_obj: object,
     model: str,
@@ -348,11 +371,11 @@ def map_stream_error_to_exception(
 
     error_message, error_type, error_code = _error_event_fields(error_obj)
     status_code: Final = _status_code_for_error_fields(error_type, error_code)
-    error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
+    error_fields: Final = {"message": error_message, "type": error_type, "code": error_code}
     provider_exception: Final = BaseLLMException(
         status_code=status_code,
-        message=f"Error code: {status_code} - {json.dumps({'error': error_body})}",
-        body=error_body,
+        message=f"Error code: {status_code} - {json.dumps({'error': error_fields})}",
+        body={**_provider_error_fields(error_obj), **error_fields},
         headers=headers,
     )
     return _mapped_exception(provider_exception, model, custom_llm_provider, logging_obj)
@@ -387,7 +410,11 @@ def _error_event_error_object(event: object) -> object:
     nested_error: Final = _event_field(event, "error")
     if nested_error is not None:
         return nested_error
-    return {field: value for field in ("message", "code") if _is_error_field_value(value := _event_field(event, field))}
+    return {
+        field: value
+        for field in ("message", "code", "param")
+        if _is_error_field_value(value := _event_field(event, field))
+    }
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
@@ -440,6 +467,9 @@ class BaseResponsesAPIStreamingIterator:
         self._created_response: ResponsesAPIResponse | None = None
         self._completed_response_cached = False
         self._completed_response_logged = False
+        self._reading_on_after_consumer_left = False
+        self._ended_in_a_failed_response = False
+        self._success_handed_to_logging = False
         self._completed_response_cache_hit: bool | None = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
@@ -513,9 +543,10 @@ class BaseResponsesAPIStreamingIterator:
                         "type": ResponsesAPIStreamEvents.ERROR.value,
                     }
                 )
+                tool_input_fix: Final = _string_tool_input_fix(typed_chunk)
                 transformed_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
-                    parsed_chunk=typed_chunk,
+                    parsed_chunk={**typed_chunk, **tool_input_fix} if tool_input_fix else typed_chunk,
                     logging_obj=self.logging_obj,
                 )
                 affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
@@ -716,6 +747,7 @@ class BaseResponsesAPIStreamingIterator:
                 start_time=self.start_time,
                 end_time=end_time,
             )
+        self._success_handed_to_logging = True
         self._run_post_success_hooks(end_time=end_time)
 
     def _restore_provider_response_headers(self, logging_response: object) -> None:
@@ -768,6 +800,7 @@ class BaseResponsesAPIStreamingIterator:
             getattr(self.completed_response, "response", None) if self.completed_response else None
         )
         error_info: Final = getattr(response_obj, "error", None) if response_obj else None
+        self._ended_in_a_failed_response = True
         self._record_failed_response_usage(response_obj)
         self._handle_failure(self._map_error_event_exception(error_info))
 
@@ -1087,8 +1120,9 @@ class BaseResponsesAPIStreamingIterator:
         Trigger failure handlers before bubbling the exception.
         Only calls handlers once even if called multiple times.
         """
-        # Prevent double-calling failure handlers
-        if self._failure_handled:
+        # Prevent double-calling failure handlers. A failure while reading on after the consumer left is no
+        # failure of the request: the stream stays a cut one, billed and released by the disconnect cleanup.
+        if self._failure_handled or self._reading_on_after_consumer_left:
             return
         self._failure_handled = True
         self._record_partial_usage_for_failure()
@@ -1156,6 +1190,9 @@ class BaseResponsesAPIStreamingIterator:
         """Whether the stream began a tool call, which a text continuation could never finish."""
         return self._started_tool_call
 
+    def record_relayed_tool_arguments(self, arguments: str) -> None:
+        self._generated_tool_arguments += arguments
+
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
         The response.incomplete event to bill when the client went away mid-stream,
@@ -1164,13 +1201,18 @@ class BaseResponsesAPIStreamingIterator:
         service_tier) plus the text and tool arguments relayed so far, with counted
         usage since the provider never sent any. None when nothing was relayed yet,
         the stream already reached its terminal event and billed itself, or its failure
-        log already billed the relayed output.
+        log already billed the relayed output. A response the provider failed while the
+        stream was read on has no failure log, so it is billed here, with the usage the
+        provider reported on that event when it reported one.
         """
         created: Final = self._created_response
-        generated: Final = self._generated_content + self._generated_tool_arguments
-        if self._replays_stored_stream or created is None or not generated or self._billed_without_disconnect():
+        if self._replays_stored_stream or created is None or self._billed_without_disconnect():
             return None
-        usage: Final = _estimate_usage_safely(
+        generated: Final = self._generated_content + self._generated_tool_arguments
+        reported: Final = self._usage_of_the_response_failed_while_read_on()
+        if reported is None and not generated:
+            return None
+        usage: Final = reported or _estimate_usage_safely(
             self.model or "",
             self.request_data.get("input"),
             self.request_data,
@@ -1190,7 +1232,23 @@ class BaseResponsesAPIStreamingIterator:
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _billed_without_disconnect(self) -> bool:
+        if self._failed_while_read_on():
+            return False
         return self.completed_response is not None or self._failure_handled
+
+    def _failed_while_read_on(self) -> bool:
+        """The terminal event read after the consumer left reached no log: the provider failed it, or logging it raised."""
+        if not self._reading_on_after_consumer_left:
+            return False
+        return self._ended_in_a_failed_response or (
+            self._completed_response_logged and not self._success_handed_to_logging
+        )
+
+    def _usage_of_the_response_failed_while_read_on(self) -> ResponseAPIUsage | None:
+        if not self._failed_while_read_on():
+            return None
+        failed: Final[object] = getattr(self.completed_response, "response", None)
+        return _usage_as_model(getattr(failed, "usage", None))
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
@@ -1290,6 +1348,10 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self._replays_stored_stream = replays_stored_stream
         self.stream_iterator = SSEDecoder().aiter_bytes(response.aiter_bytes())
+        self._outlives_its_consumer = False
+        self._settled_after_consumer_left = False
+        self._pending_upstream_read: asyncio.Future[ServerSentEvent | None] | None = None
+        self._unclaimed_close: asyncio.Task[None] | None = None
 
     def __aiter__(self):
         return self
@@ -1302,16 +1364,89 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             raise
 
     async def aclose(self) -> None:
+        if not self._outlives_its_consumer or self._settled_after_consumer_left or self._reached_its_end():
+            await self._close_upstream()
+            return
+        if self._unclaimed_close is None:
+            self._unclaimed_close = _spawn_rooted(self._close_unless_settled())
+
+    def outlive_consumer_until_settled(self) -> None:
+        """
+        A cancelled httpx read closes the provider's connection, and the wrappers around this stream close it
+        while a client disconnect unwinds them, so the provider's terminal usage would never arrive.
+        Once this is called, every event is read in its own task and aclose() holds the connection open
+        until settle_after_consumer_left() decides whether to read on, or the grace period runs out.
+        """
+        self._outlives_its_consumer = True
+
+    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+        """
+        With drain, keep reading the provider's stream so its terminal event bills the usage the provider
+        reports (reasoning tokens and the cached split included) instead of a local count; True when that
+        event was logged as a success, here or before the consumer left. Otherwise close the stream.
+        """
+        self._settled_after_consumer_left = True
+        unclaimed_close: Final = self._unclaimed_close
+        self._unclaimed_close = None
+        if unclaimed_close is not None:
+            unclaimed_close.cancel()
+        if not drain or not self._can_be_read_on():
+            await self._close_upstream()
+            return drain and self._success_handed_to_logging
+        self._reading_on_after_consumer_left = True
+        with anyio.move_on_after(RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS):
+            try:
+                while self.completed_response is None:
+                    await self.__anext__()
+            except (StopAsyncIteration, Exception) as e:  # noqa: BLE001  # the cleanup bills what was relayed, as for any cut stream
+                verbose_logger.debug("Responses API stream ended while draining after a client disconnect: %r", e)
+        await self._close_upstream()
+        return self._success_handed_to_logging
+
+    def _can_be_read_on(self) -> bool:
+        if not self._outlives_its_consumer or self._replays_stored_stream or self._reached_its_end():
+            return False
+        return not (requests_background(self.request_data) or is_background_response(self._created_response))
+
+    def _reached_its_end(self) -> bool:
+        return self.finished or self.completed_response is not None or self._failure_handled
+
+    async def _close_unless_settled(self) -> None:
+        await asyncio.sleep(RESPONSES_API_UNCLAIMED_STREAM_CLOSE_GRACE_SECONDS)
+        if not self._settled_after_consumer_left:
+            self._settled_after_consumer_left = True
+            await self._close_upstream()
+
+    async def _close_upstream(self) -> None:
+        pending: Final = self._pending_upstream_read
+        if pending is not None and not pending.cancel() and not pending.cancelled():
+            pending.exception()
         await self.response.aclose()
+
+    async def _read_upstream_event(self) -> ServerSentEvent | None:
+        if not self._outlives_its_consumer:
+            return await anext(self.stream_iterator, None)
+        pending: Final = self._pending_upstream_read or asyncio.ensure_future(anext(self.stream_iterator, None))
+        self._pending_upstream_read = pending
+        try:
+            event: Final = await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            if pending.cancelled():
+                self._pending_upstream_read = None
+            raise
+        except Exception:
+            self._pending_upstream_read = None
+            raise
+        self._pending_upstream_read = None
+        return event
 
     async def _next_event(self) -> ResponsesAPIStreamingResponse:
         try:
             self._check_max_streaming_duration()
             while True:
                 # Get the next chunk from the stream
-                try:
-                    sse = await self.stream_iterator.__anext__()
-                except StopAsyncIteration:
+                sse = await self._read_upstream_event()
+                if sse is None:
                     self.finished = True
                     self._raise_if_ended_without_terminal_event()
                     raise StopAsyncIteration
@@ -1482,7 +1617,14 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data=request_data,
             call_type=call_type,
         )
-        self._set_events_from_response(transformed=transformed, logging_obj=logging_obj)
+        self._set_events_from_response(
+            transformed=ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+                responses_api_response=transformed,
+                custom_llm_provider=custom_llm_provider,
+                litellm_metadata=litellm_metadata,
+            ),
+            logging_obj=logging_obj,
+        )
 
     def _set_events_from_response(
         self,
@@ -1769,6 +1911,26 @@ def partial_responses_incomplete_event_on_disconnect(stream: object) -> Response
     return partial if isinstance(partial, ResponseIncompleteEvent) else None
 
 
+@runtime_checkable
+class OutlivesItsConsumer(Protocol):
+    def outlive_consumer_until_settled(self) -> None: ...
+
+    def settle_after_consumer_left(self, *, drain: bool) -> Awaitable[bool]: ...
+
+
+def keep_responses_stream_open_for_disconnect_drain(stream: object) -> None:
+    """Have the Responses API stream behind a proxy or router wrapper stay open when its consumer is cancelled."""
+    if isinstance(stream, OutlivesItsConsumer):
+        stream.outlive_consumer_until_settled()
+
+
+async def settle_responses_stream_after_consumer_left(stream: object, *, drain: bool) -> bool:
+    """Read the stream kept open above on to the provider's terminal usage (drain), or close it. True when drained."""
+    if not isinstance(stream, OutlivesItsConsumer):
+        return False
+    return await stream.settle_after_consumer_left(drain=drain)
+
+
 def _partial_output_items(generated_text: str) -> Sequence[GenericResponseOutputItem]:
     if not generated_text:
         return []
@@ -1855,6 +2017,43 @@ _CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = frozenset(
         "apply_patch_call",
     }
 )
+
+
+def _answered_approval_ids(items: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    approval_ids: Final = (
+        item.get("approval_request_id") for item in items if item.get("type") == "mcp_approval_response"
+    )
+    return frozenset(approval_id for approval_id in approval_ids if isinstance(approval_id, str))
+
+
+def _call_ids(items: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    return frozenset(call_id for call_id in (item.get("call_id") for item in items) if isinstance(call_id, str))
+
+
+def _unanswered_call_ids(items: Sequence[Mapping[str, object]]) -> frozenset[str]:
+    call_ids: Final = tuple(call_id for call_id in (item.get("call_id") for item in items) if isinstance(call_id, str))
+    return frozenset(call_id for call_id in call_ids if call_ids.count(call_id) == 1)
+
+
+def _has_call_id_in(item: Mapping[str, object], call_ids: frozenset[str]) -> bool:
+    call_id: Final = item.get("call_id")
+    return isinstance(call_id, str) and call_id in call_ids
+
+
+def _is_replayed_call_item(item: Mapping[str, object], answered_approval_ids: frozenset[str]) -> bool:
+    item_type: Final = item.get("type")
+    if (isinstance(item_type, str) and item_type in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES) or isinstance(
+        item.get("call_id"), str
+    ):
+        return True
+    approval_request_id: Final = item.get("approval_request_id")
+    return (
+        item_type == "mcp_call"
+        and isinstance(approval_request_id, str)
+        and approval_request_id in answered_approval_ids
+    )
+
+
 _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
     {
         ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
@@ -1864,6 +2063,28 @@ _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS | {
     ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA
 }
+_STRING_TOOL_INPUT_FIELD_BY_EVENT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE.value: "arguments",
+        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE.value: "arguments",
+        "response.mcp_call.arguments.delta": "delta",
+        "response.mcp_call.arguments.done": "arguments",
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value: "input",
+    }
+)
+
+
+def _string_tool_input_fix(chunk: Mapping[str, object]) -> Mapping[str, str]:
+    field_name: Final = _STRING_TOOL_INPUT_FIELD_BY_EVENT.get(str(chunk.get("type")))
+    if field_name is None:
+        return {}
+    value: Final = chunk.get(field_name)
+    if isinstance(value, str):
+        return {}
+    return {field_name: "" if value is None else json.dumps(value, ensure_ascii=False)}
 
 
 def _estimate_usage_from_text(
@@ -2155,18 +2376,27 @@ _FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR: Final = 1024
 _FRAME_CHARS_PER_TOKEN_ESTIMATE: Final = 4
 
 
-def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple[int, int | None]:
-    """Extract a rough input-token count and any explicit max_output_tokens
-    from a ``response.create`` frame, handling both wire shapes:
-      flat:   {"type": "response.create", "input": ..., "max_output_tokens": ...}
-      nested: {"type": "response.create", "response": {"input": ..., "max_output_tokens": ...}}
+def is_warmup_response_create(raw_message: str) -> bool:
+    frame: Final = _json_object_or_none(raw_message)
+    return frame is not None and _response_create_params(frame).get("generate") is False
+
+
+def _response_create_params(msg_obj: Mapping[str, object]) -> Mapping[str, object]:
+    """The request params of a ``response.create`` frame, in either wire shape:
+    flat:   {"type": "response.create", "input": ..., "max_output_tokens": ...}
+    nested: {"type": "response.create", "response": {"input": ..., "max_output_tokens": ...}}
     """
     nested: Final = msg_obj.get("response")
-    params: Final[Mapping[str, object]] = (
+    return (
         nested
         if _is_json_object(nested) and nested
         else MappingProxyType({k: v for k, v in msg_obj.items() if k != "type"})
     )
+
+
+def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple[int, int | None]:
+    """Extract a rough input-token count and any explicit max_output_tokens from a ``response.create`` frame."""
+    params: Final = _response_create_params(msg_obj)
     text_parts: Final[list[str]] = []  # mutable-ok: local accumulator built in one pass, not shared
     pending: Final[list[object]] = [  # mutable-ok: explicit worklist avoids recursion
         params.get("input"),
@@ -2195,29 +2425,42 @@ async def _enforce_frame_project_quota(
     user_api_key_dict: UserAPIKeyAuth | None,
     model: str | None,
     raw_message: str,
-) -> None:
+) -> tuple[ResponsesWsQuotaRefund, ...]:
     """Charge one response.create frame's estimated tokens against every
     registered project ITPM/OTPM quota callback, in isolation from PII
     masking / logging so a malformed frame still reaches those callbacks."""
     if not quota_callbacks:
-        return
+        return ()
     try:
         msg_obj: Final = _load_json_value(raw_message)
     except (json.JSONDecodeError, TypeError):
-        return
+        return ()
     if not _is_json_object(msg_obj) or msg_obj.get("type") != "response.create":
-        return
+        return ()
     estimated_input_tokens, explicit_max_output_tokens = _extract_frame_quota_estimate_inputs(msg_obj)
     estimated_output_tokens: Final = (
         explicit_max_output_tokens if explicit_max_output_tokens is not None else _FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR
     )
-    for callback in quota_callbacks:
-        await callback.enforce_project_io_token_quota_for_frame(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=model,
-            estimated_input_tokens=estimated_input_tokens,
-            estimated_output_tokens=estimated_output_tokens,
-        )
+    refunds: Final = tuple(
+        [
+            await callback.enforce_project_io_token_quota_for_frame(
+                user_api_key_dict=user_api_key_dict,
+                requested_model=model,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=estimated_output_tokens,
+            )
+            for callback in quota_callbacks
+        ]
+    )
+    return tuple(refund for refund in refunds if inspect.iscoroutinefunction(refund))
+
+
+async def _refund_frame_quota(refunds: Sequence[ResponsesWsQuotaRefund]) -> None:
+    for refund in refunds:
+        try:
+            await refund()
+        except Exception as e:  # noqa: BLE001  # a failed refund must not end the client's socket
+            verbose_logger.exception("Responses WS project quota refund failed: %s", e)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2230,7 +2473,7 @@ class _RefusedTurn:
     rejection: Exception
 
 
-ResponsesWsTurnAdmission: TypeAlias = Callable[[], Awaitable[Mapping[str, object]]]
+ResponsesWsTurnAdmission: TypeAlias = Callable[[Mapping[str, object]], Awaitable[Mapping[str, object]]]
 
 
 def with_token_limit_checks(
@@ -2242,12 +2485,12 @@ def with_token_limit_checks(
     if not token_limit_callbacks or user_api_key_dict is None:
         return turn_admission
 
-    async def admit() -> Mapping[str, object]:
+    async def admit(turn_params: Mapping[str, object]) -> Mapping[str, object]:
         for callback in token_limit_callbacks:
             await callback.enforce_token_limits_for_frame(
                 user_api_key_dict=user_api_key_dict, requested_model=requested_model
             )
-        return MappingProxyType({}) if turn_admission is None else await turn_admission()
+        return MappingProxyType({}) if turn_admission is None else await turn_admission(turn_params)
 
     return admit
 
@@ -2259,7 +2502,7 @@ async def _admit_frame_turn(
     if turn_admission is None or frame is None or frame.get("type") != "response.create":
         return _AdmittedTurn()
     try:
-        return _AdmittedTurn(await turn_admission())
+        return _AdmittedTurn(await turn_admission(_response_create_params(frame)))
     except RateLimitError as refusal:
         return _RefusedTurn(refusal)
     except Exception as e:
@@ -2268,7 +2511,11 @@ async def _admit_frame_turn(
 
 
 def responses_ws_error_frame(
-    status: int, error_type: str, message: str, provider_specific_fields: Mapping[str, object] | None = None
+    status: int,
+    error_type: str,
+    message: str,
+    provider_specific_fields: Mapping[str, object] | None = None,
+    openai_fields: Mapping[str, str] = MappingProxyType({}),
 ) -> str:
     return json.dumps(
         {
@@ -2277,6 +2524,7 @@ def responses_ws_error_frame(
             "error": {
                 "type": error_type,
                 "message": message,
+                **openai_fields,
                 **({"provider_specific_fields": dict(provider_specific_fields)} if provider_specific_fields else {}),
             },
         },
@@ -2292,6 +2540,19 @@ def responses_ws_error_type(status: int) -> str:
             return "invalid_request_error"
         case _:
             return "server_error"
+
+
+def _openai_error_fields(failure: Exception) -> Mapping[str, str]:
+    return MappingProxyType(
+        {name: value for name in ("code", "param") if isinstance(value := attribute_or_none(failure, name), str)}
+    )
+
+
+def _turn_failure_frame(failure: Exception) -> str:
+    status: Final = error_status_code(failure, 500)
+    return responses_ws_error_frame(
+        status, responses_ws_error_type(status), str(failure), openai_fields=_openai_error_fields(failure)
+    )
 
 
 def turn_refusal_frame(refusal: RateLimitError) -> str:
@@ -2330,6 +2591,8 @@ _NO_IO_TOKEN_RESERVATION: Final[Mapping[str, object]] = MappingProxyType({})
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
 
+_CONTENT_TEXT_FIELDS: Final = ("text", "refusal")
+
 _PII_DELTA_EVENT_TYPES: Final = frozenset(
     {
         "response.output_text.delta",
@@ -2363,12 +2626,13 @@ def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], un
             for content_block in content:
                 if not _is_json_object(content_block):
                     continue
-                text = content_block.get("text")
-                if isinstance(text, str):
-                    unmasked = callable_of(unmask_pii_text)(text, pii_tokens)
-                    if unmasked != text:
-                        content_block["text"] = unmasked
-                        modified = True
+                for text_field in _CONTENT_TEXT_FIELDS:
+                    text = content_block.get(text_field)
+                    if isinstance(text, str):
+                        unmasked = callable_of(unmask_pii_text)(text, pii_tokens)
+                        if unmasked != text:
+                            content_block[text_field] = unmasked
+                            modified = True
         return json.dumps(evt_obj) if modified else response_str
 
     if event_type in _PII_DELTA_EVENT_TYPES:
@@ -2417,13 +2681,19 @@ def _frame_rejection_event(rejection: Exception) -> str:
 
 
 async def _reject_guarded_turn(
-    websocket: ResponsesClientWebSocket, guarded: GuardedResponsesWsFrame, rejection: Exception
+    websocket: ResponsesClientWebSocket,
+    guarded: GuardedResponsesWsFrame,
+    rejection: Exception,
+    quota_refunds: Sequence[ResponsesWsQuotaRefund],
 ) -> None:
-    """Bills the refused turn as its own failed request, then answers it on the open socket."""
-    if guarded.bill_refusal is not None:
-        await guarded.bill_refusal(rejection)
-    with contextlib.suppress(Exception):
-        await websocket.send_text(_turn_rejection_frame(rejection))
+    """Bills the refused turn as its own failed request, answers it on the open socket, then returns its charge."""
+    try:
+        if guarded.bill_refusal is not None:
+            await guarded.bill_refusal(rejection)
+        with contextlib.suppress(Exception):
+            await websocket.send_text(_turn_rejection_frame(rejection))
+    finally:
+        await _refund_frame_quota(quota_refunds)
 
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
@@ -2604,9 +2874,11 @@ class ResponsesWebSocketStreaming:
         turn_admission: ResponsesWsTurnAdmission | None = None,
         turn_usage_recorder: ResponsesWsTurnUsageRecorder | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
+        self.on_unfinished_turn: Callable[[], None] | None = on_unfinished_turn
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.frame_guard: ResponsesWsFrameGuard | None = frame_guard
@@ -2686,12 +2958,15 @@ class ResponsesWebSocketStreaming:
             return None
 
     async def _forward_guarded_frame(
-        self, message: str, turn_admission: ResponsesWsTurnAdmission | None = None
+        self,
+        message: str,
+        turn_admission: ResponsesWsTurnAdmission | None = None,
+        quota_refunds: Sequence[ResponsesWsQuotaRefund] = (),
     ) -> None:
         guarded: Final = await self._guard_frame(message)
         if guarded is None:
             return
-        admitted: Final = await self._admit_or_reject_turn(guarded, message, turn_admission)
+        admitted: Final = await self._admit_or_reject_turn(guarded, message, turn_admission, quota_refunds)
         if admitted is None:
             return
         if guarded.pii_tokens:
@@ -2742,6 +3017,8 @@ class ResponsesWebSocketStreaming:
     def _log_open_turns(self) -> None:
         open_turns: Final = self._open_turns
         self._open_turns = ()
+        if open_turns and self.on_unfinished_turn is not None:
+            self.on_unfinished_turn()
         for turn in open_turns:
             if turn.events:
                 self._log_turn(turn)
@@ -2986,6 +3263,7 @@ class ResponsesWebSocketStreaming:
     _OUTPUT_DONE_EVENT_TYPES = frozenset(
         {
             "response.output_text.done",
+            "response.refusal.done",
             "response.content_part.done",
             "response.output_item.done",
             "response.function_call_arguments.done",
@@ -3027,7 +3305,7 @@ class ResponsesWebSocketStreaming:
         ``response.completed`` or ``response.incomplete`` event before it is
         forwarded to the client.
 
-        Walks ``response.output[*].content[*].text`` and masks every text block,
+        Walks ``response.output[*].content[*]`` and masks every ``text`` and ``refusal``,
         as well as ``response.output[*].arguments`` on function-call items and
         ``response.output[*].summary[*].text`` on reasoning items. Delta and
         ``*.done`` events are suppressed upstream in ``backend_to_client`` when
@@ -3088,8 +3366,10 @@ class ResponsesWebSocketStreaming:
                 for content_block in content:
                     if not _is_json_object(content_block):
                         continue
-                    text = content_block.get("text")
-                    if isinstance(text, str):
+                    for text_field in _CONTENT_TEXT_FIELDS:
+                        text = content_block.get(text_field)
+                        if not isinstance(text, str):
+                            continue
                         masked = await cb.check_pii(
                             text=text,
                             output_parse_pii=False,
@@ -3097,29 +3377,32 @@ class ResponsesWebSocketStreaming:
                             request_data=self.request_data,
                         )
                         if masked != text:
-                            content_block["text"] = masked
+                            content_block[text_field] = masked
                             modified = True
 
         return json.dumps(evt_obj) if modified else response_str
 
-    async def _enforce_or_reject_frame(self, message: str) -> bool:
-        """Run the per-frame project quota check.
+    async def _enforce_or_reject_frame(self, message: str) -> tuple[ResponsesWsQuotaRefund, ...] | None:
+        """Run the per-frame project quota check and return the charge's refunds.
 
-        On rejection, sends an ``error`` event to the client and reports that
-        the frame must be dropped instead of forwarded, so the connection
+        On rejection, sends an ``error`` event to the client and returns None
+        so the frame is dropped instead of forwarded, and the connection
         stays open for the client to retry once the window resets.
         """
         try:
-            await _enforce_frame_project_quota(
+            return await _enforce_frame_project_quota(
                 self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
             )
         except RateLimitError as e:
             await self._send_turn_refusal(e)
-            return False
-        return True
+            return None
 
     async def _admit_or_reject_turn(
-        self, guarded: GuardedResponsesWsFrame, message: str, turn_admission: ResponsesWsTurnAdmission | None
+        self,
+        guarded: GuardedResponsesWsFrame,
+        message: str,
+        turn_admission: ResponsesWsTurnAdmission | None,
+        quota_refunds: Sequence[ResponsesWsQuotaRefund],
     ) -> _AdmittedTurn | None:
         verdict: Final = await _admit_frame_turn(turn_admission, message)
         match verdict:
@@ -3128,7 +3411,7 @@ class ResponsesWebSocketStreaming:
             case _RefusedTurn(rejection=rejection):
                 if self._failure is None:
                     self._failure = rejection
-                await _reject_guarded_turn(self.websocket, guarded, rejection)
+                await _reject_guarded_turn(self.websocket, guarded, rejection, quota_refunds)
                 return None
 
     async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
@@ -3140,14 +3423,14 @@ class ResponsesWebSocketStreaming:
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
-            if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
+            if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message) is not None:
                 await self._forward_guarded_frame(self.first_message)
 
             while True:
                 message = await self.websocket.receive_text()
-                if not await self._enforce_or_reject_frame(message):
+                if (quota_refunds := await self._enforce_or_reject_frame(message)) is None:
                     continue
-                await self._forward_guarded_frame(message, self.turn_admission)
+                await self._forward_guarded_frame(message, self.turn_admission, quota_refunds)
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
@@ -3227,11 +3510,13 @@ class ManagedResponsesWebSocketHandler:
         turn_admission: ResponsesWsTurnAdmission | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
         guardrail_callbacks: Sequence[PresidioGuardrailCallback] | None = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
         self.model = model
         self.frame_guard = frame_guard
+        self.on_unfinished_turn: Callable[[], None] | None = on_unfinished_turn
         self.guardrail_callbacks: tuple[PresidioGuardrailCallback, ...] = tuple(guardrail_callbacks or ())
         self._pii_tokens: Mapping[str, str] = {}
         self.logging_obj = logging_obj
@@ -3257,6 +3542,7 @@ class ManagedResponsesWebSocketHandler:
         # This avoids the async DB-write race condition where spend logs haven't
         # been committed yet when the next response.create arrives.
         self._session_history: dict[str, list[dict[str, object]]] = {}
+        self._cut_off_call_ids: Mapping[str, frozenset[str]] = MappingProxyType({})
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -3284,7 +3570,9 @@ class ManagedResponsesWebSocketHandler:
         with contextlib.suppress(Exception):
             await self.websocket.send_text(frame)
 
-    def _get_history_messages(self, previous_response_id: str) -> list[dict[str, object]]:
+    def _get_history_messages(
+        self, previous_response_id: str, current_messages: Sequence[Mapping[str, object]]
+    ) -> list[dict[str, object]]:
         """
         Return accumulated message history for *previous_response_id*.
 
@@ -3293,7 +3581,8 @@ class ManagedResponsesWebSocketHandler:
         """
         decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
         raw_id: Final = decoded.get("response_id", previous_response_id)
-        return list(self._session_history.get(raw_id, []))
+        skipped_call_ids: Final = self._cut_off_call_ids.get(raw_id, frozenset()) - _call_ids(current_messages)
+        return [item for item in self._session_history.get(raw_id, []) if not _has_call_id_in(item, skipped_call_ids)]
 
     def _store_history(self, response_id: str, messages: list[dict[str, object]]) -> None:
         """
@@ -3321,25 +3610,27 @@ class ManagedResponsesWebSocketHandler:
     @staticmethod
     def _extract_output_messages(
         completed_event: _TerminalEvent,
+        answered_approval_ids: frozenset[str] = frozenset(),
     ) -> list[dict[str, object]]:
         """
         Convert output items in a terminal (``response.completed`` or ``response.incomplete``) event into Responses
-        API message dicts suitable for the next turn's ``input``.
+        API message dicts suitable for the next turn's ``input``, keeping every item a later turn can answer.
         """
         resp_obj: Final = completed_event.get("response", {})
-        if not isinstance(resp_obj, dict):
+        if not _is_json_object(resp_obj):
             return []
+        output: Final = resp_obj.get("output")
         messages: Final[list[dict[str, object]]] = []
-        for item in resp_obj.get("output", []) or []:
-            if not isinstance(item, dict):
+        for item in output if _is_json_array(output) else []:
+            if not _is_json_object(item):
                 continue
             item_type = item.get("type")
             role = item.get("role", "assistant")
             if item_type == "message":
-                content_parts = item.get("content") or []
+                content_parts = item.get("content")
                 text_parts = [
                     p.get("text", "")
-                    for p in content_parts
+                    for p in (content_parts if _is_json_array(content_parts) else [])
                     if isinstance(p, dict) and p.get("type") in ("output_text", "text")
                 ]
                 text = "".join(text_parts)
@@ -3351,7 +3642,7 @@ class ManagedResponsesWebSocketHandler:
                             "content": [{"type": "output_text", "text": text}],
                         }
                     )
-            elif item_type == "function_call":
+            elif _is_replayed_call_item(item, answered_approval_ids):
                 messages.append(item)
         return messages
 
@@ -3594,26 +3885,35 @@ class ManagedResponsesWebSocketHandler:
         event dict, or ``None``.
         """
         terminal_event: object = None
-        stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
-        async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns an async stream
-            if chunk is None:
-                continue
-            # Read type from the object before serializing to avoid double JSON parse
-            chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if isinstance(chunk, dict) else None)
-            serialized = self._serialize_chunk(chunk)
-            if serialized is None:
-                continue
-            if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
+        try:
+            stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
+            async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns a stream
+                if chunk is None:
+                    continue
+                # Read type from the object before serializing to avoid double JSON parse
+                chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if _is_json_object(chunk) else None)
+                serialized = self._serialize_chunk(chunk)
+                if serialized is None:
+                    continue
+                if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
+                    try:
+                        terminal_event = _load_json_value(serialized)
+                    except Exception:
+                        pass
                 try:
-                    terminal_event = _load_json_value(serialized)
-                except Exception:
-                    pass
-            try:
-                await self.websocket.send_text(self._unmask_for_client(serialized))
-            except Exception as send_exc:
-                verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
-                return terminal_event  # Client disconnected
+                    await self.websocket.send_text(self._unmask_for_client(serialized))
+                except Exception as send_exc:
+                    verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
+                    self._report_unfinished_turn(terminal_event)
+                    return terminal_event  # Client disconnected
+        except asyncio.CancelledError:
+            self._report_unfinished_turn(terminal_event)
+            raise
         return terminal_event
+
+    def _report_unfinished_turn(self, terminal_event: object) -> None:
+        if terminal_event is None and self.on_unfinished_turn is not None:
+            self.on_unfinished_turn()
 
     def _unmask_for_client(self, serialized: str) -> str:
         """The provider and the turn history keep Presidio's tokens, the client gets the original text back."""
@@ -3635,9 +3935,14 @@ class ManagedResponsesWebSocketHandler:
         new_response_id: Final = self._extract_response_id(event)
         if not new_response_id:
             return
-        output_msgs: Final = self._extract_output_messages(event)
-        all_messages: Final = prior_history + current_messages + output_msgs
+        earlier_messages: Final = prior_history + current_messages
+        output_msgs: Final = self._extract_output_messages(event, _answered_approval_ids(earlier_messages))
+        all_messages: Final = earlier_messages + output_msgs
         self._store_history(new_response_id, all_messages)
+        if event.get("type", None) == "response.incomplete":
+            self._cut_off_call_ids = MappingProxyType(
+                {**self._cut_off_call_ids, new_response_id: _unanswered_call_ids(output_msgs)}
+            )
         verbose_logger.debug(
             "ManagedResponsesWS: stored %d messages for response_id=%s",
             len(all_messages),
@@ -3687,7 +3992,7 @@ class ManagedResponsesWebSocketHandler:
             return
 
         try:
-            await _enforce_frame_project_quota(
+            quota_refunds: Final = await _enforce_frame_project_quota(
                 self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
             )
         except RateLimitError as e:
@@ -3700,7 +4005,7 @@ class ManagedResponsesWebSocketHandler:
         if isinstance(verdict, _RefusedTurn):
             if self._failure is None:
                 self._failure = verdict.rejection
-            await _reject_guarded_turn(self.websocket, guarded, verdict.rejection)
+            await _reject_guarded_turn(self.websocket, guarded, verdict.rejection, quota_refunds)
             return
         if guarded.pii_tokens:
             self._pii_tokens = {**self._pii_tokens, **guarded.pii_tokens}
@@ -3721,7 +4026,9 @@ class ManagedResponsesWebSocketHandler:
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history
-        prior_history: Final = self._get_history_messages(previous_response_id) if previous_response_id else []
+        prior_history: Final = (
+            self._get_history_messages(previous_response_id, current_messages) if previous_response_id else []
+        )
 
         self._apply_history(call_kwargs, previous_response_id, current_messages, prior_history)
         self._inject_credentials(call_kwargs, model=model)
@@ -3742,7 +4049,7 @@ class ManagedResponsesWebSocketHandler:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
-            await self._send_error(error_status_code(exc, 500), str(exc))
+            await self._send_frame(_turn_failure_frame(exc))
             return
 
         self._save_turn_history(terminal_event, prior_history, current_messages)

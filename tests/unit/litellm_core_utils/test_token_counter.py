@@ -9,11 +9,11 @@ import json
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Set
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from itertools import accumulate, chain
+from itertools import chain
 from queue import SimpleQueue
-from typing import Final, cast
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch, sentinel
 
 import anyio.to_thread
@@ -30,9 +30,11 @@ from litellm.constants import (
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
+    TRUNCATED_BASE64_MARKER,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    PdfDocumentPricing,
     TokenCountMemo,
     UnsupportedContentTypeError,
     _count_content_list,
@@ -44,9 +46,12 @@ from litellm.litellm_core_utils.token_counter import (
     estimate_image_tokens,
     has_only_text_content,
     high_detail_image_token_upper_bound,
+    inline_pdf_token_delta,
+    inline_pdf_token_deltas,
     is_openai_model,
     messages_reach_token_count,
     offload_token_count,
+    openai_tokenizer_encoding,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
@@ -59,6 +64,7 @@ from tests.unit.litellm_core_utils.event_loop_lag import (
     uncounted_text,
     warm_tokenizer,
 )
+from tests.unit.litellm_core_utils.handbuilt_pdf import pdf_base64 as _pdf_base64
 from tests.unit.litellm_core_utils.messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
@@ -127,6 +133,29 @@ def test_token_counter_default_encoding_matches_cl100k():
     expected: Final = len(encoding.encode("hello world", disallowed_special=()))
 
     assert token_counter_new(model=None, text="hello world") == expected
+
+
+def test_token_counter_counts_with_a_custom_openai_tokenizer_encoding():
+    japanese: Final = "日本語のテキストを数えます。" * 50
+    o200k: Final = tiktoken.get_encoding("o200k_base")
+    assert len(o200k.encode(japanese)) != len(tiktoken.get_encoding("cl100k_base").encode(japanese))
+
+    assert token_counter_new(custom_tokenizer={"type": "openai_tokenizer", "tokenizer": o200k}, text=japanese) == len(
+        o200k.encode(japanese)
+    )
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-luna", "openai/gpt-5.6-luna", "azure/gpt-5.6-luna"])
+def test_a_selected_tokenizer_never_overrides_an_openai_models_own_encoding(model: str):
+    japanese: Final = "日本語のテキストを数えます。" * 50
+    own_encoding: Final = openai_tokenizer_encoding(model)
+    selected: Final = litellm.utils.select_tokenizer(model)
+    assert selected["type"] == "openai_tokenizer"
+    assert len(own_encoding.encode(japanese)) != len(selected["tokenizer"].encode(japanese))
+
+    assert token_counter_new(model=model, custom_tokenizer=selected, text=japanese) == token_counter_new(
+        model=model, text=japanese
+    )
 
 
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
@@ -2088,6 +2117,34 @@ def test_token_counter_with_compaction_block():
     assert token_counter(model=model, messages=unsigned) == token_counter(model=model, messages=as_text)
 
 
+@pytest.mark.parametrize("model", ("anthropic/claude-sonnet-5-5", "gpt-5.4-mini", "deepseek/deepseek-v4-flash"))
+def test_token_counter_counts_nothing_for_a_fallback_block(model: str) -> None:
+    user_turn: Final = {"role": "user", "content": "hi"}
+    reply: Final = {"type": "text", "text": "Hello"}
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "first-model"},
+        "to": {"model": "second-model"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+    }
+
+    with_block: Final = [user_turn, {"role": "assistant", "content": [reply, fallback_block, reply]}]
+    without_block: Final = [user_turn, {"role": "assistant", "content": [reply, reply]}]
+
+    assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
+
+
+@pytest.mark.parametrize("model", ("anthropic/claude-sonnet-5-5", "gpt-5.4-mini", "deepseek/deepseek-v4-flash"))
+def test_token_counter_counts_the_text_a_fallback_block_carries_like_a_text_block(model: str) -> None:
+    user_turn: Final = {"role": "user", "content": "hi"}
+    carried: Final = "Text a caller put on the block. " * 20
+
+    with_fallback: Final = [user_turn, {"role": "assistant", "content": [{"type": "fallback", "text": carried}]}]
+    with_text: Final = [user_turn, {"role": "assistant", "content": [{"type": "text", "text": carried}]}]
+
+    assert token_counter(model=model, messages=with_fallback) == token_counter(model=model, messages=with_text)
+
+
 def test_token_counter_counts_chat_compaction_blocks_like_their_summary_text():
     """
     Chat clients replay a compaction block in the assistant message's provider_specific_fields, and inference
@@ -2201,23 +2258,20 @@ def test_token_counter_with_tool_reference_block():
 
 def test_count_content_list_rejects_unknown_type():
     """
-    An unrecognized content block type must raise, and the error message must
-    enumerate the supported types (including `tool_reference`). This pins the
-    catch-all contract so a future block type isn't silently dropped.
+    An unrecognized content block type must raise, naming the type, so a
+    future block type isn't silently dropped.
     """
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
-    with pytest.raises(ValueError, match='Error getting number of tokens from content list: Invalid') as exc_info:
+    with pytest.raises(
+        ValueError, match=r"^The token counter can't count content blocks of type totally_unknown_block$"
+    ):
         _count_content_list(
             count_function=len,
             content_list=[{"type": "totally_unknown_block"}],
             use_default_image_token_count=False,
             default_token_count=None,
         )
-
-    message = str(exc_info.value)
-    assert "Invalid content item type: totally_unknown_block" in message
-    assert "tool_reference" in message
 
 
 _CLAUDE: Final = "anthropic/claude-sonnet-5-5"
@@ -2337,7 +2391,7 @@ def test_counting_tool_changes_leaves_the_messages_unchanged() -> None:
     ids=["unknown_target_type", "definition_not_an_object", "missing_target"],
 )
 def test_tool_change_with_an_unrecognized_target_stays_unsupported(tool_change: dict[str, object]) -> None:
-    with pytest.raises(UnsupportedContentTypeError, match="Invalid tool change target type"):
+    with pytest.raises(UnsupportedContentTypeError, match=r"^The token counter can't count tool changes whose target"):
         _count_content_list(len, [tool_change], False, None)
 
 
@@ -2669,7 +2723,10 @@ def test_malformed_server_tool_block_is_unsupported_content(block: Mapping[str, 
 
     content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
 
-    with pytest.raises(UnsupportedContentTypeError):
+    with pytest.raises(
+        UnsupportedContentTypeError,
+        match=rf"^The token counter can't read the content field of a {block['type']} block: ",
+    ):
         _count_content_list(len, content, False, None)
     assert _count_content_list(len, content, False, 7) == 7
 
@@ -2711,7 +2768,7 @@ def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(co
     unknown: Final = {"type": "future_block"}
     content: Final = [{"type": container, "tool_use_id": "toolu_1", "content": [unknown]}] if container else [unknown]
 
-    with pytest.raises(ValueError, match="Invalid content item type: future_block"):
+    with pytest.raises(ValueError, match=r"^The token counter can't count content blocks of type future_block$"):
         _count_content_list(len, content, False, None)
     assert _count_content_list(len, content, False, 7) == 7
 
@@ -2838,53 +2895,6 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     assert _count_user_content([prompt, named]) == _count_user_content(
         [prompt, {"type": "text", "text": "report.pdf"}]
     )
-
-
-def _pdf_base64(
-    pages: tuple[str, ...],
-    width: int = 612,
-    height: int = 792,
-    xobjects: tuple[bytes, ...] = (),
-    drawing: bytes = b"",
-    page_resources: str | None = None,
-) -> str:
-    """`xobjects` are numbered from 4 + 2 * len(pages), every page lists the first one as its /X0 XObject, and every
-    page's content stream ends with `drawing`. `page_resources` replaces every page's /Resources dictionary."""
-    first_xobject: Final = 4 + 2 * len(pages)
-    page_xobjects: Final = f" /XObject << /X0 {first_xobject} 0 R >>" if xobjects else ""
-    resources: Final = page_resources if page_resources is not None else f"<< /Font << /F1 3 0 R >>{page_xobjects} >>"
-
-    def page_objects(index: int, text: str) -> tuple[bytes, bytes]:
-        escaped: Final = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-        stream: Final = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1") + drawing
-        content: Final = f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"
-        page: Final = (
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
-            f"/Resources {resources} /Contents {4 + 2 * index} 0 R >>"
-        ).encode()
-        return content, page
-
-    kids: Final = " ".join(f"{5 + 2 * index} 0 R" for index in range(len(pages)))
-    bodies: Final = (
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        f"<< /Type /Pages /Count {len(pages)} /Kids [ {kids} ] >>".encode(),
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        *chain.from_iterable(page_objects(index, text) for index, text in enumerate(pages)),
-        *xobjects,
-    )
-    header: Final = b"%PDF-1.4\n"
-    objects: Final = tuple(
-        f"{number} 0 obj\n".encode() + body + b"\nendobj\n" for number, body in enumerate(bodies, start=1)
-    )
-    offsets: Final = accumulate((len(header), *(len(obj) for obj in objects[:-1])))
-    xref: Final = f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode() + b"".join(
-        f"{offset:010d} 00000 n \n".encode() for offset in offsets
-    )
-    trailer: Final = (
-        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-        f"startxref\n{len(header) + sum(len(obj) for obj in objects)}\n%%EOF\n"
-    ).encode()
-    return base64.b64encode(header + b"".join(objects) + xref + trailer).decode()
 
 
 def _pdf_source(pdf_base64: str) -> dict[str, str]:
@@ -3347,6 +3357,269 @@ def test_messages_reach_token_count_prices_pdf_pages_like_token_counter():
 def _png_data_url(width: int, height: int) -> str:
     ihdr = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
     return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
+
+
+def _pypdf_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name.startswith("pypdf")]
+
+
+@pytest.mark.parametrize("size", ["1.00MB", "12.5KB"])
+def test_a_redacted_pdf_placeholder_is_priced_like_an_image_without_being_parsed(
+    size: str, caplog: pytest.LogCaptureFixture
+):
+    placeholder: Final = f"data:application/pdf;base64,[base64_data truncated: {size}]"
+    caplog.set_level("WARNING", logger="pypdf")
+
+    assert len(base64.b64decode(placeholder.removeprefix("data:application/pdf;base64,"))) == 18
+
+    as_file: Final = _count_user_content([{"type": "file", "file": {"file_data": placeholder}}], model="")
+    as_document: Final = _count_user_content(
+        [{"type": "document", "source": {"type": "url", "url": placeholder}}], model=""
+    )
+
+    assert as_file == as_document == _count_user_content([{"type": "image_url", "image_url": {"url": placeholder}}], "")
+    assert _pypdf_warnings(caplog) == []
+
+
+def test_messages_the_logging_redaction_rewrote_reach_the_counter_without_a_pdf_parse(
+    caplog: pytest.LogCaptureFixture,
+):
+    from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+
+    messages: Final = [{"role": "user", "content": [_as_pdf_file(_pdf_base64(("",)))]}]
+    redacted: Final = truncate_base64_in_messages(messages)
+    caplog.set_level("WARNING", logger="pypdf")
+
+    assert redacted[0]["content"][0]["file"]["file_data"].startswith(
+        "data:application/pdf;base64," + TRUNCATED_BASE64_MARKER
+    )
+
+    total: Final = token_counter_new(model="", messages=redacted)
+
+    assert messages_reach_token_count(model="", messages=redacted, threshold=total) is True
+    assert messages_reach_token_count(model="", messages=redacted, threshold=total + 1) is False
+    assert total < token_counter_new(model="", messages=messages)
+    assert _pypdf_warnings(caplog) == []
+
+
+def test_a_line_wrapped_base64_pdf_keeps_its_page_price():
+    encoded: Final = _pdf_base64((_REVENUE_LINE, ""))
+    wrapped: Final = "\n".join(encoded[start : start + 76] for start in range(0, len(encoded), 76))
+
+    assert _pdf_cost("", wrapped, _as_pdf_file) == _pdf_cost("", encoded, _as_pdf_file)
+    assert _pdf_cost("", wrapped, _as_pdf_file) == _text_cost("", _REVENUE_LINE) + 2 * 1534
+
+
+_THREE_PAGE_PDF: Final = _pdf_base64((_REVENUE_LINE,) * 3)
+_OTHER_PDF: Final = _pdf_base64((_HEADCOUNT_LINE, ""))
+
+
+def _document(pdf_base64: str) -> dict[str, object]:
+    return {"type": "document", "source": _pdf_source(pdf_base64)}
+
+
+def _image(pdf_base64: str) -> dict[str, object]:
+    return {"type": "image", "source": _pdf_source(pdf_base64)}
+
+
+def _file(pdf_base64: str) -> dict[str, object]:
+    return {"type": "file", "file": {"file_data": f"data:application/pdf;base64,{pdf_base64}"}}
+
+
+def _image_url(pdf_base64: str) -> dict[str, object]:
+    return {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{pdf_base64}"}}
+
+
+def _tool_result(*content: object) -> dict[str, object]:
+    return {"type": "tool_result", "tool_use_id": "t1", "content": list(content)}
+
+
+def _single_image_shapes() -> list[tuple[list[object], list[object]]]:
+    shared_document: Final = _document(_THREE_PAGE_PDF)
+    shared_image: Final = _image(_THREE_PAGE_PDF)
+    return [
+        ([_document(_THREE_PAGE_PDF)], [_image(_THREE_PAGE_PDF)]),
+        ([_file(_THREE_PAGE_PDF)], [_image_url(_THREE_PAGE_PDF)]),
+        ([shared_document, shared_document, _document(_OTHER_PDF)], [shared_image, shared_image, _image(_OTHER_PDF)]),
+        (
+            [_tool_result(_document(_THREE_PAGE_PDF), _document(_OTHER_PDF))],
+            [_tool_result(_image(_THREE_PAGE_PDF), _image(_OTHER_PDF))],
+        ),
+        (
+            [{"type": "document", "source": {"type": "content", "content": [_document(_THREE_PAGE_PDF)]}}],
+            [{"type": "document", "source": {"type": "content", "content": [_image(_THREE_PAGE_PDF)]}}],
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pdf_content", "image_content"),
+    _single_image_shapes(),
+    ids=["document", "file", "repeated_document_and_another", "tool_result", "nested_document"],
+)
+def test_repricing_inline_pdfs_as_single_images_matches_sending_the_same_bytes_as_images(
+    pdf_content: list[object], image_content: list[object]
+):
+    pdf_messages: Final = [{"role": "user", "content": pdf_content}]
+
+    assert token_counter_new(model="", messages=pdf_messages) + inline_pdf_token_delta(
+        "", pdf_messages, "single_image"
+    ) == token_counter_new(model="", messages=[{"role": "user", "content": image_content}])
+
+
+def test_repricing_with_a_custom_tokenizer_moves_the_count_that_tokenizer_made():
+    accented: Final = _pdf_base64(("naïve café déjà vu résumé " * 3,))
+    o200k: Final[SelectTokenizerResponse] = {
+        "type": "openai_tokenizer",
+        "tokenizer": tiktoken.get_encoding("o200k_base"),
+    }
+    pdf_messages: Final = [{"role": "user", "content": [_document(accented)]}]
+    image_messages: Final = [{"role": "user", "content": [_image(accented)]}]
+    repriced: Final = inline_pdf_token_deltas("", pdf_messages, ("single_image",), custom_tokenizer=o200k)
+
+    assert token_counter_new(model="", messages=pdf_messages, custom_tokenizer=o200k) != token_counter_new(
+        model="", messages=pdf_messages
+    )
+    assert token_counter_new(model="", messages=pdf_messages, custom_tokenizer=o200k) + repriced[
+        "single_image"
+    ] == token_counter_new(model="", messages=image_messages, custom_tokenizer=o200k)
+
+
+def test_repricing_inline_pdfs_for_openai_moves_each_occurrence_by_its_page_price_difference():
+    encoded: Final = _pdf_base64((_REVENUE_LINE, ""))
+    document: Final = _document(encoded)
+    once: Final = [{"role": "user", "content": [document]}]
+    twice: Final = [
+        {"role": "user", "content": [document]},
+        {"role": "user", "content": [{"type": "text", "text": "and"}, document]},
+    ]
+
+    assert inline_pdf_token_delta("", once, "openai") == 13 - 2 * 1534
+    assert inline_pdf_token_delta("", twice, "openai") == 2 * (13 - 2 * 1534)
+
+
+def _web_fetch_of(document: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": {"type": "web_fetch_result", "url": "https://example.invalid/report.pdf", "content": document},
+    }
+
+
+def _web_fetch_document(document: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "web_fetch_tool_result", "tool_use_id": "srvtoolu_1", "content": document}
+
+
+@pytest.mark.parametrize("wrap", [_web_fetch_of, _web_fetch_document], ids=["web_fetch_result", "document_content"])
+@pytest.mark.parametrize("pdf_pricing", ["single_image", "openai"])
+def test_repricing_a_pdf_a_server_tool_returned_moves_only_the_pdf(
+    wrap: Callable[[Mapping[str, object]], dict[str, object]], pdf_pricing: PdfDocumentPricing
+):
+    def returning(document: Mapping[str, object]) -> list[dict[str, object]]:
+        return [{"role": "user", "content": [{"type": "text", "text": "the fetched report"}, wrap(document)]}]
+
+    def plain(document: Mapping[str, object]) -> list[dict[str, object]]:
+        return [{"role": "user", "content": [document]}]
+
+    def page_price(messages: Callable[[Mapping[str, object]], list[dict[str, object]]]) -> int:
+        return token_counter_new(model="", messages=messages(_document(_THREE_PAGE_PDF))) - token_counter_new(
+            model="", messages=messages(_document(_pdf_base64(())))
+        )
+
+    assert page_price(returning) == page_price(plain) > 0
+    assert token_counter_new(model="", messages=returning(_document(_THREE_PAGE_PDF))) > token_counter_new(
+        model="", messages=plain(_document(_THREE_PAGE_PDF))
+    )
+    assert inline_pdf_token_delta("", returning(_document(_THREE_PAGE_PDF)), pdf_pricing) == (
+        inline_pdf_token_delta("", plain(_document(_THREE_PAGE_PDF)), pdf_pricing)
+    )
+    assert inline_pdf_token_delta("", plain(_document(_THREE_PAGE_PDF)), pdf_pricing) < 0
+
+
+def test_repricing_pdfs_listed_in_a_server_tool_result_matches_sending_them_as_images():
+    def mcp_result(*content: object) -> list[dict[str, object]]:
+        listed: Final = {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_1", "content": list(content)}
+        return [{"role": "user", "content": [listed]}]
+
+    note: Final = {"type": "text", "text": "two reports"}
+    pdfs: Final = mcp_result(_document(_THREE_PAGE_PDF), note, _document(_OTHER_PDF))
+    images: Final = mcp_result(_image(_THREE_PAGE_PDF), note, _image(_OTHER_PDF))
+
+    assert token_counter_new(model="", messages=pdfs) + inline_pdf_token_delta(
+        "", pdfs, "single_image"
+    ) == token_counter_new(model="", messages=images)
+
+
+def test_repricing_a_page_that_draws_an_image_keeps_its_rendered_price_for_openai():
+    drawn: Final = _pdf_base64((_REVENUE_LINE,), xobjects=(_ONE_PIXEL_IMAGE,), drawing=_DRAW_X0)
+    messages: Final = [{"role": "user", "content": [_document(drawn), _document(_pdf_base64((_REVENUE_LINE,)))]}]
+
+    assert inline_pdf_token_deltas("", messages, ("openai", "single_image"))["openai"] == 13 - 1534
+
+
+def test_repricing_a_line_wrapped_pdf_matches_the_unwrapped_one():
+    encoded: Final = _pdf_base64((_REVENUE_LINE, ""))
+    wrapped: Final = "\n".join(encoded[start : start + 76] for start in range(0, len(encoded), 76))
+
+    def deltas(pdf_base64: str) -> Mapping[PdfDocumentPricing, int]:
+        messages: Final = [{"role": "user", "content": [_file(pdf_base64)]}]
+        return inline_pdf_token_deltas("", messages, ("openai", "single_image"))
+
+    assert deltas(wrapped) == deltas(encoded)
+    assert deltas(encoded)["openai"] == 13 - 2 * 1534
+
+
+def test_repricing_without_pypdf_moves_nothing(monkeypatch: pytest.MonkeyPatch):
+    messages: Final = [{"role": "user", "content": [_document(_THREE_PAGE_PDF), _file(_OTHER_PDF)]}]
+
+    monkeypatch.setitem(sys.modules, "pypdf", None)
+
+    assert inline_pdf_token_deltas("", messages, ("openai", "single_image")) == {"openai": 0, "single_image": 0}
+
+
+def test_repricing_an_encrypted_pdf_keeps_its_opaque_document_count():
+    from pypdf import PdfWriter
+
+    writer: Final = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.encrypt("private-document")
+    output: Final = io.BytesIO()
+    writer.write(output)
+    encoded: Final = base64.b64encode(output.getvalue()).decode("ascii")
+    messages: Final = [{"role": "user", "content": [_document(encoded)]}]
+
+    assert token_counter_new(model="", messages=messages) > 0
+    assert inline_pdf_token_deltas("", messages, ("openai", "single_image")) == {"openai": 0, "single_image": 0}
+
+
+def test_repricing_reads_a_pdf_inside_its_own_tool_result_once():
+    content: Final[list[object]] = [_document(_THREE_PAGE_PDF)]  # mutable-ok: closed into a cycle below
+    looped: Final = {"type": "tool_result", "tool_use_id": "t1", "content": content}
+    content.append(looped)
+    once: Final = [{"role": "user", "content": [_tool_result(_document(_THREE_PAGE_PDF))]}]
+
+    assert inline_pdf_token_delta("", [{"role": "user", "content": [looped]}], "single_image") == (
+        inline_pdf_token_delta("", once, "single_image")
+    )
+    assert inline_pdf_token_delta("", once, "single_image") < 0
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [{"type": "text", "text": _REVENUE_LINE}],
+        [{"type": "image_url", "image_url": {"url": _png_data_url(1024, 1024)}}],
+        [_as_pdf_file(base64.b64encode(b"not a pdf at all").decode())],
+        [_as_pdf_file("[base64_data truncated: 1.00MB]")],
+        [{"type": "text", "text": "see the report", "content": [_document(_THREE_PAGE_PDF)]}],
+    ],
+    ids=["text", "image", "unreadable_pdf", "redacted_pdf", "pdf_the_counter_does_not_read"],
+)
+@pytest.mark.parametrize("pdf_pricing", ["single_image", "openai"])
+def test_repricing_leaves_every_prompt_without_a_counted_readable_pdf_alone(
+    content: list[object], pdf_pricing: PdfDocumentPricing
+):
+    assert inline_pdf_token_delta("", [{"role": "user", "content": content}], pdf_pricing) == 0
 
 
 @pytest.mark.parametrize(
@@ -3970,6 +4243,39 @@ def test_memoized_counts_match_uncached_counts_for_each_model_sharing_the_memo()
 
     assert len(set(uncached)) == len(models)
     assert tuple(token_counter_new(model=model, text=text) for model in models * 2) == uncached * 2
+
+
+class _CallCountingByteEncoding(tiktoken.Encoding):
+    def __init__(self) -> None:
+        super().__init__(
+            "call-counting-bytes",
+            pat_str=r"\S+|\s+",
+            mergeable_ranks={bytes([byte]): byte for byte in range(256)},
+            special_tokens={},
+        )
+        self.calls = 0
+
+    def encode(
+        self,
+        text: str,
+        *,
+        allowed_special: Literal["all"] | Set[str] = frozenset(),
+        disallowed_special: Literal["all"] | Collection[str] = "all",
+    ) -> list[int]:
+        self.calls += 1
+        return super().encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special)
+
+
+def test_openai_encoding_custom_tokenizer_counts_are_memoized():
+    encoding: Final = _CallCountingByteEncoding()
+    custom_tokenizer: Final = {"type": "openai_tokenizer", "tokenizer": encoding}
+
+    first: Final = token_counter_new(custom_tokenizer=custom_tokenizer, text=_MEMOIZED_TEXT)
+    calls_for_one_count: Final = encoding.calls
+    second: Final = token_counter_new(custom_tokenizer=custom_tokenizer, text=_MEMOIZED_TEXT)
+
+    assert first == second == len(_MEMOIZED_TEXT)
+    assert encoding.calls == calls_for_one_count > 0
 
 
 def test_custom_tokenizer_counts_are_not_memoized():

@@ -21,7 +21,8 @@ from litellm.constants import (
     request_timeout,
 )
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments
+from litellm.litellm_core_utils.call_kwargs import http_client_of, logging_obj_of, optional_str
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes, keyword_arguments, str_param
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
@@ -41,6 +42,7 @@ from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import (
     ModelInfoLookupMiss,
     ProviderConfigManager,
+    acredential_updates,
     aresolve_api_key_secret_reference,
     get_base_model_from_metadata,
     lookup_model_info_for_registration,
@@ -62,7 +64,13 @@ from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_pr
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, realtime_ssl_for_url
 from ..llms.openai.common_utils import is_openai_backed_api_base
-from ..llms.openai.live.handler import LiveUpstream, OpenAILiveSessions
+from ..llms.openai.live.handler import (
+    LiveAttach,
+    LiveProviderFrameGate,
+    LiveRelayedFrame,
+    LiveUpstream,
+    OpenAILiveSessions,
+)
 from ..llms.openai.realtime.handler import (
     OpenAIRealtime,
     confirm_gateway_session_started,
@@ -126,7 +134,9 @@ def _transcription_model_overrides(session: Mapping[str, object], model_name: st
 def with_resolved_session_model(session: Mapping[str, object], model_name: str) -> dict[str, object]:
     top_level_model: Final = {} if "model" not in session else {"model": model_name}
     transcription_models: Final = (
-        _transcription_model_overrides(session, model_name) if session.get("type") == "transcription" else {}
+        _transcription_model_overrides(session, model_name)
+        if session.get("type") == "transcription"
+        else _EMPTY_MODEL_PARAMS
     )
     return {**session, **top_level_model, **transcription_models}
 
@@ -337,7 +347,7 @@ async def acreate_realtime_client_secret(
     session: Mapping[str, object] | None = None,
     expires_after: Mapping[str, object] | None = None,
     timeout: float | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     req: Final = RealtimeClientSecretRequest(
         model=model,
@@ -359,7 +369,7 @@ async def acreate_realtime_client_secret(
         or req.model
         or "gpt-4o-realtime-preview"
     )
-    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
+    raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
@@ -385,6 +395,7 @@ async def acreate_realtime_client_secret(
         resolved_api_key=resolved_api_key,
         extra_headers=caller_extra_headers,
     )
+    litellm_logging_obj: Final = logging_obj_of(raw_logging_obj)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
@@ -407,7 +418,7 @@ async def acreate_realtime_client_secret(
         provider_config=provider_config,
         model=model_name,
         extra_headers=resolved_extra_headers,
-        client=kwargs.get("client"),
+        client=http_client_of(kwargs.get("client")),
         api_version=litellm_params.api_version,
     )
 
@@ -527,7 +538,7 @@ async def acreate_realtime_transcription_session(
     model: str | None = None,
     transcription_session: Mapping[str, object] | None = None,
     timeout: float | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Create an ephemeral transcription session via POST
@@ -545,7 +556,7 @@ async def acreate_realtime_transcription_session(
         ),
     )
     model_name = req.resolved_model() or "gpt-realtime-whisper"
-    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
+    raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     (
@@ -580,6 +591,7 @@ async def acreate_realtime_transcription_session(
         resolved_api_key=resolved_api_key,
         extra_headers=caller_extra_headers,
     )
+    litellm_logging_obj: Final = logging_obj_of(raw_logging_obj)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
@@ -603,7 +615,7 @@ async def acreate_realtime_transcription_session(
         provider_config=provider_config,
         model=model_name,
         extra_headers=resolved_extra_headers,
-        client=kwargs.get("client"),
+        client=http_client_of(kwargs.get("client")),
         api_version=litellm_params.api_version,
     )
 
@@ -615,10 +627,10 @@ async def arealtime_calls(
     model: str | None = None,
     session: dict[str, object] | None = None,
     timeout: float | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     model_name = model or "gpt-4o-realtime-preview"
-    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
+    raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
     (
@@ -640,6 +652,7 @@ async def arealtime_calls(
     )
     if session is not None:
         session = with_resolved_session_model(session, model_name)
+    litellm_logging_obj: Final = logging_obj_of(raw_logging_obj)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
@@ -656,8 +669,8 @@ async def arealtime_calls(
         provider_config=provider_config,
         model=model_name,
         session_config=session,
-        extra_headers=kwargs.get("extra_headers"),
-        client=kwargs.get("client"),
+        extra_headers=as_str_mapping(kwargs.get("extra_headers")),
+        client=http_client_of(kwargs.get("client")),
         api_version=litellm_params.api_version,
     )
 
@@ -736,6 +749,12 @@ async def vertex_access_token_resolver(
     )
 
 
+def _vertex_credentials_of(value: object) -> VERTEX_CREDENTIALS_TYPES | None:
+    if isinstance(value, str):
+        return value
+    return value if has_attributes(value, dict[str, str], "keys") else None
+
+
 async def _resolve_vertex_access_token_bounded(
     credentials: VERTEX_CREDENTIALS_TYPES | None,
     project_id: str | None,
@@ -779,6 +798,11 @@ def _realtime_guardrail_configured(litellm_metadata: Mapping[str, object]) -> bo
         and any(callback.should_run_guardrail(data=request_data, event_type=hook) for hook in event_hooks)
         for callback in litellm.callbacks
     )
+
+
+def live_guardrails_configured(request_data: Mapping[str, object]) -> bool:
+    """Whether a guardrail would run on this request. Live sessions cannot run guardrails, so they are refused."""
+    return _realtime_guardrail_configured(_session_litellm_metadata(request_data))
 
 
 @dataclass(frozen=True, slots=True)
@@ -838,6 +862,12 @@ async def _azure_live_upstream(
             assert_never(upstream)
 
 
+@dataclass(frozen=True, slots=True)
+class _RelayedUnchanged:
+    frame: str
+    denial: str | None = None
+
+
 async def _alive_session(
     model: str,
     websocket: "WebSocket",
@@ -849,10 +879,19 @@ async def _alive_session(
     azure_ad_token: str | None,
     litellm_metadata: Mapping[str, object],
     litellm_params: Mapping[str, object],
+    attach: LiveAttach | None = None,
+    client_frame_gate: LiveProviderFrameGate | None = None,
 ) -> None:
     rejection: Final = _live_session_rejection(custom_llm_provider, litellm_metadata)
     if rejection is not None:
         _raise_live_session_rejection(rejection)
+    provider_frame_gate: Final = client_frame_gate
+
+    async def _gated(client_frame: str) -> LiveRelayedFrame:
+        if provider_frame_gate is None:
+            return _RelayedUnchanged(frame=client_frame)
+        return await provider_frame_gate(client_frame, custom_llm_provider)
+
     if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         azure_upstream: Final = await _azure_live_upstream(api_base, api_key, azure_ad_token, litellm_params)
         await openai_live_sessions.async_live_session(
@@ -863,6 +902,8 @@ async def _alive_session(
             api_base=azure_upstream.url,
             api_key=api_key,
             upstream=azure_upstream,
+            attach=attach,
+            client_frame_gate=None if provider_frame_gate is None else _gated,
         )
         return
     resolved_api_base: Final = api_base or litellm.api_base or "https://api.openai.com/"
@@ -874,6 +915,37 @@ async def _alive_session(
         api_base=resolved_api_base,
         api_key=await resolve_openai_bearer_token_async(
             static_api_key=openai_static_api_key(api_key), api_base=resolved_api_base, litellm_params=litellm_params
+        ),
+        attach=attach,
+        client_frame_gate=None if provider_frame_gate is None else _gated,
+    )
+
+
+async def live_session_upstream(deployment_params: Mapping[str, object]) -> tuple[str, LiveUpstream] | None:
+    """Resolve a deployment to its provider model and Live endpoint, or None when the provider has no Live API."""
+    litellm_params: Final = {**deployment_params, **await acredential_updates(deployment_params)}
+    params: Final = GenericLiteLLMParams.model_validate(litellm_params)
+    model, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
+        model=str(litellm_params.get("model") or ""),
+        custom_llm_provider=params.custom_llm_provider,
+        api_base=params.api_base,
+        api_key=params.api_key,
+    )
+    api_base: Final = dynamic_api_base or params.api_base
+    if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
+        azure_ad_token: Final = litellm_params.get("azure_ad_token")
+        return model, await _azure_live_upstream(
+            api_base, dynamic_api_key, azure_ad_token if isinstance(azure_ad_token, str) else None, litellm_params
+        )
+    if custom_llm_provider != "openai":
+        return None
+    resolved_api_base: Final = api_base or litellm.api_base or "https://api.openai.com/"
+    return model, openai_live_sessions.openai_upstream(
+        resolved_api_base,
+        await resolve_openai_bearer_token_async(
+            static_api_key=openai_static_api_key(dynamic_api_key),
+            api_base=resolved_api_base,
+            litellm_params=litellm_params,
         ),
     )
 
@@ -891,7 +963,9 @@ async def _arealtime(
     query_params: RealtimeQueryParams | None = None,
     live_session_start: Mapping[str, object] | None = None,
     realtime_mode: str = "realtime",
-    **kwargs,
+    live_attach: LiveAttach | None = None,
+    live_client_frame_gate: LiveProviderFrameGate | None = None,
+    **kwargs: object,
 ) -> None:
     """
     Handle the realtime API call.
@@ -905,11 +979,14 @@ async def _arealtime(
         headers = {}
     if extra_headers is not None:
         headers.update(extra_headers)
-    litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
+    raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
     user: Final = kwargs.get("user", None)
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-    litellm_params_dict: Final = {**get_litellm_params(**kwargs), CallTypes.arealtime.value: True}
+    litellm_params_dict: Final[dict[str, object]] = {  # mutable-ok: update_from_kwargs pops from it
+        **get_litellm_params(**kwargs),
+        CallTypes.arealtime.value: True,
+    }
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,
@@ -926,6 +1003,7 @@ async def _arealtime(
         if "model" in query_params:
             query_params["model"] = model
 
+    litellm_logging_obj: Final = logging_obj_of(raw_logging_obj)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model,
@@ -963,6 +1041,8 @@ async def _arealtime(
             azure_ad_token=azure_ad_token,
             litellm_metadata=session_litellm_metadata,
             litellm_params=deployment_params,
+            attach=live_attach,
+            client_frame_gate=live_client_frame_gate,
         )
         return
 
@@ -1058,17 +1138,17 @@ async def _arealtime(
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs
-        aws_region_name: Final = kwargs.get("aws_region_name")
-        aws_access_key_id: Final = kwargs.get("aws_access_key_id")
-        aws_secret_access_key: Final = kwargs.get("aws_secret_access_key")
-        aws_session_token: Final = kwargs.get("aws_session_token")
-        aws_role_name: Final = kwargs.get("aws_role_name")
-        aws_session_name: Final = kwargs.get("aws_session_name")
-        aws_profile_name: Final = kwargs.get("aws_profile_name")
-        aws_web_identity_token: Final = kwargs.get("aws_web_identity_token")
-        aws_sts_endpoint: Final = kwargs.get("aws_sts_endpoint")
-        aws_bedrock_runtime_endpoint: Final = kwargs.get("aws_bedrock_runtime_endpoint")
-        aws_external_id: Final = kwargs.get("aws_external_id")
+        aws_region_name: Final = str_param(kwargs, "aws_region_name")
+        aws_access_key_id: Final = str_param(kwargs, "aws_access_key_id")
+        aws_secret_access_key: Final = str_param(kwargs, "aws_secret_access_key")
+        aws_session_token: Final = str_param(kwargs, "aws_session_token")
+        aws_role_name: Final = str_param(kwargs, "aws_role_name")
+        aws_session_name: Final = str_param(kwargs, "aws_session_name")
+        aws_profile_name: Final = str_param(kwargs, "aws_profile_name")
+        aws_web_identity_token: Final = str_param(kwargs, "aws_web_identity_token")
+        aws_sts_endpoint: Final = str_param(kwargs, "aws_sts_endpoint")
+        aws_bedrock_runtime_endpoint: Final = str_param(kwargs, "aws_bedrock_runtime_endpoint")
+        aws_external_id: Final = str_param(kwargs, "aws_external_id")
         aws_session_tags: Final = kwargs.get("aws_session_tags")
 
         await bedrock_realtime.async_realtime(
@@ -1114,18 +1194,18 @@ async def _arealtime(
             litellm_metadata=session_litellm_metadata,
         )
     elif _custom_llm_provider == "vertex_ai":
-        vertex_credentials: Final = (
+        vertex_credentials: Final = _vertex_credentials_of(
             kwargs.get("vertex_credentials")
             or kwargs.get("vertex_ai_credentials")
             or get_secret_str("VERTEXAI_CREDENTIALS")
         )
-        vertex_project: Final = (
+        vertex_project: Final = optional_str(
             kwargs.get("vertex_project")
             or kwargs.get("vertex_ai_project")
             or litellm.vertex_project
             or get_secret_str("VERTEXAI_PROJECT")
         )
-        vertex_location: Final = (
+        vertex_location: Final = optional_str(
             kwargs.get("vertex_location")
             or kwargs.get("vertex_ai_location")
             or litellm.vertex_location
@@ -1320,6 +1400,18 @@ async def realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime.construct_url(api_base=openai_api_base, query_params={"model": model})
+    elif custom_llm_provider == "elevenlabs":
+        from ..llms.elevenlabs.realtime.transformation import (
+            elevenlabs_realtime_health_check,
+            realtime_options_from_params,
+        )
+
+        return await elevenlabs_realtime_health_check(
+            model=model,
+            api_base=resolved_api_base,
+            api_key=health_check_api_key,
+            options=realtime_options_from_params(resolved_params),
+        )
     elif custom_llm_provider == "soniox":
         return await soniox_realtime_health_check(
             model=model,

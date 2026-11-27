@@ -112,7 +112,10 @@ pub(crate) fn joined_reads<E: Send + 'static>(
         received: Notify::new(),
         drained: Notify::new(),
     });
-    let reader = Reader(runtime.spawn(fill(chunks.boxed(), Arc::clone(&reads))));
+    let reader = Reader(litellm_call_scope::spawn_in_call_on(
+        &runtime,
+        fill(chunks.boxed(), Arc::clone(&reads)),
+    ));
     futures_util::stream::unfold(Some((reads, reader)), |state| async move {
         let (reads, reader) = state?;
         loop {

@@ -1,4 +1,5 @@
 import type { ParseKeys } from "i18next";
+import { productNames } from "@/i18n/untranslated/productNames";
 import { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import {
   AutoRouterKind,
@@ -62,16 +63,18 @@ const COMPLEXITY_TYPE_LABELS: Record<string, ParseKeys> = {
   jev: "modelsAndEndpoints.autoRouterRows.types.oss",
   oss_classifier: "modelsAndEndpoints.autoRouterRows.types.oss",
   capability: "modelsAndEndpoints.autoRouterRows.types.capability",
-  llm_v2: "modelsAndEndpoints.autoRouterRows.types.fuseV2",
   heuristic_first: "modelsAndEndpoints.autoRouterRows.types.heuristicFirst",
   hybrid: "modelsAndEndpoints.autoRouterRows.types.hybrid",
   custom: "modelsAndEndpoints.autoRouterRows.types.custom",
 };
 
-export const complexityTypeLabel = (config: Record<string, unknown>): string =>
-  typeof config.classifier_type === "string" && Object.hasOwn(COMPLEXITY_TYPE_LABELS, config.classifier_type)
-    ? i18n.t(COMPLEXITY_TYPE_LABELS[config.classifier_type])
+export const complexityTypeLabel = (config: Record<string, unknown>): string => {
+  const type = config.classifier_type;
+  if (type === "llm_v2") return productNames.fuseV2;
+  return typeof type === "string" && Object.hasOwn(COMPLEXITY_TYPE_LABELS, type)
+    ? i18n.t(COMPLEXITY_TYPE_LABELS[type])
     : i18n.t("modelsAndEndpoints.autoRouterRows.types.heuristic");
+};
 
 interface Presentation {
   typeLabel: string;

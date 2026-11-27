@@ -16,6 +16,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.stream_round_billing import StreamedRoundBilling
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ErrorEvent,
@@ -57,16 +58,17 @@ def _output_items(response: ResponsesAPIResponse) -> Sequence[object]:
     return tuple(cast("Sequence[object]", response.output))  # cast-ok: items are only carried, never inspected
 
 
+def _item_field(item: object, name: str) -> object:
+    """One field of a response item, which is either a dict or a model."""
+    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+
 def _function_call_id(item: object) -> str | None:
     """The call id of a function_call item, None for every other item kind."""
-    item_type: Final[object] = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+    item_type: Final = _item_field(item, "type")
     if item_type != "function_call":
         return None
-    call_id: Final[object] = (
-        item.get("call_id") or item.get("id")
-        if isinstance(item, dict)
-        else getattr(item, "call_id", None) or getattr(item, "id", None)
-    )
+    call_id: Final = _item_field(item, "call_id") or _item_field(item, "id")
     return call_id if isinstance(call_id, str) else None
 
 
@@ -391,11 +393,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             MCPRequestHandler,
         )
 
-        # Extract headers from secret_fields in original_request_params
-        raw_headers_from_request: dict[str, str] | None = None
-        secret_fields: Final = self.original_request_params.get("secret_fields")
-        if secret_fields and isinstance(secret_fields, dict):
-            raw_headers_from_request = secret_fields.get("raw_headers")
+        raw_headers_from_request: Final = ResponsesAPIRequestUtils.mcp_raw_headers(
+            self.original_request_params.get("secret_fields"), self.user_api_key_auth
+        )
 
         # Extract MCP-specific headers
         self.mcp_auth_header: str | None = None

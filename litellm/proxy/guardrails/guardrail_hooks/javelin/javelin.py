@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -24,13 +24,17 @@ from litellm.types.proxy.guardrails.guardrail_hooks.javelin import (
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.javelin import JavelinGuardrailConfigModel
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _JavelinVerdict(TypedDict):
     assessments: ReadOnly[object]
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    supported_event_hooks: ReadOnly[list[GuardrailEventHooks] | None]
 
 
 class _JsonLookup(Protocol):
@@ -59,7 +63,7 @@ class JavelinGuardrail(CustomGuardrail):
         metadata: dict | None = None,
         config: dict | None = None,
         application: str | None = None,
-        **kwargs,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ):
         """
         Initialize the JavelinGuardrail class.
@@ -95,8 +99,11 @@ class JavelinGuardrail(CustomGuardrail):
             self.api_version,
         )
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        super().__init__(guardrail_name=guardrail_name, default_on=default_on, **kwargs)
+        options: Final[_CustomGuardrailOptions] = {
+            "supported_event_hooks": list(self.get_supported_event_hooks()),
+            **kwargs,
+        }
+        super().__init__(guardrail_name=guardrail_name, default_on=default_on, **options)
 
     async def call_javelin_guard(
         self,
@@ -151,7 +158,7 @@ class JavelinGuardrail(CustomGuardrail):
             ####################################################
             # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
             ####################################################
-            guardrail_json_response: Exception | str | dict | list[dict] = {}
+            guardrail_json_response: Exception | str | dict[str, object] | list[dict[str, object]] = {}
             if status == "success" and javelin_response is not None:
                 guardrail_json_response = dict(javelin_response)
             else:
@@ -292,7 +299,7 @@ class JavelinGuardrail(CustomGuardrail):
         return data
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["JavelinGuardrailConfigModel"] | None:
         """
         Get the config model for the Javelin guardrail.
         """

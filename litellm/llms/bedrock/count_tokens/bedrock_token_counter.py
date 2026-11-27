@@ -11,10 +11,14 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import CALLER_ERROR_LOG_EXTRA, verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
+from litellm.llms.anthropic.common_utils import (
+    context_management_betas,
+    context_management_with_edits,
+    without_unrendered_blocks,
+)
 from litellm.llms.anthropic.count_tokens.transformation import (
     ChatCountTranslationError,
     anthropic_count_fields,
@@ -29,7 +33,12 @@ from litellm.llms.bedrock.common_utils import (
     get_bedrock_base_model,
     strip_bedrock_routing_prefix,
 )
-from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler, BedrockCountTokensRequestError
+from litellm.llms.bedrock.count_tokens.handler import (
+    BedrockCountTokensCredentialsError,
+    BedrockCountTokensHandler,
+    BedrockCountTokensRequestError,
+    is_caller_refusal,
+)
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -69,6 +78,7 @@ class CountTokensFailure:
     message: str
     tokenizer_type: str
     rejected_before_provider_call: bool = False
+    invalid_request: bool = False
 
 
 CountTokensOutcome = CountedTokens | CountTokensFailure
@@ -231,12 +241,13 @@ class BedrockTokenCounter(BaseTokenCounter):
                 client=self._client,
             )
             reply: Final = _CountTokensReply.model_validate(result)
-        except BedrockCountTokensRequestError as e:
+        except (BedrockCountTokensRequestError, BedrockCountTokensCredentialsError) as e:
             return CountTokensFailure(
                 status_code=e.status_code,
                 message=e.message,
                 tokenizer_type=tokenizer_type,
                 rejected_before_provider_call=True,
+                invalid_request=isinstance(e, BedrockCountTokensRequestError),
             )
         except BedrockError as e:
             verbose_logger.debug(
@@ -265,6 +276,7 @@ class BedrockTokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         if not messages:
             return None
+        rendered_messages: Final = without_unrendered_blocks(messages)
 
         use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
         counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
@@ -278,15 +290,15 @@ class BedrockTokenCounter(BaseTokenCounter):
             deployment_config
             if messages_format == "openai"
             and isinstance(deployment_config, litellm.AmazonConverseConfig)
-            and all(map(_has_role, messages))
+            and all(map(_has_role, rendered_messages))
             else None
         )
         counted_input: Final = (
-            messages
+            rendered_messages
             if converse_config is None
             else _converse_messages_as_sent(
                 converse_config,
-                messages,
+                rendered_messages,
                 tools,
                 chat_params,
                 _inference_capability_model(litellm_params, counted_model),
@@ -319,7 +331,7 @@ class BedrockTokenCounter(BaseTokenCounter):
             else await asyncify(messages_count_options)(
                 _claude_messages_translator(litellm_params),
                 counted_model,
-                _COUNTED_MESSAGES.validate_python(messages),
+                _COUNTED_MESSAGES.validate_python(rendered_messages),
                 count_options,
                 litellm_params,
             )
@@ -371,11 +383,15 @@ class BedrockTokenCounter(BaseTokenCounter):
                     original_response=dict(outcome.original_response),
                 )
             case CountTokensFailure():
+                refused_for_caller: Final = is_caller_refusal(
+                    outcome.status_code, outcome.message, outcome.invalid_request
+                )
                 verbose_logger.warning(
                     "%s CountTokens API error: status=%s, message=%s",
                     outcome.tokenizer_type,
                     outcome.status_code,
                     outcome.message,
+                    extra=CALLER_ERROR_LOG_EXTRA if refused_for_caller else None,
                 )
                 return TokenCountResponse(
                     total_tokens=0,

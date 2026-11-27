@@ -1,7 +1,7 @@
 "use client";
 
-import { Page, PageContent } from "@/components/shared/Page";
-import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 
 import { useMemo, useState } from "react";
 import { Network, RefreshCw } from "lucide-react";
@@ -9,6 +9,7 @@ import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
+import { displayTime } from "@/i18n/displayDate";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
@@ -93,7 +94,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
@@ -103,7 +104,7 @@ export default function ModelsAndEndpointsPage() {
 
   const [requestedTab, setRequestedTab] = useUrlTab(TAB_KEYS, BASE_TAB_KEY);
   const [, setPrefillParams] = useQueryStates(PREFILL_URL_PARAMS);
-  const [lastRefreshed, setLastRefreshed] = useState("");
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
   const canCreate = canCreateModels(
@@ -167,7 +168,7 @@ export default function ModelsAndEndpointsPage() {
   };
 
   const handleRefreshClick = () => {
-    setLastRefreshed(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    setLastRefreshed(new Date());
     queryClient.invalidateQueries({ queryKey: ["models", "list"] });
   };
 
@@ -175,35 +176,65 @@ export default function ModelsAndEndpointsPage() {
 
   if (teamId) {
     return (
-      <div className="w-full h-full">
-        <TeamInfoView
-          teamId={teamId}
-          onClose={close}
-          accessToken={accessToken}
-          is_team_admin={userRole === "Admin" && !isViewOnly}
-          is_proxy_admin={userRole === "Admin" && !isViewOnly}
-          userModels={allModelsOnProxy}
-          editTeam={false}
-          onUpdate={invalidateModels}
-          premiumUser={premiumUser}
-        />
-      </div>
+      <TeamInfoView
+        framed
+        teamId={teamId}
+        onClose={close}
+        accessToken={accessToken}
+        is_team_admin={userRole === "Admin" && !isViewOnly}
+        is_proxy_admin={userRole === "Admin" && !isViewOnly}
+        userModels={allModelsOnProxy}
+        editTeam={false}
+        onUpdate={invalidateModels}
+        premiumUser={premiumUser}
+      />
     );
   }
 
   return (
-    <Page>
-      <PageContent>
-        <PageHeader>
-          <PageHeaderTitle>
-            <Network />
-            {t("modelsAndEndpoints.page.title")}
-          </PageHeaderTitle>
-          <PageHeaderDescription>
-            {t(isAdmin ? "modelsAndEndpoints.page.adminDescription" : "modelsAndEndpoints.page.userDescription")}
-          </PageHeaderDescription>
-          {!modelId && (
-            <PageHeaderControls className="flex-wrap">
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Network />
+          {t("modelsAndEndpoints.page.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>
+          {t(isAdmin ? "modelsAndEndpoints.page.adminDescription" : "modelsAndEndpoints.page.userDescription")}
+        </PageHeaderDescription>
+      </PageHeader>
+
+      {modelId ? (
+        <ModelInfoView
+          modelId={modelId}
+          onClose={close}
+          accessToken={accessToken}
+          userID={userID}
+          userRole={userRole}
+          isViewOnly={isViewOnly}
+          onModelUpdate={invalidateModels}
+          modelAccessGroups={availableModelAccessGroups}
+        />
+      ) : (
+        <Tabs value={activeKey} onValueChange={handleTabChange} className="gap-6">
+          <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
+            <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
+              <TabsList variant="line" className="w-max justify-start">
+                {visibleSlugs.map((slug) => {
+                  const key = slug || BASE_TAB_KEY;
+                  return (
+                    <TabsTrigger key={key} value={key} className="flex-none">
+                      {tabLabel(slug)}
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            </div>
+            <div className="flex shrink-0 items-center gap-2 pb-1">
+              {lastRefreshed && (
+                <span className="text-xs text-muted-foreground">
+                  {t("modelsAndEndpoints.page.lastRefreshed", { time: displayTime(lastRefreshed, i18n.language) })}
+                </span>
+              )}
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -212,53 +243,18 @@ export default function ModelsAndEndpointsPage() {
               >
                 <RefreshCw />
               </Button>
-              {lastRefreshed && (
-                <span className="text-xs text-muted-foreground">
-                  {t("modelsAndEndpoints.page.lastRefreshed", { time: lastRefreshed })}
-                </span>
-              )}
-            </PageHeaderControls>
-          )}
-        </PageHeader>
-
-        {modelId ? (
-          <ModelInfoView
-            modelId={modelId}
-            onClose={close}
-            accessToken={accessToken}
-            userID={userID}
-            userRole={userRole}
-            isViewOnly={isViewOnly}
-            onModelUpdate={invalidateModels}
-            modelAccessGroups={availableModelAccessGroups}
-          />
-        ) : (
-          <Tabs value={activeKey} onValueChange={handleTabChange} className="gap-6">
-            <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
-              <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
-                <TabsList variant="line" className="w-max justify-start">
-                  {visibleSlugs.map((slug) => {
-                    const key = slug || BASE_TAB_KEY;
-                    return (
-                      <TabsTrigger key={key} value={key} className="flex-none">
-                        {tabLabel(slug)}
-                      </TabsTrigger>
-                    );
-                  })}
-                </TabsList>
-              </div>
             </div>
-            {visibleSlugs.map((slug) => {
-              const key = slug || BASE_TAB_KEY;
-              return (
-                <TabsContent key={key} value={key}>
-                  {renderPanel(key)}
-                </TabsContent>
-              );
-            })}
-          </Tabs>
-        )}
-      </PageContent>
-    </Page>
+          </div>
+          {visibleSlugs.map((slug) => {
+            const key = slug || BASE_TAB_KEY;
+            return (
+              <TabsContent key={key} value={key}>
+                {renderPanel(key)}
+              </TabsContent>
+            );
+          })}
+        </Tabs>
+      )}
+    </PageContent>
   );
 }

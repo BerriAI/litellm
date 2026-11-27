@@ -32,6 +32,7 @@ _CHAT_RESPONSE: Final = {
                 "role": "assistant",
                 "content": "secret answer",
                 "reasoning_content": "secret thought",
+                "refusal": "secret refusal",
                 "thinking_blocks": [{"type": "thinking", "thinking": "t"}],
                 "audio": {"data": "a"},
                 "images": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}],
@@ -340,6 +341,25 @@ _EXTRA_SCENARIOS: Final[dict[str, tuple[dict[str, object], dict[str, object], di
             "litellm_params": {
                 "metadata": {"session_id": "minted", "litellm_session_id_generated": True},
                 "litellm_metadata": {"session_id": "sent-by-caller"},
+            },
+        },
+    ),
+    "caller_session_under_omit": (
+        {"missing_session_id": "omit"},
+        {},
+        {
+            **_scenario_kwargs(),
+            "litellm_params": {"metadata": {"user_api_key": "sk-scenario"}, "litellm_session_id": "parent-session"},
+        },
+    ),
+    "inherited_session_under_omit": (
+        {"missing_session_id": "omit"},
+        {},
+        {
+            **_scenario_kwargs(),
+            "litellm_params": {
+                "metadata": {"user_api_key": "sk-scenario", "litellm_session_id_inherited": True},
+                "litellm_session_id": "parent-session",
             },
         },
     ),

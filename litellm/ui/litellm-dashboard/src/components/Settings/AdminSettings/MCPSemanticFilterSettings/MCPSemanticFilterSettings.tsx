@@ -7,7 +7,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CircleCheck, CircleHelp, Info, Save, X } from "lucide-react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { FieldGroup } from "@/components/ui/field";
@@ -20,42 +19,30 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import {
+  DEFAULT_FORM_VALUES,
+  TOP_K_MAX,
+  TOP_K_MIN,
+  clampTopK,
+  formToPayload,
+  parseTopK,
+  storedValuesToForm,
+  type StoredValues,
+} from "./mapper";
 import MCPSemanticFilterTestPanel from "./MCPSemanticFilterTestPanel";
+import { mcpSemanticFilterSchema, type MCPSemanticFilterFormValues } from "./schema";
 import { getCurlCommand, runSemanticFilterTest, TestResult } from "./semanticFilterTestUtils";
 
 interface MCPSemanticFilterSettingsProps {
   accessToken: string | null;
 }
 
-interface MCPSemanticFilterStoredValues {
-  enabled?: boolean;
-  embedding_model?: string;
-  top_k?: number;
-  similarity_threshold?: number;
-}
-
 interface MCPSemanticFilterFieldSchema {
   properties?: { enabled?: { description?: string } };
 }
 
-interface MCPSemanticFilterFormValues {
-  enabled: boolean;
-  embedding_model: string;
-  top_k: number | null;
-  similarity_threshold: number;
-}
-
-const DEFAULT_FORM_VALUES: MCPSemanticFilterFormValues = {
-  enabled: false,
-  embedding_model: "text-embedding-3-small",
-  top_k: 10,
-  similarity_threshold: 0.3,
-};
-
-const NO_STORED_VALUES: MCPSemanticFilterStoredValues = {};
-
-const TOP_K_MIN = 1;
-const TOP_K_MAX = 100;
+const NO_STORED_VALUES: StoredValues = {};
 
 const SIMILARITY_THRESHOLD_MARKS = [
   { value: 0, label: "0.0" },
@@ -74,12 +61,6 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
     </Tooltip>
   </>
 );
-
-const clampTopK = (value: number | null): number | null =>
-  value === null ? null : Math.min(TOP_K_MAX, Math.max(TOP_K_MIN, value));
-
-const parseTopK = (raw: string, rawAsNumber: number): number | null =>
-  raw === "" || Number.isNaN(rawAsNumber) ? null : rawAsNumber;
 
 const SaveSuccessAlert = () => {
   const { t } = useTranslation();
@@ -115,7 +96,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
     isPending: isUpdating,
     error: updateError,
   } = useUpdateMCPSemanticFilterSettings(accessToken || "");
-  const form = useForm<MCPSemanticFilterFormValues>({ defaultValues: DEFAULT_FORM_VALUES });
+  const form = useZodForm(mcpSemanticFilterSchema, { defaultValues: DEFAULT_FORM_VALUES });
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [embeddingModels, setEmbeddingModels] = useState<ModelGroup[]>([]);
@@ -129,7 +110,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
   const [isTesting, setIsTesting] = useState(false);
 
   const schema: MCPSemanticFilterFieldSchema | undefined = data?.field_schema;
-  const values: MCPSemanticFilterStoredValues = data?.values ?? NO_STORED_VALUES;
+  const values: StoredValues = data?.values ?? NO_STORED_VALUES;
 
   useEffect(() => {
     const loadEmbeddingModels = async () => {
@@ -151,12 +132,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
 
   useEffect(() => {
     if (values) {
-      form.reset({
-        enabled: values.enabled ?? DEFAULT_FORM_VALUES.enabled,
-        embedding_model: values.embedding_model ?? DEFAULT_FORM_VALUES.embedding_model,
-        top_k: values.top_k ?? DEFAULT_FORM_VALUES.top_k,
-        similarity_threshold: values.similarity_threshold ?? DEFAULT_FORM_VALUES.similarity_threshold,
-      });
+      form.reset(storedValuesToForm(values));
       setIsDirty(false);
     }
   }, [values, form]);
@@ -167,7 +143,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
   };
 
   const handleSave = (formValues: MCPSemanticFilterFormValues) => {
-    updateSettings(formValues, {
+    updateSettings(formToPayload(formValues), {
       onSuccess: () => {
         setIsDirty(false);
         setSaveSuccess(true);

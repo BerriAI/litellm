@@ -16,8 +16,8 @@ from litellm.proxy.control_plane.dataplanes.client import (
 from litellm.proxy.control_plane.dataplanes.credentials import CredentialUnavailable
 from litellm.proxy.control_plane.dataplanes.registry import Dataplane
 
-T: Final = TypeVar("T")
-M: Final = TypeVar("M")
+T = TypeVar("T")
+M = TypeVar("M")
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +76,10 @@ class Fanout:
         )
 
 
+def unreachable_reason(result: DataplaneUnreachable) -> str:
+    return f"unreachable after {result.attempts} attempt(s): {result.detail}"
+
+
 def parse_reply(result: CallResult, shape: TypeAdapter[M]) -> M | Failure:
     match result:
         case DataplaneReply(status=status, body=body) if status < 400:
@@ -85,8 +89,8 @@ def parse_reply(result: CallResult, shape: TypeAdapter[M]) -> M | Failure:
                 return Failure(f"unexpected response shape: {error.error_count()} validation error(s)")
         case DataplaneReply(status=status, credential=credential):
             return Failure(f"HTTP {status} with the {credential} credential")
-        case DataplaneUnreachable(detail=detail, attempts=attempts):
-            return Failure(f"unreachable after {attempts} attempt(s): {detail}")
+        case DataplaneUnreachable():
+            return Failure(unreachable_reason(result))
         case DataplaneResponseTooLarge(limit_bytes=limit_bytes):
             return Failure(f"response exceeded {limit_bytes} bytes")
         case CredentialUnavailable(reason=reason):

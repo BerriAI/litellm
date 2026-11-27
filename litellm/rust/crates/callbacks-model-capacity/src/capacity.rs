@@ -9,8 +9,8 @@ use crate::{
     error::CapacityError,
     host::{CapacityHost, CounterStore, Estimate, Facts, Published, Throttle, Touched},
     model::{
-        BORROWER_KINDS, BorrowerKind, BorrowingLimits, Counter, CounterKind, Descriptor, GroupInfo,
-        Increment, KeyFacts, LimiterResponse, LoggedGroup, MODEL_SATURATION_CHECK,
+        BORROWER_KINDS, BorrowerKind, BorrowingLimits, Charge, Counter, CounterKind, Descriptor,
+        GroupInfo, Increment, KeyFacts, LimiterResponse, LoggedGroup, MODEL_SATURATION_CHECK,
         PRIORITY_CLASS_SHARE_AT_SATURATION, PRIORITY_MODEL, Priority, RateLimit, ReservationOp,
         Settings, Status, TeamShare, TokenRateLimitType, Window,
     },
@@ -46,6 +46,7 @@ pub enum Frame {
 }
 
 const UNCOUNTABLE_GROUP: &str = "failed to extract field PyIncrement.counter";
+const UNLICENSED_PRIORITY: &str = "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/enterprise.";
 
 const SOCKET_TURN_UNCOUNTED: [&str; 3] = [
     "model_per_project_itpm",
@@ -332,35 +333,53 @@ fn capped_idle_share(
 fn team_settlement(
     state: &ShareState,
     served: Option<&Hold>,
-    total_tokens: i64,
+    charge: Charge,
     ttl: i64,
 ) -> Vec<ReservationOp> {
-    let own_usage = if served.is_none() { total_tokens } else { 0 };
+    let own_usage = |reserved: i64| {
+        if served.is_none() {
+            charge.against(reserved)
+        } else {
+            0
+        }
+    };
     let mut operations = window_guarded(
-        team_increment(state.limit.as_ref(), own_usage - state.reserved_tokens, ttl),
+        team_increment(
+            state.limit.as_ref(),
+            own_usage(state.reserved_tokens) - state.reserved_tokens,
+            ttl,
+        ),
         state.reserved_window.as_ref(),
     );
     operations.extend(window_guarded(
         team_increment(
             state.cap.as_ref(),
-            own_usage - state.cap_reserved_tokens,
+            own_usage(state.cap_reserved_tokens) - state.cap_reserved_tokens,
             ttl,
         ),
         state.cap_reserved_window.as_ref(),
     ));
     if let Some(hold) = served {
-        operations.extend(hold_settlement(hold, total_tokens, ttl));
+        operations.extend(hold_settlement(hold, charge, ttl));
     }
     operations
 }
 
-fn hold_settlement(hold: &Hold, used: i64, ttl: i64) -> Vec<ReservationOp> {
+fn hold_settlement(hold: &Hold, charge: Charge, ttl: i64) -> Vec<ReservationOp> {
     let mut operations = window_guarded(
-        team_increment(hold.descriptor.as_ref(), used - hold.reserved_tokens, ttl),
+        team_increment(
+            hold.descriptor.as_ref(),
+            charge.against(hold.reserved_tokens) - hold.reserved_tokens,
+            ttl,
+        ),
         hold.window.as_ref(),
     );
     operations.extend(window_guarded(
-        team_increment(hold.cap.as_ref(), used - hold.cap_reserved_tokens, ttl),
+        team_increment(
+            hold.cap.as_ref(),
+            charge.against(hold.cap_reserved_tokens) - hold.cap_reserved_tokens,
+            ttl,
+        ),
         hold.cap_window.as_ref(),
     ));
     operations
@@ -370,7 +389,7 @@ fn hold_settlement(hold: &Hold, used: i64, ttl: i64) -> Vec<ReservationOp> {
 fn borrowing_settlement(
     stash: &Stash,
     served: &Holds,
-    total_tokens: i64,
+    charge: Charge,
     ttl: i64,
 ) -> Vec<ReservationOp> {
     BORROWER_KINDS
@@ -379,11 +398,80 @@ fn borrowing_settlement(
             team_settlement(
                 stash.share(kind),
                 served[kind.index()].as_deref(),
-                total_tokens,
+                charge,
                 ttl,
             )
         })
         .collect()
+}
+
+fn turn_borrowing_operations(
+    stash: &Stash,
+    served: &Holds,
+    tokens: i64,
+    ttl: i64,
+) -> Vec<ReservationOp> {
+    BORROWER_KINDS
+        .into_iter()
+        .flat_map(|kind| {
+            let state = stash.share(kind);
+            let (limit, cap) = match served[kind.index()].as_deref() {
+                Some(hold) => (hold.descriptor.as_ref(), hold.cap.as_ref()),
+                None => (state.limit.as_ref(), state.cap.as_ref()),
+            };
+            [
+                team_increment(limit, tokens, ttl),
+                team_increment(cap, tokens, ttl),
+            ]
+        })
+        .flatten()
+        .collect()
+}
+
+fn unsettled_usage(stash: &mut Stash, used: i64) -> i64 {
+    stash.session_settled |= used != 0;
+    match std::mem::take(&mut stash.turn_settled_tokens) {
+        0 => used,
+        settled => (used - settled).max(0),
+    }
+}
+
+fn model_usage_operations(
+    settings: &Settings,
+    model_group: &str,
+    priority: Option<&str>,
+    class_share: Option<&Descriptor>,
+    holder: Option<String>,
+    tokens: i64,
+) -> [ReservationOp; 2] {
+    let ttl = settings.window_size;
+    let priority_key = match settings.reserves_name(priority) {
+        Some(explicit) => format!("{model_group}:{explicit}"),
+        None => format!("{model_group}:default_pool"),
+    };
+    let priority_counter = match class_share {
+        None => scope(PRIORITY_MODEL, &priority_key),
+        Some(share) => scope(
+            &share.key,
+            &holder.map_or_else(
+                || share.value.clone(),
+                |holder| counter_value(model_group, &holder),
+            ),
+        ),
+    }
+    .with_kind(CounterKind::Tokens);
+    [
+        ReservationOp::Increment {
+            counter: scope(MODEL_SATURATION_CHECK, model_group).with_kind(CounterKind::Tokens),
+            amount: tokens,
+            ttl: Some(ttl),
+        },
+        ReservationOp::Increment {
+            counter: priority_counter,
+            amount: tokens,
+            ttl: Some(ttl),
+        },
+    ]
 }
 
 fn served_holds(stash: &Stash, model_group: Option<&str>) -> Holds {
@@ -396,6 +484,13 @@ fn release_holds(stash: &mut Stash, served: &Holds) {
         state.clear_reservation();
         state.drop_hold(served[kind.index()].as_ref());
     }
+}
+
+pub struct TurnCharge<'a> {
+    pub model_group: &'a str,
+    pub priority: Option<&'a str>,
+    pub team_id: Option<&'a str>,
+    pub tokens: i64,
 }
 
 pub struct Settlement<'a> {
@@ -428,11 +523,10 @@ impl Engine {
         match self.read_saturation(settings, model, group).await {
             Ok(saturation) => saturation,
             Err(error) => {
-                let message = format!(
+                tracing::error!(
                     "Error checking saturation for {model}: {}",
                     error.python_message()
                 );
-                let _ = self.host.log("error", &message);
                 0.0
             }
         }
@@ -469,11 +563,10 @@ impl Engine {
         let value = match self.limiter.read_counter(counter, ttl).await {
             Ok(value) => value,
             Err(error) => {
-                let message = format!(
+                tracing::warn!(
                     "Saturation read failed in Redis, using this worker's copy: {}",
                     error.python_message()
                 );
-                let _ = self.host.log("warning", &message);
                 self.limiter.read_local_counter(counter)?
             }
         };
@@ -520,12 +613,11 @@ impl Engine {
         let members = match touched {
             Ok(members) => members,
             Err(error) if error.is_registry_unavailable() => {
-                let message = format!(
+                tracing::warn!(
                     "Active team registry unavailable for {model}, holding team {} to the class pool: {}",
                     python_optional(request.key.team_text().as_deref()),
                     error.python_message()
                 );
-                let _ = self.host.log("warning", &message);
                 return Ok(None);
             }
             Err(error) => return Err(error),
@@ -555,7 +647,7 @@ impl Engine {
         let weights = normalized_weights(settings, group)?;
         let allocated = allocation(settings, model, request.priority(), &weights, group)?;
         if allocated.unlicensed {
-            self.host.unlicensed_priority()?;
+            tracing::error!("{UNLICENSED_PRIORITY}");
         }
         let weight = share.map_or(allocated.weight, |share| share.fraction);
         let floor = if share.is_some() { 1 } else { 0 };
@@ -634,12 +726,26 @@ impl Engine {
         Ok(
             match self
                 .host
-                .estimate_tokens(tpm_share, model, call_type)
+                .estimate_tokens(tpm_share, Some(model), call_type)
                 .await?
             {
-                Estimate::NoBody => 0,
+                Estimate::NoBody | Estimate::Unpriced => 0,
                 Estimate::Failed => 1,
                 Estimate::Tokens(tokens) => tokens.max(1),
+            },
+        )
+    }
+
+    pub async fn settled_estimate(
+        &self,
+        model: Option<&str>,
+        call_type: Option<&str>,
+    ) -> Result<Option<i64>, CapacityError> {
+        Ok(
+            match self.host.estimate_tokens(0, model, call_type).await? {
+                Estimate::Tokens(tokens) => Some(tokens.max(0)),
+                Estimate::NoBody | Estimate::Failed => Some(0),
+                Estimate::Unpriced => None,
             },
         )
     }
@@ -686,10 +792,9 @@ impl Engine {
 
     async fn fallback_requested(&self, fallback: &SaturationFallback) -> bool {
         if let Some(invalid) = &fallback.invalid {
-            let message = format!(
+            tracing::warn!(
                 "router_settings.fallback_on_saturation={invalid} is not a boolean, treating it as disabled"
             );
-            let _ = self.host.log("warning", &message);
         }
         fallback.enabled && fallback.armed
     }
@@ -924,11 +1029,10 @@ impl Engine {
             }
             Err(AdmitError::Failed(error)) if error.is_http() => PreCall::Raise(error),
             Err(AdmitError::Failed(error)) => {
-                let message = format!(
+                tracing::error!(
                     "Error in dynamic rate limiter: {}, allowing request",
                     error.python_message()
                 );
-                let _ = self.host.log("error", &message);
                 PreCall::Allow(None)
             }
         }
@@ -1227,22 +1331,25 @@ impl Engine {
         stash: Option<&SharedStash>,
         settlement: &Settlement<'_>,
         priority: Option<&str>,
-        total_tokens: i64,
+        charge: Charge,
         redis: Option<&RequestRedis>,
     ) -> Result<(), CapacityError> {
         let ttl = settings.window_size;
+        let total_tokens = charge.tokens();
         let group = settlement.model_group;
-        let (team_tokens, served) = match stash {
-            None => (Vec::new(), Holds::default()),
+        let (team_tokens, served, unsettled, charged_by_turns) = match stash {
+            None => (Vec::new(), Holds::default(), total_tokens, false),
             Some(stash) => {
                 let mut stash = stash.lock();
                 let served = match group {
                     Some(group) => served_holds(&stash, group.key()?),
                     None => Holds::default(),
                 };
-                let team_tokens = borrowing_settlement(&stash, &served, total_tokens, ttl);
+                let charged_by_turns = stash.turn_settled_tokens != 0;
+                let unsettled = charge.map(|used| unsettled_usage(&mut stash, used));
+                let team_tokens = borrowing_settlement(&stash, &served, unsettled, ttl);
                 release_holds(&mut stash, &served);
-                (team_tokens, served)
+                (team_tokens, served, unsettled.tokens(), charged_by_turns)
             }
         };
         let Some(model_group) = group.filter(|group| group.truthy) else {
@@ -1251,17 +1358,13 @@ impl Engine {
             }
             return Ok(());
         };
-        if total_tokens == 0 && team_tokens.is_empty() {
+        if unsettled == 0 && team_tokens.is_empty() && !charged_by_turns {
             return Ok(());
         }
-        if total_tokens != 0 && !model_group.keyed {
+        if unsettled != 0 && !model_group.keyed {
             return Err(CapacityError::Type(UNCOUNTABLE_GROUP.into()));
         }
         let model_group = model_group.text.as_str();
-        let priority_key = match settings.reserves_name(priority) {
-            Some(explicit) => format!("{model_group}:{explicit}"),
-            None => format!("{model_group}:default_pool"),
-        };
         let (class_share, class_holder) = stash.map_or((None, None), |stash| {
             let stash = stash.lock();
             (
@@ -1270,37 +1373,72 @@ impl Engine {
             )
         });
         let settled_holder = class_holder.or_else(|| settlement.team_id.map(str::to_owned));
-        let priority_counter = match &class_share {
-            None => scope(PRIORITY_MODEL, &priority_key),
-            Some(share) => scope(
-                &share.key,
-                &settled_holder.map_or_else(
-                    || share.value.clone(),
-                    |holder| counter_value(model_group, &holder),
-                ),
-            ),
-        }
-        .with_kind(CounterKind::Tokens);
         let mut operations = Vec::new();
-        if total_tokens != 0 {
-            operations.push(ReservationOp::Increment {
-                counter: scope(MODEL_SATURATION_CHECK, model_group).with_kind(CounterKind::Tokens),
-                amount: total_tokens,
-                ttl: Some(ttl),
-            });
-            operations.push(ReservationOp::Increment {
-                counter: priority_counter,
-                amount: total_tokens,
-                ttl: Some(ttl),
-            });
+        if unsettled != 0 {
+            operations.extend(model_usage_operations(
+                settings,
+                model_group,
+                priority,
+                class_share.as_ref(),
+                settled_holder,
+                unsettled,
+            ));
         }
         operations.extend(team_tokens);
         if !operations.is_empty() {
             self.limiter.apply(&operations, redis).await?;
+        }
+        if !operations.is_empty() || charged_by_turns {
             self.record_team_share(settings, stash, Some(model_group), settlement, &served)
                 .await;
         }
         Ok(())
+    }
+
+    pub async fn charge_turn(
+        &self,
+        settings: &Settings,
+        stash: &SharedStash,
+        turn: &TurnCharge<'_>,
+        redis: Option<&RequestRedis>,
+    ) -> Result<(), CapacityError> {
+        if turn.tokens <= 0 {
+            return Ok(());
+        }
+        let operations = {
+            let mut stash = stash.lock();
+            if stash.session_settled {
+                return Ok(());
+            }
+            stash.turn_model_group = Some(turn.model_group.to_owned());
+            stash.turn_settled_tokens = stash.turn_settled_tokens.saturating_add(turn.tokens);
+            let served = served_holds(&stash, Some(turn.model_group));
+            let holder = stash
+                .priority_class_share_holder
+                .clone()
+                .or_else(|| turn.team_id.map(str::to_owned));
+            let mut operations = Vec::from(model_usage_operations(
+                settings,
+                turn.model_group,
+                turn.priority,
+                stash.priority_class_share.as_ref(),
+                holder,
+                turn.tokens,
+            ));
+            operations.extend(turn_borrowing_operations(
+                &stash,
+                &served,
+                turn.tokens,
+                settings.window_size,
+            ));
+            operations
+        };
+        let applied = self.limiter.apply(&operations, redis).await;
+        if applied.is_err() {
+            let mut stash = stash.lock();
+            stash.turn_settled_tokens = stash.turn_settled_tokens.saturating_sub(turn.tokens);
+        }
+        applied.map(|_| ())
     }
 
     /// Settle a failed attempt: a borrower's admitting reservation is refunded or charged the usage the attempt
@@ -1319,7 +1457,8 @@ impl Engine {
                 Some(group) => served_holds(&stash, group.key()?),
                 None => Holds::default(),
             };
-            let refund = borrowing_settlement(&stash, &failed, used, settings.window_size);
+            let unsettled = Charge::Reported(unsettled_usage(&mut stash, used));
+            let refund = borrowing_settlement(&stash, &failed, unsettled, settings.window_size);
             release_holds(&mut stash, &failed);
             (refund, failed)
         };
@@ -1338,7 +1477,8 @@ impl Engine {
         let refund = {
             let mut stash = stash.lock();
             let none = Holds::default();
-            let refund = borrowing_settlement(&stash, &none, 0, settings.window_size);
+            let refund =
+                borrowing_settlement(&stash, &none, Charge::Reported(0), settings.window_size);
             for kind in BORROWER_KINDS {
                 stash.share_mut(kind).clear_reservation();
             }
@@ -1362,11 +1502,10 @@ impl Engine {
             .try_record_team_share(settings, stash, model_group, settlement, holds)
             .await
         {
-            let message = format!(
+            tracing::warn!(
                 "Dynamic rate limiter share metrics failed: {}",
                 error.python_message()
             );
-            let _ = self.host.log("warning", &message);
         }
     }
 
@@ -1504,6 +1643,7 @@ mod tests {
     use serde_json::{Number, Value, json};
 
     use litellm_callbacks_parallel_request_limiter::{Ctx, PolicyFacts};
+    use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 
     use crate::{
         host::{Fact, SeamFuture, ShareGauge},
@@ -1597,8 +1737,21 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeHost {
-        logged: Mutex<Vec<(String, String)>>,
+    struct FakeHost;
+
+    #[derive(Clone, Default)]
+    struct Lines(Arc<Mutex<Vec<(Level, String)>>>);
+
+    impl Sink for Lines {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn emit(&self, record: &Record) {
+            self.0
+                .lock()
+                .push((*record.metadata.level(), record.message.clone()));
+        }
     }
 
     fn done<'a, T: Send + 'a>(value: T) -> SeamFuture<'a, T> {
@@ -1632,17 +1785,6 @@ mod tests {
             done(())
         }
 
-        fn unlicensed_priority(&self) -> Result<(), CapacityError> {
-            Ok(())
-        }
-
-        fn log(&self, level: &'static str, message: &str) -> Result<(), CapacityError> {
-            self.logged
-                .lock()
-                .push((level.to_owned(), message.to_owned()));
-            Ok(())
-        }
-
         fn model_group<'a>(&'a self, model: &'a str) -> SeamFuture<'a, String> {
             done(model.to_owned())
         }
@@ -1650,7 +1792,7 @@ mod tests {
         fn estimate_tokens<'a>(
             &'a self,
             _tpm_share: i64,
-            _model: &'a str,
+            _model: Option<&'a str>,
             _call_type: Option<&'a str>,
         ) -> SeamFuture<'a, Estimate> {
             done(Estimate::NoBody)
@@ -1778,7 +1920,7 @@ mod tests {
     async fn saturation_check_cache_ttl_configuration_backfills_each_read_for_its_ttl_like_python()
     {
         let limiter = Arc::new(FakeLimiter::new(Ok(None), None, answer("OK", Vec::new())));
-        let host = Arc::new(FakeHost::default());
+        let host = Arc::new(FakeHost);
         let engine = engine(&limiter, &host);
         let model_group = group(Some(1000), Some(100));
         engine
@@ -1809,15 +1951,20 @@ mod tests {
             Some(json!(3)),
             answer("OK", Vec::new()),
         ));
-        let host = Arc::new(FakeHost::default());
-        let saturation = engine(&limiter, &host)
-            .saturation(&settings(json!(60)), "down", &group(None, Some(4)))
+        let host = Arc::new(FakeHost);
+        let lines = Lines::default();
+        let saturation = Logger::new(lines.clone())
+            .instrument(engine(&limiter, &host).saturation(
+                &settings(json!(60)),
+                "down",
+                &group(None, Some(4)),
+            ))
             .await;
         assert!((saturation - 0.75).abs() < f64::EPSILON);
         assert_eq!(
-            *host.logged.lock(),
+            *lines.0.lock(),
             vec![(
-                "warning".to_owned(),
+                Level::WARN,
                 "Saturation read failed in Redis, using this worker's copy: redis down".to_owned()
             )]
         );
@@ -1866,7 +2013,7 @@ mod tests {
             None,
             answer("OVER_LIMIT", vec![unknown]),
         ));
-        let host = Arc::new(FakeHost::default());
+        let host = Arc::new(FakeHost);
         let PreCall::Refuse(refusal) = pre_call(
             &engine(&limiter, &host),
             &settings(json!(60)),
@@ -1921,7 +2068,7 @@ mod tests {
             answer("OVER_LIMIT", vec![counted.clone(), full.clone()]),
             answer("OK", vec![counted.clone()]),
         ]);
-        let host = Arc::new(FakeHost::default());
+        let host = Arc::new(FakeHost);
         let engine = engine(&limiter, &host);
         let settings = settings(json!(60));
         let key = KeyFacts::default();
@@ -2088,6 +2235,70 @@ mod tests {
         );
     }
 
+    fn refund(descriptor: Option<&Descriptor>, amount: i64) -> ReservationOp {
+        ReservationOp::Increment {
+            counter: descriptor.unwrap().counter(CounterKind::Tokens),
+            amount,
+            ttl: Some(60),
+        }
+    }
+
+    #[rstest]
+    fn an_estimated_charge_keeps_each_borrowers_reservation_where_a_reported_zero_refunds_it(
+        #[values(BorrowerKind::Team, BorrowerKind::Key, BorrowerKind::CustomerOrg)]
+        kind: BorrowerKind,
+    ) {
+        let share = borrower(kind, Some(100), Some(2.0));
+        let mut stash = Stash::default();
+        *stash.share_mut(kind) = ShareState {
+            limit: Some(share.share.clone()),
+            reserved_tokens: 30,
+            cap: share.ceiling.clone(),
+            cap_reserved_tokens: 30,
+            ..ShareState::default()
+        };
+        let none = Holds::default();
+        assert_eq!(
+            borrowing_settlement(&stash, &none, Charge::Estimated(500), 60),
+            vec![]
+        );
+        assert_eq!(
+            borrowing_settlement(&stash, &none, Charge::Reported(0), 60),
+            vec![
+                refund(Some(&share.share), -30),
+                refund(share.ceiling.as_ref(), -30)
+            ]
+        );
+    }
+
+    #[rstest]
+    fn an_estimated_charge_keeps_the_fallback_targets_hold_where_a_reported_zero_refunds_it() {
+        let share = borrower(BorrowerKind::Team, Some(100), Some(2.0));
+        let hold = Hold {
+            descriptor: Some(share.share.clone()),
+            reserved_tokens: 30,
+            cap: share.ceiling.clone(),
+            cap_reserved_tokens: 30,
+            ..Hold::empty()
+        };
+        let state = ShareState {
+            fallback_holds: vec![("fallback".into(), Arc::new(hold))],
+            ..ShareState::default()
+        };
+        let served = state.hold("fallback");
+        assert_eq!(
+            team_settlement(&state, served.as_deref(), Charge::Estimated(500), 60),
+            vec![]
+        );
+        assert_eq!(
+            team_settlement(&state, served.as_deref(), Charge::Reported(0), 60),
+            vec![
+                refund(Some(&share.share), -30),
+                refund(share.ceiling.as_ref(), -30)
+            ]
+        );
+    }
+
     #[rstest]
     fn a_borrower_without_a_share_on_the_served_target_settles_nothing_to_its_admitting_share() {
         let mut state = ShareState {
@@ -2097,7 +2308,7 @@ mod tests {
         };
         state.put_hold("other", &Arc::new(Hold::empty()));
         let served = state.hold("other");
-        let operations = team_settlement(&state, served.as_deref(), 90, 60);
+        let operations = team_settlement(&state, served.as_deref(), Charge::Reported(90), 60);
         assert_eq!(
             operations,
             vec![ReservationOp::Increment {

@@ -15,7 +15,6 @@ export const RANGE_PRESETS = [
 
 export type RangeHours = (typeof RANGE_PRESETS)[number]["hours"];
 export const RANGE_HOURS: readonly RangeHours[] = RANGE_PRESETS.map((preset) => preset.hours);
-export const DEFAULT_RANGE_HOURS: RangeHours = 24;
 export const isRangeHours = (hours: number): hours is RangeHours => RANGE_HOURS.includes(hours as RangeHours);
 
 export const presetLabel = (hours: number): string =>
@@ -26,8 +25,6 @@ export interface RelativeRange {
   readonly hours: number;
   readonly anchorMs: number | null;
 }
-
-export const isLive = (range: RelativeRange): boolean => range.anchorMs === null;
 
 /** The window a range covers; a live range rolls with `nowMs`, a paused one ignores it. */
 export const timeWindow = (range: RelativeRange, nowMs: number): TimeWindow => {

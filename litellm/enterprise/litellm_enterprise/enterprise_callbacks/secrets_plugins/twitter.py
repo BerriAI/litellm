@@ -11,7 +11,7 @@ class TwitterDetector(RegexBasedDetector):
         return "Twitter Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Twitter Access Secret
             re.compile(

@@ -62,7 +62,7 @@ class BaseTextToSpeechConfig(ABC):
         }
 
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get list of OpenAI TTS parameters supported by this provider
         """
@@ -71,7 +71,7 @@ class BaseTextToSpeechConfig(ABC):
     def map_openai_params(
         self,
         model: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         voice: str | dict | None = None,
         drop_params: bool = False,
         kwargs: dict = {},
@@ -98,7 +98,7 @@ class BaseTextToSpeechConfig(ABC):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete url for the request
@@ -113,8 +113,8 @@ class BaseTextToSpeechConfig(ABC):
         model: str,
         input: str,
         voice: str | None,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict,
     ) -> TextToSpeechRequestData:
         """

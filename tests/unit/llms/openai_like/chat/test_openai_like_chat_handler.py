@@ -1,4 +1,6 @@
 import json
+from collections.abc import Callable
+from datetime import datetime
 from typing import Final
 
 from unittest.mock import Mock
@@ -6,8 +8,13 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
+import litellm
+from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.openai_like.chat.handler import make_call, make_sync_call
+from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler, make_call, make_sync_call
+from litellm.llms.openai_like.common_utils import OpenAILikeError
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 _FAKE_STREAMED_REPLY: Final = {
     "id": "chatcmpl-fake-stream",
@@ -106,3 +113,172 @@ async def test_stream_keeps_unicode_line_separators_inside_the_delta(sync_stream
     chunks: Final = await _streamed_chunks(sync_stream)
 
     assert "".join(str(chunk["text"]) for chunk in chunks) == _LINE_SEPARATED_TEXT
+
+
+def _logging_obj(stream: bool) -> LiteLLMLogging:
+    logging_obj: Final = LiteLLMLogging(
+        model="mistral-medium-3",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=stream,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="openai-like-timeout",
+        function_id="openai-like-timeout",
+    )
+    logging_obj.update_environment_variables(
+        model="mistral-medium-3", user=None, optional_params={}, litellm_params={}, custom_llm_provider="openai"
+    )
+    return logging_obj
+
+
+def _complete(client: AsyncHTTPHandler | HTTPHandler, *, acompletion: bool, stream: bool, timeout: float | None):
+    return OpenAILikeChatHandler().completion(
+        model="mistral-medium-3",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://openai-like.example/v1",
+        custom_llm_provider="openai",
+        custom_prompt_dict={},
+        model_response=ModelResponse(),
+        print_verbose=print,
+        encoding=None,
+        api_key="sk-openai-like",
+        logging_obj=_logging_obj(stream),
+        optional_params={"stream": stream},
+        acompletion=acompletion,
+        timeout=timeout,
+        client=client,
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_stream_sends_the_resolved_timeout_to_the_upstream_request() -> None:
+    read_timeouts: Final[list[object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        read_timeouts.append(request.extensions["timeout"]["read"])
+        return _streamed_reply(request)
+
+    stream: Final = await _complete(
+        AsyncHTTPHandler(transport=httpx.MockTransport(respond)), acompletion=True, stream=True, timeout=8.0
+    )
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in stream]
+
+    assert read_timeouts == [8.0]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _LINE_SEPARATED_TEXT
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_sync_call_on_a_caller_client_sends_the_resolved_timeout_to_the_upstream_request(stream: bool) -> None:
+    read_timeouts: Final[list[object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        read_timeouts.append(request.extensions["timeout"]["read"])
+        return _streamed_reply(request) if stream else httpx.Response(200, json=_FAKE_STREAMED_REPLY)
+
+    _complete(
+        HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        acompletion=False,
+        stream=stream,
+        timeout=8.0,
+    )
+
+    assert read_timeouts == [8.0]
+
+
+class _StallsAfterFirstChunk(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        chunk: Final = {"id": "chatcmpl-stall", "choices": [{"index": 0, "delta": {"content": "partial"}}]}
+        yield f"data: {json.dumps(chunk)}\n\n".encode()
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+
+@pytest.mark.asyncio
+async def test_async_stream_read_timeout_surfaces_as_a_408_timeout_the_router_can_fall_back_on() -> None:
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(200, stream=_StallsAfterFirstChunk()))
+    stream: Final = await _complete(AsyncHTTPHandler(transport=transport), acompletion=True, stream=True, timeout=8.0)
+
+    with pytest.raises(MidStreamFallbackError) as raised:
+        [chunk async for chunk in stream]
+
+    assert raised.value.status_code == 408
+    assert isinstance(raised.value.original_exception, litellm.Timeout)
+
+
+_ANSWER_CHUNK: Final = {"id": "chatcmpl-drop", "choices": [{"index": 0, "delta": {"content": "Hello there"}}]}
+_FINISH_CHUNK: Final = {"id": "chatcmpl-drop", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+
+
+class _DropsAfterChunks(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[dict[str, object], ...], drop: httpx.TransportError) -> None:
+        self._chunks = chunks
+        self._drop = drop
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield f"data: {json.dumps(chunk)}\n\n".encode()
+        raise self._drop
+
+
+async def _stream_that_drops(chunks: tuple[dict[str, object], ...], drop: httpx.TransportError):
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(200, stream=_DropsAfterChunks(chunks, drop)))
+    return await _complete(AsyncHTTPHandler(transport=transport), acompletion=True, stream=True, timeout=8.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drop",
+    [httpx.ReadError("Response payload is not completed"), httpx.RemoteProtocolError("incomplete chunked read")],
+    ids=["read_error", "remote_protocol_error"],
+)
+async def test_async_stream_dropped_after_its_finish_ends_with_the_finish(drop: httpx.TransportError) -> None:
+    stream: Final = await _stream_that_drops((_ANSWER_CHUNK, _FINISH_CHUNK), drop)
+
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in stream]
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "Hello there"
+    assert {chunk.choices[0].finish_reason for chunk in chunks if chunk.choices} - {None} == {"stop"}
+
+
+@pytest.mark.asyncio
+async def test_async_stream_dropped_before_its_finish_still_fails_over() -> None:
+    stream: Final = await _stream_that_drops((_ANSWER_CHUNK,), httpx.ReadError("Response payload is not completed"))
+
+    with pytest.raises(MidStreamFallbackError) as raised:
+        [chunk async for chunk in stream]
+
+    assert raised.value.generated_content == "Hello there"
+
+
+def _read_timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("Read timed out", request=request)
+
+
+def _refuse_then_read_timeout() -> Callable[[httpx.Request], httpx.Response]:
+    failures: Final = iter((httpx.ConnectError, httpx.ReadTimeout))
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise next(failures)("upstream unavailable", request=request)
+
+    return fail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream", [_read_timeout, _refuse_then_read_timeout()], ids=["read", "read_after_reconnect"])
+async def test_async_non_stream_read_timeout_maps_to_a_408(
+    upstream: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+
+    with pytest.raises(OpenAILikeError) as raised:
+        await _complete(client, acompletion=True, stream=False, timeout=8.0)
+
+    assert raised.value.status_code == 408
+
+
+def test_sync_non_stream_read_timeout_maps_to_a_408() -> None:
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_read_timeout)))
+
+    with pytest.raises(OpenAILikeError) as raised:
+        _complete(client, acompletion=False, stream=False, timeout=8.0)
+
+    assert raised.value.status_code == 408

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,6 +13,284 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
+
+func TestMCPServerOAuthRequestsAndReadBack(t *testing.T) {
+	fields := map[string]interface{}{
+		"issuer": "https://id.example.com", "authorization_url": "https://id.example.com/authorize",
+		"token_url": "https://id.example.com/token", "registration_url": "https://id.example.com/register",
+		"oauth2_flow": "client_credentials", "token_exchange_endpoint": "https://id.example.com/exchange",
+		"audience": "api", "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+		"token_exchange_profile": "custom",
+	}
+	credentials := map[string]interface{}{
+		"scopes": []interface{}{"read", "write"}, "token_endpoint_auth_method": "client_secret_basic",
+		"upstream_resource": "https://api.example.com", "client_private_key_id": "key-1",
+		"client_assertion_signing_alg": "RS256", "id_jag_resource_token_endpoint": "https://resource.example.com/token",
+		"id_jag_resource": "resource", "id_jag_resource_client_id": "resource-client", "id_jag_subject_source": "refresh_token",
+	}
+	for _, operation := range []string{"create", "update"} {
+		t.Run(operation, func(t *testing.T) {
+			config := map[string]interface{}{"server_name": "crm", "url": "https://mcp.example.com", "transport": "http", "auth_type": "oauth2"}
+			for k, v := range fields {
+				config[k] = v
+			}
+			for k, v := range credentials {
+				config[k] = v
+			}
+			config["client_private_key_wo"] = "private-key-fixture"
+			config["client_private_key_wo_version"] = 1
+			config["id_jag_resource_client_secret_wo"] = "resource-secret-fixture"
+			config["id_jag_resource_client_secret_wo_version"] = 1
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				var body map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				for k, v := range fields {
+					if body[k] != v {
+						t.Errorf("%s request lost %s: %v", operation, k, body[k])
+					}
+				}
+				got, _ := body["credentials"].(map[string]interface{})
+				for k, v := range credentials {
+					if !reflect.DeepEqual(got[k], v) {
+						t.Errorf("credential %s: got %v want %v", k, got[k], v)
+					}
+				}
+				if got["client_private_key"] != "private-key-fixture" || got["id_jag_resource_client_secret"] != "resource-secret-fixture" {
+					t.Error("write-only credentials missing")
+				}
+				body["server_id"] = "srv-1"
+				body["credentials"] = map[string]interface{}{"scopes": []string{"read", "write"}, "upstream_resource": "https://api.example.com", "client_private_key": "must-not-persist", "id_jag_resource_client_secret": "must-not-persist"}
+				json.NewEncoder(w).Encode(body)
+			}))
+			defer srv.Close()
+			res := resourceLiteLLMMCPServer()
+			delete(config, "client_private_key_wo")
+			delete(config, "id_jag_resource_client_secret_wo")
+			var prior *terraform.InstanceState
+			if operation == "update" {
+				initial := schema.TestResourceDataRaw(t, res.Schema, map[string]interface{}{
+					"server_name": "crm", "url": "https://mcp.example.com", "transport": "http", "auth_type": "oauth2",
+				})
+				initial.SetId("srv-1")
+				prior = initial.State()
+			}
+			diff, err := res.Diff(context.Background(), prior, terraform.NewResourceConfigRaw(config), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			diff.RawConfig = cty.ObjectVal(map[string]cty.Value{
+				"client_private_key_wo":            cty.StringVal("private-key-fixture"),
+				"id_jag_resource_client_secret_wo": cty.StringVal("resource-secret-fixture"),
+			})
+			d, err := schema.InternalMap(res.Schema).Data(prior, diff)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := NewClient(srv.URL, "test-key", true)
+			if operation == "create" {
+				err = resourceLiteLLMMCPServerCreate(d, client)
+			} else {
+				d.SetId("srv-1")
+				err = resourceLiteLLMMCPServerUpdate(d, client)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls == 0 {
+				t.Fatal("no request received")
+			}
+			for k, v := range fields {
+				if d.Get(k) != v {
+					t.Errorf("read-back lost %s", k)
+				}
+			}
+			if !reflect.DeepEqual(d.Get("scopes"), credentials["scopes"]) || d.Get("upstream_resource") != credentials["upstream_resource"] {
+				t.Fatal("credential read-back missing")
+			}
+			state, _ := json.Marshal(d.State().Attributes)
+			if strings.Contains(string(state), "private-key-fixture") || strings.Contains(string(state), "resource-secret-fixture") || strings.Contains(string(state), "must-not-persist") {
+				t.Fatal("secret persisted in state")
+			}
+		})
+	}
+}
+
+func TestMCPServerOAuthUpdatePreservesOmittedAndClearsExplicit(t *testing.T) {
+	for _, changed := range []string{"issuer", "url", "auth_type", "description", "omit_token_url", "omit_scopes", "scopes", "client_secret_wo_version", "token_endpoint_auth_method", "client_private_key_id", "client_assertion_signing_alg", "id_jag_resource_token_endpoint", "id_jag_resource", "id_jag_resource_client_id", "id_jag_subject_source"} {
+		t.Run(changed, func(t *testing.T) {
+			res := resourceLiteLLMMCPServer()
+			config := map[string]interface{}{"server_name": "crm", "url": "https://mcp.example.com", "transport": "http", "auth_type": "oauth2", "issuer": "https://id.example.com", "token_url": "https://id.example.com/token", "authorization_url": "https://id.example.com/auth", "registration_url": "https://id.example.com/register", "client_id": "client", "scopes": []interface{}{"read"}, "upstream_resource": "api"}
+			credentialStrings := map[string]interface{}{
+				"upstream_resource": "api", "token_endpoint_auth_method": "client_secret_basic",
+				"client_private_key_id": "key", "client_assertion_signing_alg": "RS256",
+				"id_jag_resource_token_endpoint": "https://resource.example.com/token",
+				"id_jag_resource":                "api", "id_jag_resource_client_id": "resource-client",
+				"id_jag_subject_source": "refresh_token",
+			}
+			for field, value := range credentialStrings {
+				config[field] = value
+			}
+			config["oauth2_flow"] = "client_credentials"
+			config["audience"] = "unmanaged-audience"
+			config["client_secret_wo_version"] = 1
+			config["client_private_key_wo_version"] = 1
+			prior := schema.TestResourceDataRaw(t, res.Schema, config)
+			prior.SetId("srv-1")
+			delete(config, "audience")
+			if changed == "issuer" || changed == "url" {
+				config[changed] = "https://new.example.com"
+			} else if changed == "auth_type" {
+				config[changed] = "oauth2_id_jag"
+			} else if changed == "description" {
+				config[changed] = "new description"
+			} else if strings.HasPrefix(changed, "omit_") {
+				delete(config, strings.TrimPrefix(changed, "omit_"))
+				config["description"] = "new description"
+			} else if changed == "scopes" {
+				config[changed] = []interface{}{}
+			} else if changed == "client_secret_wo_version" {
+				config[changed] = 2
+			} else {
+				delete(config, changed)
+			}
+			diff, err := res.Diff(context.Background(), prior.State(), terraform.NewResourceConfigRaw(config), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rawConfig := map[string]cty.Value{
+				"client_secret_wo":      cty.StringVal("client-secret-fixture"),
+				"client_private_key_wo": cty.StringVal("private-key-fixture"),
+			}
+			for field, value := range config {
+				if s, ok := value.(string); ok {
+					rawConfig[field] = cty.StringVal(s)
+				}
+			}
+			if changed != "omit_scopes" && changed != "scopes" {
+				rawConfig["scopes"] = cty.ListVal([]cty.Value{cty.StringVal("read")})
+			}
+			diff.RawConfig = cty.ObjectVal(rawConfig)
+			d, err := schema.InternalMap(res.Schema).Data(prior.State(), diff)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				var body map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				creds, _ := body["credentials"].(map[string]interface{})
+				if changed == "client_secret_wo_version" || changed == "auth_type" {
+					if creds["client_secret"] != "client-secret-fixture" || creds["client_id"] != "client" {
+						t.Error("secret rotation must send the OAuth client and its updated secret")
+					}
+				} else {
+					if _, clientPresent := creds["client_id"]; clientPresent {
+						t.Error("update replayed an unchanged OAuth client")
+					}
+					if _, secretPresent := creds["client_secret"]; secretPresent {
+						t.Error("update replayed an unchanged OAuth secret")
+					}
+				}
+				if changed == "url" || changed == "issuer" || changed == "auth_type" {
+					if body["preserve_explicit_oauth_settings"] != true ||
+						body["issuer"] != config["issuer"] || body["oauth2_flow"] != "client_credentials" ||
+						body["token_url"] != config["token_url"] {
+						t.Errorf("%s edit dropped explicitly configured OAuth settings", changed)
+					}
+					if _, present := body["audience"]; present {
+						t.Errorf("%s edit replayed unmanaged OAuth settings", changed)
+					}
+					if creds["token_endpoint_auth_method"] != "client_secret_basic" {
+						t.Errorf("%s edit dropped the configured token authentication method", changed)
+					}
+				}
+				if changed == "auth_type" {
+					scopes, ok := creds["scopes"].([]interface{})
+					if !ok || len(scopes) != 1 || scopes[0] != "read" ||
+						creds["client_private_key"] != "private-key-fixture" {
+						t.Error("auth type switch dropped configured scopes or private key")
+					}
+				} else if _, present := creds["client_private_key"]; present {
+					t.Error("update replayed an unchanged private key")
+				}
+				if changed == "issuer" && body["issuer"] != config["issuer"] {
+					t.Error("issuer edit did not send the new issuer")
+				}
+				if changed == "omit_token_url" {
+					if _, present := body["token_url"]; present {
+						t.Error("update changed an omitted token URL")
+					}
+				}
+				if changed == "omit_scopes" {
+					if _, present := creds["scopes"]; present {
+						t.Error("update changed omitted scopes")
+					}
+				}
+				if _, clearingCredential := credentialStrings[changed]; clearingCredential {
+					if value, present := creds[changed]; !present || value != nil {
+						t.Errorf("removed credential %s must be explicit null", changed)
+					}
+				}
+				if changed == "scopes" {
+					if v, ok := creds["scopes"].([]interface{}); !ok || len(v) != 0 {
+						t.Error("scopes were not cleared")
+					}
+				}
+				body["server_id"] = "srv-1"
+				json.NewEncoder(w).Encode(body)
+			}))
+			defer srv.Close()
+			if err := resourceLiteLLMMCPServerUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("got %d PUTs, want 1", calls)
+			}
+		})
+	}
+}
+
+func TestMCPServerOAuthClearsWriteOnlySecrets(t *testing.T) {
+	res := resourceLiteLLMMCPServer()
+	config := map[string]interface{}{"server_name": "crm", "url": "https://mcp.example.com", "transport": "http", "auth_type": "oauth2", "client_id": "client"}
+	prior := schema.TestResourceDataRaw(t, res.Schema, config)
+	prior.SetId("srv-1")
+	prior.Set("client_private_key_wo_version", 1)
+	prior.Set("id_jag_resource_client_secret_wo_version", 1)
+	diff, err := res.Diff(context.Background(), prior.State(), terraform.NewResourceConfigRaw(config), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := schema.InternalMap(res.Schema).Data(prior.State(), diff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		credentials, _ := body["credentials"].(map[string]interface{})
+		for _, field := range []string{"client_private_key", "id_jag_resource_client_secret"} {
+			if value, present := credentials[field]; !present || value != nil {
+				t.Errorf("removed write-only credential %s must be explicit null", field)
+			}
+		}
+		body["server_id"] = "srv-1"
+		json.NewEncoder(w).Encode(body)
+	}))
+	defer srv.Close()
+	if err := resourceLiteLLMMCPServerUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestMCPServerDeleteAcceptsFullSuccessRange(t *testing.T) {
 	tests := []struct {
@@ -198,6 +477,10 @@ func TestMCPServerSchemaWriteOnlyCredentialRules(t *testing.T) {
 		extra   map[string]interface{}
 		wantErr bool
 	}{
+		"private key without version":             {extra: map[string]interface{}{"client_private_key_wo": "key"}, wantErr: true},
+		"resource client secret without version":  {extra: map[string]interface{}{"id_jag_resource_client_secret_wo": "secret"}, wantErr: true},
+		"invalid flow":                            {extra: map[string]interface{}{"oauth2_flow": "implicit"}, wantErr: true},
+		"unsupported token authentication method": {extra: map[string]interface{}{"token_endpoint_auth_method": "private_key_jwt"}, wantErr: true},
 		"oauth2 client secret with id and version": {
 			extra:   map[string]interface{}{"auth_type": "oauth2", "client_id": "c", "client_secret_wo": "s", "client_secret_wo_version": 1},
 			wantErr: false,

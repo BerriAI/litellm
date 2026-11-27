@@ -60,7 +60,7 @@ class PassThroughEndpointHandler(BaseTranslation):
 
     def _extract_text_for_guardrail(
         self,
-        data: dict,
+        data: dict[str, object],
         field_expressions: list[str] | None,
     ) -> str:
         """
@@ -142,7 +142,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> object:
         """
         Process output response by applying guardrails to targeted fields.

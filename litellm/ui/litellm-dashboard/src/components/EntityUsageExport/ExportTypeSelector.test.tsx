@@ -1,6 +1,10 @@
 import { renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
+import i18next from "i18next";
+import { I18nextProvider } from "react-i18next";
 import { describe, expect, it, vi } from "vitest";
+import en from "@/i18n/locales/en.json";
+import zh from "@/i18n/locales/zh-CN.json";
 import ExportTypeSelector from "./ExportTypeSelector";
 
 describe("ExportTypeSelector", () => {
@@ -19,6 +23,19 @@ describe("ExportTypeSelector", () => {
   it("should display the correct entity type for different entities", () => {
     renderWithProviders(<ExportTypeSelector value="daily" onChange={vi.fn()} entityType="organization" />);
     expect(screen.getByText(/Day-by-day breakdown by organization$/)).toBeInTheDocument();
+  });
+
+  it("localizes the entity name inside the export scope", async () => {
+    const i18n = i18next.createInstance();
+    await i18n.init({ lng: "zh-CN", resources: { en: { translation: en }, "zh-CN": { translation: zh } } });
+    renderWithProviders(
+      <I18nextProvider i18n={i18n}>
+        <ExportTypeSelector value="daily" onChange={vi.fn()} entityType="user" />
+      </I18nextProvider>,
+    );
+
+    expect(screen.getByText("按用户的逐日明细")).toBeInTheDocument();
+    expect(screen.getByText("每个用户的每日指标")).toBeInTheDocument();
   });
 
   it("should call onChange when a radio option is selected", async () => {

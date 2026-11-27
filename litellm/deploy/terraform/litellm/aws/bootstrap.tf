@@ -33,7 +33,7 @@ resource "aws_iam_policy" "bootstrap_secrets" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [aws_secretsmanager_secret.db_master_password[0].arn]
+      Resource = [local.db_master_password_secret_arn]
     }]
   })
 
@@ -97,7 +97,7 @@ resource "aws_ecs_task_definition" "bootstrap_db" {
     ]
     secrets = [
       # `:password::` extracts the password field out of the JSON secret.
-      { name = "PGPASSWORD", valueFrom = "${aws_secretsmanager_secret.db_master_password[0].arn}:password::" },
+      { name = "PGPASSWORD", valueFrom = "${local.db_master_password_secret_arn}:password::" },
     ]
 
     entryPoint = ["sh", "-c"]

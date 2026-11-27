@@ -2,11 +2,12 @@ import { copyToClipboard } from "@/utils/dataUtils";
 import { Check, Copy } from "lucide-react";
 import { useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { formatDateWithEnglishPattern } from "@/i18n/formats";
 import moment from "moment";
-import { AuditLogEntry, AUDIT_TABLE_NAME_DISPLAY } from "../AuditLogsTableColumns";
+import { AuditLogEntry, AUDIT_TABLE_NAME_DISPLAY, auditActionLabel, auditActionTone } from "../AuditLogsTableColumns";
 import DefaultProxyAdminTag from "../../../common_components/DefaultProxyAdminTag";
 import CopyButton from "@/components/shared/CopyButton";
-import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
+import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetTitle } from "@/components/ui/sheet";
 import { ResizableSheetContent } from "@/components/ui/ResizableSheetContent";
@@ -16,14 +17,6 @@ interface AuditLogDrawerProps {
   onClose: () => void;
   log: AuditLogEntry | null;
 }
-
-const ACTION_TONE: Record<string, StatusTone> = {
-  created: "success",
-  updated: "info",
-  deleted: "error",
-  rotated: "warning",
-  kill_switch_fired: "error",
-};
 
 function CopyableJsonBlock({ label, value }: { label: string; value: Record<string, any> }) {
   const { t } = useTranslation();
@@ -169,9 +162,21 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
   );
 }
 
+const auditTimestampOptions: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+};
+
 export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   if (!log) return null;
+  const updated = moment.utc(log.updated_at).local();
+  const actionLabel = !i18n.language || i18n.language.startsWith("en") ? log.action : auditActionLabel(log.action, t);
 
   const tableDisplay = Object.hasOwn(AUDIT_TABLE_NAME_DISPLAY, log.table_name)
     ? t(AUDIT_TABLE_NAME_DISPLAY[log.table_name])
@@ -183,9 +188,14 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
         <SheetTitle className="sr-only">{t("logs.audit.drawer.title")}</SheetTitle>
 
         <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-6 py-4">
-          <StatusBadge tone={ACTION_TONE[log.action] ?? "neutral"} label={log.action} />
+          <StatusBadge tone={auditActionTone(log.action)} label={actionLabel} />
           <span className="text-sm text-muted-foreground">
-            {moment.utc(log.updated_at).local().format("MMM D, YYYY HH:mm:ss")}
+            {formatDateWithEnglishPattern(
+              updated.toDate(),
+              i18n.language,
+              updated.format("MMM D, YYYY HH:mm:ss"),
+              auditTimestampOptions,
+            )}
           </span>
         </div>
 
