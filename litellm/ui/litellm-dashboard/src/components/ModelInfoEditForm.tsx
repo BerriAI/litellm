@@ -159,11 +159,15 @@ const ChipList: React.FC<{ values: unknown; emptyLabel: string }> = ({ values, e
 };
 
 function createPricingTouches() {
-  const fields = new Set<string>();
+  let fields: ReadonlySet<string> = new Set();
   return {
     has: (field: TouchedPricingField) => fields.has(field),
-    mark: (field: string) => fields.add(field),
-    clear: () => fields.clear(),
+    mark: (field: string) => {
+      if (!fields.has(field)) fields = new Set([...fields, field]);
+    },
+    clear: () => {
+      fields = new Set();
+    },
   };
 }
 
