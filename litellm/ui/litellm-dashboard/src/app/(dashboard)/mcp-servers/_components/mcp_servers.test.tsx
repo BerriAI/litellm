@@ -925,7 +925,7 @@ describe("MCPServers URL state", () => {
     ["connect", "Connect"],
     ["semantic-filter", "Semantic Filter"],
     ["tool-search", "Tool Search"],
-    ["network", "Network Settings"],
+    ["network-settings", "Network Settings"],
     ["submitted", "Submitted MCPs"],
     ["connections", "Live Connections"],
   ])("opens the %s tab from the URL for an admin", (value, name) => {
@@ -941,17 +941,17 @@ describe("MCPServers URL state", () => {
 
     await userEvent.click(screen.getByRole("tab", { name: "Network Settings" }));
 
-    expect(lastUrl(onUrlUpdate)?.searchParams.get("tab")).toBe("network");
+    expect(lastUrl(onUrlUpdate)?.searchParams.get("tab")).toBe("network-settings");
     expect(screen.getByRole("tab", { name: "Network Settings" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("drops an admin-only tab from the URL for a non-admin", async () => {
+  it("shows All Servers for an admin-only tab link opened by a non-admin and keeps the link", async () => {
     const onUrlUpdate = renderPage("?tab=submitted", { userRole: "Internal User" }, { keepMountWrites: true });
 
+    expect(await screen.findByText("Alpha")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "All Servers" })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByRole("tab", { name: "Submitted MCPs" })).not.toBeInTheDocument();
-    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
-    expect(lastUrl(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
+    expect(onUrlUpdate.mock.calls.some(([update]) => !update.searchParams.has("tab"))).toBe(false);
   });
 
   it("orders the cards by the sort in the URL", async () => {

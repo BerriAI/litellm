@@ -72,7 +72,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const networkAccess = getMCPNetworkAccess(mcpServer, t);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const canViewUserCredentials = userRole !== null && isProxyAdminTierRole(userRole);
-  const [serverTab, setServerTab] = useMcpServerTab(isProxyAdmin, canViewUserCredentials);
+  const [serverTab, setServerTab] = useMcpServerTab({ isProxyAdmin, canViewUserCredentials });
   const editFormShowsStdioBanner = serverTab === "settings" && editing && canEdit;
   const showStdioBanner = mcpServer.transport === TRANSPORT.STDIO && !stdioEnabled && !editFormShowsStdioBanner;
   const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole) && !isViewOnly;

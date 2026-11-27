@@ -207,7 +207,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     closeServer,
     envVarsDeepLinkId,
     clearEnvVarsDeepLink,
-  } = useMcpServersUrlState(isAdmin, canViewLiveConnections, serversWithHealth, mcpServers !== undefined);
+  } = useMcpServersUrlState({ isAdmin, canViewLiveConnections }, serversWithHealth, mcpServers !== undefined);
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isModalVisible, setModalVisible] = useState(false);
@@ -476,7 +476,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                   {t("mcpServers.servers.tabs.toolSearch")}
                 </TabsTrigger>
 
-                <TabsTrigger value="network" className="flex-none rounded-none px-4 py-2">
+                <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
                   {t("mcpServers.servers.tabs.networkSettings")}
                 </TabsTrigger>
 
@@ -669,7 +669,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 <MCPToolSearchSettings accessToken={accessToken} />
               </TabsContent>
 
-              <TabsContent value="network" keepMounted>
+              <TabsContent value="network-settings" keepMounted>
                 <MCPNetworkSettings accessToken={accessToken} />
               </TabsContent>
 

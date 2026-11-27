@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -298,7 +298,7 @@ describe("MCPServerView", () => {
     expect(within(activePanel()).getByText("Host URL")).toBeInTheDocument();
   });
 
-  it("drops a settings tab from the URL for a non-admin", async () => {
+  it("shows the overview for a settings link opened by a non-admin and keeps the link", async () => {
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
     renderView({}, { isProxyAdmin: false }, newQueryClient(), {
       searchParams: "?server=srv-1&server_tab=settings",
@@ -307,9 +307,8 @@ describe("MCPServerView", () => {
     });
 
     expect(within(activePanel()).getByText("Host URL")).toBeInTheDocument();
-    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
-    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("server_tab")).toBe(false);
-    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("server")).toBe("srv-1");
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(onUrlUpdate.mock.calls.some(([update]) => !update.searchParams.has("server_tab"))).toBe(false);
   });
 
   it("reopens the edit form when returning from an edit OAuth redirect for this server", () => {

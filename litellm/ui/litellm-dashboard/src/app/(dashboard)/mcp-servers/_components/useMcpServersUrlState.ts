@@ -10,23 +10,57 @@ import { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 export const MCP_SERVER_SORT_KEYS = ["created_desc", "updated_desc", "name_asc", "health"] as const;
 export type McpServerSortKey = (typeof MCP_SERVER_SORT_KEYS)[number];
 
-const USER_PAGE_TABS = ["servers", "toolsets", "connect"] as const;
-const ADMIN_PAGE_TABS = [...USER_PAGE_TABS, "semantic-filter", "tool-search", "network", "submitted"] as const;
-const PROXY_ADMIN_PAGE_TABS = [...ADMIN_PAGE_TABS, "connections"] as const;
-export type McpPageTab = (typeof PROXY_ADMIN_PAGE_TABS)[number];
+export const PAGE_TABS = [
+  "servers",
+  "toolsets",
+  "connect",
+  "semantic-filter",
+  "tool-search",
+  "network-settings",
+  "submitted",
+  "connections",
+] as const;
+export type McpPageTab = (typeof PAGE_TABS)[number];
 
-const SERVER_TABS = ["overview", "tools", "settings", "user-credentials"] as const;
+export const SERVER_TABS = ["overview", "tools", "settings", "user-credentials"] as const;
 export type McpServerTab = (typeof SERVER_TABS)[number];
 
-const pageTabsFor = (isAdmin: boolean, canViewLiveConnections: boolean): readonly McpPageTab[] => {
-  if (!isAdmin) return USER_PAGE_TABS;
-  return canViewLiveConnections ? PROXY_ADMIN_PAGE_TABS : ADMIN_PAGE_TABS;
+export interface McpPageAccess {
+  isAdmin: boolean;
+  canViewLiveConnections: boolean;
+}
+
+export interface McpServerAccess {
+  isProxyAdmin: boolean;
+  canViewUserCredentials: boolean;
+}
+
+const PAGE_TAB_GATES: Record<McpPageTab, (access: McpPageAccess) => boolean> = {
+  servers: () => true,
+  toolsets: () => true,
+  connect: () => true,
+  "semantic-filter": ({ isAdmin }) => isAdmin,
+  "tool-search": ({ isAdmin }) => isAdmin,
+  "network-settings": ({ isAdmin }) => isAdmin,
+  submitted: ({ isAdmin }) => isAdmin,
+  connections: ({ canViewLiveConnections }) => canViewLiveConnections,
 };
 
-const serverTabsFor = (isProxyAdmin: boolean, canViewUserCredentials: boolean): readonly McpServerTab[] =>
-  SERVER_TABS.filter(
-    (tab) => (tab !== "settings" || isProxyAdmin) && (tab !== "user-credentials" || canViewUserCredentials),
-  );
+const SERVER_TAB_GATES: Record<McpServerTab, (access: McpServerAccess) => boolean> = {
+  overview: () => true,
+  tools: () => true,
+  settings: ({ isProxyAdmin }) => isProxyAdmin,
+  "user-credentials": ({ canViewUserCredentials }) => canViewUserCredentials,
+};
+
+export const visiblePageTabs = (access: McpPageAccess): readonly McpPageTab[] =>
+  PAGE_TABS.filter((tab) => PAGE_TAB_GATES[tab](access));
+
+export const visibleServerTabs = (access: McpServerAccess): readonly McpServerTab[] =>
+  SERVER_TABS.filter((tab) => SERVER_TAB_GATES[tab](access));
+
+export const resolveVisibleTab = <T extends string>(requested: T, visible: readonly T[], fallback: T): T =>
+  visible.includes(requested) ? requested : fallback;
 
 const listParsers = {
   team: parseAsString.withDefault("all"),
@@ -78,13 +112,9 @@ const readOAuthRestore = (): OAuthRestore | null => {
 const toSortKey = (value: string | null): McpServerSortKey | null =>
   MCP_SERVER_SORT_KEYS.find((key) => key === value) ?? null;
 
-export function useMcpServersUrlState(
-  isAdmin: boolean,
-  canViewLiveConnections: boolean,
-  servers: readonly MCPServer[],
-  serversLoaded: boolean,
-) {
-  const [tab, setTab] = useUrlTab<McpPageTab>(pageTabsFor(isAdmin, canViewLiveConnections), "servers");
+export function useMcpServersUrlState(access: McpPageAccess, servers: readonly MCPServer[], serversLoaded: boolean) {
+  const [requestedTab, setTab] = useUrlTab(PAGE_TABS, "servers");
+  const tab = resolveVisibleTab(requestedTab, visiblePageTabs(access), "servers");
   const [filters, setFilters] = useQueryStates(listParsers);
   const [detail, setDetail] = useQueryStates(detailParsers);
   const [fillEnvVars, setFillEnvVars] = useQueryState("fill_env_vars", parseAsString);
@@ -153,7 +183,9 @@ export function useMcpServersUrlState(
   };
 }
 
-export const useMcpServerTab = (isProxyAdmin: boolean, canViewUserCredentials: boolean) =>
-  useUrlTab(serverTabsFor(isProxyAdmin, canViewUserCredentials), "overview", "server_tab");
+export const useMcpServerTab = (access: McpServerAccess): [McpServerTab, (tab: McpServerTab) => void] => {
+  const [requestedTab, setServerTab] = useUrlTab(SERVER_TABS, "overview", "server_tab");
+  return [resolveVisibleTab(requestedTab, visibleServerTabs(access), "overview"), setServerTab];
+};
 
 export const useMcpToolUrlState = () => useQueryStates(toolParsers);
