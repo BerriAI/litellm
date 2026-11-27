@@ -2,15 +2,14 @@
 
 use std::sync::Arc;
 
-use litellm_python_compat::{Value, json};
-use litellm_redis_store::auth_cache::{MemberEntry, TeamEntry};
-use litellm_repositories::{ObjectPermissionRepository, RawJson, Side, Team, TeamRepository};
+use litellm_redis_store::auth_cache::TeamEntry;
+use litellm_repositories::{ObjectPermissionRepository, Side, Team, TeamRepository};
 
 use crate::{
     Error,
     budget_limit::windows,
     column::{nullable, nullable_or_text, time},
-    member::member,
+    member::roster,
     object_permission::ObjectPermissions,
 };
 
@@ -82,19 +81,6 @@ pub enum AliasMatch<E> {
     Ambiguous,
 }
 
-/// The roster as the model reads it, each entry what `Member` dumps. The column's default is
-/// an empty object, which the model reads as no members.
-fn roster(raw: &RawJson) -> Result<Vec<MemberEntry>, Error> {
-    match json::loads(raw.get()) {
-        Ok(Value::List(entries)) => entries
-            .iter()
-            .map(|entry| member("members_with_roles", entry))
-            .collect(),
-        Ok(Value::Dict(fields)) if fields.is_empty() => Ok(Vec::new()),
-        _ => Err(Error::row("members_with_roles")),
-    }
-}
-
 /// What `LiteLLM_TeamTableCachedObj.model_dump(mode="json")` holds for `team`, or the column
 /// the model would refuse the row for.
 fn team_entry(team: Team) -> Result<TeamEntry, Error> {
@@ -138,7 +124,7 @@ fn team_entry(team: Team) -> Result<TeamEntry, Error> {
         organization_id,
         admins,
         members,
-        members_with_roles: roster(&members_with_roles)?,
+        members_with_roles: roster(members_with_roles.get())?,
         team_member_permissions: Some(team_member_permissions),
         metadata: nullable_or_text("metadata", Some(&metadata))?,
         tpm_limit,

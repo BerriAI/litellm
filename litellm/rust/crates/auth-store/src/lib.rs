@@ -21,5 +21,5 @@ pub use key::KeyDatabase;
 pub use organization::OrganizationDatabase;
 pub use project::ProjectDatabase;
 pub use team::{AliasMatch, TeamDatabase};
-pub use team_membership::TeamMembershipDatabase;
+pub use team_membership::{MemberAdded, MemberRemoved, TeamMembershipDatabase};
 pub use user::{SignedIn, UserDatabase};
