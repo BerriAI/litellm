@@ -263,7 +263,8 @@ impl Admit {
     /// and a larger body is sent on unread for the native limit or Python to refuse. The checks still run in the same order, so a JWT
     /// the core refuses goes to Python over that refusal whatever its body holds. A request the proxy's allowlists
     /// leave out is admitted as sent, before its caller or body is read, as Python refuses it before
-    /// it reads either, and `middleware::request_allowlist` refuses it in the native app.
+    /// it reads either, and `middleware::request_allowlist` refuses it in the native app. A sign-in the
+    /// caller's user owes is made last, so a request any check sends to Python has written nothing here.
     pub async fn admit(
         self: Arc<Self>,
         request: Request,
@@ -317,11 +318,21 @@ impl Admit {
         if let Some(reason) = over_its_caller {
             return Err(refused(parts, body, reason));
         }
-        if let Ok(caller) = authenticated {
-            match self.with_end_user(caller, &fields).await {
-                Ok(caller) => parts.extensions.insert(Preauthenticated(caller)),
+        let authenticated = match authenticated {
+            Ok(caller) => match self.with_end_user(caller, &fields).await {
+                Ok(caller) => Some(caller),
                 Err(reason) => return Err(refused(parts, body, reason)),
-            };
+            },
+            Err(_) => None,
+        };
+        if let Some(owed) = authenticated.as_ref().and_then(host::auth::owed)
+            && !Box::pin(owed.settle()).await
+        {
+            let reason = Reason::new(Refused::Credential, "sign_in");
+            return Err(refused(parts, body, reason));
+        }
+        if let Some(caller) = authenticated {
+            parts.extensions.insert(Preauthenticated(caller));
         }
         parts.extensions.insert(JsonObject(fields));
         Ok(Request::from_parts(parts, body))
@@ -471,33 +482,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::an_end_user("\tend-user ", Some("end-user"))]
-    #[case::nobody(" ", None)]
-    #[tokio::test]
-    async fn an_admitted_request_carries_the_end_user_its_body_names(
-        #[case] user_id: &str,
-        #[case] end_user_id: Option<&str>,
-    ) {
-        let sent = json!({"model": "claude", "max_tokens": 8, "messages": [],
-            "metadata": {"user_id": user_id}});
-        let request = Request::post("/v1/messages")
-            .header(MASTER_KEY.0, MASTER_KEY.1)
-            .body(Body::from(sent.to_string()))
-            .unwrap();
-
-        let admitted = admit().admit(request).await.unwrap();
-
-        let caller = admitted.extensions().get::<Preauthenticated<NativeRows>>();
-        assert_eq!(
-            caller.map(|caller| {
-                let end_user = caller.0.end_user.as_ref();
-                end_user.and_then(|end_user| end_user.end_user_id.as_deref())
-            }),
-            Some(end_user_id)
-        );
-    }
-
-    #[rstest]
     #[case::a_jwt("Bearer header.claims.signature", true)]
     #[case::a_virtual_key("Bearer sk-someone-else", false)]
     #[tokio::test]
@@ -566,6 +550,33 @@ mod tests {
         assert_eq!(
             (refused.why, read, sent_on.len()),
             (Refused::Credential, 3, 10 * CHUNK)
+        );
+    }
+
+    #[rstest]
+    #[case::an_end_user("\tend-user ", Some("end-user"))]
+    #[case::nobody(" ", None)]
+    #[tokio::test]
+    async fn an_admitted_request_carries_the_end_user_its_body_names(
+        #[case] user_id: &str,
+        #[case] end_user_id: Option<&str>,
+    ) {
+        let sent = json!({"model": "claude", "max_tokens": 8, "messages": [],
+            "metadata": {"user_id": user_id}});
+        let request = Request::post("/v1/messages")
+            .header(MASTER_KEY.0, MASTER_KEY.1)
+            .body(Body::from(sent.to_string()))
+            .unwrap();
+
+        let admitted = admit().admit(request).await.unwrap();
+
+        let caller = admitted.extensions().get::<Preauthenticated<NativeRows>>();
+        assert_eq!(
+            caller.map(|caller| {
+                let end_user = caller.0.end_user.as_ref();
+                end_user.and_then(|end_user| end_user.end_user_id.as_deref())
+            }),
+            Some(end_user_id)
         );
     }
 

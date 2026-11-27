@@ -1,0 +1,32 @@
+# Python gives a user it creates the `default_internal_user_params`, and adds it to their teams.
+# The native app creates a user with none, so a config that sets them goes to Python whole.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  litellm_settings:
+    default_internal_user_params:
+      user_role: internal_user_viewer
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      user_id_jwt_field: sub
+      user_email_jwt_field: email
+      user_id_upsert: true
+
+users:
+  user-1: {sso_user_id: user-1}
+  user-by-email: {user_email: known@example.com}
+
+requests:
+  - name: a JWT naming a user the database does not hold
+    jwt: {claims: {sub: user-new}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: litellm_settings.default_internal_user_params

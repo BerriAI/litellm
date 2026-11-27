@@ -451,6 +451,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::host::auth::UserRow;
 
     /// Runs `look` on a fresh record of a Messages call holding a body that names `claude`.
     fn on_a_call<R>(look: impl FnOnce(&mut CallState) -> R) -> R {
@@ -702,10 +703,10 @@ mod tests {
             Some("ci"),
             Affiliation {
                 holder: Holder::Member {
-                    user: Named::Stored(UserRecord {
+                    user: Named::Stored(UserRow::from(UserRecord {
                         user_id: "u1".to_owned(),
                         ..UserRecord::default()
-                    }),
+                    })),
                     team: Team::Row(TeamRecord {
                         team_id: "t1".to_owned(),
                         team_alias: Some("team one".to_owned()),
@@ -767,11 +768,11 @@ mod tests {
         })
     }
 
-    fn jwt_user() -> Named<UserRecord> {
-        Named::Stored(UserRecord {
+    fn jwt_user() -> Named<UserRow> {
+        Named::Stored(UserRow::from(UserRecord {
             user_id: "u1".to_owned(),
             ..UserRecord::default()
-        })
+        }))
     }
 
     fn jwt_team() -> Team<NativeRows> {
