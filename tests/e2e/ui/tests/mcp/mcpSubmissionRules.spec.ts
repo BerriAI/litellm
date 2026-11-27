@@ -25,21 +25,28 @@ async function readSetting(request: APIRequestContext, headers: AdminHeaders, fi
 }
 
 async function waitForSetting(request: APIRequestContext, headers: AdminHeaders, expected: Setting) {
-  let matching = 0;
+  let stableSince: number | undefined;
   await expect
     .poll(async () => {
-      const current = await readSetting(request, headers, expected.field_name);
-      matching = current.stored_in_db === expected.stored_in_db &&
-        JSON.stringify(current.field_value) === JSON.stringify(expected.field_value)
-        ? matching + 1
-        : 0;
-      return matching;
+      const observations = await Promise.all(
+        Array.from({ length: 4 }, () => readSetting(request, headers, expected.field_name)),
+      );
+      const allMatch = observations.every((current) =>
+        current.stored_in_db === expected.stored_in_db &&
+        JSON.stringify(current.field_value) === JSON.stringify(expected.field_value),
+      );
+      if (!allMatch) {
+        stableSince = undefined;
+        return false;
+      }
+      stableSince ??= performance.now();
+      return performance.now() - stableSince >= 11_000;
     }, {
       message: `Wait for ${expected.field_name} to settle across proxy workers`,
       timeout: 60_000,
       intervals: [250],
     })
-    .toBe(12);
+    .toBe(true);
 }
 
 async function withSetting<T>(
