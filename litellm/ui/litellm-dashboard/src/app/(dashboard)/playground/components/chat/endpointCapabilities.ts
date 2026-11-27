@@ -1,5 +1,6 @@
 import type { ParseKeys } from "i18next";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
+import { modelPrompts } from "@/i18n/untranslated/modelText";
 import { AUDIO_ACCEPT, CHAT_ATTACHMENT_ACCEPT, IMAGE_EDIT_ACCEPT } from "../chat_ui/uploadValidation";
 
 export type AttachKind = "chat" | "images" | "audio";
@@ -96,31 +97,9 @@ export const ATTACH_LABEL: Readonly<Record<AttachKind, ParseKeys>> = {
   audio: "playground.chat.endpointCapabilities.attach.audio",
 };
 
-export const SUGGESTIONS: Readonly<Partial<Record<EndpointType, readonly ParseKeys[]>>> = {
-  [EndpointType.CHAT]: [
-    "playground.chat.endpointCapabilities.suggestions.poem",
-    "playground.chat.endpointCapabilities.suggestions.quantum",
-    "playground.chat.endpointCapabilities.suggestions.email",
-  ],
-  [EndpointType.RESPONSES]: [
-    "playground.chat.endpointCapabilities.suggestions.poem",
-    "playground.chat.endpointCapabilities.suggestions.quantum",
-    "playground.chat.endpointCapabilities.suggestions.email",
-  ],
-  [EndpointType.ANTHROPIC_MESSAGES]: [
-    "playground.chat.endpointCapabilities.suggestions.poem",
-    "playground.chat.endpointCapabilities.suggestions.quantum",
-    "playground.chat.endpointCapabilities.suggestions.email",
-  ],
-  [EndpointType.A2A_AGENTS]: [
-    "playground.chat.endpointCapabilities.suggestions.agentHelp",
-    "playground.chat.endpointCapabilities.suggestions.agentAbout",
-    "playground.chat.endpointCapabilities.suggestions.agentTasks",
-  ],
+export const SUGGESTIONS: Readonly<Partial<Record<EndpointType, readonly string[]>>> = {
+  [EndpointType.CHAT]: modelPrompts.chat,
+  [EndpointType.RESPONSES]: modelPrompts.chat,
+  [EndpointType.ANTHROPIC_MESSAGES]: modelPrompts.chat,
+  [EndpointType.A2A_AGENTS]: modelPrompts.agent,
 };
-
-export const CODE_INTERPRETER_SUGGESTIONS: readonly ParseKeys[] = [
-  "playground.chat.endpointCapabilities.codeInterpreterSuggestions.salesChart",
-  "playground.chat.endpointCapabilities.codeInterpreterSuggestions.providersChart",
-  "playground.chat.endpointCapabilities.codeInterpreterSuggestions.pricingChart",
-];

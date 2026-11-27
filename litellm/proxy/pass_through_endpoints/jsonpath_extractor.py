@@ -31,7 +31,7 @@ class JsonPathExtractor:
 
     @staticmethod
     def extract_fields(
-        data: dict,
+        data: Mapping[str, object],
         jsonpath_expressions: list[str],
     ) -> str:
         """
@@ -61,7 +61,7 @@ class JsonPathExtractor:
         return "\n".join(extracted_values)
 
     @staticmethod
-    def evaluate(data: dict, expr: str) -> object:
+    def evaluate(data: Mapping[str, object], expr: str) -> object:
         """
         Evaluate a simple JSONPath-like expression.
 

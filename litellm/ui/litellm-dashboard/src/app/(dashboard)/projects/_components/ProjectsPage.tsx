@@ -1,5 +1,5 @@
 import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAccess";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -61,7 +61,7 @@ export function ProjectsPage() {
 
   if (!premiumUser) {
     return (
-      <Page>
+      <>
         <PageHeader>
           <PageHeaderTitle>
             <Folder />
@@ -86,7 +86,7 @@ export function ProjectsPage() {
             />
           </p>
         </PageContent>
-      </Page>
+      </>
     );
   }
 
@@ -95,7 +95,7 @@ export function ProjectsPage() {
   }
 
   return (
-    <Page>
+    <>
       <PageHeader>
         <PageHeaderTitle>
           <Folder />
@@ -148,6 +148,6 @@ export function ProjectsPage() {
       </PageContent>
 
       <CreateProjectModal isOpen={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} />
-    </Page>
+    </>
   );
 }

@@ -72,7 +72,7 @@ if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 _HEADERS_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 _ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
 _SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
@@ -579,7 +579,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         messages: list[AllMessageValues] | None,
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """
         If the request ``input`` contains litellm-encoded item IDs, or its Anthropic
         ``messages`` replay a bridge-tagged thinking block, decode the embedded
@@ -615,8 +615,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
         if "litellm_metadata" in request_kwargs:
             request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = True
 
-        request_input: Final = request_kwargs.get("input")
-        anthropic_messages: Final = messages or request_kwargs.get("messages")
+        request_input: Final = typed_request_kwargs.get("input")
+        anthropic_messages: Final = messages or typed_request_kwargs.get("messages")
         model_id: Final = self._extract_model_id_from_input(
             request_input
         ) or self._extract_model_id_from_anthropic_messages(anthropic_messages)

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
+import json
 import math
+import wave
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
@@ -30,6 +34,8 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,
     _get_budget_counters,
     _get_team_member_budget_counter,
+    input_cost_for_cost_info,
+    max_cost_for_cost_info,
     count_request_input_tokens,
     customer_window_counters,
     estimate_request_input_cost,
@@ -38,6 +44,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     reconcile_budget_reservation,
     reserve_budget_for_request,
 )
+from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
 from litellm.proxy.utils import ProxyLogging
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
@@ -597,9 +604,13 @@ def test_customer_and_inline_monthly_windows_count_the_same_calendar_period(
     )
 
     assert counters[0].window_start == datetime.fromisoformat(expected)
-    assert get_budget_window_start(
-        {**limit.model_dump(), **get_budget_window_reset_fields("1mo", reset_at=limit.reset_at, settings=settings)}, settings
-    ) == counters[0].window_start
+    assert (
+        get_budget_window_start(
+            {**limit.model_dump(), **get_budget_window_reset_fields("1mo", reset_at=limit.reset_at, settings=settings)},
+            settings,
+        )
+        == counters[0].window_start
+    )
     assert counters[0].reset_at == datetime.fromisoformat(reset_at)
 
 
@@ -720,6 +731,42 @@ async def test_an_openai_chat_request_reserves_what_openai_chat_bills_on_top_of_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("served", ["openai/gpt-5.6-sol", "azure/gpt-5.6-sol"])
+async def test_a_gemini_pdf_body_for_an_openai_deployment_reserves_what_the_chat_request_it_becomes_reserves(
+    served: str,
+) -> None:
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_base64
+
+    pdf: Final = _one_page_pdf_base64()
+    question: Final = "Summarize the report."
+    router: Final = _router_with_groups(("pdf-reports", served))
+    chat_file: Final = {"type": "file", "file": {"file_data": f"data:application/pdf;base64,{pdf}"}}
+
+    chat: Final = await count_request_input_tokens(
+        request_body={
+            "model": "pdf-reports",
+            "messages": [{"role": "user", "content": [chat_file, {"type": "text", "text": question}]}],
+        },
+        route="/v1/chat/completions",
+        llm_router=router,
+        team_id=None,
+    )
+    gemini: Final = await count_request_input_tokens(
+        request_body={
+            "contents": [
+                {"role": "user", "parts": [{"inlineData": {"mimeType": "application/pdf", "data": pdf}}, {"text": question}]}
+            ]
+        },
+        route="/v1beta/models/pdf-reports:generateContent",
+        llm_router=router,
+        team_id=None,
+    )
+
+    assert chat == gemini
+    assert "pdf-reports" in gemini
+
+
+@pytest.mark.asyncio
 async def test_alias_group_of_an_openai_model_reserves_on_that_models_token_count():
     router: Final = _router_with_groups(("gpt-6.1-sol", "openai/gpt-6.1-sol"), ("prod-gpt-6", "openai/gpt-6.1-sol"))
 
@@ -818,6 +865,700 @@ def test_fixed_budget_window_requires_duration_and_reset_boundary(window: object
     from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
 
     assert fixed_budget_window(window) is None
+
+
+GEMINI_MODEL: Final = "gemini-3.8-flash"
+GEMINI_ROUTES: Final = (
+    f"/vertex_ai/v1/projects/p/locations/global/publishers/google/models/{GEMINI_MODEL}:generateContent",
+    f"/gemini/v1beta/models/{GEMINI_MODEL}:generateContent",
+    f"/v1beta/models/{GEMINI_MODEL}:generateContent",
+)
+GEMINI_QUESTION: Final = {"contents": [{"role": "user", "parts": [{"text": "Reply with one word: pong"}]}]}
+
+
+def _gemini_rate(field: str) -> float:
+    rate: Final = litellm.get_model_info(GEMINI_MODEL).get(field)
+    assert isinstance(rate, float), f"{GEMINI_MODEL} has no {field} in the cost map"
+    return rate
+
+
+def _gemini_output_rate() -> float:
+    return max(_gemini_rate("output_cost_per_token"), _gemini_rate("output_cost_per_reasoning_token"))
+
+
+def _gemini_window() -> int:
+    window: Final = litellm.get_model_info(GEMINI_MODEL).get("max_input_tokens")
+    assert isinstance(window, int)
+    return window
+
+
+def _gemini_question_tokens() -> int:
+    tokens: Final = count_input_tokens_for_model(request_body=GEMINI_QUESTION, model=GEMINI_MODEL)
+    assert tokens is not None
+    return tokens
+
+
+@pytest.mark.parametrize("route", GEMINI_ROUTES)
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"generationConfig": {"maxOutputTokens": 64}},
+        {"generation_config": {"max_output_tokens": 64}},
+        {"config": {"maxOutputTokens": 64}},
+    ],
+    ids=["generationConfig", "generation_config", "sdk-config"],
+)
+def test_a_gemini_body_reserves_its_prompt_and_output_cap_not_the_context_window(
+    route: str, config: dict[str, object]
+) -> None:
+    reserved: Final = estimate_request_max_cost(request_body=GEMINI_QUESTION | config, route=route, llm_router=None)
+
+    assert reserved == pytest.approx(
+        _gemini_question_tokens() * _gemini_rate("input_cost_per_token") + 64 * _gemini_output_rate()
+    )
+
+
+@pytest.mark.parametrize("openai_cap", ["max_tokens", "max_completion_tokens", "max_output_tokens"])
+def test_a_top_level_openai_cap_does_not_shrink_a_gemini_hold_because_gemini_ignores_it(openai_cap: str) -> None:
+    body: Final = GEMINI_QUESTION | {openai_cap: 1, "generationConfig": {"maxOutputTokens": 64}}
+
+    reserved: Final = estimate_request_max_cost(request_body=body, route=GEMINI_ROUTES[2], llm_router=None)
+
+    assert reserved == pytest.approx(
+        _gemini_question_tokens() * _gemini_rate("input_cost_per_token") + 64 * _gemini_output_rate()
+    )
+
+
+@pytest.mark.parametrize("field", ["candidateCount", "candidate_count"])
+def test_a_gemini_candidate_count_reserves_each_candidates_output(field: str) -> None:
+    def reserved(candidates: int) -> float:
+        body: Final = GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 64, field: candidates}}
+        cost: Final = estimate_request_max_cost(request_body=body, route=GEMINI_ROUTES[0], llm_router=None)
+        assert cost is not None
+        return cost
+
+    assert reserved(3) - reserved(1) == pytest.approx(2 * 64 * _gemini_output_rate())
+
+
+@pytest.mark.parametrize(
+    "cached_content",
+    [
+        {"cachedContent": "cachedContents/ctx-1"},
+        {"cached_content": "cachedContents/ctx-1"},
+        {"generationConfig": {"maxOutputTokens": 64, "cachedContent": "cachedContents/ctx-1"}},
+        {"config": {"maxOutputTokens": 64, "cached_content": "cachedContents/ctx-1"}},
+    ],
+    ids=["top-level", "top-level-snake", "generation-config", "sdk-config"],
+)
+def test_a_named_cached_content_holds_and_floors_the_rest_of_the_window_at_the_cache_read_rate(
+    cached_content: dict[str, object],
+) -> None:
+    body: Final = GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 64}} | cached_content
+    question_tokens: Final = _gemini_question_tokens()
+
+    reserved: Final = estimate_request_max_cost(request_body=body, route=GEMINI_ROUTES[0], llm_router=None)
+    floor: Final = estimate_request_input_cost(request_body=body, route=GEMINI_ROUTES[0], llm_router=None)
+
+    assert reserved == pytest.approx(
+        question_tokens * _gemini_rate("input_cost_per_token")
+        + (_gemini_window() - question_tokens) * _gemini_rate("cache_read_input_token_cost")
+        + 64 * _gemini_output_rate()
+    )
+    assert floor == pytest.approx(
+        question_tokens * _gemini_rate("input_cost_per_token")
+        + (_gemini_window() - question_tokens) * _gemini_rate("cache_read_input_token_cost")
+    )
+
+
+@pytest.mark.parametrize(
+    "unsized",
+    [
+        {"contents": [{"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}]}]},
+        {"contents": [{"role": "user", "parts": [{"fileData": {"mimeType": "video/mp4", "fileUri": "gs://b/a.mp4"}}]}]},
+        {
+            "contents": [
+                {"role": "user", "parts": [{"fileData": {"mimeType": "application/pdf", "fileUri": "gs://b/r.pdf"}}]}
+            ]
+        },
+        GEMINI_QUESTION | {"tools": [{"googleSearch": {}}]},
+    ],
+    ids=["inline-image", "file-video", "file-pdf", "google-search"],
+)
+def test_a_gemini_body_whose_input_google_sizes_on_its_side_reserves_the_whole_window(
+    unsized: dict[str, object],
+) -> None:
+    body: Final = unsized | {"generationConfig": {"maxOutputTokens": 64}}
+
+    reserved: Final = estimate_request_max_cost(request_body=body, route=GEMINI_ROUTES[0], llm_router=None)
+
+    assert reserved == pytest.approx(
+        _gemini_window() * _gemini_rate("input_cost_per_token") + 64 * _gemini_output_rate()
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("group", ["gpt-4o", "claude-sonnet-5-5"])
+async def test_a_gemini_tool_a_gpt_or_claude_named_gemini_group_cannot_count_holds_the_whole_window(
+    group: str,
+) -> None:
+    router: Final = _router_with_groups((group, f"gemini/{GEMINI_MODEL}"))
+    body: Final = GEMINI_QUESTION | {"tools": [{"urlContext": {}}], "generationConfig": {"maxOutputTokens": 64}}
+    route: Final = f"/v1beta/models/{group}:generateContent"
+    counts: Final = await count_request_input_tokens(request_body=body, route=route, llm_router=router, team_id=None)
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=body, route=route, llm_router=router, input_token_counts=counts
+    )
+    floor: Final = estimate_request_input_cost(
+        request_body=body, route=route, llm_router=router, input_token_counts=counts
+    )
+
+    assert floor == pytest.approx(_gemini_window() * _gemini_rate("input_cost_per_token"))
+    assert reserved == pytest.approx(floor + 64 * _gemini_output_rate())
+
+
+_CACHED_BODY: Final = GEMINI_QUESTION | {
+    "cachedContent": "cachedContents/ctx-1",
+    "generationConfig": {"maxOutputTokens": 100},
+}
+_THRESHOLD_PRICED: Final = {
+    "input_cost_per_token": 1e-06,
+    "input_cost_per_token_above_200k_tokens": 2e-06,
+    "cache_read_input_token_cost": 1e-07,
+    "cache_read_input_token_cost_above_200k_tokens": 2e-07,
+    "output_cost_per_token": 4e-06,
+    "output_cost_per_token_above_200k_tokens": 6e-06,
+}
+
+
+@pytest.mark.parametrize(
+    ("model_info", "expected"),
+    [
+        pytest.param(
+            {"input_cost_per_token": 1e-06, "output_cost_per_token": 4e-06, "max_input_tokens": 10_000},
+            200 * 1e-06 + 9_800 * 1e-06 + 100 * 4e-06,
+            id="no-cache-read-price-uses-the-input-rate",
+        ),
+        pytest.param(
+            {"input_cost_per_token": 1e-06, "output_cost_per_token": 4e-06, "cache_read_input_token_cost": 1e-07},
+            200 * 1e-06 + 100 * 4e-06,
+            id="unknown-window-adds-nothing",
+        ),
+        pytest.param(
+            {
+                "max_input_tokens": 10_000,
+                "tiered_pricing": [
+                    {
+                        "range": [0, 1_000],
+                        "input_cost_per_token": 1e-06,
+                        "cache_read_input_token_cost": 1e-07,
+                        "output_cost_per_token": 2e-06,
+                    },
+                    {
+                        "range": [1_000, 10_000],
+                        "input_cost_per_token": 3e-06,
+                        "cache_read_input_token_cost": 3e-07,
+                        "output_cost_per_token": 6e-06,
+                    },
+                ],
+            },
+            200 * 3e-06 + 9_800 * 3e-07 + 100 * 6e-06,
+            id="tiered-prices-at-the-tier-the-whole-window-falls-in",
+        ),
+        pytest.param(
+            _THRESHOLD_PRICED | {"max_input_tokens": 300_000},
+            200 * 2e-06 + 299_800 * 2e-07 + 100 * 6e-06,
+            id="a-window-past-a-price-threshold-holds-at-the-higher-rates",
+        ),
+        pytest.param(
+            _THRESHOLD_PRICED | {"max_input_tokens": 150_000},
+            200 * 1e-06 + 149_800 * 1e-07 + 100 * 4e-06,
+            id="a-window-under-a-price-threshold-keeps-the-base-rates",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_token": 1e-06,
+                "cache_read_input_token_cost": 1e-07,
+                "cache_read_input_audio_token_cost": 3e-07,
+                "output_cost_per_token": 4e-06,
+                "max_input_tokens": 10_000,
+            },
+            200 * 1e-06 + 9_800 * 3e-07 + 100 * 4e-06,
+            id="a-cache-that-may-hold-audio-is-held-at-the-audio-cache-rate",
+        ),
+    ],
+)
+def test_cached_content_reservation_prices_the_rest_of_the_window(
+    model_info: dict[str, object], expected: float
+) -> None:
+    reserved: Final = max_cost_for_cost_info(
+        request_body=_CACHED_BODY,
+        route=GEMINI_ROUTES[0],
+        model_info=model_info,
+        requested_output_tokens=100,
+        output_multiplier=1,
+        input_tokens=200,
+    )
+
+    assert reserved == pytest.approx(expected)
+
+
+def test_a_gemini_prompt_past_a_price_threshold_is_held_at_the_higher_rates() -> None:
+    reserved: Final = max_cost_for_cost_info(
+        request_body=GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 100}},
+        route=GEMINI_ROUTES[0],
+        model_info=_THRESHOLD_PRICED,
+        requested_output_tokens=100,
+        output_multiplier=1,
+        input_tokens=250_000,
+    )
+
+    assert reserved == pytest.approx(250_000 * 2e-06 + 100 * 6e-06)
+
+
+def test_a_gemini_body_held_at_the_whole_window_it_could_not_count_keeps_the_base_rates() -> None:
+    image_body: Final = {
+        "contents": [{"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}]}],
+        "generationConfig": {"maxOutputTokens": 100},
+    }
+    model_info: Final = _THRESHOLD_PRICED | {"max_input_tokens": 300_000}
+    cost_inputs: Final = {"request_body": image_body, "route": GEMINI_ROUTES[0], "input_tokens": None}
+
+    reserved: Final = max_cost_for_cost_info(
+        **cost_inputs, model_info=model_info, requested_output_tokens=100, output_multiplier=1
+    )
+    floor: Final = input_cost_for_cost_info(**cost_inputs, model_info=model_info)
+
+    assert reserved == pytest.approx(300_000 * 1e-06 + 100 * 4e-06)
+    assert floor == pytest.approx(300_000 * 1e-06)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"generationConfig": {"maxOutputTokens": 4096}},
+        {"contents": [{"role": "user", "parts": [{"text": "Summarize the history of Paris. " * 400}]}]},
+    ],
+    ids=["output-cap", "contents"],
+)
+async def test_a_gemini_hold_is_sized_from_the_body_extra_body_sends(
+    spend_counter_store, overrides: dict[str, object]
+) -> None:
+    requested: Final = GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 1}}
+    sent: Final = requested | overrides
+
+    reservation: Final = await reserve_budget_for_request(
+        request_body=requested | {"extra_body": overrides},
+        route=GEMINI_ROUTES[2],
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token="extra-body-key", max_budget=10000),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(
+        estimate_request_max_cost(request_body=sent, route=GEMINI_ROUTES[2], llm_router=None)
+    )
+    assert reservation["input_cost"] == pytest.approx(
+        estimate_request_input_cost(request_body=sent, route=GEMINI_ROUTES[2], llm_router=None)
+    )
+    assert reservation["reserved_cost"] > (
+        estimate_request_max_cost(request_body=requested, route=GEMINI_ROUTES[2], llm_router=None) or 0
+    )
+    await reconcile_budget_reservation(reservation, actual_cost=0.0)
+
+
+@pytest.mark.asyncio
+async def test_an_extra_body_generation_config_replaces_an_output_cap_sent_as_config(spend_counter_store) -> None:
+    override: Final = {"generationConfig": {"maxOutputTokens": 4096}}
+
+    reservation: Final = await reserve_budget_for_request(
+        request_body=GEMINI_QUESTION | {"config": {"maxOutputTokens": 1}, "extra_body": override},
+        route=GEMINI_ROUTES[2],
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token="extra-body-config-key", max_budget=10000),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(
+        estimate_request_max_cost(request_body=GEMINI_QUESTION | override, route=GEMINI_ROUTES[2], llm_router=None)
+    )
+    await reconcile_budget_reservation(reservation, actual_cost=0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"generationConfig": {"maxOutputTokens": 1}},
+        {"contents": [{"role": "user", "parts": [{"text": "Hi"}]}]},
+    ],
+    ids=["output-cap", "contents"],
+)
+async def test_an_extra_body_that_shrinks_a_gemini_body_keeps_the_hold_of_the_body_an_adapter_sends(
+    spend_counter_store, overrides: dict[str, object]
+) -> None:
+    requested: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Summarize the history of Paris. " * 400}]}],
+        "generationConfig": {"maxOutputTokens": 4096},
+    }
+
+    reservation: Final = await reserve_budget_for_request(
+        request_body=requested | {"extra_body": overrides},
+        route=GEMINI_ROUTES[2],
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token="extra-body-shrink-key", max_budget=10000),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(
+        estimate_request_max_cost(request_body=requested, route=GEMINI_ROUTES[2], llm_router=None)
+    )
+    assert reservation["input_cost"] == pytest.approx(
+        estimate_request_input_cost(request_body=requested, route=GEMINI_ROUTES[2], llm_router=None)
+    )
+    await reconcile_budget_reservation(reservation, actual_cost=0.0)
+
+
+@pytest.mark.parametrize(("small", "large"), [("generationConfig", "generation_config"), ("config", "generationConfig")])
+def test_a_gemini_body_sending_its_config_under_two_names_is_held_at_the_larger_output_cap(
+    small: str, large: str
+) -> None:
+    body: Final = GEMINI_QUESTION | {small: {"maxOutputTokens": 1}, large: {"maxOutputTokens": 4096}}
+
+    reserved: Final = estimate_request_max_cost(request_body=body, route=GEMINI_ROUTES[0], llm_router=None)
+
+    assert reserved == pytest.approx(
+        estimate_request_max_cost(
+            request_body=GEMINI_QUESTION | {large: {"maxOutputTokens": 4096}}, route=GEMINI_ROUTES[0], llm_router=None
+        )
+    )
+
+
+@pytest.mark.parametrize(("uncapped", "capped"), [("config", "generationConfig"), ("generationConfig", "generation_config")])
+def test_a_gemini_config_name_without_an_output_cap_keeps_the_uncapped_hold(uncapped: str, capped: str) -> None:
+    uncapped_body: Final = GEMINI_QUESTION | {uncapped: {"temperature": 0.5}}
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=uncapped_body | {capped: {"maxOutputTokens": 1}}, route=GEMINI_ROUTES[0], llm_router=None
+    )
+
+    assert reserved == pytest.approx(
+        estimate_request_max_cost(request_body=uncapped_body, route=GEMINI_ROUTES[0], llm_router=None)
+    )
+    assert reserved > estimate_request_max_cost(
+        request_body=GEMINI_QUESTION | {capped: {"maxOutputTokens": 1}}, route=GEMINI_ROUTES[0], llm_router=None
+    )
+
+
+@pytest.mark.parametrize(("uncapped", "capped"), [("generationConfig", "config"), ("generation_config", "generationConfig")])
+def test_a_gemini_config_name_without_an_output_cap_keeps_a_larger_cap_from_another_name(
+    uncapped: str, capped: str
+) -> None:
+    capped_body: Final = GEMINI_QUESTION | {capped: {"maxOutputTokens": 60000}}
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=capped_body | {uncapped: {"temperature": 0.5}}, route=GEMINI_ROUTES[0], llm_router=None
+    )
+
+    assert reserved == pytest.approx(
+        estimate_request_max_cost(request_body=capped_body, route=GEMINI_ROUTES[0], llm_router=None)
+    )
+
+
+@pytest.mark.parametrize(
+    ("request_body", "input_tokens", "expected"),
+    [
+        pytest.param(_CACHED_BODY, 200, 200 * 2e-06 + 299_800 * 2e-07, id="a-cached-window-past-a-price-threshold"),
+        pytest.param(GEMINI_QUESTION, 250_000, 250_000 * 2e-06, id="a-prompt-past-a-price-threshold"),
+        pytest.param(GEMINI_QUESTION, 150_000, 150_000 * 1e-06, id="a-prompt-under-a-price-threshold"),
+    ],
+)
+def test_the_input_floor_prices_a_gemini_prompt_at_the_rates_its_size_bills_at(
+    request_body: dict[str, object], input_tokens: int, expected: float
+) -> None:
+    floor: Final = input_cost_for_cost_info(
+        request_body=request_body,
+        route=GEMINI_ROUTES[0],
+        model_info=_THRESHOLD_PRICED | {"max_input_tokens": 300_000},
+        input_tokens=input_tokens,
+    )
+
+    assert floor == pytest.approx(expected)
+
+
+def test_a_routed_gemini_deployment_prices_its_cached_window_at_its_above_threshold_rates() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": GEMINI_MODEL,
+                "litellm_params": {"model": "gemini/threshold-priced-gemini", "api_key": "k"},
+                "model_info": {"id": "threshold-priced-gemini", **_THRESHOLD_PRICED, "max_input_tokens": 300_000},
+            }
+        ]
+    )
+    counts: Final = {GEMINI_MODEL: 200}
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=_CACHED_BODY, route=GEMINI_ROUTES[2], llm_router=router, input_token_counts=counts
+    )
+    floor: Final = estimate_request_input_cost(
+        request_body=_CACHED_BODY, route=GEMINI_ROUTES[2], llm_router=router, input_token_counts=counts
+    )
+
+    assert floor == pytest.approx(200 * 2e-06 + 299_800 * 2e-07)
+    assert reserved == pytest.approx(200 * 2e-06 + 299_800 * 2e-07 + 100 * 6e-06)
+
+
+def test_cached_content_without_an_input_or_cache_read_price_cannot_be_reserved() -> None:
+    reserved: Final = max_cost_for_cost_info(
+        request_body=_CACHED_BODY,
+        route=GEMINI_ROUTES[0],
+        model_info={"output_cost_per_token": 4e-06, "max_input_tokens": 10_000},
+        requested_output_tokens=100,
+        output_multiplier=1,
+        input_tokens=0,
+    )
+
+    assert reserved is None
+
+
+def _cache_priced_gemini_deployment(deployment_id: str, cache_read_cost: float) -> dict[str, object]:
+    return Deployment(
+        model_name="custom-gemini",
+        litellm_params=LiteLLM_Params(
+            model=f"vertex_ai/{GEMINI_MODEL}",
+            vertex_project="p",
+            vertex_location="global",
+            input_cost_per_token=1e-06,
+            output_cost_per_token=4e-06,
+            cache_read_input_token_cost=cache_read_cost,
+        ),
+        model_info=ModelInfo(id=deployment_id, max_input_tokens=10_000),
+    ).model_dump()
+
+
+def test_cached_content_through_a_router_is_held_at_the_highest_deployment_cache_read_rate() -> None:
+    router: Final = Router(
+        model_list=[_cache_priced_gemini_deployment("cheap", 1e-07), _cache_priced_gemini_deployment("dear", 3e-07)]
+    )
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=_CACHED_BODY,
+        route=GEMINI_ROUTES[0].replace(GEMINI_MODEL, "custom-gemini"),
+        llm_router=router,
+        input_token_counts={"custom-gemini": 200},
+    )
+
+    assert reserved == pytest.approx(200 * 1e-06 + 9_800 * 3e-07 + 100 * 4e-06)
+
+
+def test_cached_content_through_a_router_is_held_at_a_deployments_audio_cache_read_rate() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "custom-gemini",
+                "litellm_params": {"model": "gemini/audio-cache-priced-gemini", "api_key": "k"},
+                "model_info": {
+                    "id": "audio-cache-priced-gemini",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 4e-06,
+                    "cache_read_input_token_cost": 1e-07,
+                    "cache_read_input_audio_token_cost": 3e-07,
+                    "max_input_tokens": 10_000,
+                },
+            }
+        ]
+    )
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=_CACHED_BODY,
+        route=GEMINI_ROUTES[2].replace(GEMINI_MODEL, "custom-gemini"),
+        llm_router=router,
+        input_token_counts={"custom-gemini": 200},
+    )
+
+    assert reserved == pytest.approx(200 * 1e-06 + 9_800 * 3e-07 + 100 * 4e-06)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", GEMINI_ROUTES)
+async def test_a_gemini_body_is_counted_for_the_reservation_from_its_raw_body(route: str) -> None:
+    counts: Final = await count_request_input_tokens(
+        request_body=GEMINI_QUESTION,
+        route=route,
+        llm_router=None,
+        team_id=None,
+        raw_body=json.dumps(GEMINI_QUESTION).encode(),
+    )
+
+    assert counts == {GEMINI_MODEL: _gemini_question_tokens()}
+    assert counts[GEMINI_MODEL] > 0
+
+
+_WAV_AUDIO: Final = {"mimeType": "audio/wav", "data": "UklGRg=="}
+
+
+@pytest.mark.parametrize(
+    "audio_part",
+    [
+        pytest.param({"inlineData": _WAV_AUDIO}, id="inline-data"),
+        pytest.param({"inline_data": {"mime_type": "audio/ogg", "data": "T2dnUw=="}}, id="snake-case"),
+        pytest.param(
+            {"functionResponse": {"name": "record", "response": {}, "parts": [{"inlineData": _WAV_AUDIO}]}},
+            id="in-a-function-response",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model_info", "text_rate"),
+    [
+        pytest.param(
+            {"input_cost_per_token": 1e-06, "input_cost_per_audio_token": 3e-06, "output_cost_per_token": 4e-06},
+            1e-06,
+            id="flat",
+        ),
+        pytest.param(
+            {
+                "tiered_pricing": [
+                    {
+                        "range": [0, 10_000],
+                        "input_cost_per_token": 1e-06,
+                        "input_cost_per_audio_token": 3e-06,
+                        "output_cost_per_token": 4e-06,
+                    }
+                ]
+            },
+            1e-06,
+            id="tiered",
+        ),
+        pytest.param(
+            {"input_cost_per_token": 3e-06, "input_cost_per_audio_token": 1e-06, "output_cost_per_token": 4e-06},
+            3e-06,
+            id="audio-cheaper-than-text",
+        ),
+    ],
+)
+def test_a_gemini_body_with_inline_audio_holds_its_input_at_the_higher_of_the_text_and_audio_rates(
+    audio_part: dict[str, object], model_info: dict[str, object], text_rate: float
+) -> None:
+    def held(parts: list[object]) -> tuple[float | None, float | None]:
+        body: Final = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": 100}}
+        pricing: Final = {"request_body": body, "route": GEMINI_ROUTES[0]}
+        return (
+            max_cost_for_cost_info(
+                **pricing, model_info=model_info, requested_output_tokens=100, output_multiplier=1, input_tokens=200
+            ),
+            input_cost_for_cost_info(**pricing, model_info=model_info, input_tokens=200),
+        )
+
+    assert held([{"text": "Transcribe this."}, audio_part]) == (
+        pytest.approx(200 * 3e-06 + 100 * 4e-06),
+        pytest.approx(200 * 3e-06),
+    )
+    assert held(["Transcribe this."]) == (
+        pytest.approx(200 * text_rate + 100 * 4e-06),
+        pytest.approx(200 * text_rate),
+    )
+
+
+def test_a_gemini_audio_hold_uses_the_cost_maps_audio_rate() -> None:
+    model: Final = "gemini-2.5-flash"
+    info: Final = litellm.get_model_info(model)
+    audio_rate: Final = info.get("input_cost_per_audio_token")
+    text_rate: Final = info.get("input_cost_per_token")
+    assert isinstance(audio_rate, float) and isinstance(text_rate, float) and audio_rate > text_rate
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Transcribe this."}, {"inlineData": _WAV_AUDIO}]}],
+        "generationConfig": {"maxOutputTokens": 64},
+    }
+    route: Final = f"/v1beta/models/{model}:generateContent"
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=body, route=route, llm_router=None, input_token_counts={model: 200}
+    )
+    floor: Final = estimate_request_input_cost(
+        request_body=body, route=route, llm_router=None, input_token_counts={model: 200}
+    )
+
+    output_rate: Final = max(
+        rate
+        for rate in (info.get("output_cost_per_token"), info.get("output_cost_per_reasoning_token"))
+        if isinstance(rate, float)
+    )
+    assert reserved == pytest.approx(200 * audio_rate + 64 * output_rate)
+    assert floor == pytest.approx(200 * audio_rate)
+
+
+def _wav_base64(seconds: int) -> str:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as recording:
+        recording.setnchannels(1)
+        recording.setsampwidth(2)
+        recording.setframerate(16_000)
+        recording.writeframes(b"\x00\x00" * 16_000 * seconds)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+@pytest.mark.asyncio
+async def test_inline_audio_sent_to_an_alias_counts_at_the_rate_of_the_gemini_model_it_serves() -> None:
+    served: Final = "gemini/gemini-2.5-flash"
+    router: Final = Router(model_list=[{"model_name": "voice-notes", "litellm_params": {"model": served, "api_key": "k"}}])
+    body: Final = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": "Transcribe this."}, {"inlineData": {"mimeType": "audio/wav", "data": _wav_base64(4)}}],
+            }
+        ]
+    }
+
+    counts: Final = await count_request_input_tokens(
+        request_body=body,
+        route="/v1beta/models/voice-notes:generateContent",
+        llm_router=router,
+        team_id=None,
+        raw_body=json.dumps(body).encode(),
+    )
+
+    assert counts == {"voice-notes": count_input_tokens_for_model(request_body=body, model=served)}
+
+
+@pytest.mark.parametrize(
+    ("route", "body"),
+    [
+        ("/v1/chat/completions", {"model": GEMINI_MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 64}),
+        ("/v1/responses", {"model": GEMINI_MODEL, "input": "hi", "max_output_tokens": 64}),
+    ],
+    ids=["chat", "responses"],
+)
+@pytest.mark.parametrize("field", ["cached_content", "cachedContent"])
+def test_a_cached_content_name_on_a_chat_or_responses_body_leaves_the_hold_unchanged(
+    route: str, body: dict[str, object], field: str
+) -> None:
+    plain: Final = estimate_request_max_cost(request_body=body, route=route, llm_router=None)
+
+    named: Final = estimate_request_max_cost(
+        request_body=body | {field: "cachedContents/ctx-1"}, route=route, llm_router=None
+    )
+
+    assert plain is not None
+    assert named == pytest.approx(plain)
 
 
 def _priced_responses_router() -> Router:
@@ -1107,7 +1848,9 @@ def test_configured_caps_never_shrink_an_uncapped_hold(route: str, config_source
 
 @pytest.mark.parametrize("config_source", ["deployment", "router_default"])
 @pytest.mark.parametrize("field", ["n", "best_of"])
-def test_a_configured_n_holds_like_a_requested_n_unless_the_request_sets_its_own(config_source: str, field: str) -> None:
+def test_a_configured_n_holds_like_a_requested_n_unless_the_request_sets_its_own(
+    config_source: str, field: str
+) -> None:
     body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1000}
     plain: Final = _router_with_configured_caps(config_source, {})
     configured: Final = _router_with_configured_caps(config_source, {field: 4})
@@ -1148,7 +1891,7 @@ def _priced_router(
                 ),
             ).model_dump()
             for index, backend_model in enumerate(backend_models)
-        ]
+        ],
     )
 
 
@@ -1932,6 +2675,29 @@ def test_routes_outside_the_call_type_map_trust_only_the_cap_they_forward(
     assert (capped < uncapped) is lowers_hold
 
 
+@pytest.mark.parametrize(
+    ("route", "backend_models", "lowers_hold"),
+    [
+        ("/v1beta/models/priced-model:generateContent", ("gemini/gemini-3.8-flash",), True),
+        ("/gemini/v1beta/models/priced-model:streamGenerateContent", ("vertex_ai/gemini-3.8-flash",), True),
+        ("/v1beta/models/priced-model:generateContent", ("anthropic/claude-haiku-5-5", "openai/gpt-5.6"), True),
+        ("/v1beta/models/priced-model:generateContent", ("gemini/gemini-3.8-flash", "v0/v0-1.0-md"), False),
+    ],
+)
+def test_a_generation_config_cap_lowers_a_generate_content_hold_only_when_every_deployment_receives_it(
+    route: str, backend_models: tuple[str, ...], lowers_hold: bool
+) -> None:
+    router: Final = _priced_router(backend_models)
+    body: Final = {"model": "priced-model", **_CONTENTS_BODY}
+    uncapped: Final = estimate_request_max_cost(request_body=body, route=route, llm_router=router)
+    capped: Final = estimate_request_max_cost(
+        request_body={**body, "generationConfig": {"maxOutputTokens": 1}}, route=route, llm_router=router
+    )
+
+    assert uncapped is not None and capped is not None
+    assert (capped < uncapped) is lowers_hold
+
+
 @pytest.mark.asyncio
 async def test_bridged_responses_concurrent_reservations_reserve_max_completion_tokens(
     spend_counter_store: SpendCounterStore,
@@ -2159,7 +2925,10 @@ def test_customer_elapsed_windows_share_the_persisted_calendar_window(duration: 
     counter: Final = customer_window_counters(
         "customer_team", "hourly-team", (limit,), now=datetime.fromisoformat(now), reset_settings=settings
     )[0]
-    stored: Final = {"budget_duration": duration, **get_budget_window_reset_fields(duration, reset_at=reset, settings=settings)}
+    stored: Final = {
+        "budget_duration": duration,
+        **get_budget_window_reset_fields(duration, reset_at=reset, settings=settings),
+    }
 
     assert counter.window_start == reset - timedelta(hours=1)
     assert get_budget_window_start(stored, settings) == counter.window_start
@@ -2174,9 +2943,7 @@ def test_customer_elapsed_windows_share_the_persisted_calendar_window(duration: 
         ("5h", "UTC", "2026-07-15T15:00:00Z"),
     ),
 )
-def test_created_customer_and_inline_windows_keep_the_same_schedule(
-    duration: str, zone: str, expected: str
-) -> None:
+def test_created_customer_and_inline_windows_keep_the_same_schedule(duration: str, zone: str, expected: str) -> None:
     from litellm.litellm_core_utils.duration_parser import duration_in_seconds
     from litellm.models.budget import initialize_budget_limits
     from litellm.proxy.common_utils.timezone_utils import compute_budget_reset_at
@@ -2264,7 +3031,8 @@ def test_expired_customer_elapsed_schedule_keeps_its_saved_anchor(days_after_res
     saved_reset: Final = datetime(2026, 11, 1, 4, tzinfo=timezone.utc)
     start: Final = saved_reset + timedelta(days=days_after_reset)
     counter: Final = customer_window_counters(
-        "customer_team", "daily-team",
+        "customer_team",
+        "daily-team",
         (BudgetLimit(budget_duration="12h", max_budget=1, reset_at=saved_reset),),
         now=start + timedelta(minutes=1),
         reset_settings=BudgetResetSettings(timezone="America/New_York"),
@@ -2285,7 +3053,8 @@ def test_expired_customer_elapsed_schedule_keeps_its_saved_anchor(days_after_res
 )
 def test_expired_customer_daily_window_follows_local_midnight(duration: str, now: str, start: str, end: str) -> None:
     counter: Final = customer_window_counters(
-        "customer_team", "daily-team",
+        "customer_team",
+        "daily-team",
         (BudgetLimit(budget_duration=duration, max_budget=1, reset_at=datetime(2026, 11, 1, 4, tzinfo=timezone.utc)),),
         now=datetime.fromisoformat(now),
         reset_settings=BudgetResetSettings(timezone="America/New_York"),

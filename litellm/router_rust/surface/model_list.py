@@ -256,8 +256,8 @@ class HostedModelList(list[Entry]):
         params: Final = as_str_mapping(record.get("litellm_params"))
         info: Final = as_str_mapping(record.get("model_info"))
         model_id: Final = (info or {}).get("id")
-        live: Final = self._live(model_id) if params is not None else {}
-        live_info: Final = self._live_info(model_id) if info is not None else {}
+        live: Final[Mapping[str, object]] = self._live(model_id) if params is not None else {}
+        live_info: Final[Mapping[str, object]] = self._live_info(model_id) if info is not None else {}
         if live:
             record = {**record, "litellm_params": {**(params or {}), **live}}  # rebind-ok: given its live values
         if live_info:

@@ -1,5 +1,6 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { I18nextProvider } from "react-i18next";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
@@ -8,6 +9,7 @@ import { renderWithProviders, testQueryClient } from "../../../tests/test-utils"
 import OrganizationInfoView from "./organization_view";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
+import i18n from "@/i18n/i18n";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -126,6 +128,36 @@ test("renders organization view after loading data", async () => {
 
   const [orgName] = await screen.findAllByText("Acme Corp");
   expect(orgName).toBeInTheDocument();
+});
+
+test("updates organization dates when the dashboard language changes", async () => {
+  const locale = i18n.cloneInstance({ lng: "en", forkResourceStore: true });
+  locale.addResourceBundle("zh-CN", "translation", {});
+  const created = new Date(2026, 10, 27, 13, 45);
+  const updated = new Date(2026, 11, 12, 13, 45);
+  const org = { ...mockOrg, created_at: created.toISOString(), updated_at: updated.toISOString() };
+  mockUseOrganization.mockReturnValue({ data: org, isLoading: false } as ReturnType<typeof useOrganization>);
+
+  renderWithProviders(
+    <I18nextProvider i18n={locale}>
+      <OrganizationInfoView
+        organizationId="org_123"
+        onClose={() => {}}
+        accessToken="test-token"
+        is_org_admin={false}
+        is_proxy_admin={false}
+        userModels={[]}
+      />
+    </I18nextProvider>,
+  );
+
+  const hasDate = (date: string) => (text: string) => text.includes(date);
+  expect(screen.getByText(hasDate(created.toLocaleDateString()))).toBeInTheDocument();
+  await act(() => locale.changeLanguage("zh-CN"));
+  expect(screen.getByText(hasDate("2026年11月27日"))).toBeInTheDocument();
+  expect(screen.getByText(hasDate("2026年12月12日"))).toBeInTheDocument();
+  await act(() => locale.changeLanguage("en"));
+  expect(screen.getByText(hasDate(created.toLocaleDateString()))).toBeInTheDocument();
 });
 
 test("shows the creator alias as a link to the user page", async () => {

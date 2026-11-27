@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     process_audio_file,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.core_helpers import iter_items, subscript
 from litellm.llms.nvidia_riva.audio_transcription.audio_utils import (
     resample_to_riva_pcm,
 )
@@ -120,8 +121,8 @@ class NvidiaRivaAudioTranscription:
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         model_response: TranscriptionResponse,
         timeout: float | str | httpx.Timeout | None,
         logging_obj: LiteLLMLoggingObj,
@@ -165,8 +166,8 @@ class NvidiaRivaAudioTranscription:
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         model_response: TranscriptionResponse,
         timeout: float | str | httpx.Timeout | None,
         logging_obj: LiteLLMLoggingObj,
@@ -193,8 +194,8 @@ class NvidiaRivaAudioTranscription:
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         model_response: TranscriptionResponse,
         timeout: float | str | httpx.Timeout | None,
         logging_obj: LiteLLMLoggingObj,
@@ -326,16 +327,16 @@ class NvidiaRivaAudioTranscription:
         """
         final_results: Final[list[RivaFinalResult]] = []
         for response in stream:
-            results = getattr(response, "results", None) or []
-            for result in results:
+            results: object = getattr(response, "results", None) or []
+            for result in iter_items(results):
                 if require_final and not getattr(result, "is_final", False):
                     continue
-                alternatives = getattr(result, "alternatives", None) or []
+                alternatives: object = getattr(result, "alternatives", None) or []
                 if not alternatives:
                     continue
-                top = alternatives[0]
+                top = subscript(alternatives, 0)
                 transcript = getattr(top, "transcript", "") or ""
-                words_proto = getattr(top, "words", None) or []
+                words_proto: object = getattr(top, "words", None) or []
                 final_results.append(
                     {
                         "transcript": transcript,
@@ -345,7 +346,7 @@ class NvidiaRivaAudioTranscription:
                                 start_time_ms=int(getattr(word, "start_time", 0) or 0),
                                 end_time_ms=int(getattr(word, "end_time", 0) or 0),
                             )
-                            for word in words_proto
+                            for word in iter_items(words_proto)
                         ],
                     }
                 )

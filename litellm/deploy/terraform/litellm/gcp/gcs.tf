@@ -25,7 +25,7 @@ resource "google_storage_bucket" "this" {
 resource "google_storage_bucket_iam_member" "runtime" {
   bucket = google_storage_bucket.this.name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.runtime.email}"
+  member = "serviceAccount:${local.runtime_service_account_email}"
 }
 
 # Dedicated bucket holding only config.yaml. Mounted read-only into the
@@ -65,5 +65,5 @@ resource "google_storage_bucket_iam_member" "proxy_config_runtime" {
 
   bucket = google_storage_bucket.proxy_config[0].name
   role   = "roles/storage.objectViewer"
-  member = "serviceAccount:${google_service_account.runtime.email}"
+  member = "serviceAccount:${local.runtime_service_account_email}"
 }

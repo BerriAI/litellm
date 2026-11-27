@@ -11,6 +11,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     ANTHROPIC_PING_SSE_CHUNK,
     SSE_COMMENT_PING_BYTES,
     advance_sse_tail,
+    last_sse_frame_end,
     resolve_ttft_keepalive_interval,
     seal_open_sse_frame,
     split_complete_sse_frames,
@@ -33,6 +34,21 @@ def test_split_complete_sse_frames_recognizes_every_sse_frame_delimiter(delimite
 
 def test_split_complete_sse_frames_holds_bytes_with_no_complete_frame():
     assert split_complete_sse_frames(b"data: unterminated") == (b"", b"data: unterminated")
+
+
+@pytest.mark.parametrize(
+    ("buffer", "floor", "appended", "frame_end"),
+    [
+        pytest.param(b"data: 6\r\n\r\n", 0, 1, 11, id="crlf-terminator-split-across-reads"),
+        pytest.param(b"data: 5\n\nda", 9, 2, 9, id="read-without-a-terminator"),
+        pytest.param(b"data: 5\n\n\n", 9, 1, 9, id="terminator-overlapping-the-floor"),
+        pytest.param(b"data: 7\n\ndata: 8\r\r", 0, 18, 18, id="last-terminator-wins"),
+    ],
+)
+def test_last_sse_frame_end_finds_the_last_terminator_the_read_completed_past_the_floor(
+    buffer: bytes, floor: int, appended: int, frame_end: int
+):
+    assert last_sse_frame_end(buffer, floor, appended) == frame_end
 
 
 @pytest.mark.parametrize("chunk", [{"content": "hi"}, ModelResponse()])

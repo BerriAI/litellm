@@ -1,10 +1,13 @@
 package litellm
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"reflect"
 	"time"
 
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
@@ -23,6 +26,16 @@ func buildMCPServerRequest(d *schema.ResourceData) *MCPServerRequest {
 		Transport:   d.Get("transport").(string),
 		SpecVersion: d.Get("spec_version").(string),
 		AuthType:    d.Get("auth_type").(string),
+
+		Issuer:                d.Get("issuer").(string),
+		AuthorizationURL:      d.Get("authorization_url").(string),
+		TokenURL:              d.Get("token_url").(string),
+		RegistrationURL:       d.Get("registration_url").(string),
+		OAuth2Flow:            d.Get("oauth2_flow").(string),
+		TokenExchangeEndpoint: d.Get("token_exchange_endpoint").(string),
+		Audience:              d.Get("audience").(string),
+		SubjectTokenType:      d.Get("subject_token_type").(string),
+		TokenExchangeProfile:  d.Get("token_exchange_profile").(string),
 	}
 
 	// Set optional fields
@@ -112,11 +125,24 @@ func buildMCPServerRequest(d *schema.ResourceData) *MCPServerRequest {
 // proxy keeps whatever it already stores.
 func mcpCredentialsFromResource(d *schema.ResourceData) *MCPCredentials {
 	creds := &MCPCredentials{
-		AuthValue:    writeOnlyString(d, "auth_value_wo"),
-		ClientID:     d.Get("client_id").(string),
-		ClientSecret: writeOnlyString(d, "client_secret_wo"),
+		TokenEndpointAuthMethod:    d.Get("token_endpoint_auth_method").(string),
+		UpstreamResource:           d.Get("upstream_resource").(string),
+		ClientPrivateKeyID:         d.Get("client_private_key_id").(string),
+		ClientAssertionSigningAlg:  d.Get("client_assertion_signing_alg").(string),
+		IDJAGResourceTokenEndpoint: d.Get("id_jag_resource_token_endpoint").(string),
+		IDJAGResource:              d.Get("id_jag_resource").(string),
+		IDJAGResourceClientID:      d.Get("id_jag_resource_client_id").(string),
+		IDJAGSubjectSource:         d.Get("id_jag_subject_source").(string),
+		ClientPrivateKey:           writeOnlyString(d, "client_private_key_wo"),
+		IDJAGResourceClientSecret:  writeOnlyString(d, "id_jag_resource_client_secret_wo"),
+		AuthValue:                  writeOnlyString(d, "auth_value_wo"),
+		ClientID:                   d.Get("client_id").(string),
+		ClientSecret:               writeOnlyString(d, "client_secret_wo"),
 	}
-	if *creds == (MCPCredentials{}) {
+	for _, v := range d.Get("scopes").([]interface{}) {
+		creds.Scopes = append(creds.Scopes, v.(string))
+	}
+	if reflect.DeepEqual(*creds, MCPCredentials{}) {
 		return nil
 	}
 	return creds
@@ -124,6 +150,23 @@ func mcpCredentialsFromResource(d *schema.ResourceData) *MCPCredentials {
 
 // Helper function to update schema data from MCPServerResponse
 func updateSchemaFromResponse(d *schema.ResourceData, resp *MCPServerResponse) error {
+	d.Set("issuer", resp.Issuer)
+	d.Set("authorization_url", resp.AuthorizationURL)
+	d.Set("token_url", resp.TokenURL)
+	d.Set("registration_url", resp.RegistrationURL)
+	d.Set("oauth2_flow", resp.OAuth2Flow)
+	d.Set("token_exchange_endpoint", resp.TokenExchangeEndpoint)
+	d.Set("audience", resp.Audience)
+	d.Set("subject_token_type", resp.SubjectTokenType)
+	d.Set("token_exchange_profile", resp.TokenExchangeProfile)
+	var credentials struct {
+		Scopes           []string `json:"scopes"`
+		UpstreamResource string   `json:"upstream_resource"`
+	}
+	// Some proxy versions return credentials as an opaque string.
+	_ = json.Unmarshal(resp.Credentials, &credentials)
+	d.Set("scopes", credentials.Scopes)
+	d.Set("upstream_resource", credentials.UpstreamResource)
 	d.Set("server_id", resp.ServerID)
 	d.Set("server_name", resp.ServerName)
 	d.Set("alias", resp.Alias)
@@ -262,7 +305,70 @@ func resourceLiteLLMMCPServerUpdate(d *schema.ResourceData, m interface{}) error
 	req := buildMCPServerRequest(d)
 	req.ServerID = d.Id() // Ensure we include the server ID for updates
 
-	resp, err := MakeRequest(client, "PUT", endpointMCPServerUpdate, req)
+	encoded, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(encoded, &body); err != nil {
+		return err
+	}
+	authChanged := d.HasChange("auth_type")
+	upstreamChanged := d.HasChange("url") || d.HasChange("issuer")
+	oauthConfigured := false
+	switch req.AuthType {
+	case "oauth2", "oauth2_token_exchange", "oauth2_id_jag", "true_passthrough", "oauth_delegate":
+		oauthConfigured = true
+	}
+	resendOAuthSettings := oauthConfigured && (upstreamChanged || authChanged)
+	if resendOAuthSettings {
+		body["preserve_explicit_oauth_settings"] = true
+	}
+	setMCPStringUpdates(d, body, resendOAuthSettings, "issuer", "authorization_url", "token_url", "registration_url",
+		"oauth2_flow", "token_exchange_endpoint", "audience", "subject_token_type", "token_exchange_profile")
+
+	credentials, ok := body["credentials"].(map[string]interface{})
+	if !ok {
+		credentials = make(map[string]interface{})
+	}
+	resendOAuthCredentials := authChanged && oauthConfigured
+	setMCPStringUpdates(d, credentials, resendOAuthSettings, "token_endpoint_auth_method")
+	setMCPStringUpdates(d, credentials, resendOAuthCredentials, "upstream_resource",
+		"client_private_key_id", "client_assertion_signing_alg", "id_jag_resource_token_endpoint",
+		"id_jag_resource", "id_jag_resource_client_id", "id_jag_subject_source")
+	delete(credentials, "scopes")
+	if d.HasChange("scopes") || (resendOAuthCredentials && mcpFieldConfigured(d, "scopes")) {
+		credentials["scopes"] = d.Get("scopes").([]interface{})
+	}
+
+	for _, field := range []string{"client_private_key", "id_jag_resource_client_secret"} {
+		if d.HasChange(field + "_wo_version") {
+			if _, ok := credentials[field]; !ok {
+				credentials[field] = nil
+			}
+		} else if !resendOAuthCredentials {
+			delete(credentials, field)
+		}
+	}
+	// An issuer or URL change can invalidate a client. Resend credentials only on an
+	// explicit client edit so a later apply cannot silently rebind that client.
+	if req.AuthType == "oauth2" && !authChanged {
+		secretChanged := d.HasChange("client_secret_wo_version")
+		clientChanged := d.HasChange("client_id")
+		if !secretChanged && (!clientChanged || upstreamChanged) {
+			delete(credentials, "client_secret")
+		}
+		if !secretChanged && !clientChanged && !d.HasChange("client_private_key_wo_version") {
+			delete(credentials, "client_id")
+		}
+	}
+	if len(credentials) == 0 {
+		delete(body, "credentials")
+	} else {
+		body["credentials"] = credentials
+	}
+
+	resp, err := MakeRequest(client, "PUT", endpointMCPServerUpdate, body)
 	if err != nil {
 		return fmt.Errorf("failed to update MCP server: %w", err)
 	}
@@ -273,13 +379,31 @@ func resourceLiteLLMMCPServerUpdate(d *schema.ResourceData, m interface{}) error
 		return fmt.Errorf("failed to update MCP server: %w", err)
 	}
 
-	// Update the state with the response data
 	if err := updateSchemaFromResponse(d, &mcpResp); err != nil {
 		return fmt.Errorf("failed to update state after update: %w", err)
 	}
 
 	log.Printf("[INFO] MCP server updated with ID %s", mcpResp.ServerID)
 	return nil
+}
+
+func mcpFieldConfigured(d *schema.ResourceData, field string) bool {
+	raw, diags := d.GetRawConfigAt(cty.GetAttrPath(field))
+	return !diags.HasError() && raw.IsKnown() && !raw.IsNull()
+}
+
+func setMCPStringUpdates(d *schema.ResourceData, body map[string]interface{}, resendConfigured bool, fields ...string) {
+	for _, field := range fields {
+		delete(body, field)
+		if !d.HasChange(field) && !(resendConfigured && mcpFieldConfigured(d, field)) {
+			continue
+		}
+		if value := d.Get(field).(string); value != "" {
+			body[field] = value
+		} else {
+			body[field] = nil
+		}
+	}
 }
 
 func resourceLiteLLMMCPServerDelete(d *schema.ResourceData, m interface{}) error {

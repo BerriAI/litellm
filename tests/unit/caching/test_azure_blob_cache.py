@@ -1,3 +1,6 @@
+import json
+import time
+from typing import Final
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
@@ -44,7 +47,6 @@ def mock_azure_dependencies():
             "azure.storage.blob.aio.BlobServiceClient",
             return_value=mock_async_blob_service_client,
         ),
-        patch("azure.core.exceptions.ResourceExistsError"),
     ):
 
         yield {
@@ -159,6 +161,42 @@ def test_blob_cache_sync_set_cache(mock_azure_dependencies):
     cache.container_client.upload_blob.assert_called_once_with(
         "sync_test_key", '{"sync_key": "sync_value", "number": 123}'
     )
+
+
+@pytest.mark.parametrize(
+    ("stored_ttl", "new_ttl", "expected_response"),
+    [(None, 5, "fresh"), (5, None, "fresh"), (None, None, "old"), (20, None, "old")],
+)
+def test_blob_cache_sync_replaces_only_responses_affected_by_scoped_ttl(
+    mock_azure_dependencies: dict[str, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+    stored_ttl: int | None,
+    new_ttl: int | None,
+    expected_response: str,
+) -> None:
+    from azure.core import MatchConditions
+    from azure.core.exceptions import ResourceExistsError
+
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = AzureBlobCache("https://my-test-host", "test-container")
+    blob: Final = MagicMock()
+    blob.properties.etag = '"version-1"'
+    old_response: Final = {"response": "old", "timestamp": 100, "response_cache_ttl": stored_ttl}
+    new_response: Final = {"response": "fresh", "timestamp": 110, "response_cache_ttl": new_ttl}
+    blob.readall.return_value = json.dumps(old_response).encode()
+    cache.container_client.download_blob.return_value = blob
+
+    def upload_blob(key: str, value: str, *, overwrite: bool = False, **conditions: object) -> None:
+        if not overwrite:
+            raise ResourceExistsError(key)
+        if stored_ttl is not None and new_ttl is None:
+            assert conditions == {"etag": '"version-1"', "match_condition": MatchConditions.IfNotModified}
+        blob.readall.return_value = value.encode()
+
+    cache.container_client.upload_blob.side_effect = upload_blob
+    cache.set_cache("cache-key", new_response)
+
+    assert cache.get_cache("cache-key") == (new_response if expected_response == "fresh" else old_response)
 
 
 def test_blob_cache_sync_get_cache_not_found(mock_azure_dependencies):

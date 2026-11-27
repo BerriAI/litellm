@@ -10,15 +10,20 @@
 import asyncio
 import copy
 import inspect
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Final, Protocol
+import json
+from collections.abc import Awaitable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic_core import PydanticSerializationError, to_json, to_jsonable_python
 
 import litellm
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import REDACTED_BY_LITELLM, VLLM_PROMPT_DERIVED_FIELDS, VLLM_PROMPT_FIELD_REQUEST_PARAMS
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.enums import Field
+from litellm.integrations.custom_logger_v2.outcomes import Patch
+from litellm.integrations.custom_logger_v2.patches import LiveFields, apply_patch
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
@@ -26,7 +31,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     has_attributes,
 )
-from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY, keeps_original_output
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_litellm_params,
@@ -51,6 +56,30 @@ class _HasArguments(Protocol):
     arguments: str
 
 
+class _HasChoices(Protocol):
+    choices: Iterable[object]
+
+
+class _HasOutput(Protocol):
+    output: Iterable[object]
+
+
+class _HasReasoning(Protocol):
+    reasoning: object
+
+
+class _HasEncryptedContent(Protocol):
+    encrypted_content: str
+
+
+class _HasInput(Protocol):
+    input: str
+
+
+class _HasAction(Protocol):
+    action: object
+
+
 MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
 
 
@@ -59,14 +88,16 @@ def _opted_out_of_message_logging(custom_logger: CustomLogger) -> bool:
 
 
 def redact_message_input_output_from_custom_logger(
-    litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
+    litellm_logging_obj: LiteLLMLoggingObject, result: object, custom_logger: CustomLogger
 ) -> object:
     if _opted_out_of_message_logging(custom_logger):
         return perform_redaction(litellm_logging_obj.model_call_details, result, redact_streaming_responses=False)
     return result
 
 
-def redacted_model_call_details_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
+def redacted_model_call_details_for_custom_logger(
+    model_call_details: dict[str, object], custom_logger: CustomLogger
+) -> dict[str, object]:
     """
     Returns a copy of model_call_details with the request messages, instructions and streaming responses
     redacted when the custom logger has opted out of message logging. The shared model_call_details is left
@@ -109,7 +140,10 @@ def _redacted_entries_for_opted_out_logger(model_call_details: Mapping[str, obje
 
 
 def redacted_response_obj_for_custom_logger(response_obj: object, custom_logger: CustomLogger) -> object:
-    if not _opted_out_of_message_logging(custom_logger) or not _is_redactable_response(response_obj):
+    is_redactable: Final = _is_redactable_response(response_obj) or isinstance(
+        response_obj, litellm.ModelResponseStream
+    )
+    if not _opted_out_of_message_logging(custom_logger) or not is_redactable:
         return response_obj
     return perform_redaction({}, response_obj)
 
@@ -177,25 +211,25 @@ def _redact_bedrock_guardrail_trace(response: object) -> None:
             setattr(response, field, _redacted_bedrock_trace(value))
 
 
-def _redact_streaming_response(streaming_response):
-    if hasattr(streaming_response, "choices"):
+def _redact_streaming_response(streaming_response: object) -> object:
+    if has_attributes(streaming_response, _HasChoices, "choices"):
         for choice in streaming_response.choices:
             _redact_choice_content(choice)
-        redact_vertex_ai_metadata_from_logged_object(streaming_response)
+        _redact_prompt_derived_fields(streaming_response)
         if isinstance(streaming_response, litellm.ModelResponse):
             _redact_bedrock_guardrail_trace(streaming_response)
     elif isinstance(streaming_response, litellm.ResponsesAPIResponse):
         return perform_redaction({}, streaming_response)
     elif isinstance(streaming_response, litellm.TranscriptionResponse):
         streaming_response.text = REDACTED_BY_LITELLM
-    elif hasattr(streaming_response, "output"):
+    elif has_attributes(streaming_response, _HasOutput, "output"):
         _redact_responses_api_output(streaming_response.output)
-        if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
+        if has_attributes(streaming_response, _HasReasoning, "reasoning") and streaming_response.reasoning is not None:
             streaming_response.reasoning = None
     return streaming_response
 
 
-def _redact_tool_calls(tool_calls) -> None:
+def _redact_tool_calls(tool_calls: Iterable[object] | None) -> None:
     """Redact tool call arguments (assistant tool calls carry prompt-derived data)."""
     if not tool_calls:
         return
@@ -205,22 +239,24 @@ def _redact_tool_calls(tool_calls) -> None:
             function.arguments = REDACTED_BY_LITELLM
 
 
-def _redact_function_call(function_call) -> None:
+def _redact_function_call(function_call: object) -> None:
     """Redact legacy assistant function_call arguments."""
-    if function_call is not None and hasattr(function_call, "arguments"):
+    if function_call is not None and has_attributes(function_call, _HasArguments, "arguments"):
         function_call.arguments = REDACTED_BY_LITELLM
 
 
-def _redact_choice_content(choice):
+def _redact_choice_content(choice: object) -> None:
     """Helper to redact content in a choice (message or delta)."""
     if isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices, litellm.utils.TextChoices)):
         drop_token_ids(choice)
+        _drop_prompt_derived_fields(choice)
         _redact_provider_specific_fields(choice)
     if isinstance(choice, litellm.Choices):
         if choice.message.content is not None:
             choice.message.content = REDACTED_BY_LITELLM
         if getattr(choice.message, "reasoning_content", None) is not None:
             choice.message.reasoning_content = REDACTED_BY_LITELLM
+        _redact_field_when_present(choice.message, "refusal")
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
         _drop_field_when_present(choice.message, "reasoning_items")
@@ -234,6 +270,7 @@ def _redact_choice_content(choice):
             choice.delta.content = REDACTED_BY_LITELLM
         if getattr(choice.delta, "reasoning_content", None) is not None:
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
+        _redact_field_when_present(choice.delta, "refusal")
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
         _drop_field_when_present(choice.delta, "reasoning_items")
@@ -293,17 +330,188 @@ def _redact_provider_specific_fields(message: object) -> None:
         setattr(message, "provider_specific_fields", _redacted_provider_specific_fields(fields))  # noqa: B010  # typed as object
 
 
+def _set_field(holder: object, field: str, value: object) -> None:
+    if isinstance(holder, dict):
+        holder[field] = value  # rebind-ok: the served response is edited in place, like the setattr branch
+    else:
+        setattr(holder, field, value)
+
+
 def _drop_provider_specific_token_ids(holder: object) -> None:
-    fields: Final = _as_mapping(getattr(holder, "provider_specific_fields", None))
+    fields: Final = _as_mapping(stream_item_field(holder, "provider_specific_fields"))
     if fields is not None and fields.get("token_ids") is not None:
-        setattr(holder, "provider_specific_fields", {**fields, "token_ids": None})  # noqa: B010  # typed as object
+        _set_field(holder, "provider_specific_fields", {**fields, "token_ids": None})
 
 
 def drop_token_ids(choice: object) -> None:
-    if getattr(choice, "token_ids", None) is not None:
-        setattr(choice, "token_ids", None)  # noqa: B010  # pydantic extra, not a declared field
-    for holder in (choice, getattr(choice, "delta", None), getattr(choice, "message", None)):
+    if stream_item_field(choice, "token_ids") is not None:
+        _set_field(choice, "token_ids", None)
+    for holder in (choice, stream_item_field(choice, "delta"), stream_item_field(choice, "message")):
         _drop_provider_specific_token_ids(holder)
+
+
+_MESSAGE_OUTPUT_FIELDS: Final = (
+    "content",
+    "reasoning_content",
+    "thinking_blocks",
+    "tool_calls",
+    "function_call",
+    "refusal",
+    "audio",
+)
+
+
+_JSONABLE: Final = TypeAdapter(object)
+
+
+def _comparable_value(value: object) -> object:
+    return _JSONABLE.validate_python(to_jsonable_python(value, serialize_unknown=True))
+
+
+def _comparable_message(message: object) -> tuple[object, ...]:
+    return tuple(_comparable_value(stream_item_field(message, field)) for field in _MESSAGE_OUTPUT_FIELDS)
+
+
+def _holder_output(holder: object) -> tuple[object, ...]:
+    return (*_comparable_message(stream_item_field(holder, "message")), stream_item_field(holder, "text"))
+
+
+def _carries_logprobs(holder: object) -> bool:
+    return stream_item_field(holder, "logprobs") not in (None, [])
+
+
+def _carries_token_data(holder: object) -> bool:
+    return (
+        stream_item_field(holder, "token_ids") is not None
+        or _carries_logprobs(holder)
+        or any(
+            stream_item_field(stream_item_field(field_holder, "provider_specific_fields"), "token_ids") is not None
+            for field_holder in (holder, stream_item_field(holder, "message"))
+        )
+    )
+
+
+def _token_data_holders(response: object) -> Iterator[object]:
+    yield from stream_item_items(response, "choices")
+    for item in stream_item_items(response, "output"):
+        yield from stream_item_items(item, "content")
+
+
+def _logprob_entries(logprobs: object) -> tuple[object, ...]:
+    if isinstance(logprobs, (list, tuple)):
+        return _RESPONSE_ITEMS.validate_python(logprobs)
+    return (*stream_item_items(logprobs, "content"), *stream_item_items(logprobs, "refusal"))
+
+
+def _logprob_entry_key(entry: object) -> tuple[object, object]:
+    return stream_item_field(entry, "logprob"), stream_item_field(entry, "bytes")
+
+
+def _logprobs_key(logprobs: object) -> tuple[object, ...]:
+    values: Final = (
+        *map(_logprob_entry_key, _logprob_entries(logprobs)),
+        *stream_item_items(logprobs, "token_logprobs"),
+        *stream_item_items(logprobs, "text_offset"),
+    )
+    return values if values or logprobs in (None, []) else (logprobs,)
+
+
+def _comparable_key(part: tuple[object, ...]) -> str:
+    return json.dumps(to_jsonable_python(part, serialize_unknown=True)) if part else ""
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenData:
+    token_ids: frozenset[str]
+    logprobs: str
+
+    def pairs_with(self, served: "_TokenData") -> bool:
+        if served.token_ids:
+            return not self.token_ids.isdisjoint(served.token_ids)
+        return bool(served.logprobs) and self.logprobs == served.logprobs
+
+
+def _token_data(holder: object) -> _TokenData:
+    token_ids: Final = (
+        stream_item_items(holder, "token_ids"),
+        *(
+            stream_item_items(stream_item_field(field_holder, "provider_specific_fields"), "token_ids")
+            for field_holder in (holder, stream_item_field(holder, "message"))
+        ),
+    )
+    return _TokenData(
+        token_ids=frozenset(key for key in map(_comparable_key, token_ids) if key),
+        logprobs=_comparable_key(_logprobs_key(stream_item_field(holder, "logprobs"))),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenDataOutput:
+    token_data: _TokenData
+    output: tuple[object, ...]
+
+
+def _token_data_outputs(response: object) -> tuple[_TokenDataOutput, ...]:
+    return tuple(
+        _TokenDataOutput(_token_data(holder), _holder_output(holder))
+        for holder in _token_data_holders(response)
+        if _carries_token_data(holder)
+    )
+
+
+def _drop_token_data(holder: object) -> None:
+    drop_token_ids(holder)
+    if _carries_logprobs(holder):
+        _set_field(holder, "logprobs", None)
+
+
+def _keeps_every_field(original: tuple[object, ...], served: tuple[object, ...]) -> bool:
+    return all(keeps_original_output(before, after) for before, after in zip(original, served, strict=True))
+
+
+def _hides_original_output(holder: object, outputs_before: tuple[_TokenDataOutput, ...]) -> bool:
+    token_data: Final = _token_data(holder)
+    output: Final = _holder_output(holder)
+    originals: Final = tuple(before.output for before in outputs_before if before.token_data.pairs_with(token_data))
+    return bool(originals) and not all(_keeps_every_field(original, output) for original in originals)
+
+
+def _drop_token_data_of_rewritten_outputs(response: object, outputs_before: tuple[_TokenDataOutput, ...]) -> None:
+    for holder in _token_data_holders(response):
+        if _carries_token_data(holder) and _hides_original_output(holder, outputs_before):
+            _drop_token_data(holder)
+
+
+_Hooked = TypeVar("_Hooked")
+
+
+async def without_hidden_token_data(response: object, hooked: Awaitable[_Hooked]) -> _Hooked:
+    outputs_before: Final = _token_data_outputs(response)
+    result: Final = await hooked
+    _drop_token_data_of_rewritten_outputs(response if result is None else result, outputs_before)
+    return result
+
+
+class TokenDataCheckedFields(LiveFields):
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner: Mapping[Field, object]) -> None:
+        self._inner: Final = inner
+
+    def __getitem__(self, field: Field) -> object:
+        return self._inner[field]
+
+    def __iter__(self) -> Iterator[Field]:
+        return iter(self._inner)
+
+    def __len__(self) -> int:
+        return len(self._inner)
+
+    def apply(self, patch: Patch) -> Mapping[Field, object]:
+        outputs_before: Final = _token_data_outputs(self._inner.get(Field.response))
+        applied: Final = apply_patch(self._inner, patch)
+        _drop_token_data_of_rewritten_outputs(applied.get(Field.response), outputs_before)
+        return self if applied is self._inner else TokenDataCheckedFields(applied)
 
 
 def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:
@@ -417,7 +625,133 @@ def _drop_field_when_present(item: object, field: str) -> None:
         setattr(item, field, None)
 
 
-def _redact_responses_api_output(output_items):
+def _drop_prompt_derived_fields(response: object) -> None:
+    for field in VLLM_PROMPT_DERIVED_FIELDS:
+        if isinstance(response, dict) and field in response:
+            del response[field]  # rebind-ok: redaction scrubs the logged object in place for every caller
+        else:
+            _drop_field_when_present(response, field)
+
+
+def _carries_own_prompt_derived_fields(item: object) -> bool:
+    mapping: Final = _as_mapping(item)
+    return any(
+        (mapping.get(field) if mapping is not None else attribute_or_none(item, field)) is not None
+        for field in VLLM_PROMPT_DERIVED_FIELDS
+    )
+
+
+def _carries_prompt_derived_fields(response: object) -> bool:
+    return _carries_own_prompt_derived_fields(response) or any(
+        _carries_own_prompt_derived_fields(choice) for choice in stream_item_items(response, "choices")
+    )
+
+
+_CallDetails = TypeVar("_CallDetails", bound=Mapping[str, object])
+
+
+def _mapping_without_prompt_derived_fields(mapping: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in mapping.items() if key not in VLLM_PROMPT_DERIVED_FIELDS}
+
+
+def _without_own_prompt_derived_fields(item: object) -> object:
+    if not _carries_own_prompt_derived_fields(item):
+        return item
+    if (mapping := _as_mapping(item)) is not None:
+        return _mapping_without_prompt_derived_fields(mapping)
+    if not isinstance(item, BaseModel):
+        return item
+    logged_copy: Final = item.model_copy()
+    _drop_prompt_derived_fields(logged_copy)
+    return logged_copy
+
+
+def _without_prompt_derived_fields(response: object) -> object:
+    if not _carries_prompt_derived_fields(response):
+        return response
+    logged_choices: Final = [
+        _without_own_prompt_derived_fields(choice) for choice in stream_item_items(response, "choices")
+    ]
+    choices_update: Final = {"choices": logged_choices} if logged_choices else {}
+    if (mapping := _as_mapping(response)) is not None:
+        return {**_mapping_without_prompt_derived_fields(mapping), **choices_update}
+    if not isinstance(response, BaseModel):
+        return response
+    logged_copy: Final = response.model_copy(update=choices_update)
+    _drop_prompt_derived_fields(logged_copy)
+    return logged_copy
+
+
+def _sets_prompt_field_param(params: Mapping[str, object]) -> bool:
+    return any(
+        params.get(name) is not None and params.get(name) is not False for name in VLLM_PROMPT_FIELD_REQUEST_PARAMS
+    )
+
+
+def _requests_prompt_derived_fields(model_call_details: Mapping[str, object]) -> bool:
+    optional_params: Final = _as_mapping(model_call_details.get("optional_params")) or {}
+    extra_body: Final = _as_mapping(optional_params.get("extra_body")) or {}
+    return _sets_prompt_field_param(optional_params) or _sets_prompt_field_param(extra_body)
+
+
+def logged_content_fingerprint(model_call_details: Mapping[str, object], result: object) -> bytes | None:
+    if not _requests_prompt_derived_fields(model_call_details):
+        return None
+    try:
+        return to_json((model_call_details.get("messages"), result), fallback=repr)
+    except PydanticSerializationError:
+        return None
+
+
+def logs_without_prompt_fields_once_masked(
+    masked_earlier: bool, content_before_hook: bytes | None, model_call_details: _CallDetails, result: object
+) -> tuple[bool, _CallDetails | dict[str, object], object]:  # mutable-ok: logging hooks hand every logger a plain dict
+    if (
+        not masked_earlier
+        and content_before_hook is not None
+        and logged_content_fingerprint(model_call_details, result) == content_before_hook
+    ):
+        return False, model_call_details, result
+    return True, *_logs_without_prompt_derived_fields(model_call_details, result)
+
+
+def _logs_without_prompt_derived_fields(
+    model_call_details: _CallDetails, result: object
+) -> tuple[_CallDetails | dict[str, object], object]:  # mutable-ok: logging hooks hand every logger a plain dict
+    logged_entries: Final = _logged_entries_without_prompt_derived_fields(model_call_details)
+    if not logged_entries and not _carries_prompt_derived_fields(result):
+        return model_call_details, result
+    return {**model_call_details, **logged_entries}, _without_prompt_derived_fields(result)
+
+
+def _logged_entries_without_prompt_derived_fields(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
+    standard_logging_object: Final = _as_mapping(model_call_details.get("standard_logging_object"))
+    logged_response: Final = standard_logging_object.get("response") if standard_logging_object is not None else None
+    return {
+        **{
+            streaming_key: _without_prompt_derived_fields(model_call_details[streaming_key])
+            for streaming_key in ("complete_streaming_response", "async_complete_streaming_response")
+            if _carries_prompt_derived_fields(model_call_details.get(streaming_key))
+        },
+        **(
+            {
+                "standard_logging_object": {
+                    **standard_logging_object,
+                    "response": _without_prompt_derived_fields(logged_response),
+                }
+            }
+            if standard_logging_object is not None and _carries_prompt_derived_fields(logged_response)
+            else {}
+        ),
+    }
+
+
+def _redact_prompt_derived_fields(response: object) -> None:
+    _drop_prompt_derived_fields(response)
+    redact_vertex_ai_metadata_from_logged_object(response)
+
+
+def _redact_responses_api_output(output_items: Iterable[object]) -> None:
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
         output_type = stream_item_field(output_item, "type")
@@ -432,13 +766,17 @@ def _redact_responses_api_output(output_items):
             for summary_item in stream_item_items(output_item, "summary"):
                 _redact_field_when_present(summary_item, "text")
 
-        if output_type == "compaction" and hasattr(output_item, "encrypted_content"):
+        if output_type == "compaction" and has_attributes(output_item, _HasEncryptedContent, "encrypted_content"):
             output_item.encrypted_content = REDACTED_BY_LITELLM
-        if output_type == "function_call" and hasattr(output_item, "arguments"):
+        if output_type == "function_call" and has_attributes(output_item, _HasArguments, "arguments"):
             output_item.arguments = REDACTED_BY_LITELLM
-        if output_type == "custom_tool_call" and hasattr(output_item, "input"):
+        if output_type == "custom_tool_call" and has_attributes(output_item, _HasInput, "input"):
             output_item.input = REDACTED_BY_LITELLM
-        if output_type == "web_search_call" and getattr(output_item, "action", None) is not None:
+        if (
+            output_type == "web_search_call"
+            and has_attributes(output_item, _HasAction, "action")
+            and output_item.action is not None
+        ):
             output_item.action = _redacted_web_search_action(output_item.action)
 
 
@@ -580,7 +918,7 @@ def _redact_standard_logging_object(
             # ModelResponse dict format - redact content in choices
             if isinstance(response.get("choices"), list):
                 _redact_model_response_dict_choices(response["choices"], redacted_str)
-            redact_vertex_ai_metadata_from_logged_object(response)
+            _redact_prompt_derived_fields(response)
             _redact_bedrock_guardrail_trace(response)
         elif isinstance(response, str):
             standard_logging_object["response"] = redacted_str
@@ -607,12 +945,13 @@ def _redact_model_response_dict_choices(choices: Iterable[object], redacted_str:
     for choice in choices:
         if isinstance(choice, dict):
             _redact_provider_specific_fields_dict(choice)
+            _drop_prompt_derived_fields(choice)
             if choice.get("token_ids") is not None:
                 choice["token_ids"] = None
             if (
                 body := next((choice[key] for key in ("message", "delta") if isinstance(choice.get(key), dict)), None)
             ) is not None:
-                for field in ("content", "reasoning_content"):
+                for field in ("content", "reasoning_content", "refusal"):
                     if body.get(field) is not None:
                         body[field] = redacted_str
                 for field in ("thinking_blocks", "reasoning_items", "audio", "images"):
@@ -678,7 +1017,9 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     }
 
 
-def perform_redaction(model_call_details: dict[str, object], result, redact_streaming_responses: bool = True):
+def perform_redaction(
+    model_call_details: dict[str, object], result: object, redact_streaming_responses: bool = True
+) -> object:
     """
     Performs the actual redaction on the logging object and result.
 
@@ -745,13 +1086,13 @@ def perform_redaction(model_call_details: dict[str, object], result, redact_stre
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:
                     _redact_choice_content(choice)
-            redact_vertex_ai_metadata_from_logged_object(_result)
+            _redact_prompt_derived_fields(_result)
             _redact_bedrock_guardrail_trace(_result)
         elif isinstance(_result, dict) and "choices" in _result:
             # Handle dict representation of ModelResponse (e.g., from model_dump())
             if _result.get("choices") is not None:
                 _redact_model_response_dict_choices(_result["choices"], REDACTED_BY_LITELLM)
-            redact_vertex_ai_metadata_from_logged_object(_result)
+            _redact_prompt_derived_fields(_result)
             _redact_bedrock_guardrail_trace(_result)
         elif isinstance(_result, dict) and "output" in _result:
             return _redacted_responses_api_response(_result, redact_instructions=redact_streaming_responses)
@@ -821,7 +1162,9 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     return litellm.turn_off_message_logging is True
 
 
-def redact_message_input_output_from_logging(model_call_details: dict, result, input: object | None = None) -> object:
+def redact_message_input_output_from_logging(
+    model_call_details: dict, result: object, input: object | None = None
+) -> object:
     """
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True
@@ -851,7 +1194,7 @@ def _get_turn_off_message_logging_from_dynamic_params(
     return None
 
 
-def redact_user_api_key_info(metadata: dict) -> dict:
+def redact_user_api_key_info(metadata: dict) -> dict[str, object]:
     """
     removes any user_api_key_info before passing to logging object, if flag set
 

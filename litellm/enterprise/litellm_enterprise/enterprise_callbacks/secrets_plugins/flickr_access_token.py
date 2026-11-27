@@ -15,7 +15,7 @@ class FlickrAccessTokenDetector(RegexBasedDetector):
         return "Flickr Access Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Flickr Access Token
             re.compile(

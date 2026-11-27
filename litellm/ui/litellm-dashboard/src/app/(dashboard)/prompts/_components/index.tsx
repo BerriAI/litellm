@@ -166,25 +166,8 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         />
       ) : (
         <PageContent>
-          <PageHeader>
-            <PageHeaderTitle>
-              <FileText />
-              {t("shell.nav.items.prompts")}
-            </PageHeaderTitle>
-            <PageHeaderDescription>{t("shell.pageDescriptions.prompts")}</PageHeaderDescription>
-            <PageHeaderControls className="flex-wrap">
-              {canModify && (
-                <>
-                  <Button onClick={handleAddPrompt} disabled={!accessToken}>
-                    <Plus />
-                    {t("prompts.panel.addNew")}
-                  </Button>
-                  <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
-                    <Upload />
-                    {t("prompts.panel.uploadFile")}
-                  </Button>
-                </>
-              )}
+          <PageHeader
+            aside={
               <Select
                 items={ENVIRONMENT_ITEMS.map((item) => ({ label: t(item.labelKey), value: item.value }))}
                 value={selectedEnvironment ?? null}
@@ -202,7 +185,25 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
                   ))}
                 </SelectContent>
               </Select>
-            </PageHeaderControls>
+            }
+          >
+            <PageHeaderTitle>
+              <FileText />
+              {t("shell.nav.items.prompts")}
+            </PageHeaderTitle>
+            <PageHeaderDescription>{t("shell.pageDescriptions.prompts")}</PageHeaderDescription>
+            {canModify && (
+              <PageHeaderControls>
+                <Button onClick={handleAddPrompt} disabled={!accessToken}>
+                  <Plus />
+                  {t("prompts.panel.addNew")}
+                </Button>
+                <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
+                  <Upload />
+                  {t("prompts.panel.uploadFile")}
+                </Button>
+              </PageHeaderControls>
+            )}
           </PageHeader>
 
           <PromptTable

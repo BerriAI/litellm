@@ -9,6 +9,7 @@ The only provider quirks:
 Ref: https://docs.perplexity.ai/api-reference/responses-post
 """
 
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -32,7 +33,7 @@ PERPLEXITY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = MappingProxyTyp
 
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Ref: https://docs.perplexity.ai/api-reference/responses-post"""
         return [
             "max_output_tokens",
@@ -40,6 +41,8 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             "temperature",
             "top_p",
             "tools",
+            "tool_choice",
+            "parallel_tool_calls",
             "reasoning",
             "instructions",
             "models",
@@ -49,7 +52,9 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.PERPLEXITY
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key: Final = (
             litellm_params.api_key or get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
@@ -58,7 +63,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
         return join_api_base(api_base, "v1/responses")
 
@@ -82,15 +87,15 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """Handle preset/ model prefix: send as {"preset": name} instead of {"model": name}."""
         input = self._ensure_message_type(input)
         if model.startswith("preset/"):
             input = self._validate_input_param(input, drop_params=drops_params(litellm_params))
-            data: Final[dict] = {
+            data: Final[dict[str, object]] = {
                 "preset": model[len("preset/") :],
                 "input": input,
             }

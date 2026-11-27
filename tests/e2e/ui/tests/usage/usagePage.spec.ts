@@ -1,8 +1,15 @@
-import { test, expect, type APIRequestContext, type Locator, type Page as PlaywrightPage } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type Locator,
+  type Page as PlaywrightPage,
+} from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import {
+  CHAT_MODEL_A,
   createVirtualKey,
   masterKey,
   rootPath,
@@ -14,7 +21,11 @@ import {
 /** Covers /ui/usage. */
 
 const topKeysCard = (page: PlaywrightPage): Locator =>
-  page.locator("section").filter({ has: page.getByRole("heading", { name: "Top Virtual Keys", exact: true }) });
+  page
+    .locator("section")
+    .filter({
+      has: page.getByRole("heading", { name: "Top Virtual Keys", exact: true }),
+    });
 
 async function openUsage(page: PlaywrightPage): Promise<Locator> {
   await navigateToPage(page, Page.NewUsage);
@@ -23,7 +34,10 @@ async function openUsage(page: PlaywrightPage): Promise<Locator> {
   await expect(card).toBeVisible({ timeout: 30_000 });
   // Widen past the default top-5 so other keys in the database cannot crowd this one out.
   // The radio itself is sr-only and its label covers it, so click the label.
-  await card.getByRole("radiogroup", { name: "Number of top keys to show" }).getByText("50", { exact: true }).click();
+  await card
+    .getByRole("radiogroup", { name: "Number of top keys to show" })
+    .getByText("50", { exact: true })
+    .click();
   return card;
 }
 
@@ -41,7 +55,10 @@ async function createPricedDeployment(
   // name recorded up front is the only registration no response shape can skip.
   registerForCleanup.push(modelName);
   const res = await request.post("/model/new", {
-    headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${masterKey()}`,
+      "Content-Type": "application/json",
+    },
     data: {
       model_name: modelName,
       litellm_params: {
@@ -53,7 +70,10 @@ async function createPricedDeployment(
       },
     },
   });
-  expect(res.ok(), `POST /model/new failed (${res.status()}): ${await res.text()}`).toBe(true);
+  expect(
+    res.ok(),
+    `POST /model/new failed (${res.status()}): ${await res.text()}`,
+  ).toBe(true);
 
   // /model/new returns once the row is written, but the router only picks the deployment up on its
   // next refresh, so sending traffic straight away can still get "no healthy deployments". A ping
@@ -62,12 +82,21 @@ async function createPricedDeployment(
     .poll(
       async () => {
         const ping = await request.post(`${rootPath()}/v1/chat/completions`, {
-          headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
-          data: { model: modelName, messages: [{ role: "user", content: "readiness ping" }] },
+          headers: {
+            Authorization: `Bearer ${masterKey()}`,
+            "Content-Type": "application/json",
+          },
+          data: {
+            model: modelName,
+            messages: [{ role: "user", content: "readiness ping" }],
+          },
         });
         return ping.ok();
       },
-      { message: `deployment ${modelName} never became routable`, timeout: 60_000 },
+      {
+        message: `deployment ${modelName} never became routable`,
+        timeout: 60_000,
+      },
     )
     .toBe(true);
 
@@ -88,7 +117,10 @@ test.describe("Usage page", () => {
     // that reached the database only. Absent from both means it never persisted.
     const names = pricedDeployments.splice(0);
     if (names.length === 0) return;
-    const auth = { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" };
+    const auth = {
+      Authorization: `Bearer ${masterKey()}`,
+      "Content-Type": "application/json",
+    };
 
     type Lookup =
       | { readonly listed: true; readonly id: string | undefined }
@@ -101,12 +133,21 @@ test.describe("Usage page", () => {
         model_name?: string;
         model_info?: { id?: string };
       }[];
-      return { listed: true, id: deployments.find((d) => d.model_name === name)?.model_info?.id };
+      return {
+        listed: true,
+        id: deployments.find((d) => d.model_name === name)?.model_info?.id,
+      };
     };
 
     const remove = async (name: string, id: string) => {
-      const deleted = await request.post(`${rootPath()}/model/delete`, { headers: auth, data: { id } });
-      expect(deleted.ok(), `POST /model/delete for ${name} (${deleted.status()})`).toBe(true);
+      const deleted = await request.post(`${rootPath()}/model/delete`, {
+        headers: auth,
+        data: { id },
+      });
+      expect(
+        deleted.ok(),
+        `POST /model/delete for ${name} (${deleted.status()})`,
+      ).toBe(true);
     };
 
     for (const name of names) {
@@ -116,7 +157,10 @@ test.describe("Usage page", () => {
         continue;
       }
       const search = encodeURIComponent(name);
-      const fromDb = await idIn(`${rootPath()}/v2/model/info?search=${search}`, name);
+      const fromDb = await idIn(
+        `${rootPath()}/v2/model/info?search=${search}`,
+        name,
+      );
       expect(
         fromDb.listed,
         `GET /v2/model/info?search=${search} (${fromDb.listed ? 200 : fromDb.status}), so ${name} could not be checked`,
@@ -138,7 +182,11 @@ test.describe("Usage page", () => {
     // Top Virtual Keys ranks by spend, and every mock deployment costs $0, so once a run has more
     // keys than the list shows, whether this one makes the cut is down to how ties happen to sort.
     // Give it a priced deployment of its own so it earns its place.
-    const { modelName } = await createPricedDeployment(request, alias, pricedDeployments);
+    const { modelName } = await createPricedDeployment(
+      request,
+      alias,
+      pricedDeployments,
+    );
 
     const requestId = await sendChatCompletion(request, {
       model: modelName,
@@ -169,7 +217,72 @@ test.describe("Usage page", () => {
     await expect(keyInfo, "key info panel did not open").toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.getByRole("tab", { name: "Settings", exact: true })).toBeVisible();
-    await expect(page.getByText("Back to Keys", { exact: false })).toBeVisible();
+    await expect(
+      page.getByRole("tab", { name: "Settings", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Back to Keys", { exact: false }),
+    ).toBeVisible();
+  });
+  test("Export as PDF prints a report of the chosen export type", async ({
+    page,
+    request,
+  }) => {
+    const alias = `e2e-usage-pdf-${Date.now()}`;
+    const { key, token } = await createVirtualKey(request, {
+      key_alias: alias,
+    });
+    const requestId = await sendChatCompletion(request, {
+      model: CHAT_MODEL_A,
+      prompt: `pdf export ping for ${alias}`,
+      apiKey: key,
+    });
+    await waitForSpendLog(request, requestId);
+    await waitForKeyInDailyActivity(request, token);
+
+    await page.addInitScript(() => {
+      window.print = () => {
+        const top = window.top as
+          (Window & { usageReportPrintTitles?: string[] }) | null;
+        if (top)
+          top.usageReportPrintTitles = [
+            ...(top.usageReportPrintTitles ?? []),
+            top.document.title,
+          ];
+      };
+    });
+    await openUsage(page);
+    await page.getByRole("button", { name: "Export Data" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog
+      .getByText("Day-by-day breakdown by user and key", { exact: true })
+      .click();
+    await dialog.getByRole("combobox").click();
+    await page.getByRole("option", { name: "PDF (printable report)" }).click();
+    await expect(
+      dialog.getByRole("checkbox", { name: "Include key and user metadata" }),
+    ).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Export PDF" }).click();
+    await expect(dialog).toBeHidden({ timeout: 30_000 });
+
+    const report = page.frameLocator('iframe[title="Usage report"]');
+    await expect(
+      report.getByRole("heading", { name: "Summary" }),
+    ).toBeAttached();
+    await expect(
+      report.getByRole("columnheader", { name: "Key", exact: true }),
+    ).toBeAttached();
+    await expect(
+      report.getByRole("cell", { name: alias, exact: true }),
+    ).toBeAttached();
+    const printTitles = await page.evaluate(
+      () =>
+        (window as Window & { usageReportPrintTitles?: string[] })
+          .usageReportPrintTitles ?? [],
+    );
+    expect(printTitles).toHaveLength(1);
+    expect(printTitles[0]).toMatch(
+      /^user_usage_daily_with_keys_\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}$/,
+    );
   });
 });

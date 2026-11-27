@@ -6,10 +6,7 @@
 //! against the counters it holds and reseeds any it finds cold; a call that charges nothing
 //! releases it. Each step stamps the caller's copy, which [`crate::SpendLogCallback`] writes back.
 
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use litellm_callbacks::{BudgetReservation, Host, Scalar};
 use litellm_callbacks_budgets::{CounterStep, CustomerWindow, Failure as Failed, post_call};
@@ -18,7 +15,7 @@ use litellm_callbacks_spend_log::{
     SpendLogStatus, hash_token, is_sha256_hex, strip_bearer,
 };
 use litellm_python_compat::json;
-use litellm_redis_store::spend_counters::SpendCounter;
+use litellm_redis_store::{RequestRedis, spend_counters::SpendCounter};
 use litellm_spend_log_writer::{LedgerStore, QueuedSpendLog, Retention};
 use serde_json::{Value as Json, json};
 
@@ -27,16 +24,12 @@ use crate::{
     hook_input::{Failure, Identity, RowRequest, Settings, Success},
     host::{
         AccountingContext, AccountingRow, AfterCharge, AfterWrite, BatchAccounting,
-        EnrichKeyIdentity, EnrichedKeyIdentity, FailedTrackingAlert, IncrementSearchFreeTier,
-        LoggedCost,
+        ChargeFailureCounters, EnrichKeyIdentity, EnrichedKeyIdentity, FailedTrackingAlert,
+        IncrementSearchFreeTier, LoggedCost,
     },
     policy::{self, Disposition},
     search_free_tier,
 };
-
-/// `FAILURE_SPEND_COUNTER_WAIT_SECONDS`: how long a failure waits on its counters before
-/// leaving them to finish in the background.
-const FAILURE_SPEND_COUNTER_WAIT: Duration = Duration::from_secs(1);
 
 const RESPONSES_ID_CALL_TYPES: [&str; 2] = ["aget_responses", "acancel_responses"];
 
@@ -277,6 +270,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
         fields: &Typed,
         reservation: &mut Option<BudgetReservation>,
         host: &Host,
+        redis: Option<&RequestRedis>,
     ) {
         let mut success = success;
         if let Some(resolve) = policy::enrich(&success)
@@ -295,7 +289,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
             outcome.write_started.store(true, Ordering::Relaxed);
         }
         if let Err(error) = self
-            .track(&mut success, fields, reservation, &outcome, host)
+            .track(&mut success, fields, reservation, &outcome, host, redis)
             .await
         {
             outcome.failed.store(true, Ordering::Relaxed);
@@ -313,6 +307,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
         reservation: &mut Option<BudgetReservation>,
         outcome: &BatchOutcome,
         host: &Host,
+        redis: Option<&RequestRedis>,
     ) -> Result<(), String> {
         let resets = success.window_resets.clone();
         let cost = match &fields.cost {
@@ -353,7 +348,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
                     return Ok(());
                 }
                 let charged = self
-                    .charge_request(success, fields, cost, reservation, outcome, host)
+                    .charge_request(success, fields, cost, reservation, outcome, host, redis)
                     .await
                     .map_err(|error| error.to_string())?;
                 if let Some(charged) = charged {
@@ -414,6 +409,10 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
 
     /// `_charge_request_cost`: what the request charged, trying the repeat poll's own cost, under
     /// its own guardrail cost id, when an earlier poll already charged the job.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the Python function's values plus the host and the request's Redis batches"
+    )]
     async fn charge_request(
         &self,
         success: &Success,
@@ -422,6 +421,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
         reservation: &mut Option<BudgetReservation>,
         outcome: &BatchOutcome,
         host: &Host,
+        redis: Option<&RequestRedis>,
     ) -> Result<Option<f64>, Failed> {
         let request_id = fields.spend_log_id.as_ref().and_then(|id| id.id.as_deref());
         let write = RowWrite {
@@ -439,6 +439,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
                 &success.window_resets,
                 outcome,
                 host,
+                redis,
             )
             .await?
         {
@@ -464,6 +465,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
                 &[],
                 outcome,
                 host,
+                redis,
             )
             .await?;
         Ok(charged.then_some(repeat))
@@ -486,6 +488,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
         window_resets: &[Option<String>],
         outcome: &BatchOutcome,
         host: &Host,
+        redis: Option<&RequestRedis>,
     ) -> Result<bool, Failed> {
         outcome.write_started.store(true, Ordering::Relaxed);
         let written = self
@@ -502,7 +505,14 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
             customer_hierarchy: true,
         };
         if let Err(error) = self
-            .count(host, &charge, written, reservation.as_mut(), window_resets)
+            .count(
+                host,
+                redis,
+                &charge,
+                written,
+                reservation.as_mut(),
+                window_resets,
+            )
             .await
         {
             if let Some(held) = reservation.as_mut() {
@@ -516,10 +526,12 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
 
     /// `increment_spend_counters` on the ledger path: the whole post-call counter step in
     /// `charge_counters`, which reconciles the held reservation first; its stamps and
-    /// finalization are copied onto the reservation.
+    /// finalization are copied onto the reservation. The increments ride `redis`, the request's
+    /// post-call batch, so a later reader in the request can tell whether its own charge landed.
     async fn count(
         &self,
         host: &Host,
+        redis: Option<&RequestRedis>,
         charge: &Charge<'_>,
         written: Written,
         reservation: Option<&mut BudgetReservation>,
@@ -528,7 +540,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
         let step = counter_step(charge, written, window_resets);
         let outcome = self
             .budgets
-            .charge_counters(host, None, &step, reservation.as_deref())
+            .charge_counters(host, redis, &step, reservation.as_deref())
             .await;
         if let Some(held) = reservation {
             if let Some(entries) = held.entries.as_mut() {
@@ -799,13 +811,16 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
     }
 
     /// `async_post_call_failure_hook`: release the reservation unless a completed cost settles
-    /// it, then one row for the final attempt and one per billed retry attempt.
+    /// it, then one row for the final attempt and one per billed retry attempt. The failure
+    /// logging already sent the request's post-call batch, so a charge declared here sends it
+    /// again instead of waiting out its deadline with the client already holding the error.
     pub(crate) async fn on_failure(
         &self,
         failure: Failure,
         fields: &Typed,
         reservation: &mut Option<BudgetReservation>,
         host: &Host,
+        redis: Option<&RequestRedis>,
     ) {
         let mut failure = failure;
         let completed_cost = fields
@@ -815,7 +830,7 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
             .unwrap_or(false);
         let disabled = failure.settings.disable_spend_updates;
         let resets = failure.window_resets.clone();
-        if !completed_cost || disabled {
+        if (!completed_cost || disabled) && !failure.nested_tool_call {
             self.release(host, reservation, &resets).await;
             if let Some(settled) = reservation.as_ref() {
                 for row in &mut failure.rows {
@@ -868,11 +883,15 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
                         &resets,
                         &outcome,
                         host,
+                        redis,
                     )
                     .await
                 {
                     tracing::error!(%error, "Failed to write the spend log for a failure with a completed cost");
                 }
+            }
+            if let Some(redis) = redis {
+                redis.flush_post().await;
             }
             return;
         }
@@ -905,34 +924,15 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
     }
 
     /// `_increment_failure_spend_counters`: the failure rows' counters, sent before the client sees
-    /// the error. A counter store slower than `FAILURE_SPEND_COUNTER_WAIT` finishes them in the
-    /// background instead of holding the error back. The reservation was already released, so
-    /// every counter takes the full row cost.
+    /// the error. The proxy runs them on the request's post-call batch, so a counter store slower
+    /// than its wait finishes them in the background with the host still answering. The
+    /// reservation was already released, so every counter takes the full row cost.
     async fn count_failure_rows(&self, host: &Host, steps: Vec<CounterStep>) {
         if steps.is_empty() {
             return;
         }
-        let budgets = self.budgets.clone();
-        let host = host.clone();
-        let mut counting = tokio::spawn(async move {
-            for step in steps {
-                if let Some(error) = budgets
-                    .charge_counters(&host, None, &step, None)
-                    .await
-                    .error
-                {
-                    tracing::error!(%error, "Failed to raise spend counters for a failure spend row");
-                }
-            }
-        });
-        if tokio::time::timeout(FAILURE_SPEND_COUNTER_WAIT, &mut counting)
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                "Spend counters for failure spend rows took over {}s, finishing them in the background",
-                FAILURE_SPEND_COUNTER_WAIT.as_secs_f64()
-            );
+        if let Err(error) = host.call(ChargeFailureCounters { steps }).await {
+            tracing::error!(%error, "Failed to raise spend counters for the failure spend rows");
         }
     }
 }

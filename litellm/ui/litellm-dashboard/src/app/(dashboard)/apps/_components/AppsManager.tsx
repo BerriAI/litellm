@@ -16,7 +16,7 @@ import { readsEveryApp, useGrantedApps } from "./useGrantedApps";
 import ApplicationsTable from "./ApplicationsTable";
 import AppSettingsDialog from "./AppSettingsDialog";
 import { Card } from "@/components/ui/card";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import AppDefinitionSetting from "./AppDefinitionSetting";
 
@@ -32,11 +32,9 @@ function GranteeApps() {
   const granted = useGrantedApps();
   if (granted.apps.isLoading) return <p role="status">{t("apps.loading")}</p>;
   if (granted.hasGrant) return <GrantedApps apps={granted.apps.data ?? []} />;
-  if (!granted.failed) return <AdminOnlyNotice pageTitle={t("apps.title")} />;
+  if (!granted.failed) return <AdminOnlyNotice framed pageTitle={t("apps.title")} />;
   return (
-    <Page>
-      <ErrorState message={extractProxyErrorMessage(granted.apps.error)} onRetry={() => void granted.apps.refetch()} />
-    </Page>
+    <ErrorState message={extractProxyErrorMessage(granted.apps.error)} onRetry={() => void granted.apps.refetch()} />
   );
 }
 
@@ -48,7 +46,7 @@ function ManagedApps() {
   if (selected && [definition, resources].some((query) => query.isLoading))
     return <p role="status">{t("apps.loading")}</p>;
   return (
-    <Page>
+    <>
       <PageHeader>
         <PageHeaderTitle>
           <AppWindow />
@@ -71,14 +69,14 @@ function ManagedApps() {
           <AppDefinitionSetting />
         </section>
       </PageContent>
-    </Page>
+    </>
   );
 }
 
 function GrantedApps({ apps }: { apps: readonly App[] }) {
   const { t } = useTranslation();
   return (
-    <Page>
+    <>
       <PageHeader>
         <PageHeaderTitle>
           <AppWindow />
@@ -91,7 +89,7 @@ function GrantedApps({ apps }: { apps: readonly App[] }) {
           <ApplicationsTable rows={grantedApplicationRows(apps)} loading={false} />
         </Card>
       </PageContent>
-    </Page>
+    </>
   );
 }
 

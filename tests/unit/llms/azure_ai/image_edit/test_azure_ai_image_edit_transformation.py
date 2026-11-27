@@ -209,3 +209,34 @@ def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():
     )
 
     assert optional_params == {"num_images": 1}
+
+
+def test_flux_kontext_image_edit_rejects_markup_unless_dropped():
+    captured: Final[list[httpx.Request]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    png: Final = b"\x89PNG\r\n\x1a\nfakepng"
+    request: Final[dict[str, object]] = {
+        "model": "azure_ai/FLUX.1-Kontext-pro",
+        "image": png,
+        "prompt": "add a hat",
+        "api_base": "https://test-endpoint.services.ai.azure.com",
+        "api_key": "test-key",
+        "api_version": "2025-04-01-preview",
+        "client": client,
+        "markup": BytesIO(png),
+    }
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="markup"):
+        litellm.image_edit(**request)
+    assert captured == []
+
+    litellm.image_edit(**request, drop_params=True)
+
+    assert len(captured) == 1
+    assert b'name="markup"' not in captured[0].content
+    assert b'name="prompt"\r\n\r\nadd a hat' in captured[0].content

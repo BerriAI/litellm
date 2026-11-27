@@ -433,7 +433,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         if llm_router is None:
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
 
-        responses: Final = []
+        responses: Final[list[ResourceObjectType]] = []
         for model in target_model_names_list:
             individual_response = await self.create_resource_for_model(
                 llm_router=llm_router,
@@ -503,10 +503,10 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self,
         model: str,
         healthy_deployments: list,
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         parent_otel_span: Span | None = None,
         resource_id_key: str = "resource_id",
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """
         Filter deployments based on model mappings for a resource.
 

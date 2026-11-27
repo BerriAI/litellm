@@ -11,7 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.anthropic.common_utils import AnthropicError, with_unrendered_blocks_as_text
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
@@ -205,7 +205,7 @@ class DeepSeekTokenCounter(BaseTokenCounter):
         try:
             result: Final = await self._handler.handle_count_tokens_request(
                 model=model_to_use,
-                messages=[dict(message) for message in messages],
+                messages=[dict(message) for message in with_unrendered_blocks_as_text(messages)],
                 auth_header=model_info.validate_environment(
                     headers={},
                     model=model_to_use,

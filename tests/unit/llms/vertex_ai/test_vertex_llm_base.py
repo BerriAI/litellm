@@ -24,6 +24,7 @@ from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE, DEFAULT_MAX_RECURSE_DE
 
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.vertex_ai.vertex_ai_aws_wif import VertexAIAwsWifAuth
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
@@ -2594,9 +2595,9 @@ def test_get_access_token_reraises_malformed_service_account_credentials_without
             )
 
     assert vertex_base._credentials_project_mapping == {}
-    assert [record.getMessage().split(". Error: ")[0] for record in caplog.records] == [
-        "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information"
-    ]
+    assert [
+        record.getMessage().split(". Error: ")[0] for record in caplog.records if record.name == verbose_logger.name
+    ] == ["Failed to load vertex credentials. Check to see if credentials containing partial/invalid information"]
 
 
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])

@@ -17,15 +17,19 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.batch_utils import POLLED_BATCH_COST_IS_FINAL_KWARG, POLLED_BATCH_ID_KWARG
+from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.redact_messages import perform_redaction
+from litellm.llms.gemini.empty_image_response import UnservedImageError
 from litellm.proxy._types import ProxyException, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
+from litellm._internal_context import nested_tool_call_failure
 from litellm.proxy.hooks.proxy_track_cost_callback import (
+    HealthProbeFailureBiller,
     ProxyDBLogger,
     _charge_request_cost,
     _get_budget_reservation_from_metadata,
@@ -801,6 +805,75 @@ async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_str
         assert mock_update_database.call_args[1]["response_cost"] == pytest.approx(0.0013)
 
 
+def _failed_image_call(litellm_metadata: Mapping[str, object], response_cost: float) -> dict[str, object]:
+    return {
+        "model": "gemini-scripted-image",
+        "custom_llm_provider": "gemini",
+        "litellm_params": {"litellm_metadata": dict(litellm_metadata)},
+        "exception": UnservedImageError(
+            message="Gemini answered with text and no image",
+            model="gemini-scripted-image",
+            llm_provider="gemini",
+            response=httpx.Response(422, request=httpx.Request("POST", "https://gemini.invalid")),
+            billed_answer=litellm.ImageResponse(),
+        ),
+        "combined_usage_object": Usage(prompt_tokens=12, completion_tokens=25, total_tokens=37),
+        "response_cost": response_cost,
+    }
+
+
+_PROBE_METADATA: Final = HealthCheckHelpers.update_model_params_with_health_check_tracking_information(
+    {"model": "gemini/gemini-scripted-image"}
+)["litellm_metadata"]
+
+
+def _biller_writing_to(spend_writer: DBSpendUpdateWriter) -> HealthProbeFailureBiller:
+    legacy_logger: Final = ProxyDBLogger(spend_writer=lambda: spend_writer)
+
+    async def bill(auth: UserAPIKeyAuth, exception: Exception, request_data: dict[str, object]) -> None:
+        await legacy_logger.async_post_call_failure_hook(
+            request_data=request_data, original_exception=exception, user_api_key_dict=auth
+        )
+
+    return HealthProbeFailureBiller(bill=bill)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_health_probe_that_billed_the_provider_gets_a_failure_spend_row():
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    now: Final = datetime.now(timezone.utc)
+
+    await _biller_writing_to(spend_writer).async_log_failure_event(
+        _failed_image_call(_PROBE_METADATA, 0.000274), None, now, now
+    )
+
+    write: Final = spend_writer.update_database.call_args.kwargs
+    row: Final = get_logging_payload(kwargs=write["kwargs"], response_obj={}, start_time=now, end_time=now)
+    assert write["response_cost"] == pytest.approx(0.000274)
+    assert (row["status"], row["api_key"]) == ("failure", _PROBE_METADATA["user_api_key"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("litellm_metadata", "response_cost"),
+    [
+        pytest.param(_PROBE_METADATA, 0.0, id="probe-that-billed-nothing"),
+        pytest.param({"user_api_key": "hashed-caller-key"}, 0.000274, id="caller-request"),
+    ],
+)
+async def test_a_failure_event_writes_no_row_unless_a_health_probe_billed_the_provider(  # test-quality-ok: update_database is the DB write boundary, so whether it is awaited is the observable outcome
+    litellm_metadata: Mapping[str, object], response_cost: float
+):
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    now: Final = datetime.now(timezone.utc)
+
+    await _biller_writing_to(spend_writer).async_log_failure_event(
+        _failed_image_call(litellm_metadata, response_cost), None, now, now
+    )
+
+    spend_writer.update_database.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "snapshot_guardrail_information, expected_guardrail_names",
@@ -1089,6 +1162,28 @@ async def test_async_post_call_failure_hook_releases_budget_reservation_before_r
             is user_api_key_dict.budget_reservation
         )
         mock_update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_tool_call_inside_the_request_leaves_the_requests_budget_reservation_open() -> None:
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="test_api_key",
+        request_route="/custom/route",
+        budget_reservation={"reserved_cost": 0.5, "entries": []},
+    )
+
+    async def fail(error: str) -> None:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data={}, original_exception=Exception(error), user_api_key_dict=user_api_key_dict
+        )
+
+    with nested_tool_call_failure():
+        await fail("tool failed")
+    assert user_api_key_dict.budget_reservation is not None
+    assert user_api_key_dict.budget_reservation.get("finalized") is None
+
+    await fail("request failed")
+    assert user_api_key_dict.budget_reservation.get("finalized") is True
 
 
 @pytest.mark.asyncio
@@ -4058,6 +4153,49 @@ async def test_sidecar_writes_the_same_spend_row_and_counters_as_the_in_process_
     assert in_process_counters["budget_reservation"]["reserved_cost"] == 0.5
     assert in_process_counters["model_access_groups"] == ("premium",)
     assert sidecar_tools == in_process_tools == ("get_weather",)
+
+
+@pytest.mark.asyncio
+async def test_sidecar_keeps_guardrail_prompt_text_out_of_a_no_log_spend_row(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
+    monkeypatch.setitem(proxy_server.general_settings, "store_prompts_in_spend_logs", True)
+    matched_prompt_text: Final = "zebrafishsecret"
+    base: Final = _offload_kwargs()
+    kwargs: Final = {
+        **base,
+        "litellm_params": {**base["litellm_params"], "no-log": True},
+        "standard_logging_object": {
+            **base["standard_logging_object"],
+            "guardrail_information": [
+                {
+                    "guardrail_name": "cf-mask",
+                    "guardrail_status": "success",
+                    "guardrail_response": [{"type": "blocked_word", "keyword": matched_prompt_text}],
+                    "match_details": [{"type": "blocked_word", "snippet": matched_prompt_text}],
+                }
+            ],
+        },
+    }
+    start_time: Final = datetime(2026, 1, 1, 0, 0, 0)
+    end_time: Final = datetime(2026, 1, 1, 0, 0, 2)
+
+    async def in_process() -> None:
+        await ProxyDBLogger().async_log_success_event(kwargs, _offload_response(), start_time, end_time)
+
+    async def via_sidecar() -> None:
+        line = build_spend_event(kwargs, _offload_response(), start_time, end_time, store_bodies=False)
+        assert isinstance(line, bytes)
+        await run_spend_event(line)
+
+    in_process_row, _, _ = await _spend_row_written_by(in_process)
+    sidecar_row, _, _ = await _spend_row_written_by(via_sidecar)
+
+    assert matched_prompt_text not in json.dumps(sidecar_row, default=str), sidecar_row["metadata"]
+    assert sidecar_row == in_process_row
+    assert sidecar_row["spend"] == 0.0125
+    assert json.loads(sidecar_row["metadata"])["guardrail_information"][0]["guardrail_name"] == "cf-mask"
 
 
 @pytest.mark.asyncio

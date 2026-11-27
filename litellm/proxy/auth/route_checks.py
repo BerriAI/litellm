@@ -350,7 +350,7 @@ class RouteChecks:
         route: str,
         request: Request,
         valid_token: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: Mapping[str, object],
     ):
         """
         Checks if Non Proxy Admin User is allowed to access the route
@@ -488,8 +488,12 @@ class RouteChecks:
 
     @staticmethod
     def is_unbilled_route(route: str) -> bool:
-        resource, _, action = route.rsplit("/", 1)[-1].partition(":")
-        return route in _UNBILLED_ROUTES or resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
+        segment: Final = route.rsplit("/", 1)[-1]
+        return (
+            route in _UNBILLED_ROUTES
+            or segment.partition(":")[0] in _TOKEN_COUNTING_SEGMENTS
+            or segment.endswith(f":{_TOKEN_COUNTING_ACTION}")
+        )
 
     @staticmethod
     def runs_inference_checks(route: str) -> bool:
@@ -654,7 +658,7 @@ class RouteChecks:
         if not isinstance(route, str):
             return False
 
-        def _placeholder_to_regex(match: re.Match) -> str:
+        def _placeholder_to_regex(match: re.Match[str]) -> str:
             placeholder: Final = match.group(0).strip("{}")
             if not placeholder.endswith(":path"):
                 return r"[^/]+"
@@ -662,16 +666,16 @@ class RouteChecks:
             # converter takes, slashes and colons alike, so an id spelled with
             # either (or both) still matches the template it was mounted under.
             #
-            # Unless the template puts a ":" literal of its own after the
-            # placeholder: the Google routes end in ":generateContent" and
-            # friends, and there the value has to stop before that suffix
-            # rather than swallow it and match a different verb.
+            # Before a ":" literal of the template's own (the Google routes end
+            # in ":generateContent" and friends) the value may also be empty,
+            # since those routes then take the model from the body. The "$"
+            # anchor below keeps that suffix from matching a different verb.
             #
             # "[\s\S]" rather than ".", because "." stops at a newline and the
             # path converter does not: a %0A anywhere in the value would leave
             # the route unmatched here while still reaching the handler, which
             # turns this gate into a bypass for the lists built on it.
-            return r"[^:]+" if ":" in match.string[match.end() :] else r"[\s\S]+"
+            return r"[\s\S]*" if ":" in match.string[match.end() :] else r"[\s\S]+"
 
         pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
         # Anchor the pattern to match the entire string
@@ -964,7 +968,7 @@ class RouteChecks:
     def _check_proxy_admin_viewer_access(
         route: str,
         _user_role: str,
-        request_data: dict,
+        request_data: Mapping[str, object],
         request: Request | None = None,
     ) -> None:
         """

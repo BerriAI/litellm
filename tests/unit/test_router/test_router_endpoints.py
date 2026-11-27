@@ -874,3 +874,73 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
         assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(deployment_callback)
     finally:
         router.discard()
+
+
+_BATCH: Final = {
+    "id": "batch_abc",
+    "object": "batch",
+    "endpoint": "/v1/chat/completions",
+    "input_file_id": "file_abc",
+    "completion_window": "24h",
+    "status": "completed",
+    "created_at": 1,
+}
+
+
+def _oidc_env_router(monkeypatch: pytest.MonkeyPatch) -> Router:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("QA_BATCH_OIDC_KEY", "resolved-batch-key")
+    return Router(
+        model_list=[
+            {
+                "model_name": "batch-group",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "oidc/env/QA_BATCH_OIDC_KEY"},
+            },
+            {"model_name": "batch-wild/*", "litellm_params": {"model": "openai/*", "api_key": "oidc/env/QA_BATCH_OIDC_KEY"}},
+        ]
+    )
+
+
+async def _batch_list_or_retrieve_authorization(router: Router, list_batches: bool) -> str:
+    with respx.mock(assert_all_called=False) as upstream:
+        listed = upstream.get("https://api.openai.com/v1/batches").mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [], "has_more": False, "last_id": None})
+        )
+        retrieved = upstream.get("https://api.openai.com/v1/batches/batch_abc").mock(
+            return_value=httpx.Response(200, json=_BATCH)
+        )
+        if list_batches:
+            await router.alist_batches(model="batch-group")
+        else:
+            await router.aretrieve_batch(batch_id="batch_abc")
+    route: Final = listed if list_batches else retrieved
+    return route.calls.last.request.headers["authorization"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("list_batches", (True, False), ids=("list", "retrieve-without-model"))
+async def test_batch_list_and_retrieve_send_the_secret_an_admin_oidc_reference_points_to(
+    list_batches: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router: Final = _oidc_env_router(monkeypatch)
+
+    authorization: Final = await _batch_list_or_retrieve_authorization(router, list_batches)
+
+    assert authorization == "Bearer resolved-batch-key"
+
+
+@pytest.mark.asyncio
+async def test_wildcard_credentials_send_the_secret_an_admin_oidc_reference_points_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = _oidc_env_router(monkeypatch)
+    credentials: Final = router.registry().credentials("batch-wild/gpt-5.5", form="with_provider")
+    assert credentials is not None
+
+    with respx.mock(assert_all_called=False) as upstream:
+        retrieved = upstream.get("https://api.openai.com/v1/batches/batch_abc").mock(
+            return_value=httpx.Response(200, json=_BATCH)
+        )
+        await litellm.aretrieve_batch(batch_id="batch_abc", custom_llm_provider="openai", api_key=credentials["api_key"])
+
+    assert retrieved.calls.last.request.headers["authorization"] == "Bearer resolved-batch-key"

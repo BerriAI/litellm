@@ -7,6 +7,7 @@ import {
   type UsageMetric,
 } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { stackedUsageColor } from "@/components/shared/charts";
+import type { TFunction } from "i18next";
 import type { DailyData } from "@/components/UsagePage/types";
 import i18n from "@/i18n/i18n";
 import type { CustomerUsageAnalysisData } from "./customerUsageApi";
@@ -27,14 +28,18 @@ const UNCLASSIFIED_TOKEN_SERIES = {
   color: "#64748b",
 } as const;
 
-export const customerTokenBreakdownSeries = (days: readonly DailyData[]): Series => {
+export const customerTokenBreakdownSeries = (
+  days: readonly DailyData[],
+  t: TFunction = i18n.t,
+  language = i18n.language,
+): Series => {
   const data = days.map(({ date, metrics }) => {
     const cacheRead = metrics.cache_read_input_tokens ?? 0;
     const cacheWrite = metrics.cache_creation_input_tokens ?? 0;
     const output = metrics.completion_tokens;
     const uncachedInput = metrics.prompt_tokens - cacheRead - cacheWrite;
     const total = metrics.total_tokens;
-    const point = { date, label: formatDayLabel(date) };
+    const point = { date, label: formatDayLabel(date, language) };
     if (Math.min(cacheRead, cacheWrite, output, uncachedInput) < 0 || metrics.prompt_tokens + output !== total) {
       return { ...point, cacheRead: 0, cacheWrite: 0, uncachedInput: 0, output: 0, unclassified: total };
     }
@@ -46,7 +51,7 @@ export const customerTokenBreakdownSeries = (days: readonly DailyData[]): Series
   return {
     data,
     keys: segments.map(({ key }) => key),
-    labels: segments.map(({ label }) => i18n.t(label)),
+    labels: segments.map(({ label }) => t(label)),
     colors: segments.map(({ color }) => color),
   };
 };
@@ -68,41 +73,53 @@ const entityDays = (
   }));
 };
 
-export const customerUsageSeries = (
-  data: CustomerUsageAnalysisData,
-  dimension: CustomerUsageDimension,
-  metric: UsageMetric,
-  colorByModel: ReadonlyMap<string, string>,
-): Series => {
-  if (dimension === "models") {
-    const days = data.results.map((day) => ({
-      ...day,
-      breakdown: {
-        ...day.breakdown,
-        model_groups: customerModelBreakdown(day),
-      },
-    }));
-    return seriesBy(days, "model_groups", metric, { top: TOP_SERIES, colorByKey: colorByModel });
-  }
+export const customerUsageSeriesWith =
+  (t: TFunction, language = i18n.language) =>
+  (
+    data: CustomerUsageAnalysisData,
+    dimension: CustomerUsageDimension,
+    metric: UsageMetric,
+    colorByModel: ReadonlyMap<string, string>,
+  ): Series => {
+    const otherLabel = t("usage.overview.otherSeries");
+    if (dimension === "models") {
+      const days = data.results.map((day) => ({
+        ...day,
+        breakdown: {
+          ...day.breakdown,
+          model_groups: customerModelBreakdown(day),
+        },
+      }));
+      const seriesOptions = {
+        top: TOP_SERIES,
+        colorByKey: colorByModel,
+        otherLabel,
+        language,
+      };
+      return seriesBy(days, "model_groups", metric, seriesOptions);
+    }
 
-  const unnamedKey = i18n.t("customerPortal.analytics.unnamedKey");
-  const rows = data[dimension];
-  const labels = new Map(
-    rows
-      .filter((row) => row.id)
-      .map((row) => {
-        const label = row.label.trim();
-        return [row.id, dimension === "api_keys" && (!label || label === row.id) ? unnamedKey : label];
-      }),
-  );
-  const days = dimension === "api_keys" ? data.results : entityDays(data.results, data.teamResults, labels);
-  const breakdown = dimension === "api_keys" ? "api_keys" : "model_groups";
-  const ranking = rollUpBreakdown(days, breakdown).sort((a, b) => b.spend - a.spend || a.key.localeCompare(b.key));
-  const colors = new Map(ranking.map((row, index) => [row.key, stackedUsageColor(index)]));
-  const series = seriesBy(days, breakdown, metric, { top: TOP_SERIES, colorByKey: colors });
-  const namedCount = Math.min(TOP_SERIES, ranking.filter((row) => rankValue(row, metric) > 0).length);
-  return {
-    ...series,
-    labels: series.labels.map((id, index) => (index < namedCount ? labels.get(id) ?? unnamedKey : id)),
+    const unnamedKey = t("customerPortal.analytics.unnamedKey");
+    const rows = data[dimension];
+    const labels = new Map(
+      rows
+        .filter((row) => row.id)
+        .map((row) => {
+          const label = row.label.trim();
+          return [row.id, dimension === "api_keys" && (!label || label === row.id) ? unnamedKey : label];
+        }),
+    );
+    const days = dimension === "api_keys" ? data.results : entityDays(data.results, data.teamResults, labels);
+    const breakdown = dimension === "api_keys" ? "api_keys" : "model_groups";
+    const ranking = rollUpBreakdown(days, breakdown).sort((a, b) => b.spend - a.spend || a.key.localeCompare(b.key));
+    const colors = new Map(ranking.map((row, index) => [row.key, stackedUsageColor(index)]));
+    const seriesOptions = { top: TOP_SERIES, colorByKey: colors, otherLabel, language };
+    const series = seriesBy(days, breakdown, metric, seriesOptions);
+    const namedCount = Math.min(TOP_SERIES, ranking.filter((row) => rankValue(row, metric) > 0).length);
+    return {
+      ...series,
+      labels: series.labels.map((id, index) => (index < namedCount ? labels.get(id) ?? unnamedKey : id)),
+    };
   };
-};
+
+export const customerUsageSeries = customerUsageSeriesWith(i18n.t);

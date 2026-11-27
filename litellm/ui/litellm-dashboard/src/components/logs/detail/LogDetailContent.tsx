@@ -41,16 +41,6 @@ import {
   getGuardrailLabel,
   checkHasVectorStoreData,
 } from "./utils";
-import {
-  DRAWER_CONTENT_PADDING,
-  API_BASE_MAX_WIDTH,
-  METADATA_MAX_HEIGHT,
-  TAB_REQUEST,
-  TAB_RESPONSE,
-  FONT_SIZE_SMALL,
-  FONT_FAMILY_MONO,
-  SPACING_XLARGE,
-} from "./constants";
 import { ToolsSection } from "./sections/ToolsSection";
 import { PrettyMessagesView } from "./PrettyMessagesView";
 import { ClassifierAuditView } from "./ClassifierAuditView";
@@ -124,7 +114,7 @@ export function LogDetailContent({
   };
 
   return (
-    <div style={{ padding: `${DRAWER_CONTENT_PADDING} ${DRAWER_CONTENT_PADDING} 0` }}>
+    <div className="px-6 pt-6">
       {/* Error Alert */}
       {hasError && errorInfo && (
         <div
@@ -146,7 +136,7 @@ export function LogDetailContent({
 
       {/* Request Details */}
       <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
-        <Card size="sm" style={{ marginBottom: 0 }}>
+        <Card size="sm" className="mb-0">
           <CardHeader>
             <CardTitle>{t("logs.detail.content.requestDetails")}</CardTitle>
           </CardHeader>
@@ -166,7 +156,7 @@ export function LogDetailContent({
                 <TruncatedValue value={logEntry.model_id} />
               </DescriptionItem>
               <DescriptionItem label={t("logs.detail.content.apiBase")}>
-                <TruncatedValue value={logEntry.api_base} maxWidth={API_BASE_MAX_WIDTH} />
+                <TruncatedValue value={logEntry.api_base} maxWidth={200} />
               </DescriptionItem>
               {podRouting && typeof podRouting === "object" && (
                 <DescriptionItem label={t("logs.detail.content.pod")}>
@@ -235,9 +225,7 @@ export function LogDetailContent({
       {isLoadingDetails ? (
         <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
           <UiLoadingSpinner className="inline-block size-5" />
-          <div style={{ marginTop: 8, color: "var(--color-muted-foreground)" }}>
-            {t("logs.detail.content.loadingDetails")}
-          </div>
+          <div className="mt-2 text-muted-foreground">{t("logs.detail.content.loadingDetails")}</div>
         </div>
       ) : null}
       {!isLoadingDetails && hasClassifierAudit && (
@@ -282,7 +270,7 @@ export function LogDetailContent({
       )}
 
       {/* Bottom spacing */}
-      <div style={{ height: DRAWER_CONTENT_PADDING }} />
+      <div className="h-6" />
     </div>
   );
 }
@@ -358,9 +346,7 @@ function TagsSection({ tags }: { tags: Record<string, any> }) {
   const { t } = useTranslation();
   return (
     <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
-      <span className="font-semibold" style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
-        {t("logs.detail.content.tags")}
-      </span>
+      <span className="mb-2 block text-[16px] font-semibold">{t("logs.detail.content.tags")}</span>
       <div className="flex flex-wrap items-center gap-2">
         {Object.entries(tags).map(([key, value]) => (
           <Badge key={key} variant="outline">
@@ -391,7 +377,7 @@ function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: nu
 
   return (
     <span className="inline-flex items-center gap-2">
-      <a onClick={handleClick} style={{ cursor: "pointer" }}>
+      <a onClick={handleClick} className="cursor-pointer">
         {label}
       </a>
       {maskedCount > 0 && (
@@ -462,7 +448,7 @@ function BatchResultsSection({ logEntry, metadata }: { logEntry: LogEntry; metad
 
   return (
     <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
-      <Card size="sm" style={{ marginBottom: 0 }}>
+      <Card size="sm" className="mb-0">
         <CardHeader>
           <CardTitle>{t("logs.detail.batch.title")}</CardTitle>
         </CardHeader>
@@ -521,7 +507,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
 
   return (
     <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
-      <Card size="sm" style={{ marginBottom: 0 }}>
+      <Card size="sm" className="mb-0">
         <CardHeader>
           <CardTitle>{t("logs.detail.metrics.title")}</CardTitle>
         </CardHeader>
@@ -672,11 +658,11 @@ function RequestResponseSection({
 }: RequestResponseSectionProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
+  const [activeTab, setActiveTab] = useState<"request" | "response">("request");
   const [viewMode, setViewMode] = useState<"pretty" | "json">("pretty");
 
   const getCopyText = () => {
-    const data = activeTab === TAB_REQUEST ? getRawRequest() : getFormattedResponse();
+    const data = activeTab === "request" ? getRawRequest() : getFormattedResponse();
     return JSON.stringify(data, null, 2);
   };
 
@@ -695,20 +681,18 @@ function RequestResponseSection({
     <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapsible open={open} onOpenChange={setOpen}>
         <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as "pretty" | "json")}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+          <div className="flex w-full items-center justify-between">
             <CollapsibleTrigger className="flex flex-1 items-center gap-3 px-4 py-3 text-left">
               {open ? (
                 <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
               ) : (
                 <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
               )}
-              <h3 className="text-lg font-medium text-foreground" style={{ margin: 0 }}>
-                {t("logs.detail.requestResponse.title")}
-              </h3>
+              <h3 className="m-0 text-lg font-medium text-foreground">{t("logs.detail.requestResponse.title")}</h3>
             </CollapsibleTrigger>
             <TabsList className="mr-4">
               <TabsTrigger value="pretty">{t("logs.detail.requestResponse.pretty")}</TabsTrigger>
-              <TabsTrigger value="json">{t("logs.detail.requestResponse.json")}</TabsTrigger>
+              <TabsTrigger value="json">JSON</TabsTrigger>
             </TabsList>
           </div>
           <CollapsibleContent>
@@ -726,39 +710,29 @@ function RequestResponseSection({
                 />
               </TabsContent>
               <TabsContent value="json">
-                <Tabs
-                  value={activeTab}
-                  onValueChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
-                >
+                <Tabs value={activeTab} onValueChange={(key) => setActiveTab(key as typeof activeTab)}>
                   <div className="flex items-center justify-between">
                     <TabsList>
-                      <TabsTrigger value={TAB_REQUEST}>{t("logs.detail.requestResponse.request")}</TabsTrigger>
-                      <TabsTrigger value={TAB_RESPONSE}>{t("logs.detail.requestResponse.response")}</TabsTrigger>
+                      <TabsTrigger value="request">{t("logs.detail.requestResponse.request")}</TabsTrigger>
+                      <TabsTrigger value="response">{t("logs.detail.requestResponse.response")}</TabsTrigger>
                     </TabsList>
                     <CopyButton
                       getText={getCopyText}
                       label={t("logs.detail.requestResponse.copyJson")}
-                      disabled={activeTab === TAB_RESPONSE && !hasResponse && !hasError}
+                      disabled={activeTab === "response" && !hasResponse && !hasError}
                     />
                   </div>
-                  <TabsContent value={TAB_REQUEST}>
-                    <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                  <TabsContent value="request">
+                    <div className="py-4">
                       <JsonViewer data={getRawRequest()} mode="formatted" />
                     </div>
                   </TabsContent>
-                  <TabsContent value={TAB_RESPONSE}>
-                    <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                  <TabsContent value="response">
+                    <div className="py-4">
                       {hasResponse || hasError ? (
                         <JsonViewer data={getFormattedResponse()} mode="formatted" />
                       ) : (
-                        <div
-                          style={{
-                            textAlign: "center",
-                            padding: 20,
-                            color: "var(--color-muted-foreground)",
-                            fontStyle: "italic",
-                          }}
-                        >
+                        <div className="p-5 text-center text-muted-foreground italic">
                           {t("logs.detail.requestResponse.responseUnavailable")}
                         </div>
                       )}
@@ -774,18 +748,18 @@ function RequestResponseSection({
   );
 }
 
-const GUARDRAIL_JUMP_LINK_STYLE = {
-  passed: { className: "border border-success/20 bg-success/10 text-success", glyph: "\u2713" },
-  flagged: { className: "border border-warning/20 bg-warning/10 text-warning", glyph: "\u26A0" },
-  failed: { className: "border border-destructive/20 bg-destructive/10 text-destructive", glyph: "\u2717" },
-  not_run: { className: "border border-border bg-muted text-muted-foreground", glyph: "\u2013" },
+const GUARDRAIL_JUMP_LINK_GLYPH = {
+  passed: "\u2713",
+  flagged: "\u26A0",
+  failed: "\u2717",
+  not_run: "\u2013",
 } as const;
 
 const isPassedStatus = (status: unknown) => status === "pass" || status === "passed" || status === "success";
 const isFlaggedStatus = (status: unknown) => status === "flagged" || status === "guardrail_flagged";
 const isNotRunStatus = (status: unknown) => status === "not_run";
 
-const guardrailJumpLinkOutcome = (evaluated: unknown[]): keyof typeof GUARDRAIL_JUMP_LINK_STYLE => {
+const guardrailJumpLinkOutcome = (evaluated: unknown[]): keyof typeof GUARDRAIL_JUMP_LINK_GLYPH => {
   if (evaluated.length === 0) return "not_run";
   if (evaluated.every(isPassedStatus)) return "passed";
   if (evaluated.every((s) => isPassedStatus(s) || isFlaggedStatus(s))) return "flagged";
@@ -797,7 +771,7 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
   const statuses = guardrailEntries.map((e) => e?.guardrail_status || e?.status);
   const evaluated = statuses.filter((s) => !isNotRunStatus(s));
   const notRunCount = statuses.length - evaluated.length;
-  const { className, glyph } = GUARDRAIL_JUMP_LINK_STYLE[guardrailJumpLinkOutcome(evaluated)];
+  const outcome = guardrailJumpLinkOutcome(evaluated);
 
   const handleClick = () => {
     const el = document.getElementById("guardrail-section");
@@ -805,24 +779,21 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
   };
 
   return (
-    <div style={{ textAlign: "left", marginBottom: 12 }}>
+    <div className="mb-3 text-left">
       <div
         onClick={handleClick}
-        className={className}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "4px 12px",
-          borderRadius: 16,
-          cursor: "pointer",
-          fontSize: 13,
-          fontWeight: 500,
-        }}
+        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-[16px] border px-3 py-1 text-[13px] font-medium ${
+          {
+            passed: "border-success/20 bg-success/10 text-success",
+            flagged: "border-warning/20 bg-warning/10 text-warning",
+            failed: "border-destructive/20 bg-destructive/10 text-destructive",
+            not_run: "border-border bg-muted text-muted-foreground",
+          }[outcome]
+        }`}
       >
-        {glyph} {t("logs.detail.guardrailJumpLink.evaluated", { count: evaluated.length })}
+        {GUARDRAIL_JUMP_LINK_GLYPH[outcome]} {t("logs.detail.guardrailJumpLink.evaluated", { count: evaluated.length })}
         {notRunCount > 0 ? t("logs.detail.guardrailJumpLink.notRun", { count: notRunCount }) : ""}
-        <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
+        <span className="text-[11px] opacity-70">{"\u2193"}</span>
       </div>
     </div>
   );
@@ -845,20 +816,10 @@ function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+            <div className="mb-2 flex justify-end">
               <CopyButton getText={() => JSON.stringify(metadata, null, 2)} label={t("logs.detail.metadata.copy")} />
             </div>
-            <pre
-              style={{
-                maxHeight: METADATA_MAX_HEIGHT,
-                overflowY: "auto",
-                fontSize: FONT_SIZE_SMALL,
-                fontFamily: FONT_FAMILY_MONO,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-                margin: 0,
-              }}
-            >
+            <pre className="m-0 max-h-[300px] overflow-y-auto text-[12px] break-all whitespace-pre-wrap [font-family:monospace]">
               {JSON.stringify(metadata, null, 2)}
             </pre>
           </div>

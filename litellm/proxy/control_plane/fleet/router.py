@@ -16,15 +16,32 @@ from litellm.proxy.control_plane.dataplanes.dependencies import (
 )
 from litellm.proxy.control_plane.dataplanes.registry import Dataplane
 from litellm.proxy.control_plane.fleet.service import fetch_models, fetch_teams, group_models
+from litellm.proxy.control_plane.fleet.teams import FleetTeams
+from litellm.proxy.control_plane.store.dependencies import audited_fleet_write
 from litellm.types.proxy.control_plane.dataplanes import UnreachableDataplane
-from litellm.types.proxy.control_plane.fleet import FleetModel, FleetModelsResponse, FleetTeam, FleetTeamsResponse
+from litellm.types.proxy.control_plane.fleet import (
+    FleetModel,
+    FleetModelsResponse,
+    FleetTeam,
+    FleetTeamAdoption,
+    FleetTeamAdoptionProblem,
+    FleetTeamBudget,
+    FleetTeamsResponse,
+    FleetTeamStatus,
+    ManagedFleetTeam,
+)
 
-T: Final = TypeVar("T")
+T = TypeVar("T")
 
 router: Final = APIRouter(prefix="/fleet", tags=["fleet"])
 
 FleetRead: TypeAlias = Annotated[Principal, Security(require_scopes, scopes=[Scope.FLEET_READ.value])]
+FleetWrite: TypeAlias = Annotated[Principal, Security(audited_fleet_write, scopes=[Scope.FLEET_WRITE.value])]
 Selected: TypeAlias = Annotated[tuple[Dataplane, ...], Depends(selected_dataplanes)]
+
+
+def get_fleet_teams() -> FleetTeams:
+    raise RuntimeError("get_fleet_teams is not bound, build the app with create_app")
 
 
 def _or_503(gathered: Gathered[T]) -> Gathered[T]:
@@ -72,3 +89,39 @@ async def fleet_teams(
         await fanout.gather(dataplanes, lambda dataplane: fetch_teams(client, dataplane, caller))
     )
     return FleetTeamsResponse(items=_flatten(gathered), partial=gathered.partial, unreachable=_unreachable(gathered))
+
+
+@router.post(
+    "/teams/adopt",
+    response_model=ManagedFleetTeam,
+    response_model_exclude_unset=True,
+    responses={409: {"model": FleetTeamAdoptionProblem}},
+)
+async def adopt_team(
+    data: FleetTeamAdoption, principal: FleetWrite, service: Annotated[FleetTeams, Depends(get_fleet_teams)]
+) -> ManagedFleetTeam:
+    """Link existing teams by exact alias. Supply fleet_team_id to refresh URLs for existing links only."""
+    return await service.adopt(data, principal)
+
+
+@router.put("/teams/{fleet_team_id}", response_model=ManagedFleetTeam, response_model_exclude_unset=True)
+async def put_team(
+    fleet_team_id: str,
+    data: FleetTeamBudget,
+    principal: FleetWrite,
+    service: Annotated[FleetTeams, Depends(get_fleet_teams)],
+) -> ManagedFleetTeam:
+    """Replace the managed budget fields. Omit a field to leave it unmanaged, or use null to clear it.
+
+    Reconciliation reads before writing. If a worker crashes after a regional commit but before saving
+    progress, a retry skips matching values. A local edit in that interval can be overwritten by the retry.
+    """
+    return await service.put(fleet_team_id, data, principal)
+
+
+@router.get("/teams/{fleet_team_id}/status", response_model=FleetTeamStatus, response_model_exclude_unset=True)
+async def team_status(
+    fleet_team_id: str, principal: FleetRead, service: Annotated[FleetTeams, Depends(get_fleet_teams)]
+) -> FleetTeamStatus:
+    """Compare applied budgets with current regional settings. Drift is reported, not overwritten."""
+    return await service.status(fleet_team_id, principal)

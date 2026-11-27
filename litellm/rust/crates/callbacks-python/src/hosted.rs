@@ -129,6 +129,18 @@ where
     )
 }
 
+/// `run_hosted` for one hook run a host starts itself: the verdict is the execution's return
+/// value, as it is for `RustCallback.start`.
+pub fn run_hosted_hook<F>(run: impl FnOnce(Host) -> F, host: Py<PyAny>) -> Execution
+where
+    F: Future<Output = HookOutput> + Send + 'static,
+{
+    run_hosted(run, host, |py, handled: HookOutput| match handled {
+        Ok(verdict) => verdict_object(py, verdict),
+        Err(error) => Err(callback_error(error)),
+    })
+}
+
 /// The execution behind `RustCallback.start`: the callback's hosted handler, its verdict returned.
 pub(crate) fn callback_execution(
     callback: Arc<dyn ErasedCallback>,

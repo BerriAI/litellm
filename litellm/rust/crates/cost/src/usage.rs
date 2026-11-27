@@ -53,6 +53,8 @@ pub enum DurationMeter {
     WallClock,
     /// Length of the input audio, a transcription file or a realtime transcription
     InputAudio,
+    /// Length of the input video
+    InputVideo,
     /// Realtime voice session time
     LiveVoice,
     /// Length of generated video, already multiplied by the video count. `resolution` picks `output_cost_per_second_<resolution>`

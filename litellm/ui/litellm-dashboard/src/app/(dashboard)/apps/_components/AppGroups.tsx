@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useQueryStates } from "nuqs";
 import { useTranslation } from "react-i18next";
-import { Page } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -20,7 +19,7 @@ export default function AppGroups() {
   const { accessToken, userRole, isViewOnly, isLoading } = useAuthorized();
   if (isLoading) return <p role="status">{t("apps.loading")}</p>;
   if (!accessToken || !readsEveryApp(userRole, isViewOnly))
-    return <AdminOnlyNotice pageTitle={t("apps.groups.title")} />;
+    return <AdminOnlyNotice framed pageTitle={t("apps.groups.title")} />;
   return <ManagedAppGroups />;
 }
 
@@ -43,7 +42,7 @@ function ManagedAppGroups() {
       </>
     );
   return (
-    <Page>
+    <>
       <PageHeader>
         <PageHeaderTitle>{t("apps.groups.title")}</PageHeaderTitle>
         <PageHeaderDescription>{t("apps.groups.hint")}</PageHeaderDescription>
@@ -66,6 +65,6 @@ function ManagedAppGroups() {
         />
       )}
       {editing && <AppGroupBudgetDialog target={editing} onClose={() => setEditing(null)} />}
-    </Page>
+    </>
   );
 }

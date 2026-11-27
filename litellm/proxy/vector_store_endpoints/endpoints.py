@@ -25,6 +25,7 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import read_raw_json_body
+from litellm.proxy.common_utils.registry_read_through import register_created_vector_store_index
 from litellm.proxy.route_llm_request import JSON_OBJECT_ADAPTER
 from litellm.proxy.utils import jsonify_object
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -138,12 +139,12 @@ def build_request_data_from_managed_vector_store(
 
 
 async def _update_request_data_with_litellm_managed_vector_store_registry(
-    data: dict,
+    data: dict[str, object] | dict[str, str],
     vector_store_id: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
     *,
     include_search_defaults: bool = True,
-) -> dict:
+) -> dict[str, object] | dict[str, str]:
     """
     Update the request data with the litellm managed vector store registry.
 
@@ -490,7 +491,7 @@ async def vector_store_list(
         version,
     )
 
-    data: Final[dict] = {}
+    data: Final[dict[str, object]] = {}
     if after is not None:
         data["after"] = after
     if before is not None:
@@ -721,6 +722,7 @@ async def index_create(
             "dict[str, object]", jsonify_object(index_data)
         )
     )
+    register_created_vector_store_index(new_index)
 
     return new_index.model_dump()
 

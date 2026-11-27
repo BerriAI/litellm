@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use litellm_python_compat::Value;
-use litellm_redis_store::auth_cache::{AuthCache, AuthObject, Settings};
+use litellm_redis_store::auth_cache::{AuthCache, AuthObject, Settings, TeamRoster};
 use pyo3::prelude::*;
 
 use super::{
@@ -14,6 +14,17 @@ use crate::redis::client::NativeRedisClient;
 
 fn values(values: Vec<Option<Value>>) -> Vec<Option<PyValue>> {
     values.into_iter().map(|value| value.map(PyValue)).collect()
+}
+
+/// A request's reference to the indexed roster of the cached team it read.
+#[pyclass(frozen, name = "NativeTeamRoster")]
+pub(crate) struct NativeTeamRoster(TeamRoster);
+
+#[pymethods]
+impl NativeTeamRoster {
+    fn member(&self, py: Python<'_>, user_id: &str) -> Option<PyValue> {
+        py.detach(|| self.0.member(user_id)).map(PyValue)
+    }
 }
 
 /// One object the auth cache holds; `key` is the wire key `main` writes for it.
@@ -483,6 +494,68 @@ impl NativeAuthCache {
 
     fn get_local(&self, key: PyRef<'_, PyAuthObject>) -> PyResult<Option<PyValue>> {
         Ok(self.0.get_local(&key.0).map_err(kind_error)?.map(PyValue))
+    }
+
+    fn team_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        key: PyAuthObject,
+        request: Option<&NativeRequestRedis>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = self.0.clone();
+        let request = request.map(|request| request.0.clone());
+        redis_async(py, "async_get_cache", kind_error, async move {
+            Ok(store
+                .team_snapshot(request.as_ref(), &key.0)
+                .await?
+                .map(|(value, roster)| (PyValue(value), roster.map(NativeTeamRoster))))
+        })
+    }
+
+    #[pyo3(signature = (key, fields, user_id, request))]
+    fn team_fields<'py>(
+        &self,
+        py: Python<'py>,
+        key: PyAuthObject,
+        fields: Option<Vec<String>>,
+        user_id: Option<String>,
+        request: Option<&NativeRequestRedis>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = self.0.clone();
+        let request = request.map(|request| request.0.clone());
+        redis_async(py, "async_get_cache", kind_error, async move {
+            Ok(store
+                .team_fields(
+                    request.as_ref(),
+                    &key.0,
+                    fields.as_deref(),
+                    user_id.as_deref(),
+                )
+                .await?
+                .map(PyValue))
+        })
+    }
+
+    #[pyo3(signature = (key, fields, user_id))]
+    fn local_team_fields(
+        &self,
+        py: Python<'_>,
+        key: PyAuthObject,
+        fields: Option<Vec<String>>,
+        user_id: Option<String>,
+    ) -> PyResult<Option<PyValue>> {
+        py.detach(|| {
+            self.0
+                .local_team_fields(&key.0, fields.as_deref(), user_id.as_deref())
+        })
+        .map_err(kind_error)
+        .map(|row| row.map(PyValue))
+    }
+
+    fn add_local_team_spend(&self, key: PyRef<'_, PyAuthObject>, delta: f64) -> PyResult<bool> {
+        self.0
+            .add_local_team_spend(&key.0, delta)
+            .map_err(kind_error)
     }
 
     fn get_local_by_key(&self, key: &str) -> PyResult<Option<PyValue>> {

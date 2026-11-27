@@ -1297,7 +1297,7 @@ class _ClassifierCircuitBreaker:
         self._clock = clock
         self._state = self.CLOSED
         self._opened_at: float | None = None
-        self._generation = 0
+        self._generation: int = 0
         self._lock = Lock()
 
     def acquire_permit(self) -> int | None:
@@ -3134,7 +3134,7 @@ class ComplexityRouter(CustomLogger):
     ) -> Mapping[str, object]:
         entries: Final = self.config.tier_model_configs.get(_tier_name(tier), ()) if tier is not None else ()
         entry: Final = next((candidate for candidate in entries if candidate.model_name == model), None)
-        explicit: Final = entry.litellm_params if entry is not None else MappingProxyType({})
+        explicit: Final[Mapping[str, object]] = entry.litellm_params if entry is not None else MappingProxyType({})
         if not self.config.max_tokens_from_tier_model or not OUTPUT_TOKEN_CEILING_PARAMS.isdisjoint(explicit):
             return explicit
         ceiling: Final = self._group_output_ceiling(model)
@@ -3206,8 +3206,8 @@ class ComplexityRouter(CustomLogger):
         self,
         tier: ComplexityTier | str,
         raw_messages: list[dict[str, object]] | None,
-        resolved_messages: list[dict[str, object]] | None,
-        request_kwargs: dict,
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: dict[str, object],
         allowed_models: tuple[str, ...] | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> str:
@@ -4317,7 +4317,9 @@ class ComplexityRouter(CustomLogger):
                 routelayer = await asyncio.to_thread(self._get_or_create_semantic_routelayer)
             return routelayer
 
-    async def _semantic_tier_override(self, user_message: str, request_kwargs: dict) -> ComplexityTier | str | None:
+    async def _semantic_tier_override(
+        self, user_message: str, request_kwargs: dict[str, object]
+    ) -> ComplexityTier | str | None:
         """Match the prompt against keyword_tier_rules by embedding similarity.
 
         Embeds the query ourselves (instead of letting SemanticRouter.acall embed it
@@ -4367,7 +4369,9 @@ class ComplexityRouter(CustomLogger):
             return None
         return self.config.resolve_classified_tier(route_choice.name)
 
-    async def _resolve_keyword_tier_override(self, user_message: str, request_kwargs: dict) -> KeywordOverride | None:
+    async def _resolve_keyword_tier_override(
+        self, user_message: str, request_kwargs: dict[str, object]
+    ) -> KeywordOverride | None:
         """Resolve a keyword_tier_rule override, semantically or lexically per config.
 
         Returns None (no override -> fall through to the scorer) not only when no rule
@@ -4398,7 +4402,7 @@ class ComplexityRouter(CustomLogger):
     def _resolve_messages(
         self,
         messages: list[dict[str, object]] | None,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
     ) -> list[dict[str, object]] | None:
         """
         Resolve messages from the request, converting from other formats if needed.
@@ -4519,7 +4523,7 @@ class ComplexityRouter(CustomLogger):
         return self._get_session_id_from_request_kwargs(request_kwargs)
 
     @staticmethod
-    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict[str, object]) -> str | None:
         """Resolve the proxy-derived API key hash, the same trust boundary
         DeploymentAffinityCheck uses for its own key-based affinity (not the
         client-supplied OpenAI `user` param, which isn't authenticated)."""
@@ -4529,7 +4533,7 @@ class ComplexityRouter(CustomLogger):
                 return str(user_key)
         return None
 
-    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> TierSessionPin:
+    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict[str, object]) -> TierSessionPin:
         return TierSessionPin(
             router=self.model_name,
             caller=(
@@ -4580,7 +4584,7 @@ class ComplexityRouter(CustomLogger):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
@@ -4912,7 +4916,7 @@ class ComplexityRouter(CustomLogger):
         model: str,
         request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
         conversation_continuing: bool = True,
         resolved_messages: Sequence[Mapping[str, object]] | None = None,

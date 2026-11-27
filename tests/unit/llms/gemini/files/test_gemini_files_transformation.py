@@ -362,6 +362,7 @@ class TestGoogleAIStudioFilesTransformation:
         "batch-la6",
         "files/batch-la6",
         "https://generativelanguage.googleapis.com/v1beta/files/batch-la6",
+        "https://generativelanguage.googleapis.com/v1/files/batch-la6",
         "https://example.invalid/batch-la6",
         "http://example.invalid/batch-la6?alt=media#download",
     ],

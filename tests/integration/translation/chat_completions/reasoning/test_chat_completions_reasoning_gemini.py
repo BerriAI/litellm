@@ -671,6 +671,7 @@ VERTEX_GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE: Final = replace(
     ),
     mock_provider_response=VERTEX_GEMINI_3_8_FLASH_THOUGHTS_OFF_RESPONSE,
     expected_litellm_response={
+        "service_tier": "default",
         **gemini_chat_response(
             content=(
                 "To understand how zero, negative, and non-integer quantities are handled during checkout validation, "

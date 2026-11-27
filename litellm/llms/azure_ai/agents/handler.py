@@ -22,7 +22,7 @@ import asyncio
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict
 
 import httpx
@@ -126,28 +126,28 @@ class AzureAIAgentsHandler:
     # Azure Foundry Agents API uses /assistants, /threads, etc. directly
     # See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
     # -------------------------------------------------------------------------
-    def _build_thread_url(self, api_base: str, api_version: str) -> str:
+    def _build_thread_url(self, api_base: str, api_version: object) -> str:
         return f"{join_api_base(api_base, 'threads')}?api-version={api_version}"
 
-    def _build_messages_url(self, api_base: str, thread_id: object, api_version: str) -> str:
+    def _build_messages_url(self, api_base: str, thread_id: object, api_version: object) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
         return f"{join_api_base(api_base, f'threads/{encoded_thread_id}/messages')}?api-version={api_version}"
 
-    def _build_runs_url(self, api_base: str, thread_id: object, api_version: str) -> str:
+    def _build_runs_url(self, api_base: str, thread_id: object, api_version: object) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
         return f"{join_api_base(api_base, f'threads/{encoded_thread_id}/runs')}?api-version={api_version}"
 
-    def _build_run_status_url(self, api_base: str, thread_id: object, run_id: object, api_version: str) -> str:
+    def _build_run_status_url(self, api_base: str, thread_id: object, run_id: object, api_version: object) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
         encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
         run_status_route: Final = f"threads/{encoded_thread_id}/runs/{encoded_run_id}"
         return f"{join_api_base(api_base, run_status_route)}?api-version={api_version}"
 
-    def _build_list_messages_url(self, api_base: str, thread_id: object, api_version: str) -> str:
+    def _build_list_messages_url(self, api_base: str, thread_id: object, api_version: object) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
         return f"{join_api_base(api_base, f'threads/{encoded_thread_id}/messages')}?api-version={api_version}"
 
-    def _build_create_thread_and_run_url(self, api_base: str, api_version: str) -> str:
+    def _build_create_thread_and_run_url(self, api_base: str, api_version: object) -> str:
         """URL for the create-thread-and-run endpoint (supports streaming)."""
         return f"{join_api_base(api_base, 'threads/runs')}?api-version={api_version}"
 
@@ -214,7 +214,7 @@ class AzureAIAgentsHandler:
         content: str,
         model_response: ModelResponse,
         thread_id: object,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         annotations: list[_TransformedAnnotation] | None = None,
     ) -> ModelResponse:
         """Build the ModelResponse from agent output."""
@@ -257,9 +257,9 @@ class AzureAIAgentsHandler:
         model: str,
         api_base: str,
         api_key: str,
-        optional_params: dict,
-        headers: dict | None,
-    ) -> tuple[dict[str, str], str, str, str | None, str]:
+        optional_params: dict[str, object],
+        headers: dict[str, object] | None,  # mutable-ok: dict-typed callees take it
+    ) -> tuple[dict[str, object], object, str, object, str]:  # mutable-ok: dict-typed callees take it
         """Prepare common parameters for completion.
 
         Azure Foundry Agents API uses Bearer token authentication:
@@ -297,16 +297,16 @@ class AzureAIAgentsHandler:
     def completion(
         self,
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         client: HTTPHandler | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> ModelResponse:
         """Execute synchronous completion using Azure Agent Service."""
         from litellm.llms.custom_httpx.http_handler import get_httpx_client
@@ -348,11 +348,11 @@ class AzureAIAgentsHandler:
         self,
         make_request: _SyncAgentRequest,
         api_base: str,
-        api_version: str,
+        api_version: object,
         agent_id: str,
         thread_id: object,
-        messages: list[dict[str, object]],
-        optional_params: dict,
+        messages: Sequence[Mapping[str, object]],
+        optional_params: dict[str, object],
     ) -> tuple[object, str, list[_TransformedAnnotation] | None]:
         """Execute the agent flow synchronously. Returns (thread_id, content, annotations)."""
 
@@ -375,7 +375,7 @@ class AzureAIAgentsHandler:
                 self._check_response(response, [200, 201], "Failed to add message")
 
         # Step 3: Create run
-        run_payload: Final = {"assistant_id": agent_id}
+        run_payload: Final[dict[str, object]] = {"assistant_id": agent_id}
         if "instructions" in optional_params:
             run_payload["instructions"] = optional_params["instructions"]
 
@@ -419,16 +419,16 @@ class AzureAIAgentsHandler:
     async def acompletion(
         self,
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         client: AsyncHTTPHandler | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> ModelResponse:
         """Execute asynchronous completion using Azure Agent Service."""
         import litellm
@@ -474,11 +474,11 @@ class AzureAIAgentsHandler:
         self,
         make_request: _AsyncAgentRequest,
         api_base: str,
-        api_version: str,
+        api_version: object,
         agent_id: str,
         thread_id: object,
-        messages: list[dict[str, object]],
-        optional_params: dict,
+        messages: Sequence[Mapping[str, object]],
+        optional_params: dict[str, object],
     ) -> tuple[object, str, list[_TransformedAnnotation] | None]:
         """Execute the agent flow asynchronously. Returns (thread_id, content, annotations)."""
 
@@ -501,7 +501,7 @@ class AzureAIAgentsHandler:
                 self._check_response(response, [200, 201], "Failed to add message")
 
         # Step 3: Create run
-        run_payload: Final = {"assistant_id": agent_id}
+        run_payload: Final[dict[str, object]] = {"assistant_id": agent_id}
         if "instructions" in optional_params:
             run_payload["instructions"] = optional_params["instructions"]
 
@@ -545,14 +545,14 @@ class AzureAIAgentsHandler:
     async def acompletion_stream(
         self,
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> AsyncIterator[ModelResponseStream]:
         """Execute async streaming completion using Azure Agent Service with native SSE."""
         import litellm

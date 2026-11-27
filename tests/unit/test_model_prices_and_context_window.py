@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterator, Mapping
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -11,8 +12,11 @@ import pytest
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
+from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.types.utils import CompletionTokensDetailsWrapper, PromptTokensDetailsWrapper, SearchFreeRequests, Usage
@@ -1251,8 +1255,25 @@ def test_drex_max_metadata_supports_decisions_and_input_billing(local_model_cost
     assert litellm.supports_vision("nace/drex-max-v1.1") is True
 
 
+@pytest.mark.parametrize("effort", ("low", "medium", "high"))
+def test_nace_parse_bills_each_processed_page_at_its_effort_row_price(local_model_cost_map: None, effort: str) -> None:
+    model: Final = f"nace/parse-{effort}"
+    row: Final = litellm.model_cost[model]
+    assert (row["litellm_provider"], row["mode"], row["supported_endpoints"]) == ("nace", "ocr", ["/v1/ocr"])
+    response: Final = OCRResponse(
+        pages=[OCRPage(index=0, markdown="page")],
+        model=f"parse-{effort}",
+        usage_info=OCRUsageInfo(pages_processed=3),
+    )
+    cost: Final = completion_cost(
+        completion_response=response, model=model, custom_llm_provider="nace", call_type="ocr"
+    )
+    assert cost == pytest.approx(3 * row["ocr_cost_per_page"])
+    assert cost > 0
+
+
 def test_nace_backup_rows_match_the_main_catalog() -> None:
-    assert {"nace/drex-max", "nace/drex-max-v1.1"} <= _nace_rows(PRICES_PATH).keys()
+    assert {"nace/drex-max", "nace/drex-max-v1.1", "nace/parse-low"} <= _nace_rows(PRICES_PATH).keys()
     assert _nace_rows(BACKUP_PRICES_PATH) == _nace_rows(PRICES_PATH)
 
 
@@ -1344,3 +1365,71 @@ def test_deepinfra_new_catalog_models_resolve_pricing_and_capabilities(
     assert litellm.supports_video_input(model=model) is supports_video_input
     assert litellm.supports_audio_input(model=model) is supports_audio_input
     assert "reasoning_effort" in DeepInfraConfig().get_supported_openai_params(model=model)
+
+
+# Probed against Bedrock Converse in us-east-1 on 2026-11-19: each id takes toolChoice auto, any, and a named tool
+BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS: Final = (
+    "mistral.mistral-large-3-675b-instruct",
+    "mistral.ministral-3-14b-instruct",
+    "mistral.ministral-3-8b-instruct",
+    "mistral.ministral-3-3b-instruct",
+)
+WEATHER_TOOL: Final = MappingProxyType(
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        },
+    }
+)
+
+
+@pytest.mark.parametrize("route", ("", "converse/"))
+@pytest.mark.parametrize("model", BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS)
+@pytest.mark.parametrize(
+    ("tool_choice", "converse_tool_choice"),
+    (
+        ("auto", {"auto": {}}),
+        ("required", {"any": {}}),
+        ({"type": "function", "function": {"name": "get_weather"}}, {"tool": {"name": "get_weather"}}),
+    ),
+)
+def test_bedrock_converse_mistral_rows_send_tool_choice_to_bedrock(
+    local_model_cost_map: None,
+    route: str,
+    model: str,
+    tool_choice: str | dict[str, JsonValue],
+    converse_tool_choice: dict[str, JsonValue],
+) -> None:
+    optional_params: Final = litellm.get_optional_params(
+        model=f"{route}{model}", custom_llm_provider="bedrock", tools=[dict(WEATHER_TOOL)], tool_choice=tool_choice
+    )
+
+    assert optional_params["tool_choice"] == converse_tool_choice
+
+
+def _region_pinned_bedrock_converse_rows(prices: CostMap) -> Iterator[tuple[str, str]]:
+    return (
+        (key, base)
+        for key, row in prices.items()
+        if key.startswith("bedrock/")
+        and row.get("litellm_provider") == "bedrock_converse"
+        and (base := BedrockModelInfo.get_base_model(key)) in prices
+    )
+
+
+def _capabilities_missing_from_one_side(prices: CostMap, key: str, base: str) -> Iterator[str]:
+    capabilities: Final = sorted({name for name in (*prices[key], *prices[base]) if name.startswith("supports_")})
+    return (
+        f"{key} {name}={prices[key].get(name)} but {base} {name}={prices[base].get(name)}"
+        for name in capabilities
+        if bool(prices[key].get(name)) != bool(prices[base].get(name))
+    )
+
+
+def test_region_pinned_bedrock_converse_rows_carry_their_base_rows_capabilities(prices: CostMap) -> None:
+    rows: Final = tuple(_region_pinned_bedrock_converse_rows(prices))
+    assert {base for _, base in rows} >= set(BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS)
+
+    assert list(chain.from_iterable(_capabilities_missing_from_one_side(prices, key, base) for key, base in rows)) == []

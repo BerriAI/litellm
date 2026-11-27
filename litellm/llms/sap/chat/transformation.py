@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orches
 """
 
 import types
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
@@ -14,6 +14,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -63,7 +64,7 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
 
 def validate_dict(
     data: Mapping[str, object], model: type[BaseModel]
-) -> dict:  # mutable-ok: pydantic validation boundary; both input and output are untyped wire dicts
+) -> dict[str, object]:  # mutable-ok: pydantic validation boundary; both input and output are untyped wire dicts
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
@@ -106,8 +107,8 @@ def _message_role_mapping(role: str) -> type[ChatMessage]:
     }.get(role, SAPMessage)
 
 
-def _messages_to_sap_template(messages: list[AllMessageValues]) -> list:
-    template: Final = []
+def _messages_to_sap_template(messages: list[AllMessageValues]) -> list[dict[str, object]]:
+    template: Final[list[dict[str, object]]] = []
     for message in messages:
         folded_message = _fold_message_cache_control(message_with_file_parts_as_image_urls(message))
         message_role_class = _message_role_mapping(str(folded_message["role"]))
@@ -135,18 +136,18 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
-        tools: list | None = None,
-        tool_choice: str | dict | None = None,
+        response_format: Mapping[str, object] | None = None,
+        tools: Sequence[object] | None = None,
+        tool_choice: str | Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
@@ -155,6 +156,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self.token_creator = None
         self._base_url = None
         self._resource_group = None
+        self._request_authorization: str | None = None
 
     def run_env_setup(self, service_key: str | None = None) -> None:
         try:
@@ -186,33 +188,52 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup()
         return self._resource_group
 
+    def _invalidate_rejected_token(self, authorization: str | None) -> None:
+        if self.token_creator is not None and authorization is not None:
+            self.token_creator.invalidate(authorization)
+
+    def _get_with_current_token(self, path: str) -> httpx.Response:
+        request_headers: Final = self.headers
+        response: Final = litellm.module_level_client.get(join_api_base(self.base_url, path), headers=request_headers)
+        if response.status_code == 401:
+            self._invalidate_rejected_token(request_headers["Authorization"])
+        return response
+
+    def _get_from_ai_core(self, path: str) -> httpx.Response:
+        first_try: Final = self._get_with_current_token(path)
+        response: Final = self._get_with_current_token(path) if first_try.status_code == 401 else first_try
+        if response.status_code == 401:
+            raise GenAIHubOrchestrationError(status_code=401, message=response.text)
+        return response
+
+    def _is_orchestration_configuration(self, configuration_id: str) -> bool:
+        configuration: Final = _DECODED_JSON.validate_python(
+            self._get_from_ai_core(f"lm/configurations/{configuration_id}").json()
+        )
+        return require_get(configuration).get("executableId") == "orchestration"
+
     @cached_property
     def deployment_url(self) -> str:
-        # Keep a short, tight client lifecycle here to avoid fd leaks
-        client: Final = litellm.module_level_client
-        # with httpx.Client(timeout=30) as client:
-        deployments: Final[AICoreDeploymentList] = client.get(
-            join_api_base(self.base_url, "lm/deployments"), headers=self.headers
-        ).json()
-        valid: Final[list[tuple[str, str]]] = []
-        for dep in deployments.get("resources", []):
-            if dep.get("scenarioId") == "orchestration":
-                cfg = _DECODED_JSON.validate_python(
-                    client.get(
-                        join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
-                        headers=self.headers,
-                    ).json()
-                )
-                if require_get(cfg).get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
-            # newest first
-        return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+        deployments: Final[AICoreDeploymentList] = self._get_from_ai_core("lm/deployments").json()
+        orchestration_deployments: Final = tuple(
+            (dep["deploymentUrl"], dep["createdAt"])
+            for dep in deployments.get("resources", [])
+            if dep.get("scenarioId") == "orchestration" and self._is_orchestration_configuration(dep["configurationId"])
+        )
+        return sorted(orchestration_deployments, key=lambda x: x[1], reverse=True)[0][0]
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> BaseLLMException:
+        if status_code == 401:
+            self._invalidate_rejected_token(self._request_authorization)
+        return super().get_error_class(error_message, status_code, headers)
 
     @classmethod
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model):
+    def get_supported_openai_params(self, model: str):
         params: Final = [
             "frequency_penalty",
             "logit_bias",
@@ -252,25 +273,40 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key:
             self.run_env_setup(api_key)
         return self.headers
+
+    def sign_request(
+        self,
+        headers: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict[str, object], bytes | None]:  # mutable-ok: BaseConfig.sign_request returns a dict
+        authorization: Final = self.headers["Authorization"]
+        self._request_authorization = authorization
+        return {**headers, "Authorization": authorization}, None
 
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ):
         api_base_: Final = join_api_base(self.deployment_url, "v2/completion")
@@ -279,9 +315,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def _build_prompt_module(
         self,
         model_name: str,
-        template_messages: list[dict[str, str]],
+        template_messages: Sequence[object],
         params: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
         # LangChain agents pass strict=true at top level, which fails for GPT models
         # Anthropic models accept strict, so preserve it for them
@@ -308,7 +344,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         placeholder_defaults = params.pop("placeholder_defaults", {})
         placeholder_defaults = {"defaults": placeholder_defaults} if placeholder_defaults else {}
 
-        optional_modules: Final = {}
+        optional_modules: Final[dict[str, object]] = {}
         optional_modules_lst: Final = ["grounding", "masking", "filtering", "translation"]
         for module in optional_modules_lst:
             if params.get(module, None) is not None:
@@ -336,9 +372,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
 
@@ -348,7 +384,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         fallback_modules: Final = optional_params.pop("fallback_sap_modules", [])
 
         optional_params.pop("stream", None)
-        stream_config: Final[dict] = {}
+        stream_config: Final[dict[str, object]] = {}
         if "stream_options" in optional_params:
             stream_options: Final = optional_params.pop("stream_options", {})
             if "chunk_size" in stream_options:
@@ -402,10 +438,10 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -417,7 +453,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
         response = ModelResponse.model_validate(
-            normalize_reasoning_blocks(raw_response.json()["final_result"], "message")
+            normalize_reasoning_blocks(_DECODED_JSON.validate_python(raw_response.json()["final_result"]), "message")
         )
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models

@@ -1,0 +1,20 @@
+# A variable the config's environment_variables exports reaches Python's readers as a process
+# variable would, so one the native app does not honor sends every request to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+  environment_variables:
+    LITELLM_LENS_URL: https://lens.example
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: LITELLM_LENS_URL

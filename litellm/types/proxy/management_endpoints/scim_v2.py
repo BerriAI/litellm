@@ -1,4 +1,5 @@
-from typing import Final, Literal, Optional, TypeAlias, Union
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Final, Literal, Optional, TypeAlias, Union
 
 from fastapi import HTTPException
 from pydantic import (
@@ -11,10 +12,33 @@ from pydantic import (
     model_validator,
 )
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.user_requests import NewUserRequest
+
+if TYPE_CHECKING:
+    from pydantic.main import IncEx
+
+
+class _ModelDumpOptions(TypedDict, total=False):
+    """Keyword arguments of ``pydantic.BaseModel.model_dump``."""
+
+    mode: ReadOnly[str]
+    include: ReadOnly["IncEx | None"]
+    exclude: ReadOnly["IncEx | None"]
+    context: ReadOnly[object]
+    by_alias: ReadOnly[bool | None]
+    exclude_unset: ReadOnly[bool]
+    exclude_defaults: ReadOnly[bool]
+    exclude_none: ReadOnly[bool]
+    exclude_computed_fields: ReadOnly[bool]
+    round_trip: ReadOnly[bool]
+    warnings: ReadOnly[bool | Literal["none", "warn", "error"]]
+    fallback: ReadOnly[Callable[[object], object] | None]
+    serialize_as_any: ReadOnly[bool]
+    polymorphic_serialization: ReadOnly[bool | None]
+
 
 SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 SCIM_ENTERPRISE_METADATA_KEY: Final = "scim_enterprise"
@@ -209,7 +233,7 @@ class SCIMPatchOperation(LiteLLMBaseModel):
 
     @field_validator("op", mode="before")
     @classmethod
-    def normalize_op(cls, v):
+    def normalize_op(cls, v: object) -> object:
         if isinstance(v, str):
             v_lower: Final = v.lower()
             if v_lower not in {"add", "remove", "replace"}:
@@ -250,7 +274,7 @@ class SCIMSchemaExtension(LiteLLMBaseModel):
     schema_: str  # aliased to "schema" in serialization
     required: bool
 
-    def model_dump(self, **kwargs):
+    def model_dump(self, **kwargs: Unpack[_ModelDumpOptions]):
         d: Final = super().model_dump(**kwargs)
         d["schema"] = d.pop("schema_")
         return d
@@ -269,7 +293,7 @@ class SCIMResourceType(LiteLLMBaseModel):
     schemaExtensions: list[SCIMSchemaExtension] | None = None
     meta: dict[str, object] | None = None
 
-    def model_dump(self, **kwargs):
+    def model_dump(self, **kwargs: Unpack[_ModelDumpOptions]):
         d: Final = super().model_dump(**kwargs)
         d["schema"] = d.pop("schema_")
         if d.get("schemaExtensions") is None:
@@ -289,7 +313,7 @@ class SCIMSchemaAttribute(LiteLLMBaseModel):
     uniqueness: str = "none"
     subAttributes: list["SCIMSchemaAttribute"] | None = None
 
-    def model_dump(self, **kwargs):
+    def model_dump(self, **kwargs: Unpack[_ModelDumpOptions]):
         d: Final = super().model_dump(**kwargs)
         if d.get("subAttributes") is None:
             d.pop("subAttributes", None)

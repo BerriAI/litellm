@@ -1351,6 +1351,45 @@ async def test_alias_and_target_published_together_are_probed_once_and_saved_und
 
 
 @pytest.mark.asyncio
+async def test_a_wildcard_child_probe_sends_the_secret_behind_the_wildcard_api_key_reference(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("WILDCARD_HEALTH_KEY", "resolved-wildcard-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "oidc/env/WILDCARD_HEALTH_KEY",
+                    "api_base": "https://wildcard-health.example/v1",
+                },
+                "model_info": {"id": "wildcard"},
+            }
+        ]
+    )
+    children: Final = list(public_wildcard_children(["openai/gpt-5.5"], router, None))
+    payload: Final = {
+        "id": "chatcmpl-wildcard-health",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5.5",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock:
+        route: Final = respx.post("https://wildcard-health.example/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        healthy, unhealthy, _ = _CHECK_RESULT_ADAPTER.validate_python(await perform_health_check(children))
+
+    assert (len(healthy), len(unhealthy)) == (1, 0)
+    assert [call.request.headers["authorization"] for call in route.calls] == ["Bearer resolved-wildcard-key"]
+
+
+@pytest.mark.asyncio
 async def test_a_newly_published_alias_is_saved_although_its_target_has_a_fresh_row_under_the_same_id():
     router: Final = litellm.Router(
         model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "wc"}}],

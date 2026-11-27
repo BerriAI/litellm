@@ -10,7 +10,7 @@ This is an __init__.py file to allow the following interface
 
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 
 from litellm.messages import (
     anthropic_messages as _async_anthropic_messages,
@@ -25,21 +25,21 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 
 async def acreate(
     max_tokens: int,
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     model: str,
-    metadata: dict | None = None,
+    metadata: Mapping[str, object] | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | None = None,
     temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
-    tools: list[dict] | None = None,
+    thinking: Mapping[str, object] | None = None,
+    tool_choice: Mapping[str, object] | None = None,
+    tools: Sequence[Mapping[str, object]] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
-    container: dict | None = None,
-    **kwargs,
-) -> AnthropicMessagesResponse | AsyncIterator:
+    container: Mapping[str, object] | None = None,
+    **kwargs: object,
+) -> AnthropicMessagesResponse | AsyncIterator[object]:
     """
     Async wrapper for Anthropic's messages API
 
@@ -84,20 +84,20 @@ async def acreate(
 
 def create(
     max_tokens: int,
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     model: str,
-    metadata: dict | None = None,
+    metadata: Mapping[str, object] | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | None = None,
     temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
-    tools: list[dict] | None = None,
+    thinking: Mapping[str, object] | None = None,
+    tool_choice: Mapping[str, object] | None = None,
+    tools: Sequence[Mapping[str, object]] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
-    container: dict | None = None,
-    **kwargs,
+    container: Mapping[str, object] | None = None,
+    **kwargs: object,
 ) -> (
     AnthropicMessagesResponse
     | Iterator[bytes]

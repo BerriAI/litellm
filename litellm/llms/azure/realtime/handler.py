@@ -219,7 +219,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         realtime_protocol: str | None = None,
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: object | None = None,
-        litellm_metadata: dict | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
         realtime_mode: str = "realtime",
         bridges_beta_client_to_ga: bool = False,
         drop_params: bool = False,

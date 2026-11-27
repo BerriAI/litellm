@@ -69,6 +69,10 @@ FAKES = {
     'record_response': lambda logger, status, headers, body, streamed, sent: logger.model_call_details.update(
         response_headers=dict(headers)
     ),
+    'record_route_cost': lambda logger, receipt, service_tier, data_residency, vertex_location: logger.record(
+        'record_route_cost',
+        None if receipt is None else (receipt.total, receipt.prompt_cost, service_tier, data_residency, vertex_location),
+    ),
     'retried_request': lambda logger, logged_body, body, reasons: (
         logger.record('retried_request', (logged_body, body, reasons)),
         'awaitable',

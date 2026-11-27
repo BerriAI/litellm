@@ -3,7 +3,6 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
-from ipaddress import IPv6Address, ip_address
 from typing import Annotated, Final
 from urllib.parse import urlencode, urlsplit
 
@@ -14,10 +13,12 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict
 from starlette.responses import RedirectResponse
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.integrations.lens.config import LensController
 from litellm.integrations.lens.proxy.buffering import (
     LensRoute,
 )
 from litellm.integrations.lens.remote import LensConnection, bounded_response
+from litellm.litellm_core_utils.url_utils import is_local_host
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
@@ -120,18 +121,6 @@ class ServiceConnection(BaseModel):
     browser_url: str = ""
 
 
-def _local_host(host: str) -> bool:
-    normalized: Final = host.removeprefix("[").removesuffix("]").rstrip(".").lower()
-    if normalized == "localhost" or normalized.endswith(".localhost"):
-        return True
-    try:
-        address: Final = ip_address(normalized)
-    except ValueError:
-        return False
-    effective: Final = address.ipv4_mapped if isinstance(address, IPv6Address) and address.ipv4_mapped else address
-    return effective.is_loopback or effective.is_unspecified
-
-
 def lens_browser_url(lens_url: str, gateway_url: str) -> str:
     try:
         target: Final = AnyHttpUrl(lens_url)
@@ -140,11 +129,17 @@ def lens_browser_url(lens_url: str, gateway_url: str) -> str:
             return ""
         if target.query or target.fragment:
             return ""
-        if _local_host(target.host or "") and not _local_host((gateway.host or "") if gateway else ""):
+        if is_local_host(target.host or "") and not is_local_host((gateway.host or "") if gateway else ""):
             return ""
         return lens_url.rstrip("/")
     except ValueError:
         return ""
+
+
+class _GatewaySettings(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    general_settings: Mapping[str, object]
 
 
 async def service_status(connection: Connection, client: httpx.AsyncClient) -> ServiceStatus:
@@ -160,6 +155,9 @@ async def service_status(connection: Connection, client: httpx.AsyncClient) -> S
 
 
 async def service_connection(identity: Identity, gateway_url: str = "") -> ServiceConnection:
+    from litellm.proxy import proxy_server
+
+    settings: Final = _GatewaySettings.model_validate(vars(proxy_server)).general_settings
     connection: Final = Connection.from_env()
     status: Final = (
         await service_status(connection, connection.remote.control_client()) if connection else ServiceStatus()
@@ -168,7 +166,7 @@ async def service_connection(identity: Identity, gateway_url: str = "") -> Servi
         url=os.environ.get("LITELLM_LENS_PUBLIC_URL", "").rstrip("/"),
         connected=bool(connection) and status.public_contract == PUBLIC_CONTRACT,
         status=status,
-        configured=bool(os.environ.get("LITELLM_LENS_URL")),
+        configured=LensController.is_lens_setup(settings.get("tracing")),
         release=status.release,
         browser_url=lens_browser_url(os.environ.get("LITELLM_LENS_PUBLIC_URL", ""), gateway_url),
     )

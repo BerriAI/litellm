@@ -1761,7 +1761,12 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
 
     assert store.get_local("spend:key:key-budget-cleanup-failure") is None
     assert store.get_local("spend:team:team-budget-cleanup-failure") == pytest.approx(0.3)
-    assert "Failed to release partial budget reservation during exception cleanup" in caplog.text
+    cleanup_failure: Final = "Failed to release partial budget reservation during exception cleanup"
+    for _ in range(500):  # the Rust record reaches Python's logging from a background queue
+        if cleanup_failure in caplog.text:
+            break
+        await asyncio.sleep(0.01)
+    assert cleanup_failure in caplog.text
 
 
 @pytest.mark.asyncio
@@ -2186,8 +2191,13 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
             {
                 "model_name": "claude-haiku-4-5",
                 "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-test"},
-            }
-        ]
+            },
+            {
+                "model_name": "claude-sonnet-5",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "sk-test"},
+            },
+        ],
+        fallbacks=[{"claude-haiku-4-5": ["claude-sonnet-5"]}],
     )
     provider_response = AnthropicMessagesStreamingResponse(
         completion_stream=held_back, hidden_params={"additional_headers": {}}

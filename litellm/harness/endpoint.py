@@ -275,7 +275,7 @@ class SSEUsageParser:
             return
         try:
             event: Final[object] = _JSON_VALUE_ADAPTER.validate_python(json.loads(payload))
-        except ValueError:
+        except (ValueError, RecursionError):
             return
         if isinstance(event, Mapping):
             self.absorb(_JSON_OBJECT_ADAPTER.validate_python(event))
@@ -436,8 +436,16 @@ def error_body(exc: BaseException, message: str) -> dict[str, dict[str, str]]:  
     return {"error": {"type": type(exc).__name__, "message": message}}  # mutable-ok: JSONResponse body
 
 
+class _DumpsModel(Protocol):
+    def model_dump(self, *, mode: str, exclude_none: bool) -> object: ...
+
+
+class _DumpsModelJson(Protocol):
+    def model_dump_json(self) -> object: ...
+
+
 def to_jsonable(obj: object) -> object:
-    if hasattr(obj, "model_dump"):
+    if has_attributes(obj, _DumpsModel, "model_dump"):
         return obj.model_dump(mode="json", exclude_none=True)
     if isinstance(obj, Mapping):
         return dict(obj)  # mutable-ok: plain-dict copy so json.dumps can serialize any Mapping
@@ -455,7 +463,7 @@ def encode_anthropic_chunk(chunk: object) -> bytes:
 
 
 def encode_chat_chunk(chunk: object) -> bytes:
-    if hasattr(chunk, "model_dump_json"):
+    if has_attributes(chunk, _DumpsModelJson, "model_dump_json"):
         return f"data: {chunk.model_dump_json()}\n\n".encode()
     return f"data: {json.dumps(to_jsonable(chunk))}\n\n".encode()
 

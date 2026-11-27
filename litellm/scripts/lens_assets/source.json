@@ -1,31 +1,34 @@
 {
   "repository": "https://github.com/BerriAI/lens",
-  "revision": "105e7b0923a17311e527aad4d480b57bab431000",
+  "revision": "ce3a3c498d50ed05be48304f3e555df8e03a8e05",
   "schema_groups": {
     "types": {
-      "schemas/types/QueryScope.json": "123dc1e736212ff99b0dc4dd92e2f3a6c40c6825688f4dbfdb152cc1eea89f94",
-      "schemas/types/SpanDetail.json": "cabd928822e83f48845742e7f96b9ef156dda5a09048f4525dab20b5defce506",
-      "schemas/types/SpanErrorPage.json": "cabfbfe88984ef138f74b2e4550f2fa72547e367982b32cc60868dc80ce0bf67",
-      "schemas/types/Tenant.json": "d1afb324d35c7e0a17d6df50d000351b552ee3fb722fec070b90a20596bd6b53",
-      "schemas/types/Trace.json": "886828ce09fd20881b4a9eb968e626e725dc3dd7aaab071d6f29b4b510f7ffbe",
-      "schemas/types/TracePage.json": "751365bbe350d32f2d24f390391ce16112f582d8e8692c6da958d9f8c41d7160",
-      "schemas/types/TraceScope.json": "41c69f94d1f5b487f6446b4d64420b585c4bedae7e9464181b90770241f95dde"
+      "schemas/types/QueryScope.json": "6c381c9fa0d406321f031009f0f7fdb13521cf2e9ace658739107f69f84ddb5f",
+      "schemas/types/SpanDetail.json": "cdb93898a2993ca6874bac74f6884e7d16a66762c084cfcb8ae6a555d9d201d7",
+      "schemas/types/SpanErrorPage.json": "7861f72513b076dafa8b2949a118ec812e9cc8cd0bc693edc43340da14acdb6d",
+      "schemas/types/Tenant.json": "1a458495fbf971ce4d26c68156d7447a0b33dbea9223b302cb7818237bf2292d",
+      "schemas/types/Trace.json": "82e1fa1d4a6099781a567f35c47617ec55af48d0043acbe4ff87fcaa4d70a01c",
+      "schemas/types/TracePage.json": "f82284a947f9f0cb3ec6dc68d661422b0bb4673ecca296cf66a8c519bd7eda9d",
+      "schemas/types/TraceScope.json": "d75548cdb4c2e67168f017d428a3d41ee3033c8e241e9c3e570fafc013eea805",
+      "schemas/types/TraceConversationPage.json": "429b5d55f468fddf22b182f6ba3970c8ee5844a640b0538e93faa9f45c80dcbf"
     },
     "requests": {
-      "schemas/requests/TraceDetailRequest.json": "4666e0cae8439c8f1726ea5418db8d4dbd613836759c7d0f1578f92077f9ff70",
-      "schemas/requests/TraceErrorPageRequest.json": "f5d8695d0a2b004fb3baca8d2566e35e8b33e3b3e81fd5ea8ce6c03f2274ea4f",
-      "schemas/requests/TraceListRequest.json": "5cdb08384256257ed481ce27a4989b13e5dabc56bf063457f6fa97c0ce04f007",
-      "schemas/requests/TraceQueryRequest.json": "dd2e2d25d4d54a2021b0585dbd8391a1e91334a959328b68b73ed1fea3303930",
-      "schemas/requests/TraceSpanRequest.json": "7009bc131f190c0863ea6eb808966f1613d6a1611e1dd88a884953b7b19d3224"
+      "schemas/requests/TraceDetailRequest.json": "1afda04438471af4f1d8b587712cca7fa4abfd265c8b569e72a35df685287b22",
+      "schemas/requests/TraceErrorPageRequest.json": "6d9f839c6ea525ef3a0054c7ea44913810851d87e39fbe396577bf24ad3dfbaa",
+      "schemas/requests/TraceListRequest.json": "fab5b6595bd42705c69bd64467712a1eb55f1e1bfe8858b56e7d8f930ee0bca0",
+      "schemas/requests/TraceQueryRequest.json": "6b6e16003484e5814ced0105afdd3c61a1ff1921032288d94a2b98c08e113274",
+      "schemas/requests/TraceSpanRequest.json": "3f5c9d0f58faa65dc60158c8935777b791408fed6070278ef8193dfb73bfdd5f",
+      "schemas/requests/TraceAgentsRequest.json": "d9196e5c0547c96fb2d82f481c50bf8f804da6a6248b30ddf489693ec885a400",
+      "schemas/requests/TraceConversationRequest.json": "273c369bd62704f9a0c737c5d722e2c76a2079b496f73f019a433a8c9da0e6a3"
     },
     "responses": {
       "schemas/responses/TraceSQLResponse.json": "222b9c9288a259bc554de0beed7fa1fb6cd62635595f385ae556366090bf7460"
     },
     "models": {
-      "schemas/models/TraceAgentRow.json": "abbd4f48a509c18cb32b238c46a767ff1994040875c936c4385f964225de0feb",
-      "schemas/models/TraceAgentsParams.json": "c98e4bd296005b8fd7a8946a0c4c8589ac051f2cb6ba4505357445ee8bf7c542",
-      "schemas/models/TraceQueryHelp.json": "0ffb8b1eed55cd304f0a61fe97df68f5f90361ccc603b17458c88e127afab9ae",
-      "schemas/models/ReadQueryName.json": "e8b688ce6d344f19eef4d65341623b0c95abe0a76869731b9d75c634a4cc747e"
+      "schemas/models/TraceAgentRow.json": "300d2ff03f33231705547285fca102e1c734d3c84c7d1166196f5f702f1eb7fd",
+      "schemas/models/TraceAgentsParams.json": "3ce3513efd097bdf415d31bf4c6105ad34ecc952661eceaa0856e35504484f61",
+      "schemas/models/TraceQueryHelp.json": "1304ee6cd2100d87f3013a0142e2c607ec89237ba595c0527df10e1f8575462a",
+      "schemas/models/ReadQueryName.json": "c16ad5776bcc9ee43073c4dfdc62765477b964a476ae894cf5228238b686258b"
     }
   },
   "fixtures": {

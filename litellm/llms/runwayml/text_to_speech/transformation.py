@@ -74,8 +74,8 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: str | dict | None,
-        optional_params: dict,
+        voice: str | Mapping[str, object] | None,
+        optional_params: dict[str, object],
         litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
@@ -140,7 +140,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return response
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         RunwayML TTS supports these OpenAI parameters
         """
@@ -149,11 +149,11 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: dict,
-        voice: str | dict | None = None,
+        optional_params: Mapping[str, object],
+        voice: str | Mapping[str, object] | None = None,
         drop_params: bool = False,
-        kwargs: dict = {},
-    ) -> tuple[str | None, dict]:
+        kwargs: Mapping[str, object] = {},
+    ) -> tuple[str | None, dict[str, object]]:
         """
         Map OpenAI parameters to RunwayML TTS parameters
 
@@ -163,10 +163,10 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         Note: Since RunwayML requires voice as a dict, we store it in
         mapped_params["runwayml_voice"] and return None for the voice string.
         """
-        mapped_params: Final = {}
+        mapped_params: Final[dict[str, object]] = {}
 
         # Map voice parameter to RunwayML format dict
-        voice_dict: dict | None = None
+        voice_dict: dict[str, object] | None = None
         if isinstance(voice, str):
             # Check if it's an OpenAI voice name that needs mapping
             if voice in self.VOICE_MAPPINGS:
@@ -197,11 +197,11 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate RunwayML environment and set up authentication headers
         """
@@ -222,7 +222,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for RunwayML TTS request
@@ -380,10 +380,10 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: str | dict | None,
+        voice: str | Mapping[str, object] | None,
         optional_params: Mapping[str, object],
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: Mapping[str, object],
+        headers: dict[str, str],
     ) -> TextToSpeechRequestData:
         """
         Transform OpenAI TTS request to RunwayML TTS format

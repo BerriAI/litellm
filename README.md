@@ -410,6 +410,7 @@ Use `litellm.agent_eval(tasks, targets, trials=3)` to compare harness and model 
 | [Galadriel (`galadriel`)](https://docs.litellm.ai/docs/providers/galadriel) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [GitHub Copilot (`github_copilot`)](https://docs.litellm.ai/docs/providers/github_copilot) | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  |  |
 | [GitHub Models (`github`)](https://docs.litellm.ai/docs/providers/github) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [Gnani (`gnani`)](https://docs.litellm.ai/docs/providers/gnani) |  |  |  |  |  | ✅ |  |  |  |  |
 | [Google - PaLM](https://docs.litellm.ai/docs/providers/palm) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Google - Vertex AI (`vertex_ai`)](https://docs.litellm.ai/docs/providers/vertex) | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  |
 | [Google AI Studio - Gemini (`gemini`)](https://docs.litellm.ai/docs/providers/gemini) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -449,6 +450,7 @@ Use `litellm.agent_eval(tasks, targets, trials=3)` to compare harness and model 
 | [OVHCloud AI Endpoints (`ovhcloud`)](https://docs.litellm.ai/docs/providers/ovhcloud) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Parallel AI (`parallel_ai`)](https://docs.litellm.ai/docs/search/parallel_ai) |  |  |  |  |  |  |  |  |  |  |
 | [Perplexity AI (`perplexity`)](https://docs.litellm.ai/docs/providers/perplexity) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [Perplexity Orchestrator (`perplexity_orchestrator`)](https://docs.litellm.ai/docs/providers/perplexity_orchestrator) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Petals (`petals`)](https://docs.litellm.ai/docs/providers/petals) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Pinstripes (`pinstripes`)](https://docs.litellm.ai/docs/providers/pinstripes) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Predibase (`predibase`)](https://docs.litellm.ai/docs/providers/predibase) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -667,29 +669,16 @@ The Terraform modules live at [`litellm/deploy/terraform/litellm/aws/`](./litell
 
 ### Verify Docker Image Signatures
 
-All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Releases are signed with the key introduced in [commit `e82a3c6`](https://github.com/BerriAI/litellm/commit/e82a3c646908ba0a6ee0beddc4310d7a6cac4065).
-
-**Verify using the pinned commit hash (recommended):**
-
-A commit hash is cryptographically immutable, so this is the strongest way to ensure you are using the published signing key:
+All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Releases published since November 15, 2026 use keyless signing tied to our release workflow:
 
 ```bash
 cosign verify \
-  --key https://raw.githubusercontent.com/BerriAI/litellm/e82a3c646908ba0a6ee0beddc4310d7a6cac4065/cosign.pub \
+  --certificate-identity https://github.com/BerriAI/project-releaser/.github/workflows/release.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/berriai/litellm:<release-tag>
 ```
 
-**Verify using a release tag (convenience):**
-
-Tags are protected in this repository and resolve to the same key. This option is easier to read but relies on tag protection rules:
-
-```bash
-cosign verify \
-  --key https://raw.githubusercontent.com/BerriAI/litellm/<release-tag>/cosign.pub \
-  ghcr.io/berriai/litellm:<release-tag>
-```
-
-Replace `<release-tag>` with the version you are deploying (e.g. `v1.83.0-stable`).
+Replace `<release-tag>` with the version you are deploying. Older releases are signed with a key and verify with the `cosign.pub` from the commit that introduced it. See [Release Signing](.github/SECURITY.md#release-signing) for those commands.
 
 ---
 

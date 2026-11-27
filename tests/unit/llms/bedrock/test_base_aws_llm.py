@@ -14,8 +14,9 @@ from fastapi.testclient import TestClient
 
 
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Final, Optional
 from unittest.mock import MagicMock, Mock, patch
 
@@ -3988,6 +3989,39 @@ def test_get_runtime_endpoint(base_aws_llm):
     assert endpoint_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
     assert proxy_endpoint_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
 
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("api_base", "aws_bedrock_runtime_endpoint", "env_runtime_endpoint", "expected"),
+    (
+        ("", None, None, "https://bedrock-runtime.us-east-1.amazonaws.com"),
+        (None, "", None, "https://bedrock-runtime.us-east-1.amazonaws.com"),
+        ("", "", None, "https://bedrock-runtime.us-east-1.amazonaws.com"),
+        ("", "https://vpce-runtime.example.com", None, "https://vpce-runtime.example.com"),
+        ("", None, "https://env-runtime.example.com", "https://env-runtime.example.com"),
+        (None, "", "https://env-runtime.example.com", "https://env-runtime.example.com"),
+    ),
+)
+def test_get_runtime_endpoint_treats_an_empty_setting_as_unset(
+    base_aws_llm: BaseAWSLLM,
+    monkeypatch: pytest.MonkeyPatch,
+    api_base: str | None,
+    aws_bedrock_runtime_endpoint: str | None,
+    env_runtime_endpoint: str | None,
+    expected: str,
+) -> None:
+    if env_runtime_endpoint is None:
+        monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    else:
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", env_runtime_endpoint)
+
+    endpoints: Final = base_aws_llm.get_runtime_endpoint(
+        api_base=api_base,
+        aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+        aws_region_name="us-east-1",
+    )
+
+    assert endpoints == (expected, expected)
+
 @pytest.fixture
 def clear_cache(base_aws_llm):
     """Clear the cache before each test"""
@@ -4480,3 +4514,80 @@ async def test_extra_headers_and_authorization_override_reach_converse_and_invok
         "my-test-key",
     )
     assert (invoke_request.headers["test"], invoke_request.headers["authorization"]) == ("hello world", "my-test-key")
+
+
+@pytest.fixture
+def logged_out_sso_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    config: Final = tmp_path / "config"
+    config.write_text(
+        "[profile logged-out-sso]\n"
+        "sso_session = litellm-unit-test-session-never-logged-in\n"
+        "sso_account_id = 111111111111\n"
+        "sso_role_name = Dev\n"
+        "region = us-west-2\n"
+        "[sso-session litellm-unit-test-session-never-logged-in]\n"
+        "sso_start_url = https://example.awsapps.com/start\n"
+        "sso_region = us-west-2\n"
+    )
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "no-credentials"))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    return "logged-out-sso"
+
+
+_SSO_SIGNED_CALLS: Final = (
+    pytest.param(
+        lambda profile: litellm.acompletion(
+            model="bedrock/us.anthropic.claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            aws_profile_name=profile,
+        ),
+        id="chat",
+    ),
+    pytest.param(
+        lambda profile: litellm.acompletion(
+            model="bedrock/us.anthropic.claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            aws_profile_name=profile,
+            stream=True,
+        ),
+        id="chat-stream",
+    ),
+    pytest.param(
+        lambda profile: litellm.aembedding(
+            model="bedrock/amazon.titan-embed-text-v2:0", input=["hi"], aws_profile_name=profile
+        ),
+        id="embedding",
+    ),
+    pytest.param(
+        lambda profile: litellm.anthropic.messages.acreate(
+            model="bedrock/us.anthropic.claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=5,
+            aws_profile_name=profile,
+        ),
+        id="messages",
+    ),
+    pytest.param(
+        lambda profile: litellm.aresponses(
+            model="bedrock/us.anthropic.claude-haiku-5-5", input="hi", aws_profile_name=profile
+        ),
+        id="responses",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", _SSO_SIGNED_CALLS)
+async def test_an_sso_profile_without_a_usable_token_answers_401_instead_of_a_retryable_500(
+    logged_out_sso_profile: str, call: Callable[[str], Awaitable[object]]
+) -> None:
+    from botocore.exceptions import SSOTokenLoadError
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        await call(logged_out_sso_profile)
+
+    assert excinfo.value.status_code == 401
+    assert type(excinfo.value.__context__) is SSOTokenLoadError

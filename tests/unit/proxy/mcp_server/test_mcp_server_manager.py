@@ -91,6 +91,8 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
     resolve_openapi_tool_auth,
     should_strip_caller_authorization,
 )
+from litellm.proxy.mcp_server.operations import apply_display_name_overrides
+from litellm.proxy.mcp_server.tool_catalog_guard import apply_description_overrides
 from litellm.proxy.mcp_server.tool_outcome import TextResult
 from litellm.proxy.mcp_server.upstream import resolve_upstream_auth
 from litellm.proxy.utils import ProxyLogging
@@ -98,7 +100,12 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
-from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, PinnedMCPTool
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPOAuthMetadata,
+    MCPServer,
+    MCPServerEventsConfig,
+    PinnedMCPTool,
+)
 
 _TSessionResult = TypeVar("_TSessionResult")
 
@@ -10350,6 +10357,68 @@ class TestMCPServerTimestamps:
         assert servers[1].rpm is None
 
     @pytest.mark.asyncio
+    async def test_config_tool_overrides_rename_and_describe_the_listed_tools(
+        self, config_only_mcp_manager_factory: type[MCPServerManager]
+    ) -> None:
+        manager: Final = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(
+            {
+                "weather": {
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "tool_name_to_display_name": {"get_weather": "weather_now", "get_time": "Time Now"},
+                    "tool_name_to_description": {"get_weather": "Current weather for one city"},
+                },
+            }
+        )
+        server: Final = next(iter(manager.config_mcp_servers.values()))
+        listed: Final = apply_display_name_overrides(
+            list(
+                apply_description_overrides(
+                    [
+                        MCPTool(name="weather-get_weather", description="upstream", inputSchema={}),
+                        MCPTool(name="weather-get_time", description="upstream", inputSchema={}),
+                    ],
+                    server,
+                )
+            ),
+            server,
+        )
+        assert [(tool.name, tool.description) for tool in listed] == [
+            ("weather_now", "Current weather for one city"),
+            ("weather-get_time", "upstream"),
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "display_names",
+        [{"get_weather": None}, {"get_weather": 2024}, ["get_weather"], {"get_weather": ""}],
+        ids=["null", "int", "list", "empty"],
+    )
+    async def test_a_malformed_config_tool_override_is_ignored_with_a_warning(
+        self,
+        config_only_mcp_manager_factory: type[MCPServerManager],
+        caplog: pytest.LogCaptureFixture,
+        display_names: object,
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        manager: Final = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(
+            {
+                "weather": {
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "tool_name_to_display_name": display_names,
+                    "tool_name_to_description": {"get_weather": 7},
+                },
+            }
+        )
+        server: Final = next(iter(manager.config_mcp_servers.values()))
+        assert not server.tool_name_to_display_name
+        assert server.tool_name_to_description is None
+        assert "MCP server weather: ignoring" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_timeout_returns_504(self):
         """When the MCP client call is cancelled (timeout), _call_regular_mcp_tool raises HTTPException 504."""
         from unittest.mock import AsyncMock, patch
@@ -15994,7 +16063,6 @@ async def test_pre_call_tool_check_uses_inherited_team_auth_for_guardrails(monke
 
 @pytest.mark.asyncio
 async def test_pre_call_tool_check_keeps_native_name_for_team_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 
     server: Final = MCPServer(
         server_id="math-a",
@@ -16998,7 +17066,6 @@ async def test_tool_listing_rejects_malformed_or_other_missing_static_credential
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
 async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None:
-    import respx
 
     clock: Final = _DiscoveryClock()
     manager: Final = MCPServerManager(discovery_clock=clock)
@@ -18002,7 +18069,6 @@ async def test_tools_list_above_the_entry_limit_is_fetched_every_time_and_warned
 @pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
 @pytest.mark.parametrize("outcome", ("unsupported", "rejected", "failure"))
 async def test_discovery_cache_empty_results_and_failures(kind: str, outcome: str) -> None:
-    import respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -18047,7 +18113,6 @@ async def test_discovery_cache_retries_failed_pagination_before_caching_complete
 
 @pytest.mark.asyncio
 async def test_discovery_cache_isolates_forwarded_credentials_and_static_auth_callers() -> None:
-    import respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -18097,7 +18162,6 @@ async def test_discovery_cache_isolates_keyless_admission_credentials(kind: str,
 
 @pytest.mark.asyncio
 async def test_discovery_cache_coalesces_and_survives_waiter_cancellation() -> None:
-    import respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -18121,7 +18185,6 @@ async def test_discovery_cache_coalesces_and_survives_waiter_cancellation() -> N
 
 @pytest.mark.asyncio
 async def test_discovery_cache_invalidation_during_fetch_does_not_repopulate_old_results() -> None:
-    import respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -18141,7 +18204,6 @@ async def test_discovery_cache_invalidation_during_fetch_does_not_repopulate_old
 
 @pytest.mark.asyncio
 async def test_discovery_cache_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    import respx
 
     monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "0")
     manager: Final = MCPServerManager()
@@ -18307,7 +18369,6 @@ async def test_discovery_cache_bounds_detached_fetches_without_dropping_results(
 
 @pytest.mark.asyncio
 async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> None:
-    import respx
 
     from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
     from litellm.proxy.mcp_server.outbound_credentials.resolver import UpstreamCredentialProvider
@@ -18384,7 +18445,6 @@ async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> N
 
 @pytest.mark.asyncio
 async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None:
-    import respx
 
     from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 
@@ -19518,9 +19578,8 @@ async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(a
         }
     )
 
-    async def hydrate(target: MCPServer) -> bool:
-        target.client_id = "persisted-client"
-        return True
+    async def hydrate(targets: tuple[MCPServer, ...]) -> None:
+        targets[0].client_id = "persisted-client"
 
     async def read_rows(**_kwargs):
         assert manager._publish_resolved_oauth_server(resolved, generation) is resolved
@@ -19534,7 +19593,7 @@ async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(a
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch(
-            "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client",
+            "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_dcr_clients",
             side_effect=hydrate,
         ),
     ):
@@ -20278,12 +20337,12 @@ async def test_catalog_cancelled_config_hydration_preserves_published_credential
     )
     manager.config_mcp_servers = {server.server_id: server}
 
-    async def cancelled_hydration(target: MCPServer) -> bool:
-        target.client_id = "unpublished-client"
+    async def cancelled_hydration(targets: tuple[MCPServer, ...]) -> None:
+        targets[0].client_id = "unpublished-client"
         raise asyncio.CancelledError()
 
     with patch(
-        "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client",
+        "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_dcr_clients",
         side_effect=cancelled_hydration,
     ):
         with pytest.raises(asyncio.CancelledError):
@@ -20435,6 +20494,109 @@ async def test_catalog_unchanged_revision_skips_table_reload(monkeypatch):
     assert (await manager.catalog.list())["catalog-server"].name == "initial"
     read_rows.assert_awaited_once()
     assert read_revision.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scheduled_catalog_skips_unchanged_revision_but_forced_reload_reads(monkeypatch):
+    read_rows = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
+    read_revision = AsyncMock(return_value=_revision_row(0))
+    _catalog_database(monkeypatch, read_rows, read_revision)
+    manager = MCPServerManager()
+
+    await manager.reload_servers_from_database(skip_unchanged=True)
+    await manager.reload_servers_from_database(skip_unchanged=True)
+    read_rows.assert_awaited_once()
+
+    await manager.reload_servers_from_database()
+    assert (await manager.catalog.list())["catalog-server"].name == "updated"
+    assert read_rows.await_count == 2
+    assert read_revision.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_scheduled_catalog_retries_incomplete_hydration_at_the_same_revision(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    hydrate = AsyncMock(side_effect=(False, True))
+    monkeypatch.setattr(manager, "hydrate_config_servers_dcr_clients", hydrate)
+
+    await manager.reload_servers_from_database()
+    await manager.reload_servers_from_database(skip_unchanged=True)
+    await manager.reload_servers_from_database(skip_unchanged=True)
+    assert read_rows.await_count == 2
+    assert hydrate.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", [_revision_row(8), None])
+async def test_scheduled_catalog_fetches_when_revision_changes_or_is_missing(monkeypatch, revision):
+    read_rows = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
+    _catalog_database(monkeypatch, read_rows, AsyncMock(side_effect=(_revision_row(7), revision)))
+    manager = MCPServerManager()
+
+    await manager.reload_servers_from_database()
+    await manager.reload_servers_from_database(skip_unchanged=True)
+
+    assert manager.registry["catalog-server"].name == "updated"
+    assert read_rows.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scheduled_catalog_retries_a_server_that_failed_registration(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    register_tools = AsyncMock(side_effect=(RuntimeError("temporary failure"), None))
+    monkeypatch.setattr(manager, "maybe_register_openapi_tools", register_tools)
+
+    await manager.reload_servers_from_database()
+    assert not manager.registry
+    await manager.reload_servers_from_database(skip_unchanged=True)
+    await manager.reload_servers_from_database(skip_unchanged=True)
+
+    assert manager.registry["catalog-server"].name == "initial"
+    assert read_rows.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scheduled_catalog_retries_unresolved_oauth_at_the_same_revision(monkeypatch):
+    row = _catalog_row().model_copy(update={"auth_type": MCPAuth.oauth2, "oauth2_flow": "authorization_code"})
+    read_rows = AsyncMock(return_value=[row])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    unresolved = MCPServer(
+        server_id=row.server_id,
+        name="initial",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        updated_at=row.updated_at,
+    )
+    build = AsyncMock(return_value=unresolved)
+    monkeypatch.setattr(manager, "build_mcp_server_from_table", build)
+
+    await manager.reload_servers_from_database()
+    await manager.reload_servers_from_database(skip_unchanged=True)
+
+    assert read_rows.await_count == 2
+    assert build.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scheduled_catalog_keeps_refreshing_database_openapi_tools(monkeypatch):
+    row = _catalog_row().model_copy(update={"spec_path": "https://upstream.example/openapi.json"})
+    read_rows = AsyncMock(return_value=[row])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    register_tools = AsyncMock()
+    monkeypatch.setattr(manager, "maybe_register_openapi_tools", register_tools)
+
+    await manager.reload_servers_from_database()
+    await manager.reload_servers_from_database(skip_unchanged=True)
+
+    assert read_rows.await_count == 2
+    assert register_tools.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -23227,3 +23389,46 @@ async def test_pre_call_guardrail_bearer_never_carries_the_admission_key(
 
     hook_kwargs: Final = proxy_logging_obj.create_mcp_request_object_from_kwargs.call_args.args[0]
     assert hook_kwargs["incoming_bearer_token"] == expected_bearer
+
+
+@pytest.mark.parametrize(
+    ("stored", "enabled"),
+    (
+        ('{"enabled": true}', True),
+        ({"enabled": True, "allowed_events": ["build.*"]}, True),
+        ({"enabled": False}, False),
+        ('{"enabled": "maybe-not"}', None),
+        ("", None),
+        (None, None),
+        (object(), None),
+    ),
+)
+def test_stored_events_config_accepts_json_or_mappings_and_ignores_anything_else(
+    stored: object, enabled: bool | None
+) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
+
+    config: Final = _stored_events_config(stored)
+    assert (config.enabled if config is not None else None) is enabled
+
+
+@pytest.mark.parametrize(
+    "events",
+    (None, MCPServerEventsConfig(enabled=True, allowed_events=("build.*",)), MCPServerEventsConfig(enabled=False)),
+)
+def test_the_server_listing_row_carries_the_events_config(events: MCPServerEventsConfig | None) -> None:
+    server: Final = MCPServer(
+        server_id="events-server",
+        name="ci",
+        url="https://example.com/mcp",
+        transport=MCPTransport.http,
+        events=events,
+    )
+
+    assert MCPServerManager().build_mcp_server_table(server).events == events
+
+
+def test_a_yaml_server_with_an_unreadable_events_block_loads_with_events_off() -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
+
+    assert _stored_events_config({"enabled": True, "allowed_events": []}) is None

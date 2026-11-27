@@ -3,6 +3,7 @@
 Azure Text Moderation Native Guardrail Integrationfor LiteLLM
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 
 from fastapi import HTTPException
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
         AzureTextModerationGuardrailResponse,
+        AzureTextModerationOptionalParams,
     )
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
@@ -99,7 +101,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         verbose_proxy_logger.info("Initialized Azure Text Moderation Guardrail: %s", guardrail_name)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[AzureTextModerationOptionalParams]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
             AzureContentSafetyTextModerationConfigModel,
         )
@@ -157,7 +159,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -251,7 +253,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: Mapping[str, object],
         user_api_key_dict: "UserAPIKeyAuth",
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:

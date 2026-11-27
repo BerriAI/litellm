@@ -48,10 +48,10 @@ class AzureRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         validated_headers: Final = {
             **headers,
             "Content-Type": "application/json",

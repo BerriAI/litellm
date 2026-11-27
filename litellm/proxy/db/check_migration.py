@@ -30,7 +30,7 @@ def extract_sql_commands(diff_output: str) -> list[str]:
     # Split the output into lines and remove empty lines
     lines: Final = [line.strip() for line in diff_output.split("\n") if line.strip()]
 
-    sql_commands: Final = []
+    sql_commands: Final[list[str]] = []
     current_command = ""
     in_sql_block = False
 

@@ -2,7 +2,6 @@ import { parseAsString, useQueryStates } from "nuqs";
 import { useCallback } from "react";
 
 export const LOG_ID_QUERY_PARAM = "log_id";
-export const SESSION_ID_QUERY_PARAM = "session_id";
 
 export interface LogDetailRouting {
   logId: string | null;

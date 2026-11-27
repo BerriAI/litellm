@@ -20,7 +20,7 @@ class OpenAIGPTAudioConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for the `gpt-audio` models
 
@@ -37,11 +37,11 @@ class OpenAIGPTAudioConfig(OpenAIGPTConfig):
 
     def _map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return super()._map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,

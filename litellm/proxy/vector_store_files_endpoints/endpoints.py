@@ -133,7 +133,7 @@ class _ManagedFileCopy:
 _PROBE_ARGUMENTS: Final = frozenset(
     {"vector_store_id", "file_id", "extra_headers", "timeout", "custom_llm_provider", "no-log"}
 )
-_EXTRA_HEADERS: Final = TypeAdapter(dict[str, str] | None)
+_EXTRA_HEADERS: Final[TypeAdapter[dict[str, str] | None]] = TypeAdapter(dict[str, str] | None)
 
 
 async def _store_lacks_file(
@@ -252,14 +252,14 @@ def _public_model_name_reaching(llm_router: "Router", deployment: Deployment, te
 
 
 async def _update_request_data_with_managed_file_id(
-    data: dict,
+    data: dict[str, object],
     file_id: str,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
     managed_files_obj: object | None,
     llm_router: Optional["Router"] = None,
     managed_vector_store: LiteLLM_ManagedVectorStore | None = None,
-) -> tuple[dict, str | None]:
+) -> tuple[dict[str, object], str | None]:
     """
     Update request data with model routing information from managed file ID.
 
@@ -453,7 +453,7 @@ async def _update_request_data_with_managed_file_id(
     return data, None
 
 
-def _replace_file_id_in_response(response, original_file_id: str):
+def _replace_file_id_in_response(response, original_file_id: str) -> object:
     """
     Replace the provider file ID in the response with the original managed file ID.
 
@@ -513,11 +513,11 @@ async def _authorize_model_routing_hint(
 
 
 async def _update_request_data_with_model_routing_hint(
-    data: dict,
+    data: dict[str, object],
     request: Request,
     llm_router: Optional["Router"] = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-) -> dict:
+) -> dict[str, object]:
     if data.get("api_key") is not None or data.get("api_base") is not None:
         return data
 
@@ -605,12 +605,12 @@ async def _update_request_data_with_model_routing_hint(
 
 
 def _update_request_data_with_litellm_managed_vector_store_registry(
-    data: dict,
+    data: dict[str, object],
     vector_store_id: str,
     llm_router: Optional["Router"] = None,
     managed_vector_store: LiteLLM_ManagedVectorStore | None = None,
     should_lookup_registry: bool = True,
-) -> dict:
+) -> dict[str, object]:
     """
     Update request data with model routing information from managed vector store.
 
@@ -701,7 +701,7 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
 async def _resolve_provider(
     *,
-    data: dict,
+    data: dict[str, object],
     request: Request,
 ) -> LlmProviders | None:
     provider = (
@@ -884,7 +884,7 @@ async def vector_store_file_list(
     )
 
     query_params: Final = _with_provider_file_id_cursors(request.query_params)
-    data: dict[str, str | None] = {"vector_store_id": vector_store_id}
+    data: dict[str, object] = {"vector_store_id": vector_store_id}
     data.update(query_params)
     data["vector_store_id"] = vector_store_id
     managed_vector_store: Final = await assert_user_can_access_vector_store_id(
@@ -991,7 +991,7 @@ async def vector_store_file_retrieve(
         version,
     )
 
-    data: dict[str, str] = {
+    data: dict[str, object] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
@@ -1099,7 +1099,7 @@ async def vector_store_file_content(
         version,
     )
 
-    data: dict[str, str] = {
+    data: dict[str, object] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
@@ -1318,7 +1318,7 @@ async def vector_store_file_delete(
         version,
     )
 
-    data: dict[str, str] = {
+    data: dict[str, object] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }

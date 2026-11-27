@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.secret_managers.main import get_secret_str
@@ -44,8 +45,8 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         base_url: Final[str] = (api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL).rstrip("/")
@@ -59,11 +60,11 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         for key, value in non_default_params.items():
             if key == "response_format":
@@ -82,7 +83,7 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
                 )
         return optional_params
 
-    def _map_aspect_ratio(self, size: str) -> str:
+    def _map_aspect_ratio(self, size: object) -> str:
         if not isinstance(size, str) or "x" not in size:
             return "1:1"
         try:
@@ -104,8 +105,8 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         return {"prompt": prompt, **optional_params}

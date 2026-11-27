@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import React, { useState, useEffect, useRef } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
@@ -39,7 +40,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
   onDelete,
   onEdit,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [promptData, setPromptData] = useState<PromptSpec | null>(null);
   const [promptTemplate, setPromptTemplate] = useState<PromptTemplateBase | null>(null);
   const [rawApiResponse, setRawApiResponse] = useState<any>(null);
@@ -131,7 +132,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
-    return date.toLocaleString();
+    return displayTimestamp(date, locale.language);
   };
 
   const copyToClipboard = async (text: string | null | undefined, key: string) => {

@@ -681,6 +681,19 @@ backend:
     targetCPUUtilizationPercentage: 70
     # Optional autoscaling/v2 scaling behavior; same shape as gateway.hpa.behavior.
     behavior: {}
+  # Same shape as gateway.keda, without `prometheus` since the request and token
+  # counters are gateway metrics. Mutually exclusive with backend.hpa.enabled.
+  keda:
+    enabled: false
+    minReplicaCount: 1
+    maxReplicaCount: 4
+    pollingInterval: 30
+    cooldownPeriod: 300
+    scaledObject:
+      annotations: {}
+    advanced: {}
+    fallback: {}
+    triggers: []
   # Same shape as gateway.pdb.
   pdb:
     enabled: false
@@ -754,6 +767,19 @@ ui:
     targetCPUUtilizationPercentage: 80
     # Optional autoscaling/v2 scaling behavior; same shape as gateway.hpa.behavior.
     behavior: {}
+  # Same shape as gateway.keda, without `prometheus` since the request and token
+  # counters are gateway metrics. Mutually exclusive with ui.hpa.enabled.
+  keda:
+    enabled: false
+    minReplicaCount: 1
+    maxReplicaCount: 3
+    pollingInterval: 30
+    cooldownPeriod: 300
+    scaledObject:
+      annotations: {}
+    advanced: {}
+    fallback: {}
+    triggers: []
   # Same shape as gateway.pdb.
   pdb:
     enabled: false

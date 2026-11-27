@@ -26,8 +26,8 @@ class BaseAnthropicMessagesConfig(ABC):
         headers: dict,
         model: str,
         messages: Sequence[object],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
@@ -44,7 +44,7 @@ class BaseAnthropicMessagesConfig(ABC):
 
     async def avalidate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        headers: dict[str, object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
         messages: Sequence[object],
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
@@ -71,8 +71,8 @@ class BaseAnthropicMessagesConfig(ABC):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -85,18 +85,18 @@ class BaseAnthropicMessagesConfig(ABC):
         return api_base or ""
 
     @abstractmethod
-    def get_supported_anthropic_messages_params(self, model: str) -> list:
+    def get_supported_anthropic_messages_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: list[dict[str, object]],
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     @abstractmethod
@@ -111,7 +111,7 @@ class BaseAnthropicMessagesConfig(ABC):
     def sign_request(
         self,
         headers: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         request_data: dict,
         api_base: str,
         api_key: str | None = None,
@@ -177,9 +177,9 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         model: str,
         httpx_response: httpx.Response,
-        request_body: dict,
+        request_body: dict[str, object],
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         raise NotImplementedError("Subclasses must implement this method")
 
     def get_error_class(
@@ -196,7 +196,7 @@ class BaseAnthropicMessagesConfig(ABC):
         retry (e.g. strip invalid encrypted thinking signatures after a deployment or
         credential change).
         """
-        return 2
+        return 4
 
     def should_retry_anthropic_messages_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: Mapping[str, object], request_body: object = None
@@ -211,7 +211,10 @@ class BaseAnthropicMessagesConfig(ABC):
             anthropic_request_errors_on_thinking_binding_mismatch,
             is_anthropic_invalid_thinking_block_error,
             is_anthropic_thinking_binding_mismatch_error,
+            is_anthropic_tool_use_id_pattern_error,
             is_claude_strict_tools_rejection,
+            messages_with_renamed_tool_use_ids,
+            strips_thinking_from_anthropic_messages_request,
             tools_without_strict,
             validated_object_mapping,
         )
@@ -220,6 +223,12 @@ class BaseAnthropicMessagesConfig(ABC):
             return False
         error_text: Final[str] = e.response.text
         body: Final = validated_object_mapping(request_body)
+        if (
+            is_anthropic_tool_use_id_pattern_error(error_text)
+            and body is not None
+            and messages_with_renamed_tool_use_ids(body.get("messages")) is not None
+        ):
+            return True
         drops_rejected_strict_tools: Final = (
             drops_unsupported_params(litellm_params.get("drop_params"))
             and is_claude_strict_tools_rejection(e.response.status_code, error_text)
@@ -231,7 +240,12 @@ class BaseAnthropicMessagesConfig(ABC):
         caller_asked_for_this_error: Final = anthropic_request_errors_on_thinking_binding_mismatch(
             request_body
         ) and is_anthropic_thinking_binding_mismatch_error(error_text)
-        return not caller_asked_for_this_error and is_anthropic_invalid_thinking_block_error(error_text)
+        return (
+            not caller_asked_for_this_error
+            and is_anthropic_invalid_thinking_block_error(error_text)
+            and body is not None
+            and strips_thinking_from_anthropic_messages_request(body)
+        )
 
     def transform_anthropic_messages_request_on_http_error(
         self, e: httpx.HTTPStatusError, request_data: dict[str, object]
@@ -241,7 +255,9 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         from litellm.llms.anthropic.common_utils import (
             is_anthropic_invalid_thinking_block_error,
+            is_anthropic_tool_use_id_pattern_error,
             is_claude_strict_tools_rejection,
+            messages_with_renamed_tool_use_ids,
             strip_thinking_blocks_from_anthropic_messages_request_dict,
             tools_without_strict,
             warn_claude_strict_tools_dropped,
@@ -249,6 +265,13 @@ class BaseAnthropicMessagesConfig(ABC):
 
         if e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
             strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
+        renamed_messages: Final = (
+            messages_with_renamed_tool_use_ids(request_data.get("messages"))
+            if e.response.status_code == 400 and is_anthropic_tool_use_id_pattern_error(e.response.text)
+            else None
+        )
+        if renamed_messages is not None:
+            request_data["messages"] = list(renamed_messages)  # rebind-ok: the retry loop re-signs this same dict
         without_strict: Final = (
             tools_without_strict(request_data.get("tools"))
             if is_claude_strict_tools_rejection(e.response.status_code, e.response.text)

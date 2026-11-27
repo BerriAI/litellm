@@ -1,6 +1,7 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
+import json
 import threading
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable, Iterable, Iterator, Mapping, Sequence
@@ -13,7 +14,7 @@ from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import APIError, MidStreamFallbackError
-from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes, iter_items
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
@@ -81,6 +82,11 @@ class _FailedResponseEvent(LiteLLMBaseModel):
     response: _FailedResponse | None = None
 
 
+def _dict_value(source: object, name: str, default: object = None) -> object:
+    """``source[name]`` when ``source`` is a dict that has it, else ``default``."""
+    return source.get(name, default) if isinstance(source, dict) else default
+
+
 def _original_failure(exception: Exception) -> Exception:
     failure = exception  # rebind-ok: walks the MidStreamFallbackError chain down to the provider failure
     while isinstance(failure, MidStreamFallbackError) and failure.original_exception is not None:
@@ -146,8 +152,10 @@ class AnthropicResponsesStreamWrapper:
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
         applied_edits: Sequence[AppliedEdit] | None = None,
+        tool_search_name: str | None = None,
     ) -> None:
         self.responses_stream = responses_stream
+        self._tool_search_name: Final = tool_search_name
         self._applied_edits: Final = tuple(applied_edits or ())
         self.model = model
         self.litellm_logging_obj = litellm_logging_obj
@@ -211,6 +219,20 @@ class AnthropicResponsesStreamWrapper:
             }
         )
         return block_idx
+
+    def _emit_mcp_call(self, item: object) -> None:
+        tool_use, result = LiteLLMAnthropicToResponsesAPIAdapter.mcp_blocks_from_call(item)
+        use_idx: Final = self._open_block(None, {**tool_use, "input": {}})
+        self._chunk_queue.append(
+            {
+                "type": "content_block_delta",
+                "index": use_idx,
+                "delta": {"type": "input_json_delta", "partial_json": json.dumps(tool_use["input"])},
+            }
+        )
+        self._chunk_queue.append({"type": "content_block_stop", "index": use_idx})
+        result_idx: Final = self._open_block(None, result)
+        self._chunk_queue.append({"type": "content_block_stop", "index": result_idx})
 
     @staticmethod
     def _field(source: object, name: str) -> object:
@@ -296,19 +318,26 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- content_block_start for a new output message item ----
         if event_type == "response.output_item.added":
-            item = getattr(event, "item", None) or (event.get("item") if isinstance(event, dict) else None)
+            item = getattr(event, "item", None) or _dict_value(event, "item")
             if item is None:
                 return
-            item_type: Final = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None)
+            item_type: Final = getattr(item, "type", None) or _dict_value(item, "type")
             item_id = getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None)
 
             if item_type == "message":
                 self._open_block(item_id, {"type": "text", "text": ""})
-            elif item_type == "function_call":
+            elif item_type == "function_call" or (
+                item_type == "tool_search_call" and self._tool_search_name is not None
+            ):
                 call_id: Final = (
                     getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or ""
                 )
-                name = getattr(item, "name", None) or (item.get("name") if isinstance(item, dict) else None) or ""
+                name: Final = (
+                    (self._tool_search_name if item_type == "tool_search_call" else None)
+                    or getattr(item, "name", None)
+                    or _dict_value(item, "name")
+                    or ""
+                )
                 if item_id:
                     self._pending_tool_ids[item_id] = call_id
                 self._open_block(
@@ -323,7 +352,7 @@ class AnthropicResponsesStreamWrapper:
             return
 
         if event_type == "response.refusal.delta":
-            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            delta = getattr(event, "delta", "") or _dict_value(event, "delta", "")
             if not isinstance(delta, str) or not delta:
                 return
             self._refusal_text = self._refusal_text + delta
@@ -343,7 +372,7 @@ class AnthropicResponsesStreamWrapper:
         # ---- text delta ----
         if event_type == "response.output_text.delta":
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
-            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            delta = getattr(event, "delta", "") or _dict_value(event, "delta", "")
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:
                 # Some providers (e.g. LMStudio) skip response.output_item.added,
@@ -381,7 +410,7 @@ class AnthropicResponsesStreamWrapper:
 
         if event_type in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
-            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            delta = getattr(event, "delta", "") or _dict_value(event, "delta", "")
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:
                 if not delta:
@@ -402,7 +431,7 @@ class AnthropicResponsesStreamWrapper:
         # ---- function call arguments delta ----
         if event_type == "response.function_call_arguments.delta":
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
-            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            delta = getattr(event, "delta", "") or _dict_value(event, "delta", "")
             block_idx = (
                 self._item_id_to_block_index.get(item_id, self._current_block_index)
                 if item_id
@@ -431,11 +460,17 @@ class AnthropicResponsesStreamWrapper:
             if self._field(item, "type") == "reasoning":
                 self._close_reasoning_item(item, item_id)
                 return
+            if self._field(item, "type") == "mcp_call":
+                self._emit_mcp_call(item)
+                return
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:
                 return
             if self._field(item, "type") == "function_call":
                 self._stream_unstreamed_tool_input(item_id, self._field(item, "arguments"))
+            search_arguments: Final = as_str_mapping(self._field(item, "arguments"))
+            if self._field(item, "type") == "tool_search_call" and search_arguments:
+                self._stream_unstreamed_tool_input(item_id, json.dumps(search_arguments))
             self._tool_input_settled_blocks = self._tool_input_settled_blocks | {block_idx}
             self._chunk_queue.append(
                 {
@@ -472,19 +507,18 @@ class AnthropicResponsesStreamWrapper:
             "response.completed",
             "response.incomplete",
         ):
-            response_obj: Final = getattr(event, "response", None) or (
-                event.get("response") if isinstance(event, dict) else None
-            )
+            response_obj: Final = getattr(event, "response", None) or _dict_value(event, "response")
             output: Final[Iterable[object]] = (
                 (getattr(response_obj, "output", None) or ()) if response_obj is not None else ()
             )
             refusal_text: Final = responses_output_refusal_text(output) or (self._refusal_text or None)
             status: Final = getattr(response_obj, "status", None) if response_obj is not None else None
-            has_tool_call: Final = any(
-                getattr(item, "type", None) == "function_call"
-                or (isinstance(item, dict) and item.get("type") == "function_call")
-                for item in output
+            tool_call_types: Final = (
+                frozenset({"function_call", "tool_search_call"})
+                if self._tool_search_name is not None
+                else frozenset({"function_call"})
             )
+            has_tool_call: Final = any(self._field(item, "type") in tool_call_types for item in output)
             stop_reason: Final = (
                 "max_tokens"
                 if status == "incomplete"

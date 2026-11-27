@@ -63,7 +63,8 @@ impl HostCall for WriteOutputCap {
 }
 
 /// The input and output estimate of a request only Python's estimator reads: one carrying image,
-/// audio, video or file media, whose tokens Python prices per model, or a value that is not JSON.
+/// audio, video or file media, whose tokens Python prices per model, or a value that is not JSON,
+/// and whether it counted embedding media no deployment prices as text.
 #[derive(Serialize)]
 pub struct MediaEstimate {
     pub min_configured_tpm_limit: Option<i64>,
@@ -73,7 +74,7 @@ pub struct MediaEstimate {
 
 impl HostCall for MediaEstimate {
     const NAME: &'static str = "media_estimate";
-    type Reply = (WideTokens, WideTokens);
+    type Reply = (WideTokens, WideTokens, bool);
 }
 
 #[derive(Serialize)]
@@ -104,7 +105,8 @@ fn typed_configured(configured: &EstimatedOutputTokens, model: Option<&str>) -> 
         .or(configured.team_default)
 }
 
-fn written(body: &mut Value, call_type: &str, cap: i64) {
+/// Writes `cap` into `body` where the route of `call_type` reads its output cap.
+pub fn write_output_cap(body: &mut Value, call_type: &str, cap: i64) {
     let Value::Object(request) = body else {
         return;
     };
@@ -181,7 +183,7 @@ impl Reservation<'_> {
         };
         let applied = self.host.call(WriteOutputCap { cap }).await?;
         if applied && let Some(body) = self.body.as_mut() {
-            written(body, self.call_type, cap);
+            write_output_cap(body, self.call_type, cap);
         }
         Ok(applied)
     }
@@ -192,17 +194,21 @@ impl Reservation<'_> {
         &self,
         answer: Option<Out<(i128, i128)>>,
         call: MediaEstimate,
-    ) -> Result<(i64, i64, (f64, f64)), Stop> {
+    ) -> Result<(i64, i64, (f64, f64), bool), Stop> {
         match answer {
             Some(Ok((input, output))) => Ok((
                 saturated(input),
                 saturated(output),
                 (input as f64, output as f64),
+                false,
             )),
             _ => {
-                let (WideTokens(input, wide_input), WideTokens(output, wide_output)) =
-                    self.host.call(call).await?;
-                Ok((input, output, (wide_input, wide_output)))
+                let (
+                    WideTokens(input, wide_input),
+                    WideTokens(output, wide_output),
+                    unpriced_media,
+                ) = self.host.call(call).await?;
+                Ok((input, output, (wide_input, wide_output), unpriced_media))
             }
         }
     }
@@ -212,11 +218,15 @@ impl ParallelRequestLimiter {
     pub(crate) async fn pre_call_hosted(
         &self,
         state: &LimiterState,
+        held: &LimiterState,
         facts: PreCallFacts,
         ctx: Ctx<'_>,
         reservation: Reservation<'_>,
     ) -> Result<Option<Abort>, CallbackError> {
-        match self.admit_hosted(state, facts, ctx, reservation).await {
+        match self
+            .admit_hosted(state, held, facts, ctx, reservation)
+            .await
+        {
             Ok(()) => Ok(None),
             Err(Stop::Refused(abort)) => Ok(Some(*abort)),
             Err(Stop::Raised(error)) => Err(error),
@@ -226,14 +236,40 @@ impl ParallelRequestLimiter {
     async fn admit_hosted(
         &self,
         state: &LimiterState,
+        held: &LimiterState,
         facts: PreCallFacts,
         ctx: Ctx<'_>,
-        mut reservation: Reservation<'_>,
+        reservation: Reservation<'_>,
     ) -> Result<(), Stop> {
         refused(self.first_pass(state, &facts, ctx).await?)?;
         if !state.stash().first_pass_admitted {
             return Ok(());
         }
+        if !facts.nested_tool_call {
+            return self.reserve_hosted(state, facts, ctx, reservation).await;
+        }
+        held.stash().owned = true;
+        let reserved = self
+            .reserve_hosted(held, facts.clone(), ctx, reservation)
+            .await;
+        self.give_back_tool_call_reservation(
+            state,
+            &facts,
+            held,
+            matches!(reserved, Err(Stop::Refused(_))),
+            ctx,
+        )
+        .await;
+        reserved
+    }
+
+    async fn reserve_hosted(
+        &self,
+        state: &LimiterState,
+        facts: PreCallFacts,
+        ctx: Ctx<'_>,
+        mut reservation: Reservation<'_>,
+    ) -> Result<(), Stop> {
         let plan = self.plan(state);
         let cap = self.cap_settings();
         let configured = if plan.reserves {
@@ -250,7 +286,7 @@ impl ParallelRequestLimiter {
                 let split = reservation
                     .request(Some(min), configured, true)
                     .map(|request| estimate::input_and_output_tokens(request, &cap));
-                let (input, output, exact) = reservation
+                let (input, output, exact, counts_unpriced_media) = reservation
                     .estimate(
                         split,
                         MediaEstimate {
@@ -285,6 +321,7 @@ impl ParallelRequestLimiter {
                     estimated_tokens: Some(estimated_tokens),
                     ptu_estimate,
                     ptu_exact,
+                    counts_unpriced_media,
                     ..facts
                 }
             }
@@ -299,7 +336,7 @@ impl ParallelRequestLimiter {
         let split = reservation
             .request(plan.min_otpm_limit, None, false)
             .map(|request| estimate::input_and_output_tokens(request, &cap));
-        let (_, output_tokens, _) = reservation
+        let (_, output_tokens, _, _) = reservation
             .estimate(
                 split,
                 MediaEstimate {
@@ -360,7 +397,7 @@ mod tests {
         #[case] expected: Value,
     ) {
         let mut body = body;
-        written(&mut body, call_type, 25);
+        write_output_cap(&mut body, call_type, 25);
         assert_eq!(body, expected);
     }
 

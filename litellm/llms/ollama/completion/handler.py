@@ -56,7 +56,7 @@ def _process_ollama_embedding_response(
     model_response: EmbeddingResponse,
     encoding: TokenEncoder | None,
 ) -> EmbeddingResponse:
-    output_data: Final = []
+    output_data: Final[list[Mapping[str, object]]] = []
     embeddings: Final[list[list[float]]] = response_json["embeddings"]
 
     for idx, emb in enumerate(embeddings):

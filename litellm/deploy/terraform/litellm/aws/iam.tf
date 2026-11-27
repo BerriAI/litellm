@@ -11,8 +11,9 @@ data "aws_iam_policy_document" "task_assume" {
 }
 
 resource "aws_iam_role" "task_execution" {
-  name               = "${local.name}-task-execution"
-  assume_role_policy = data.aws_iam_policy_document.task_assume.json
+  name                 = "${local.name}-task-execution"
+  assume_role_policy   = data.aws_iam_policy_document.task_assume.json
+  permissions_boundary = var.permissions_boundary
 
   tags = local.tags
 }
@@ -50,9 +51,9 @@ data "aws_iam_policy_document" "secrets_access" {
   statement {
     actions = ["secretsmanager:GetSecretValue"]
     resources = concat(
-      [aws_secretsmanager_secret.master_key.arn],
+      [local.master_key_secret_arn],
       aws_secretsmanager_secret.license[*].arn,
-      aws_secretsmanager_secret.ui_password[*].arn,
+      local.ui_password_secret_arn[*],
       aws_secretsmanager_secret.billing_metrics_client_secret[*].arn,
       aws_secretsmanager_secret.database_url[*].arn,
       aws_secretsmanager_secret.redis_url[*].arn,
@@ -84,8 +85,9 @@ resource "aws_iam_role_policy_attachment" "task_execution_secrets" {
 # var.database_url, so the policy is skipped there.
 
 resource "aws_iam_role" "task" {
-  name               = "${local.name}-task"
-  assume_role_policy = data.aws_iam_policy_document.task_assume.json
+  name                 = "${local.name}-task"
+  assume_role_policy   = data.aws_iam_policy_document.task_assume.json
+  permissions_boundary = var.permissions_boundary
 
   tags = local.tags
 }
@@ -128,8 +130,9 @@ resource "aws_iam_role_policy_attachment" "task_rds_iam_connect" {
 # credentials aren't surfaced to the container).
 
 resource "aws_iam_role" "ui_task" {
-  name               = "${local.name}-ui-task"
-  assume_role_policy = data.aws_iam_policy_document.task_assume.json
+  name                 = "${local.name}-ui-task"
+  assume_role_policy   = data.aws_iam_policy_document.task_assume.json
+  permissions_boundary = var.permissions_boundary
 
   tags = local.tags
 }

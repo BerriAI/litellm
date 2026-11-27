@@ -21,6 +21,7 @@ import dayjs from "dayjs";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Conversation } from "./types";
+import { displayConversationTitle } from "./conversationTitle";
 
 interface Props {
   conversations: Conversation[];
@@ -77,7 +78,8 @@ interface ConversationRowProps {
 }
 
 const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSelect, onDelete, onRename }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const title = displayConversationTitle(conv, t);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(conv.title);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -140,17 +142,18 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
           <Button
             variant="ghost"
             onClick={() => onSelect(conv.id)}
-            aria-label={conv.title}
+            aria-label={title}
             aria-current={isActive ? "page" : undefined}
             className={`h-auto min-h-11 min-w-0 flex-1 justify-start text-[13px] hover:bg-sidebar-accent ${
               isActive ? "font-medium" : ""
             }`}
-            title={conv.title}
+            title={title}
           >
             <span className="min-w-0 flex-1 text-left">
-              <span className="block truncate">{conv.title}</span>
+              <span className="block truncate">{title}</span>
               <span className="moyai-chat-conversation-meta block truncate text-xs font-normal text-muted-foreground">
-                {conv.model} · {dayjs(conv.updatedAt).format("MMM D")}
+                {conv.model} ·{" "}
+                {new Date(conv.updatedAt).toLocaleDateString(i18n.language, { month: "short", day: "numeric" })}
               </span>
             </span>
           </Button>
@@ -167,7 +170,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                       onClick={startEditing}
                       variant="ghost"
                       size="icon-xs"
-                      aria-label={t("chat.conversationList.renameConversation", { title: conv.title })}
+                      aria-label={t("chat.conversationList.renameConversation", { title })}
                       className="text-muted-foreground"
                     >
                       <Pencil className="h-3 w-3" />
@@ -190,7 +193,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                           <Button
                             variant="ghost"
                             size="icon-xs"
-                            aria-label={t("chat.conversationList.deleteConversation", { title: conv.title })}
+                            aria-label={t("chat.conversationList.deleteConversation", { title })}
                             className="text-muted-foreground hover:text-destructive"
                           >
                             <Trash2 className="h-3 w-3" />

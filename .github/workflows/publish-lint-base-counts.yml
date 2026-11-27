@@ -57,8 +57,15 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Cache the Rust build
+      - name: Restore the Rust bridge
+        id: bridge
         if: matrix.checker == 'openapi-docs'
+        uses: ./.github/actions/restore-rust-bridge
+        with:
+          stale-cost-map: "true"
+
+      - name: Cache the Rust build
+        if: matrix.checker == 'openapi-docs' && steps.bridge.outputs.restored != 'true'
         uses: ./.github/actions/cache-cargo-build
 
       - name: Cache Prisma binaries
@@ -76,8 +83,16 @@ jobs:
       # test-linting.yml python job uses, Prisma client included.
       - name: Install the proxy
         if: matrix.checker == 'openapi-docs'
+        env:
+          BRIDGE_RESTORED: ${{ steps.bridge.outputs.restored }}
         run: |
-          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
+          if [ "${BRIDGE_RESTORED}" = true ]; then
+            uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy --no-install-project --no-install-package litellm-proxy
+            uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
+            cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
+          else
+            uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
+          fi
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Emit ${{ matrix.checker }} counts for HEAD

@@ -54,7 +54,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         complete_url: Final = self._add_api_version_to_url(url=url, api_version=(params.get("api_version", None)))
         return complete_url
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "documents",
@@ -65,12 +65,12 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         optional_params = optional_params or {}
 
         default_headers: Final = {
@@ -112,7 +112,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map Cohere rerank params to IBM watsonx.ai rerank params
         """
@@ -141,10 +141,10 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        optional_rerank_params: dict[str, object],
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         """
         Transform request to IBM watsonx.ai rerank format
         """
@@ -163,9 +163,9 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
         """
         Transform IBM watsonx.ai rerank response to LiteLLM RerankResponse format

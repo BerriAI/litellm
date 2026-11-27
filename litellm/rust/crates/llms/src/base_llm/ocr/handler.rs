@@ -17,8 +17,8 @@ use crate::base_llm::ocr::{
     error::Error,
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, OcrResponseContext, PreparedOcrRequest,
-        decode_request_value, decode_response,
+        BaseOcrConfig, DecodedOcrResponse, OcrRequestContext, OcrResponseContext,
+        PreparedOcrRequest, decode_request_value, decode_response,
     },
 };
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument};
@@ -40,6 +40,7 @@ pub struct OcrClient {
     auth: Arc<AuthServices>,
     settings: OcrSettings,
     secrets: Arc<dyn SecretSource>,
+    user_agent: Option<String>,
 }
 
 impl OcrClient {
@@ -58,6 +59,7 @@ impl OcrClient {
             auth,
             settings,
             secrets,
+            user_agent: config.user_agent.clone(),
         })
     }
 
@@ -85,6 +87,11 @@ impl OcrClient {
         &self.secrets
     }
 
+    /// The operator's configured `User-Agent`, which the HTTP clients already send by default.
+    pub fn user_agent(&self) -> Option<&str> {
+        self.user_agent.as_deref()
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_test() -> Self {
         Self {
@@ -96,6 +103,7 @@ impl OcrClient {
             document_fetcher: MediaFetcher::for_test(Client::for_test()),
             auth: Arc::new(AuthServices::default()),
             settings: OcrSettings::default(),
+            user_agent: None,
         }
     }
 
@@ -127,8 +135,28 @@ pub async fn ocr<C: BaseOcrConfig>(
     hooks: &dyn CallHooks<Error>,
 ) -> Result<LiteLLMOcrResponse, Error> {
     let http = config.prepare_request(request, client, hooks).await?;
-    let url = http.url().to_string();
+    let cleanup = config.request_cleanup(&http);
     let headers = header_pairs(http.headers());
+    let result = send(config, client, request, hooks, http, &headers).await;
+    if let Some(cleanup) = cleanup {
+        let context = OcrRequestContext {
+            client,
+            connection: &request.connection,
+        };
+        config.release_request(cleanup, context, &headers).await;
+    }
+    result
+}
+
+async fn send<C: BaseOcrConfig>(
+    config: &C,
+    client: &OcrClient,
+    request: &PreparedOcrRequest,
+    hooks: &dyn CallHooks<Error>,
+    http: reqwest::Request,
+    headers: &[(String, String)],
+) -> Result<LiteLLMOcrResponse, Error> {
+    let url = http.url().to_string();
     let response = client
         .provider_http()
         .execute(http)
@@ -146,7 +174,8 @@ pub async fn ocr<C: BaseOcrConfig>(
         hooks,
         request_format: request.response_format()?,
         url: &url,
-        headers: &headers,
+        headers,
+        optional_params: &request.optional_params,
     };
     config
         .async_transform_ocr_response(&request.model, response, context)
@@ -394,5 +423,227 @@ mod tests {
 
         let (status, body, _) = error.upstream_response().expect("the provider answered");
         assert_eq!((status, body), (429, prefix.as_str()));
+    }
+
+    mod release {
+        use std::sync::{Arc, Mutex};
+
+        use futures_util::future::BoxFuture;
+        use litellm_core_utils::call_arguments::CallArguments;
+        use litellm_host::interceptors::WireRequest;
+        use litellm_llms_types::formats::ocr::{
+            LiteLLMOcrResponse, OcrDocument, OcrResponseFormat,
+        };
+        use rstest::rstest;
+        use serde_json::{Value, json};
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        use crate::base_llm::ocr::{
+            error::Error,
+            handler::{CallHooks, OcrClient, ocr},
+            transformation::{BaseOcrConfig, OcrConnection, OcrRequestContext, PreparedOcrRequest},
+        };
+
+        type Released = Arc<Mutex<Vec<(Value, Vec<(String, String)>)>>>;
+
+        /// A provider whose request leaves state behind when `cleanup` is set.
+        struct Leaving {
+            url: String,
+            cleanup: bool,
+            released: Released,
+        }
+
+        struct NoHooks;
+
+        impl CallHooks<Error> for NoHooks {
+            fn before_provider_request(
+                &self,
+                wire: WireRequest,
+            ) -> BoxFuture<'_, Result<WireRequest, Error>> {
+                Box::pin(async move { Ok(wire) })
+            }
+
+            fn response_received<'a>(
+                &'a self,
+                _body: &'a [u8],
+            ) -> BoxFuture<'a, Result<(), Error>> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        impl BaseOcrConfig for Leaving {
+            type OcrParams = ();
+            type ProviderRequest = Value;
+            type Environment = Vec<(String, String)>;
+
+            fn secret_names(&self) -> Vec<&'static str> {
+                Vec::new()
+            }
+
+            fn map_ocr_params(&self, _: &CallArguments, _: &str) -> Result<(), Error> {
+                Ok(())
+            }
+
+            async fn validate_environment(
+                &self,
+                _: &PreparedOcrRequest,
+                _: &OcrClient,
+            ) -> Result<Self::Environment, Error> {
+                Ok(Vec::new())
+            }
+
+            fn get_complete_url(
+                &self,
+                _: &PreparedOcrRequest,
+                _: &(),
+                _: &Self::Environment,
+            ) -> Result<String, Error> {
+                Ok(self.url.clone())
+            }
+
+            fn transform_ocr_request(
+                &self,
+                _: &str,
+                _: OcrDocument,
+                _: &(),
+                _: &[(String, String)],
+            ) -> Result<Value, Error> {
+                Ok(json!({}))
+            }
+
+            fn transform_ocr_response(
+                &self,
+                model: &str,
+                _: &[u8],
+                _: OcrResponseFormat,
+            ) -> Result<LiteLLMOcrResponse, Error> {
+                Ok(LiteLLMOcrResponse::new(model, Vec::new()))
+            }
+
+            async fn prepare_request(
+                &self,
+                _: &PreparedOcrRequest,
+                _: &OcrClient,
+                _: &dyn CallHooks<Error>,
+            ) -> Result<reqwest::Request, Error> {
+                let headers = [("authorization".to_owned(), "Bearer key".to_owned())];
+                Ok(litellm_http::outbound::json(
+                    &self.url,
+                    &headers,
+                    &json!({"source": "file-1"}),
+                    None,
+                )?)
+            }
+
+            fn request_cleanup(&self, request: &reqwest::Request) -> Option<Value> {
+                let body = request.body()?.as_bytes()?;
+                self.cleanup
+                    .then(|| serde_json::from_slice::<Value>(body).unwrap()["source"].clone())
+            }
+
+            async fn release_request(
+                &self,
+                cleanup: Value,
+                _: OcrRequestContext<'_>,
+                headers: &[(String, String)],
+            ) {
+                self.released
+                    .lock()
+                    .unwrap()
+                    .push((cleanup, headers.to_vec()));
+            }
+        }
+
+        /// The URL of a server that answers one request with `response`, or of a closed port.
+        async fn provider(response: Option<&'static str>) -> String {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            match response {
+                Some(response) => {
+                    tokio::spawn(async move {
+                        let (mut socket, _) = listener.accept().await.unwrap();
+                        let mut request = [0; 4096];
+                        let _ = socket.read(&mut request).await.unwrap();
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    });
+                }
+                None => drop(listener),
+            }
+            format!("http://{address}/parse")
+        }
+
+        fn request() -> PreparedOcrRequest {
+            PreparedOcrRequest {
+                model: "model".into(),
+                document: OcrDocument::DocumentUrl {
+                    document_url: "data:application/pdf;base64,YWJj".into(),
+                    extra_fields: Default::default(),
+                },
+                connection: OcrConnection::default(),
+                caller_document: true,
+                optional_params: CallArguments::default(),
+                input_sources: Default::default(),
+                azure_ad_token_provider: None,
+            }
+        }
+
+        #[rstest]
+        #[case::success(
+            Some("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"),
+            true
+        )]
+        #[case::error_status(
+            Some(
+                "HTTP/1.1 402 Payment Required\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+            ),
+            false
+        )]
+        #[case::transport_error(None, false)]
+        #[tokio::test]
+        async fn state_left_by_the_request_is_released_once_whatever_the_outcome(
+            #[case] response: Option<&'static str>,
+            #[case] succeeds: bool,
+        ) {
+            let released = Released::default();
+            let config = Leaving {
+                url: provider(response).await,
+                cleanup: true,
+                released: released.clone(),
+            };
+
+            let result = ocr(&config, &OcrClient::for_test(), &request(), &NoHooks).await;
+
+            assert_eq!(result.is_ok(), succeeds);
+            let released = released.lock().unwrap();
+            assert_eq!(released.len(), 1);
+            assert_eq!(released[0].0, json!("file-1"));
+            assert!(
+                released[0]
+                    .1
+                    .contains(&("authorization".to_owned(), "Bearer key".to_owned()))
+            );
+        }
+
+        #[tokio::test]
+        async fn a_provider_without_cleanup_is_never_released() {
+            let released = Released::default();
+            let config = Leaving {
+                url: provider(Some(
+                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                ))
+                .await,
+                cleanup: false,
+                released: released.clone(),
+            };
+
+            ocr(&config, &OcrClient::for_test(), &request(), &NoHooks)
+                .await
+                .unwrap();
+
+            assert!(released.lock().unwrap().is_empty());
+        }
     }
 }

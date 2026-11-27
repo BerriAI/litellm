@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.base_llm.image_generation.transformation import (
@@ -18,11 +19,11 @@ class XInferenceImageGenerationConfig(BaseImageGenerationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         for k in non_default_params:
             if k not in optional_params:

@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from httpx._models import Headers
@@ -29,9 +29,9 @@ class MaritalkConfig(OpenAIGPTConfig):
         n: int | None = None,
         stop: list[str] | None = None,
         stream: bool | None = None,
-        stream_options: dict | None = None,
-        tools: list[dict] | None = None,
-        tool_choice: str | dict | None = None,
+        stream_options: Mapping[str, object] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        tool_choice: str | Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -42,7 +42,7 @@ class MaritalkConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "frequency_penalty",
             "presence_penalty",

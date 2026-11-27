@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { type FC, type KeyboardEvent, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, CircleAlert, Ellipsis, Trash2, Zap } from "lucide-react";
@@ -346,7 +347,7 @@ const HealthChip: FC<HealthChipProps> = ({
   error,
   dotClass,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   if (isLoadingHealth || isRechecking) {
     return (
       <Badge variant="outline" className="text-muted-foreground">
@@ -382,7 +383,9 @@ const HealthChip: FC<HealthChipProps> = ({
         {status === "reachable" && <div className="mb-1 text-xs">{t(MCP_REACHABLE_DESCRIPTION)}</div>}
         {lastCheck && (
           <div className="mb-1 text-xs">
-            {t("mcpServers.serverCard.healthChip.lastCheck", { time: new Date(lastCheck).toLocaleString() })}
+            {t("mcpServers.serverCard.healthChip.lastCheck", {
+              time: displayTimestamp(new Date(lastCheck), locale.language),
+            })}
           </div>
         )}
         {error && (

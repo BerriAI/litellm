@@ -42,5 +42,14 @@
       "Authorization": "Bearer {{environment_variables.RAMP_API_KEY}}"
     },
     "environment_variables": ["RAMP_API_KEY"]
+  },
+  "luca": {
+    "event_types": ["llm_api_success"],
+    "endpoint": "{{environment_variables.LUCA_LITELLM_URL}}",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer {{environment_variables.LUCA_LITELLM_TOKEN}}"
+    },
+    "environment_variables": ["LUCA_LITELLM_URL", "LUCA_LITELLM_TOKEN"]
   }
 }

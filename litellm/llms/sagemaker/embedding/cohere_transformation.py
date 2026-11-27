@@ -10,7 +10,7 @@ be of type Object`.
 Reference: https://docs.cohere.com/v2/reference/embed
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, cast
 
 if TYPE_CHECKING:
@@ -30,6 +30,7 @@ from litellm.llms.bedrock.embed.cohere_transformation import (
 from litellm.llms.cohere.embed.v1_transformation import CohereEmbeddingConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse
+from litellm.utils import is_base64_encoded
 
 from ..common_utils import SagemakerError
 
@@ -42,6 +43,20 @@ def _cohere_embed_body(response_json: object) -> dict[str, object]:
         return body
     subscript(response_json, "embeddings")
     return require_attributes(response_json, dict[str, object], "get")
+
+
+def cohere_extra_body_params(
+    config: BaseEmbeddingConfig, input: Sequence[object], extra_body: Mapping[str, object]
+) -> Mapping[str, object]:
+    """The ``extra_body`` ``input_type`` for a Cohere endpoint, passed as a param so the default is skipped while an
+    explicit argument still wins. Image input keeps the ``image`` type the transform sets."""
+    if not isinstance(config, SagemakerCohereEmbeddingConfig) or "input_type" not in extra_body:
+        return {}
+    if any(
+        isinstance(item, str) and is_base64_encoded(item) for item in ([input] if isinstance(input, str) else input)
+    ):
+        return {}
+    return {"input_type": extra_body["input_type"]}
 
 
 class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
@@ -57,8 +72,8 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -77,9 +92,9 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: "AllEmbeddingInputValues",
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform embedding request for Cohere models on SageMaker
         """
@@ -108,8 +123,8 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> "EmbeddingResponse":
         """
         Transform embedding response for Cohere models on SageMaker.
@@ -136,14 +151,14 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: Sequence[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate environment for SageMaker Cohere embeddings
         """
