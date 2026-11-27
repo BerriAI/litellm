@@ -62,7 +62,7 @@ Catalog errors use one opaque `Error` with typed causes and JSON Pointer accesso
 
 - `names.rs` builds the seven names `get_model_info` tries for a known provider (`Candidates::potential`)
 - `mod.rs` has `lookup`, the `get_model_info` walk over a `CatalogView`: the first name whose row's provider matches, else a capability rule when no name is a key
-- `bedrock.rs` reads Bedrock model id spellings (region paths, ARNs, base model). The routing prefix and cross-region profile spellings the billing walk needs live in `litellm_cost::candidates::bedrock`, and this file re-exports them. `litellm-llms` re-exports it, so the routes and the lookups share one copy
+- `bedrock.rs` splits a Bedrock region path off a model id. The other Bedrock spellings (routing prefixes, cross-region profiles, ARNs, throughput suffixes and the base model) live in `litellm_cost::candidates::bedrock`, the one crate the billing walk, the catalog and router-core all link, and this file re-exports them. `litellm-llms` re-exports it, so the routes and the lookups share one copy
 - `tests/candidate_walk.rs` tests litellm-cost's walk over this catalog against `cost_candidates.json`. The walk cannot see a catalog from litellm-cost, so its parity tests run here
 - `tests/cost_candidates.json` (marked generated) is main's answer for each test case, captured once from `completion_cost` with `NativePrices` spied. Recapture it when main's selection changes on purpose, never to make a Rust change pass
 
@@ -86,6 +86,7 @@ Each line is main's behavior kept on purpose. Fixing one is a separate behavior 
 - A Bedrock Mantle row without token or tier prices bills 0 instead of trying the next candidate (the `else` branch of `cost_per_token`)
 - `stripped_model_name` keeps a Mantle region path, `us-gov-west-1/anthropic.claude-x` (`get_potential_model_names`)
 - A region path is any `<letters-digits-dashes>/` segment (`is_bedrock_region`), where Python checks a fixed region list (`get_all_bedrock_regions`)
+- A model id that is only a cross-region geo word, such as `us`, is its own base model (`bedrock_base_model`), where Python's `get_bedrock_base_model` raises `IndexError`
 - A geo or speed multiplier below 1 is dropped, since `Multiplier` refuses it, where Python applies any number
 
 ## Prices

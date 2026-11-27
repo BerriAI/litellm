@@ -19,6 +19,7 @@ use aws_smithy_runtime_api::client::identity::Identity;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 use litellm_auth_types::{AwsParams, AwsSessionTag, ParamSpec};
+use litellm_cost::candidates::bedrock::is_bedrock_region;
 
 use super::constants::{
     AWS_ACCESS_KEY_ID, AWS_DEFAULT_REGION, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION,
@@ -1086,14 +1087,6 @@ pub fn bedrock_model_id_and_region(model: &str) -> (String, Option<String>) {
             .map(str::to_string);
     }
     (stripped.to_string(), region)
-}
-
-pub fn is_bedrock_region(value: &str) -> bool {
-    value.len() > 3
-        && value.contains('-')
-        && value
-            .chars()
-            .all(|char| char.is_ascii_alphanumeric() || char == '-')
 }
 
 /// The region a caller configured: `aws_region_name`, then the model's own

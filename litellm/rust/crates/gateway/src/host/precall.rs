@@ -240,4 +240,32 @@ mod tests {
             expected
         );
     }
+
+    const BEDROCK_COST_MAP: &[u8] = br#"{
+        "anthropic.claude-x-v1:0": {"litellm_provider": "bedrock", "mode": "chat", "max_input_tokens": 5000},
+        "us.anthropic.claude-x-v1:0": {"litellm_provider": "bedrock", "mode": "chat", "max_input_tokens": 9000},
+        "anthropic.claude-y-v1:0": {"litellm_provider": "bedrock", "mode": "chat", "max_input_tokens": 9000}
+    }"#;
+
+    #[rstest]
+    #[case::widened_by_a_cross_region_profile_of_its_model("us.anthropic.claude-x-v1:0", 9000)]
+    #[case::kept_under_a_base_model_naming_another_model("anthropic.claude-y-v1:0", 5000)]
+    #[tokio::test]
+    async fn a_bedrock_deployments_window_is(#[case] base_model: &str, #[case] expected: i64) {
+        let catalog = Catalog::parse(BEDROCK_COST_MAP).unwrap().value;
+        let spec: DeploymentSpec = serde_json::from_value(json!({
+            "model_name": "claude",
+            "litellm_params": {"model": "bedrock/anthropic.claude-x-v1:0"},
+            "model_info": {"base_model": base_model},
+        }))
+        .unwrap();
+        let deployment = Deployment::from_spec(spec).unwrap();
+
+        assert_eq!(
+            window(&catalog, &deployment)
+                .await
+                .map(|window| window.limit),
+            Some(expected)
+        );
+    }
 }

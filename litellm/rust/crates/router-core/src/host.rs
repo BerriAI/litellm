@@ -256,8 +256,6 @@ pub enum ModelInfoLookup {
     /// The deployments a wildcard pattern routes `name` to: answered with `[{id, model}]`, or
     /// `None` when no pattern matches.
     PatternModels { name: String },
-    /// The base model a bedrock model id names (`get_bedrock_base_model`).
-    BedrockBase { model_id: String },
     /// The limits the background model-info refresh discovered for deployment `id`.
     Discovered { id: Value },
     /// The queried deployment's own `model_info`, read when the merge reaches it (a malformed one
@@ -765,11 +763,6 @@ pub trait RouterHost: Send + Sync {
         async { Ok(PreCallFacts::default()) }
     }
 
-    fn provider_model_id<'a>(&self, model_id: &'a str, provider: &str) -> &'a str {
-        let _ = provider;
-        model_id
-    }
-
     /// `f"{provider}/{model}"` for `ctx.name`, which `PatternMatchRouter.get_pattern` tries when
     /// no pattern matches the name itself: only the host can infer a provider. `None` from a
     /// host that infers none.
@@ -811,9 +804,12 @@ pub trait RouterHost: Send + Sync {
         target: &str,
     ) -> impl Future<Output = Result<bool, AttemptError>> + Send;
 
-    // TODO: a pure check of each dict target's keys, which moves into the core
-    /// Whether `run_async_fallback` refuses a chain for one of its dict `targets`, a server-owned
-    /// federation field or an `oidc/` api key. The chain is walked by `level`.
+    // TODO: decided by the host until the server-owned field names and the stored credentials a
+    // target names are facts the core reads
+    /// Whether `run_async_fallback` refuses a chain for one of its dict `targets`: a server-owned
+    /// federation field, an `oidc/` api key, or a `litellm_credential_name` naming a stored
+    /// credential that holds one. The host keeps the error it raises. The chain is walked by
+    /// `level`.
     fn refuses_fallbacks(
         &self,
         level: u32,

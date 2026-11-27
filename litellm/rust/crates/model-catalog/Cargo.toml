@@ -9,7 +9,6 @@ repository.workspace = true
 schema = ["dep:schemars", "litellm-cost/schema"]
 
 [dependencies]
-litellm-auth-aws.workspace = true
 litellm-cost = { workspace = true, features = ["serde"] }
 litellm-error.workspace = true
 litellm-python-compat.workspace = true

@@ -1,11 +1,9 @@
 //! The names main's `get_model_info` tries for a model and a known provider: `get_potential_model_names` and
 //! `_strip_model_name` in `litellm/utils.py`
 
-use litellm_auth_aws::is_bedrock_region;
-
 use super::Candidates;
 use super::bedrock::{
-    bedrock_base_model, bedrock_model_name_from_arn, split_bedrock_region_path,
+    bedrock_base_model, bedrock_model_name_from_arn, is_bedrock_region, split_bedrock_region_path,
     strip_bedrock_routing_prefix,
 };
 
