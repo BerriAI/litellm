@@ -13,7 +13,10 @@ from litellm._internal_context import billed_separately, internal_sub_call, is_i
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.agentic_followup_failure import mark_agentic_followup_failure, rounds_served_before
-from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
+from litellm.litellm_core_utils.agentic_followup_kwargs import (
+    build_agentic_followup_kwargs,
+    isolate_agentic_metadata,
+)
 from litellm.litellm_core_utils.agentic_loop_refusal import every_claimed_tool_call, finalize_refused_chat_turn
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
@@ -43,6 +46,7 @@ from litellm.types.integrations.custom_logger import (
     is_interception_internal_key,
     stashed_stream_options,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
@@ -51,6 +55,7 @@ from litellm.types.utils import (
 from litellm.utils import CustomStreamWrapper
 
 _DispatchResult = TypeVar("_DispatchResult")
+_Round = TypeVar("_Round", ResponsesAPIResponse, ModelResponse)
 
 _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
     (
@@ -381,16 +386,21 @@ def _followup_billing_scope(logging_obj: object, request_kwargs: Mapping[str, ob
     return internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObject) else None)
 
 
-def _billed_with_the_round_it_follows(round_served: object, follow_up: object, logging_obj: object) -> object:
-    if not (
-        isinstance(round_served, ModelResponse)
-        and isinstance(follow_up, ModelResponse)
-        and isinstance(logging_obj, LiteLLMLoggingObject)
-        and logging_obj.bridged_chat_request is not None
-    ):
+def billed_with_the_round_it_follows(round_served: object, follow_up: object, logging_obj: object) -> object:
+    if not isinstance(logging_obj, LiteLLMLoggingObject):
         return follow_up
-    if not (is_internal_call.get() or logging_obj.unpark_success_log()):
-        return follow_up
+    if isinstance(round_served, ModelResponse) and isinstance(follow_up, ModelResponse):
+        if logging_obj.bridged_chat_request is not None and not (
+            is_internal_call.get() or logging_obj.unpark_success_log()
+        ):
+            return follow_up
+        return _merge_billed_rounds(round_served, follow_up, logging_obj)
+    if isinstance(round_served, ResponsesAPIResponse) and isinstance(follow_up, ResponsesAPIResponse):
+        return _merge_billed_rounds(round_served, follow_up, logging_obj)
+    return follow_up
+
+
+def _merge_billed_rounds(round_served: _Round, follow_up: _Round, logging_obj: LiteLLMLoggingObject) -> _Round:
     first_price: Final = _price_of_round(round_served, logging_obj)
     final_price: Final = _price_of_round(follow_up, logging_obj)
     first: Final = _priced(round_served, first_price)
@@ -412,25 +422,27 @@ def _billed_with_the_round_it_follows(round_served: object, follow_up: object, l
     return billed
 
 
-def _price_of_every_round(response: ModelResponse) -> UncachedPrice | None:
+def _price_of_every_round(response: ResponsesAPIResponse | ModelResponse) -> UncachedPrice | None:
     every_round: Final = (get_hidden_params(response) or {}).get(_PRICE_OF_EVERY_ROUND)
     return every_round if isinstance(every_round, UncachedPrice) else None
 
 
-def _price_of_round(round_response: ModelResponse, logging_obj: LiteLLMLoggingObject) -> UncachedPrice:
+def _price_of_round(
+    round_response: ResponsesAPIResponse | ModelResponse, logging_obj: LiteLLMLoggingObject
+) -> UncachedPrice:
     every_round: Final = _price_of_every_round(round_response)
     if every_round is not None:
         return every_round
     return SERVED_FROM_CACHE if served_from_cache(round_response) else logging_obj.uncached_price(round_response)
 
 
-def _priced(round_response: ModelResponse, price: UncachedPrice) -> ModelResponse:
+def _priced(round_response: _Round, price: UncachedPrice) -> _Round:
     priced: Final = round_response.model_copy()
     set_hidden_params(priced, {**(get_hidden_params(round_response) or {}), "response_cost": price.cost})
     return priced
 
 
-def _leave_pricing_to_the_request(response: object) -> None:
+def leave_pricing_to_the_request(response: object) -> None:
     hidden_params: Final = get_hidden_params(response)
     if hidden_params is not None and not served_from_cache(response):
         hidden_params.pop("response_cost", None)
@@ -459,7 +471,10 @@ async def _execute_chat_completion_agentic_plan(
 
     full_model_name: Final = qualify_agentic_followup_model(patch.model, model, custom_llm_provider)
 
-    optional_params_for_followup: Final = {**optional_params, **patch.optional_params}
+    optional_params_for_followup: Final = {
+        k: isolate_agentic_metadata(v) if k == "metadata" else v
+        for k, v in chain(optional_params.items(), patch.optional_params.items())
+    }
     if patch.tools is not None:
         optional_params_for_followup["tools"] = patch.tools
     if "tool_choice" not in patch.optional_params:
@@ -501,8 +516,8 @@ async def _execute_chat_completion_agentic_plan(
                     model,
                     str(e),
                 )
-        _leave_pricing_to_the_request(response_followup)
-        billed: Final = _billed_with_the_round_it_follows(response, response_followup, logging_obj)
+        leave_pricing_to_the_request(response_followup)
+        billed: Final = billed_with_the_round_it_follows(response, response_followup, logging_obj)
         replay: Final = _converted_stream_replay(
             billed,
             kwargs=kwargs,

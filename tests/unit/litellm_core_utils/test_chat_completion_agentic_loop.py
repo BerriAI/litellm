@@ -20,13 +20,16 @@ removed, so `test_internal_control_fields_never_leak_into_provider_body` proves
 they stay out of the body even without it.
 """
 
+import asyncio
 import datetime
 import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from openai._legacy_response import LegacyAPIResponse
 
 import litellm
@@ -1368,3 +1371,269 @@ async def test_a_malformed_choice_dropped_by_drop_params_never_holds_back_the_ch
     )
 
     assert (hook.runs, response.choices[0].message.content) == (1, "ran the hook")
+
+
+def _interception_round_response(
+    surface: str,
+    model_name: str,
+    tool_calls_seen: int,
+    max_tool_rounds: int,
+    usages: Sequence[Mapping[str, int]],
+) -> httpx.Response:
+    usage: Final = dict(usages[tool_calls_seen])
+    needs_tool: Final = tool_calls_seen < max_tool_rounds
+    if surface == "chat":
+        message = (
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": f"call_{tool_calls_seen}",
+                        "type": "function",
+                        "function": {
+                            "name": "litellm_code_execution",
+                            "arguments": json.dumps({"code": f"print({tool_calls_seen})"}),
+                        },
+                    }
+                ],
+            }
+            if needs_tool
+            else {"role": "assistant", "content": "done"}
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": f"chatcmpl-{tool_calls_seen}",
+                "object": "chat.completion",
+                "created": 1,
+                "model": model_name,
+                "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+                "usage": usage,
+            },
+        )
+
+    output = (
+        [
+            {
+                "type": "function_call",
+                "id": f"fc_{tool_calls_seen}",
+                "call_id": f"call_{tool_calls_seen}",
+                "name": "litellm_code_execution",
+                "arguments": json.dumps({"code": f"print({tool_calls_seen})"}),
+                "status": "completed",
+            }
+        ]
+        if needs_tool
+        else [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "done", "annotations": []}],
+            }
+        ]
+    )
+    return httpx.Response(
+        200,
+        json={
+            "id": f"resp_{tool_calls_seen}",
+            "object": "response",
+            "created_at": 1,
+            "model": model_name,
+            "status": "completed",
+            "output": output,
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "usage": {
+                "input_tokens": usage["prompt_tokens"],
+                "output_tokens": usage["completion_tokens"],
+                "total_tokens": usage["total_tokens"],
+            },
+        },
+    )
+
+
+def _tool_round_handler(surface: str, model_name: str, usages: Sequence[Mapping[str, int]]):
+    max_tool_rounds: Final = len(usages) - 1
+
+    def _reply(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        if surface == "chat":
+            tool_calls_seen = sum(1 for m in body["messages"] if m.get("role") == "tool")
+        else:
+            inp = body["input"]
+            tool_calls_seen = (
+                sum(1 for item in inp if item.get("type") == "function_call_output") if isinstance(inp, list) else 0
+            )
+        return _interception_round_response(surface, model_name, tool_calls_seen, max_tool_rounds, usages)
+
+    return _reply
+
+
+class _SuccessUsageRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[tuple[int, int, float | None, object]] = []
+        self.logged: Final = asyncio.Event()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        slo = kwargs.get("standard_logging_object")
+        assert isinstance(slo, dict)
+        cost_breakdown = slo.get("cost_breakdown")
+        total_cost = cost_breakdown.get("total_cost") if isinstance(cost_breakdown, dict) else None
+        self.events.append(
+            (int(slo["prompt_tokens"]), int(slo["completion_tokens"]), slo.get("response_cost"), total_cost)
+        )
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["chat", "responses"])
+@pytest.mark.parametrize("with_metadata", [True, False], ids=["with_metadata", "no_metadata"])
+async def test_code_interpreter_interception_logs_summed_round_usage_and_single_otel_span(
+    surface: str,
+    with_metadata: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    usages: Final = (
+        {"prompt_tokens": 111, "completion_tokens": 75, "total_tokens": 186},
+        {"prompt_tokens": 254, "completion_tokens": 60, "total_tokens": 314},
+    )
+    endpoint = "http://vllm.local/v1/chat/completions" if surface == "chat" else "http://vllm.local/v1/responses"
+    respx_mock.post(endpoint).mock(side_effect=_tool_round_handler(surface, "m", usages))
+
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    otel.tracer = provider.get_tracer(__name__)
+    recorder: Final = _SuccessUsageRecorder()
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CodeInterpreterInterceptionLogger(sandbox_config=FakeSandboxConfig()), otel, recorder],
+    )
+
+    extra: dict[str, object] = {"metadata": {"k": "v"}} if with_metadata else {}
+    tools: Final = [{"type": "code_interpreter", "container": {"type": "auto"}}]
+    if surface == "chat":
+        response = await litellm.acompletion(
+            model="hosted_vllm/m",
+            api_base="http://vllm.local/v1",
+            api_key="x",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=tools,
+            **extra,
+        )
+    else:
+        response = await litellm.aresponses(
+            model="hosted_vllm/m",
+            api_base="http://vllm.local/v1",
+            api_key="x",
+            input="hi",
+            tools=tools,
+            **extra,
+        )
+    await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    spans: Final = [s for s in exporter.get_finished_spans() if s.name == "litellm_request"]
+    assert len(spans) == 1
+    assert (
+        spans[0].attributes["gen_ai.usage.input_tokens"],
+        spans[0].attributes["gen_ai.usage.output_tokens"],
+    ) == (365, 135)
+    assert len(recorder.events) == 1
+    assert recorder.events[0][:2] == (365, 135)
+    if surface == "chat":
+        assert isinstance(response, ModelResponse)
+        assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (
+            365,
+            135,
+            500,
+        )
+    else:
+        assert isinstance(response, ResponsesAPIResponse)
+        assert response.usage is not None
+        assert (response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens) == (
+            365,
+            135,
+            500,
+        )
+        assert any(
+            (item.get("type") if isinstance(item, dict) else getattr(item, "type", None)) == "code_interpreter_call"
+            for item in response.output
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["chat", "responses"])
+async def test_code_interpreter_interception_sums_cost_across_three_rounds(
+    surface: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+):
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    rounds: Final = (
+        {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+        {"prompt_tokens": 200, "completion_tokens": 20, "total_tokens": 220},
+        {"prompt_tokens": 300, "completion_tokens": 30, "total_tokens": 330},
+    )
+    endpoint = (
+        "https://api.openai.com/v1/chat/completions" if surface == "chat" else "https://api.openai.com/v1/responses"
+    )
+    respx_mock.post(endpoint).mock(side_effect=_tool_round_handler(surface, "gpt-4o-mini", rounds))
+
+    recorder: Final = _SuccessUsageRecorder()
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CodeInterpreterInterceptionLogger(sandbox_config=FakeSandboxConfig()), recorder],
+    )
+    tools: Final = [{"type": "code_interpreter", "container": {"type": "auto"}}]
+    if surface == "chat":
+        await litellm.acompletion(
+            model="openai/gpt-4o-mini",
+            api_key="sk-test",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=tools,
+        )
+    else:
+        await litellm.aresponses(
+            model="openai/gpt-4o-mini",
+            api_key="sk-test",
+            input="hi",
+            tools=tools,
+        )
+    await asyncio.wait_for(recorder.logged.wait(), timeout=5)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    price: Final = litellm.model_cost["gpt-4o-mini"]
+    expected_cost: Final = 600 * price["input_cost_per_token"] + 60 * price["output_cost_per_token"]
+    assert len(recorder.events) == 1
+    prompt_tokens, completion_tokens, response_cost, breakdown_total = recorder.events[0]
+    assert (prompt_tokens, completion_tokens) == (600, 60)
+    assert response_cost == pytest.approx(expected_cost)
+    assert breakdown_total == pytest.approx(expected_cost)
