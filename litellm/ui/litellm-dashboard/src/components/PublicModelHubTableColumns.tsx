@@ -1,5 +1,6 @@
 "use client";
 
+import { displayTimestamp } from "@/i18n/displayDate";
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
@@ -372,7 +373,7 @@ export const getPublicModelHubColumns = ({
           : i18n.t("aiHub.publicModelHubColumns.notAvailable");
         const lastCheckedLabel = model.health_checked_at
           ? i18n.t("aiHub.publicModelHubColumns.lastChecked", {
-              date: new Date(model.health_checked_at).toLocaleString(),
+              date: displayTimestamp(new Date(model.health_checked_at)),
             })
           : i18n.t("aiHub.publicModelHubColumns.notAvailable");
         return (

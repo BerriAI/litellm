@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Controller } from "react-hook-form";
@@ -160,7 +161,7 @@ export default function SkillVersionHistory({
   isAdmin?: boolean;
   onRestored?: (skill: Skill) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [offset, setOffset] = useState(0);
   const onAdminRestore = isAdmin ? onRestored : undefined;
   const history = useQuery({
@@ -182,7 +183,9 @@ export default function SkillVersionHistory({
           <div className="flex items-center justify-between gap-4">
             <h3 className="font-medium">{version.version ?? t("claudeCodePlugins.skillDetail.history.legacy")}</h3>
             {version.published_at && (
-              <time className="text-sm text-muted-foreground">{new Date(version.published_at).toLocaleString()}</time>
+              <time className="text-sm text-muted-foreground">
+                {displayTimestamp(new Date(version.published_at), locale.language)}
+              </time>
             )}
           </div>
           {version.description && <p className="mt-2 text-sm">{version.description}</p>}
