@@ -36,7 +36,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.pangea import PangeaGuardrailConfigModel
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -349,7 +349,7 @@ class PangeaHandler(CustomGuardrail):
             ) from e
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[PangeaGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.pangea import (
             PangeaGuardrailConfigModel,
         )

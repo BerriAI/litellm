@@ -59,7 +59,7 @@ _LEGACY_NOMA_DEPRECATION_WARNED = False
 _DECODED_JSON: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.noma import NomaGuardrailConfigModel
 
 
 class NomaBlockedMessage(HTTPException):
@@ -809,7 +809,7 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.debug(msg)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[NomaGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
             NomaGuardrailConfigModel,
         )
