@@ -29,9 +29,9 @@ from claude_code.cli_driver import (
 
 
 VERTEX_AI_MODELS = [
-    "claude-haiku-4-5-vertex",
-    "claude-sonnet-4-6-vertex",
-    "claude-opus-4-7-vertex",
+    "claude-haiku-5-5-vertex",
+    "claude-sonnet-5-5-vertex",
+    "claude-opus-5-5-vertex",
 ]
 
 TOOL_USE_PROMPT = (

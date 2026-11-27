@@ -15,7 +15,7 @@ class JFrogDetector(RegexBasedDetector):
         return "JFrog Secrets"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # JFrog API Key
             re.compile(

@@ -20,6 +20,7 @@ use std::{
     time::Duration,
 };
 
+use litellm_model_catalog::bedrock_base_model;
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, Blocked, BuildAsk, BuildPath, Built, CallbackFiltered,
     Deployment, Error, HealthState, LimitCounter, Outcomes, PreRoute, PreRouted, Provided,
@@ -259,6 +260,8 @@ pub(crate) enum HostCall {
         max_retries: u32,
         model_group_size: usize,
         shape: AttemptShape,
+        refused_ids: Vec<String>,
+        provider_refused_window: bool,
     },
     Sleep {
         seconds: f64,
@@ -862,6 +865,14 @@ impl RouterHost for PythonRouterHost {
     type Failure = ();
     type Cache = PythonRouterCache;
 
+    fn provider_model_id<'a>(&self, model_id: &'a str, provider: &str) -> &'a str {
+        if provider.starts_with("bedrock") {
+            bedrock_base_model(model_id)
+        } else {
+            model_id
+        }
+    }
+
     async fn attempt(&self, attempt: &Attempt) -> Result<Served<()>, AttemptFailure<()>> {
         let call = HostCall::Attempt {
             deployment_id: attempt.deployment.id.clone(),
@@ -883,6 +894,8 @@ impl RouterHost for PythonRouterHost {
             max_retries: attempt.max_retries,
             model_group_size: attempt.model_group_size,
             shape: AttemptShape::of(attempt),
+            refused_ids: attempt.refused_ids.clone(),
+            provider_refused_window: attempt.provider_refused_window,
         };
         let (result, blocked, deferred, tracks_usage) = match call_host(call).await {
             HostCallResponse::Attempt(result) => (result, None, false, None),
@@ -1102,6 +1115,7 @@ impl RouterHost for PythonRouterHost {
                 | RouterEvent::RetryLogged { .. }
                 | RouterEvent::RetryPolicyRaised { .. }
                 | RouterEvent::RetryCountRaised { .. }
+                | RouterEvent::ContextWindowRaised { .. }
                 | RouterEvent::FallbackDone { .. }
                 | RouterEvent::Blocked { .. }
                 | RouterEvent::CooldownSet { .. }

@@ -23,11 +23,11 @@ from typing import (
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY
+from litellm.litellm_core_utils.attribute_shapes import has_attributes, require_attributes
 from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
@@ -277,7 +277,6 @@ def http_error_status(value: object) -> int | None:
             return None
 
 
-_Shape = TypeVar("_Shape")
 _MetadataBucket = TypeVar("_MetadataBucket", bound=MutableMapping[str, object])
 
 
@@ -296,22 +295,6 @@ NO_FINISH_EVIDENCE: Final = FinishEvidence(by_choice=MappingProxyType({}), unind
 def finish_evidence_of(stream: object) -> FinishEvidence:
     evidence: Final[object] = getattr(stream, "finish_evidence", None)
     return evidence if isinstance(evidence, FinishEvidence) else NO_FINISH_EVIDENCE
-
-
-def has_attributes(
-    value: object,
-    shape: type[_Shape],
-    *names: str,
-) -> TypeIs[_Shape]:  # guard-ok: hasattr sees what __getattr__ serves, which Protocol isinstance skips on 3.12+
-    return all(hasattr(value, name) for name in names)
-
-
-def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shape:
-    if has_attributes(value, shape, *names):
-        return value
-    for name in names:
-        getattr(value, name)
-    raise AttributeError(f"{type(value).__name__!r} object lacks {names!r}")
 
 
 def int_of(value: object) -> int:
@@ -386,6 +369,11 @@ class SupportsGet(Protocol):
 
 def require_get(value: object) -> SupportsGet:
     return require_attributes(value, SupportsGet, "get")
+
+
+def str_param(params: SupportsGet, key: str) -> str | None:
+    value: Final = params.get(key)
+    return value if isinstance(value, str) else None
 
 
 def iter_items(value: object) -> Iterable[object]:
@@ -1406,13 +1394,15 @@ _PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 
 
 def set_provider_response_headers_in_hidden_params(
-    response: _CarriesHiddenParams, headers: httpx.Headers | Mapping[str, str]
+    response: _CarriesHiddenParams,
+    headers: httpx.Headers | Mapping[str, str],
+    process_headers: Callable[[Mapping[str, str]], Mapping[str, object]] = process_response_headers,
 ) -> None:
     hidden_params: Final = response.hidden_params
     existing_additional_headers: Final[object] = hidden_params.get("additional_headers")
     raw_headers: Final[dict[str, str]] = dict(headers)  # mutable-ok: stored as the plain-dict hidden param
     additional_headers: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
-        **process_response_headers(raw_headers),
+        **process_headers(raw_headers),
         **(existing_additional_headers if isinstance(existing_additional_headers, Mapping) else _NO_HEADERS),
     }
     hidden_params["headers"] = raw_headers

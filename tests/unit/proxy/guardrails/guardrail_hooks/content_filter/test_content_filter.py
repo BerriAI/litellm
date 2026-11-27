@@ -3890,3 +3890,36 @@ async def test_streaming_hook_blocks_a_word_split_across_text_completion_chunks(
 
     assert exc_info.value.status_code == 400
     assert "kumquat" in str(exc_info.value.detail)
+
+
+class _UpstreamStreamError(Exception):
+    pass
+
+
+async def _chat_stream_then_upstream_error() -> AsyncGenerator[ModelResponseStream, None]:
+    for content in (_LONG_TAIL[:30], _LONG_TAIL[30:]):
+        yield ModelResponseStream(
+            id="chatcmpl-stream",
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=0, delta=Delta(content=content))],
+        )
+    raise _UpstreamStreamError("Upstream generation aborted (finish_reason=abort)")
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_releases_the_held_tail_before_an_upstream_error() -> None:
+    delivered: Final[list[ModelResponseStream | TextCompletionResponse]] = []
+    hook_stream: Final = _fruit_word_filter().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=MagicMock(), response=_chat_stream_then_upstream_error(), request_data={}
+    )
+
+    async def drain() -> None:
+        async for chunk in hook_stream:
+            delivered.append(chunk)
+
+    with pytest.raises(_UpstreamStreamError):
+        await drain()
+
+    assert "".join(_streamed_text(chunk, 0) for chunk in delivered) == _LONG_TAIL.replace(
+        "persimmon", "[KEYWORD_REDACTED]"
+    )

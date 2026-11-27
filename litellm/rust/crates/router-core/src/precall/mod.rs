@@ -14,6 +14,7 @@ mod region;
 use std::{collections::BTreeMap, sync::Arc};
 
 use context_window::Overflow;
+pub(crate) use context_window::named_model;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -26,13 +27,15 @@ pub struct DeploymentFacts {
     /// The deployment's context window (`get_router_model_info`'s `max_input_tokens`), when it
     /// declares one and resolves.
     pub max_input_tokens: Option<i64>,
+    /// The prompt's token count with this deployment's tokenizer, an inline PDF priced the way it
+    /// bills one, when the host counted it.
+    pub input_tokens: Option<i64>,
+    /// The count came from a stand-in tokenizer, not the one the provider bills with.
+    pub estimated: bool,
     /// `_deployment_lacks_params`: it does not support one of the requested params.
     pub lacks_params: bool,
     /// `_deployment_rejects_params`: it lacks one the request and deployment neither drop nor allow.
     pub rejects_params: bool,
-    /// The prompt's token count for this deployment when it bills the prompt below the shared
-    /// [`PreCallFacts::input_tokens`], as Gemini and OpenAI bill an inline PDF.
-    pub input_tokens: Option<i64>,
 }
 
 /// What the host knows about a request for the pre-call checks.
@@ -43,8 +46,6 @@ pub struct PreCallFacts {
     pub has_input: bool,
     /// The prompt may be counted against a context window (no compaction is pending).
     pub countable: bool,
-    /// The prompt's token count, when it was counted.
-    pub input_tokens: Option<i64>,
     /// The request's `allowed_model_region`.
     pub allowed_model_region: Option<Value>,
     /// The requested params the check filters on, sorted (`_pre_call_check_requested_chat_params`).
@@ -54,12 +55,24 @@ pub struct PreCallFacts {
 }
 
 impl PreCallFacts {
+    pub(crate) fn max_input_tokens(&self, deployment_id: &str) -> Option<i64> {
+        self.deployments
+            .get(deployment_id)
+            .and_then(|facts| facts.max_input_tokens)
+    }
+
     fn of(&self, deployment: &Deployment) -> DeploymentFacts {
         self.deployments
             .get(&deployment.id)
             .cloned()
             .unwrap_or_default()
     }
+}
+
+#[derive(Debug, Default)]
+pub struct Filtered {
+    pub kept: Vec<Arc<Deployment>>,
+    pub uncertain: BTreeMap<String, String>,
 }
 
 /// `_pre_call_checks` over `candidates`; `pool` is the group's deployments before health filters
@@ -69,19 +82,23 @@ pub fn filter(
     candidates: Vec<Arc<Deployment>>,
     pool: &[Arc<Deployment>],
     facts: &PreCallFacts,
-) -> Result<Vec<Arc<Deployment>>, Error> {
+) -> Result<Filtered, Error> {
     if !facts.has_input {
-        return Ok(candidates);
+        return Ok(Filtered {
+            kept: candidates,
+            ..Filtered::default()
+        });
     }
     let overflows: Vec<Option<Overflow>> = candidates
         .iter()
         .map(|deployment| context_window::overflow(deployment, facts))
         .collect();
-    let context_window_error = overflows.iter().any(Option::is_some);
+    let certain = |overflow: &Option<Overflow>| overflow.as_ref().is_some_and(Overflow::certain);
+    let context_window_error = overflows.iter().any(certain);
     let dropped: Vec<bool> = candidates
         .iter()
         .zip(&overflows)
-        .map(|(deployment, overflow)| overflow.is_some() || region::outside(deployment, facts))
+        .map(|(deployment, overflow)| certain(overflow) || region::outside(deployment, facts))
         .collect();
     let left: Vec<&Deployment> = candidates
         .iter()
@@ -99,14 +116,58 @@ pub fn filter(
             return Err(error);
         }
         if context_window_error {
-            return Err(context_window::exceeded(model, overflows.iter().flatten()));
+            return Err(context_window::exceeded(
+                model,
+                overflows
+                    .iter()
+                    .flatten()
+                    .filter(|overflow| overflow.certain()),
+            ));
         }
     }
-    Ok(candidates
+    let uncertain = candidates
+        .iter()
+        .zip(&overflows)
+        .filter_map(|(deployment, overflow)| {
+            overflow
+                .as_ref()
+                .filter(|overflow| !overflow.certain())
+                .map(|overflow| (deployment.id.clone(), overflow.detail()))
+        })
+        .collect();
+    Ok(Filtered {
+        kept: candidates
+            .into_iter()
+            .zip(kept)
+            .filter_map(|(deployment, kept)| kept.then_some(deployment))
+            .collect(),
+        uncertain,
+    })
+}
+
+pub fn settle(
+    model: &str,
+    healthy: Vec<Arc<Deployment>>,
+    uncertain: &BTreeMap<String, String>,
+    refuse_uncertain: bool,
+) -> Result<Vec<Arc<Deployment>>, Error> {
+    let (unsure, fitting): (Vec<_>, Vec<_>) = healthy
         .into_iter()
-        .zip(kept)
-        .filter_map(|(deployment, kept)| kept.then_some(deployment))
-        .collect())
+        .partition(|deployment| uncertain.contains_key(&deployment.id));
+    if !fitting.is_empty() || unsure.is_empty() {
+        return Ok(fitting);
+    }
+    if refuse_uncertain {
+        return Err(Error::ContextWindowExceeded {
+            model: model.to_owned(),
+            detail: unsure
+                .iter()
+                .filter_map(|deployment| uncertain.get(&deployment.id).map(String::as_str))
+                .collect(),
+            held_for_fallback: true,
+        });
+    }
+    Ok(unsure)
 }
 
 #[cfg(test)]
@@ -139,23 +200,112 @@ mod tests {
         }
     }
 
-    fn window(limit: i64) -> DeploymentFacts {
+    fn counted(limit: i64, tokens: i64, estimated: bool) -> DeploymentFacts {
         DeploymentFacts {
             max_input_tokens: Some(limit),
+            input_tokens: Some(tokens),
+            estimated,
             ..DeploymentFacts::default()
         }
+    }
+
+    fn ids(deployments: &[Arc<Deployment>]) -> Vec<&str> {
+        deployments.iter().map(|d| d.id.as_str()).collect()
     }
 
     #[rstest]
     fn a_prompt_over_a_context_window_drops_that_deployment() {
         let small = deployment("small", json!({"model": "openai/a"}), json!({}));
         let big = deployment("big", json!({"model": "openai/b"}), json!({}));
-        let mut found = facts(&[("small", window(5)), ("big", window(10_000))]);
-        found.input_tokens = Some(100);
-        let kept = filter("g", vec![small, big], &[], &found).unwrap();
+        let found = facts(&[
+            ("small", counted(5, 100, false)),
+            ("big", counted(10_000, 100, false)),
+        ]);
+        let filtered = filter("g", vec![small, big], &[], &found).unwrap();
+        assert_eq!(ids(&filtered.kept), ["big"]);
+    }
+
+    #[rstest]
+    fn each_deployment_is_checked_against_its_own_count() {
+        let a = deployment("a", json!({"model": "openai/a"}), json!({}));
+        let b = deployment("b", json!({"model": "openai/b"}), json!({}));
+        let found = facts(&[
+            ("a", counted(100, 101, false)),
+            ("b", counted(100, 99, false)),
+        ]);
+        let filtered = filter("g", vec![a, b], &[], &found).unwrap();
+        assert_eq!(ids(&filtered.kept), ["b"]);
+    }
+
+    #[rstest]
+    #[case::exact_count_over_the_window(150, false, false)]
+    #[case::estimate_within_the_margin(200, true, true)]
+    #[case::estimate_past_the_margin(201, true, false)]
+    fn only_an_estimate_within_the_margin_is_left_to_the_provider(
+        #[case] tokens: i64,
+        #[case] estimated: bool,
+        #[case] kept: bool,
+    ) {
+        let only = deployment("only", json!({"model": "cohere/a"}), json!({}));
+        let found = facts(&[("only", counted(100, tokens, estimated))]);
+        let result = filter("g", vec![only], &[], &found);
+        match result {
+            Ok(filtered) => {
+                assert!(kept, "expected a context window error");
+                assert_eq!(ids(&filtered.kept), ["only"]);
+                assert_eq!(
+                    filtered.uncertain.get("only").map(String::as_str),
+                    Some(format!("Model=cohere/a, Max Input Tokens=100, Got={tokens}").as_str())
+                );
+            }
+            Err(error) => {
+                assert!(!kept, "expected the deployment kept, got {error:?}");
+                assert!(matches!(error, Error::ContextWindowExceeded { .. }));
+            }
+        }
+    }
+
+    #[rstest]
+    fn an_uncertain_deployment_gives_way_to_one_the_prompt_fits() {
+        let small = deployment("small", json!({"model": "cohere/a"}), json!({}));
+        let big = deployment("big", json!({"model": "cohere/b"}), json!({}));
+        let found = facts(&[
+            ("small", counted(100, 150, true)),
+            ("big", counted(1_000, 150, true)),
+        ]);
+        let filtered = filter("g", vec![small, big], &[], &found).unwrap();
+        let settled = settle("g", filtered.kept, &filtered.uncertain, false).unwrap();
+        assert_eq!(ids(&settled), ["big"]);
+    }
+
+    #[rstest]
+    #[case::with_a_context_window_fallback(true)]
+    #[case::without_one(false)]
+    fn only_uncertain_deployments_left_go_to_a_fallback_or_the_provider(#[case] fallback: bool) {
+        let one = deployment("one", json!({"model": "cohere/a"}), json!({}));
+        let two = deployment("two", json!({"model": "cohere/b"}), json!({}));
+        let found = facts(&[
+            ("one", counted(100, 150, true)),
+            ("two", counted(120, 150, true)),
+        ]);
+        let filtered = filter("g", vec![one, two], &[], &found).unwrap();
+        let settled = settle("g", filtered.kept, &filtered.uncertain, fallback);
+        if !fallback {
+            assert_eq!(ids(&settled.unwrap()), ["one", "two"]);
+            return;
+        }
+        let Err(Error::ContextWindowExceeded {
+            model,
+            detail,
+            held_for_fallback: true,
+        }) = settled
+        else {
+            panic!("expected a context window error, got {settled:?}");
+        };
+        assert_eq!(model, "g");
         assert_eq!(
-            kept.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
-            ["big"]
+            detail,
+            "Model=cohere/a, Max Input Tokens=100, Got=150Model=cohere/b, Max Input Tokens=120, Got=150"
         );
     }
 
@@ -167,97 +317,37 @@ mod tests {
             json!({"model": "openai/two"}),
             json!({"base_model": "azure/base"}),
         );
-        let mut found = facts(&[("one", window(5)), ("two", window(6))]);
-        found.input_tokens = Some(9);
+        let found = facts(&[("one", counted(5, 9, false)), ("two", counted(6, 8, false))]);
         let error = filter("g", vec![one, two], &[], &found).unwrap_err();
-        let Error::ContextWindowExceeded { model, detail } = error else {
+        let Error::ContextWindowExceeded {
+            model,
+            detail,
+            held_for_fallback: false,
+        } = error
+        else {
             panic!("expected a context window error, got {error:?}");
         };
         assert_eq!(model, "g");
         assert_eq!(
             detail,
-            "Model=openai/one, Max Input Tokens=5, Got=9Model=azure/base, Max Input Tokens=6, Got=9"
+            "Model=openai/one, Max Input Tokens=5, Got=9Model=azure/base, Max Input Tokens=6, Got=8"
         );
     }
 
     #[rstest]
     fn without_input_nothing_is_checked() {
         let small = deployment("small", json!({"model": "openai/a"}), json!({}));
-        let mut found = facts(&[("small", window(5))]);
-        found.input_tokens = Some(100);
+        let mut found = facts(&[("small", counted(5, 100, false))]);
         found.has_input = false;
-        assert_eq!(filter("g", vec![small], &[], &found).unwrap().len(), 1);
+        assert_eq!(filter("g", vec![small], &[], &found).unwrap().kept.len(), 1);
     }
 
     #[rstest]
     fn a_prompt_that_may_not_be_counted_fits_every_window() {
         let small = deployment("small", json!({"model": "openai/a"}), json!({}));
-        let mut found = facts(&[("small", window(5))]);
-        found.input_tokens = Some(100);
+        let mut found = facts(&[("small", counted(5, 100, false))]);
         found.countable = false;
-        assert_eq!(filter("g", vec![small], &[], &found).unwrap().len(), 1);
-    }
-
-    fn counted_apart(limit: i64, tokens: i64) -> DeploymentFacts {
-        DeploymentFacts {
-            input_tokens: Some(tokens),
-            ..window(limit)
-        }
-    }
-
-    #[rstest]
-    fn a_deployment_counted_apart_is_kept_when_its_own_count_fits() {
-        let gemini = deployment("gemini", json!({"model": "gemini/a"}), json!({}));
-        let claude = deployment("claude", json!({"model": "anthropic/b"}), json!({}));
-        let mut found = facts(&[("gemini", counted_apart(50, 40)), ("claude", window(50))]);
-        found.input_tokens = Some(100);
-        let kept = filter("g", vec![gemini, claude], &[], &found).unwrap();
-        assert_eq!(
-            kept.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
-            ["gemini"]
-        );
-    }
-
-    #[rstest]
-    fn a_deployment_counted_apart_names_its_own_count_when_it_overflows() {
-        let gemini = deployment("gemini", json!({"model": "gemini/a"}), json!({}));
-        let claude = deployment("claude", json!({"model": "anthropic/b"}), json!({}));
-        let mut found = facts(&[("gemini", counted_apart(50, 60)), ("claude", window(50))]);
-        found.input_tokens = Some(100);
-        let error = filter("g", vec![gemini, claude], &[], &found).unwrap_err();
-        let Error::ContextWindowExceeded { detail, .. } = error else {
-            panic!("expected a context window error, got {error:?}");
-        };
-        assert_eq!(
-            detail,
-            "Model=gemini/a, Max Input Tokens=50, Got=60Model=anthropic/b, Max Input Tokens=50, Got=100"
-        );
-    }
-
-    #[rstest]
-    fn a_deployment_counted_apart_fits_every_window_while_a_compaction_is_pending() {
-        let gemini = deployment("gemini", json!({"model": "gemini/a"}), json!({}));
-        let mut found = facts(&[("gemini", counted_apart(50, 60))]);
-        found.input_tokens = Some(100);
-        found.countable = false;
-        assert_eq!(filter("g", vec![gemini], &[], &found).unwrap().len(), 1);
-    }
-
-    #[rstest]
-    #[case::shared_only(json!({"max_input_tokens": 5}), None)]
-    #[case::counted_apart(json!({"max_input_tokens": 5, "input_tokens": 3}), Some(3))]
-    fn deployment_facts_read_an_own_count_only_when_the_host_sends_one(
-        #[case] wire: Value,
-        #[case] own: Option<i64>,
-    ) {
-        let read: DeploymentFacts = serde_json::from_value(wire).unwrap();
-        assert_eq!(
-            read,
-            DeploymentFacts {
-                input_tokens: own,
-                ..window(5)
-            }
-        );
+        assert_eq!(filter("g", vec![small], &[], &found).unwrap().kept.len(), 1);
     }
 
     #[rstest]
@@ -274,7 +364,7 @@ mod tests {
         let mut found = facts(&[]);
         found.allowed_model_region = Some(region);
         let left = filter("g", vec![eu, none], &[], &found).unwrap();
-        assert_eq!(left.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), kept);
+        assert_eq!(ids(&left.kept), kept);
     }
 
     #[rstest]
@@ -299,10 +389,7 @@ mod tests {
         found.requested_params = vec!["response_format".to_owned()];
         found.allowed_model_region = Some(json!("eu"));
         let kept = filter("g", vec![eu, ap], &[], &found).unwrap();
-        assert_eq!(
-            kept.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
-            ["eu"]
-        );
+        assert_eq!(ids(&kept.kept), ["eu"]);
     }
 
     #[rstest]
@@ -335,10 +422,7 @@ mod tests {
             },
         )]);
         found.requested_params = vec!["response_format".to_owned()];
-        let kept = filter("g", vec![old, new], &[], &found).unwrap();
-        assert_eq!(
-            kept.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
-            ["new"]
-        );
+        let filtered = filter("g", vec![old, new], &[], &found).unwrap();
+        assert_eq!(ids(&filtered.kept), ["new"]);
     }
 }

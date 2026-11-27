@@ -140,7 +140,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         return None
 
     @staticmethod
-    def _get_provider_specific_entry(model_info: Mapping[str, object]) -> dict:
+    def _get_provider_specific_entry(model_info: Mapping[str, object]) -> dict[str, object]:
         provider_specific_entry = model_info.get("provider_specific_entry")
         if not isinstance(provider_specific_entry, dict):
             provider_specific_entry = {}

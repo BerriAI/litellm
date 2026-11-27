@@ -179,7 +179,7 @@ class PromptManagementBase(ABC):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         if prompt_id is None:
             return model, messages, non_default_params
         if not self.should_run_prompt_management(
@@ -228,7 +228,7 @@ class PromptManagementBase(ABC):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         if not self.should_run_prompt_management(
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,

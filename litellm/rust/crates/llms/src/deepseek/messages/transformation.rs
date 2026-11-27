@@ -11,6 +11,7 @@ use litellm_llms_types::{
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
+use crate::anthropic::messages::handler::shape_anthropic_messages_request;
 use crate::{
     Error,
     anthropic::{
@@ -113,7 +114,7 @@ impl MessagesDialect for DeepSeekMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn tool_custom_field(&self, _model: &str) -> ToolCustomField {

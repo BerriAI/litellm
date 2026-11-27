@@ -539,7 +539,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         cache: litellm.DualCache,
         data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )

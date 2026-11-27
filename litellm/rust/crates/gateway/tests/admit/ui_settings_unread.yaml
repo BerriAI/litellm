@@ -1,0 +1,19 @@
+# With store_model_in_db off and UI settings boot could not read or layer in, the gateway runs the
+# YAML alone, which may lack a flag Python honors, so Python answers every request.
+stored: ui_settings_unread
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: db_config_not_loaded
+    over: ui_settings

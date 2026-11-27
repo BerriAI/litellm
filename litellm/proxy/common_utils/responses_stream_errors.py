@@ -15,7 +15,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # the guards narrow hook v
 
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import MidStreamFallbackError, UnresolvablePreviousResponseError
 from litellm.litellm_core_utils.routing_common_utils import carries_fallback_failure
 from litellm.proxy.common_utils.openai_error_payload import relayed_provider_specific_fields
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -244,6 +244,23 @@ def responses_error_fields(error: Mapping[str, object]) -> Mapping[str, object]:
     }
 
 
+def responses_failure_error(exception: Exception) -> Mapping[str, object]:
+    original: Final = _original_failure(exception)
+    details: Final = _failure_details(original)
+    provider_specific_fields: Final = relayed_provider_specific_fields(original)
+    return {
+        "code": _response_error_code(details),
+        "message": redact_internal_details_from_client_message(details.message or str(original)),
+        **({} if provider_specific_fields is None else {"provider_specific_fields": provider_specific_fields}),
+    }
+
+
+def background_failure_error(exception: Exception) -> Mapping[str, object]:
+    if isinstance(_original_failure(exception), UnresolvablePreviousResponseError):
+        return responses_failure_error(exception)
+    return {"type": "internal_error", "message": str(exception), "code": "background_streaming_error"}
+
+
 def _error_event(
     fields: Mapping[str, object], error: Mapping[str, object], sequence_number: int
 ) -> Mapping[str, object]:
@@ -394,9 +411,6 @@ class ResponsesStreamErrorState:
     def format_failure(self, exception: Exception) -> str | None:
         if self.terminal_emitted:
             return None
-        original: Final = _original_failure(exception)
-        details: Final = _failure_details(original)
-        provider_specific_fields: Final = relayed_provider_specific_fields(original)
         response: Final = ResponsesAPIResponse.model_validate(
             MappingProxyType(
                 {
@@ -406,17 +420,7 @@ class ResponsesStreamErrorState:
                     "model": self.model,
                     "status": "failed",
                     "output": (),
-                    "error": MappingProxyType(
-                        {
-                            "code": _response_error_code(details),
-                            "message": redact_internal_details_from_client_message(details.message or str(original)),
-                            **(
-                                {}
-                                if provider_specific_fields is None
-                                else {"provider_specific_fields": provider_specific_fields}
-                            ),
-                        }
-                    ),
+                    "error": responses_failure_error(exception),
                 }
             )
         )

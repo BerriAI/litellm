@@ -26,8 +26,8 @@
 #   LITELLM_COMPAT_RATE_BEDROCK_MANTLE
 #   LITELLM_COMPAT_RATE_BURST            override per-bucket burst
 #
-# Optional env (GPT-5.6 columns):
-#   COMPAT_MANTLE_CELLS=1                 opt the Bedrock Mantle GPT-5.6
+# Optional env (GPT-6 columns):
+#   COMPAT_MANTLE_CELLS=1                 opt the Bedrock Mantle GPT-6
 #                                         cells in; without it they skip
 #                                         and publish as not_tested
 #

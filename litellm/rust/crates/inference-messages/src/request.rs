@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use litellm_auth::{AuthServices, CredentialPlacement};
 use litellm_core_utils::{
-    dot_notation_indexing::delete_nested_value,
+    dot_notation_indexing::{OverlappingPaths, delete_nested_values},
     get_provider_specific_headers::get_provider_specific_headers,
 };
 use litellm_env::Lookup;
@@ -455,9 +455,12 @@ fn without_additional_drop_params(
         return Ok(request);
     }
     let params = serde_json::to_value(request.params).map_err(invalid_request)?;
-    let trimmed = paths
-        .iter()
-        .fold(params, |params, path| delete_nested_value(params, path));
+    let trimmed = delete_nested_values(params, paths.iter().map(String::as_str)).map_err(|_| {
+        Error::invalid_request(litellm_llms::ErrorDetail::Expected {
+            subject: "additional_drop_params",
+            expected: OverlappingPaths::EXPECTED,
+        })
+    })?;
     Ok(MessagesRequest {
         params: serde_json::from_value(trimmed).map_err(invalid_request)?,
         ..request
@@ -1169,7 +1172,8 @@ mod tests {
             detail.to_string(),
             "claude-test does not support temperature=1. anthropic-version 2026-10-21 removed \
              temperature, top_p and top_k. To drop unsupported params, set \
-             `litellm.drop_params = True`."
+             `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the \
+             proxy config."
         );
     }
 
@@ -1602,6 +1606,52 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.is_request(), "{error:?}");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn drop_paths_overlapping_past_the_cap_are_a_request_error(shaping: MessagesShaping) {
+        let depth = 7;
+        let additional_drop_params = (0..1usize << depth)
+            .map(|combo| {
+                let steps: String = (0..depth)
+                    .map(|level| {
+                        if combo >> level & 1 == 1 {
+                            "[*]"
+                        } else {
+                            "[0]"
+                        }
+                    })
+                    .collect();
+                format!("tools[0].input_schema.x{steps}[*].drop")
+            })
+            .collect();
+        let shaping = MessagesShaping {
+            settings: MessagesSettings {
+                additional_drop_params,
+                ..shaping.settings
+            },
+            ..shaping
+        };
+        let nested = (0..depth).fold(json!([{"drop": 1}]), |inner, _| json!([inner]));
+        assert_eq!(
+            wire_body(
+                json!({
+                    "model": "claude-test",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 16,
+                    "tools": [{"name": "t", "input_schema": {"type": "object", "x": nested}}]
+                }),
+                shaping,
+            )
+            .await,
+            Err(Error::invalid_request(
+                litellm_llms::ErrorDetail::Expected {
+                    subject: "additional_drop_params",
+                    expected: OverlappingPaths::EXPECTED,
+                }
+            ))
+        );
     }
 
     #[rstest]

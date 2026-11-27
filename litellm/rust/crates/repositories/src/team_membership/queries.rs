@@ -15,14 +15,14 @@ use crate::utc_timestamp::naive_utc;
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Serialize)]
 pub struct TeamMembership {
-    user_id: String,
-    team_id: String,
-    budget_id: Option<String>,
-    spend: f64,
+    pub user_id: String,
+    pub team_id: String,
+    pub budget_id: Option<String>,
+    pub spend: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    rollover_credit: Option<f64>,
-    total_spend: f64,
-    litellm_budget_table: Option<Json<Budget>>,
+    pub rollover_credit: Option<f64>,
+    pub total_spend: f64,
+    pub litellm_budget_table: Option<Json<Budget>>,
 }
 
 /// `user_id`'s membership of `team_id`, or `None` when the user is not a member.

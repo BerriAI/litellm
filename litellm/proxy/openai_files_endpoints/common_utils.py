@@ -462,6 +462,10 @@ def get_original_file_id(encoded_id: str) -> str:
         return encoded_id
 
 
+def provider_upload_model_id(custom_llm_provider: str) -> str:
+    return f"_provider_upload_{custom_llm_provider}"
+
+
 _GEMINI_FILES_HOST: Final = "generativelanguage.googleapis.com"
 
 

@@ -1,7 +1,7 @@
 # Proxy routing config for the Claude Code Compatibility Matrix PR gate.
 #
 # The tests under `tests/e2e/claude_code/` only know **alias** names (e.g.
-# `claude-haiku-4-5-bedrock-invoke`). The proxy is the layer that maps
+# `claude-haiku-5-5-bedrock-invoke`). The proxy is the layer that maps
 # each alias to a real upstream model id, region, and credentials.
 #
 # Adding a new (feature, provider) cell is a three-step change in the
@@ -14,69 +14,78 @@
 #   - claude-{tier}-bedrock-converse        → Bedrock Converse API
 #   - claude-{tier}-vertex                  → GCP Vertex AI
 #   - claude-{tier}-azure                   → Microsoft Foundry (Anthropic deployments)
-#   - gpt-5-6-{tier}-openai                 → OpenAI API
-#   - gpt-5-6-{tier}-azure-openai           → Azure OpenAI deployments
-#   - gpt-5-6-{tier}-bedrock-mantle         → Bedrock Mantle (Responses API)
+#   - gpt-{version}-{tier}-openai           → OpenAI API
+#   - gpt-{version}-{tier}-azure-openai     → Azure OpenAI deployments
+#   - gpt-{version}-{tier}-bedrock-mantle   → Bedrock Mantle (Responses API)
 #
-# GPT-5.6 tiers are sol / terra / luna. There are no GPT aliases for
-# GCP: Vertex AI does not offer the closed-weight GPT-5.6 family, so
+# GPT tiers are sol / terra / luna / astra, each on the newest version the
+# route serves. There are no GPT aliases for GCP: Vertex AI does not
+# offer the closed-weight GPT-6 family, so
 # the matrix's `vertex_ai_gpt` column reports not_applicable without
 # ever reaching the proxy.
 
 model_list:
   # ---- Anthropic ----
-  - model_name: claude-haiku-4-5
+  - model_name: claude-haiku-5-5
     litellm_params:
-      model: anthropic/claude-haiku-4-5
+      model: anthropic/claude-haiku-5-5
       api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: claude-sonnet-4-5
+  - model_name: claude-sonnet-5-5
     litellm_params:
-      model: anthropic/claude-sonnet-4-5
+      model: anthropic/claude-sonnet-5-5
       api_key: os.environ/ANTHROPIC_API_KEY
       extra_headers:
         anthropic-beta: "context-1m-2025-08-07"
-  - model_name: claude-opus-4-7
+  - model_name: claude-opus-5-5
     litellm_params:
-      model: anthropic/claude-opus-4-7
+      model: anthropic/claude-opus-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
+  - model_name: claude-fable-5-2
+    litellm_params:
+      model: anthropic/claude-fable-5-2
       api_key: os.environ/ANTHROPIC_API_KEY
       extra_headers:
         anthropic-beta: "context-1m-2025-08-07"
 
   # ---- Bedrock (InvokeModel) ----
-  - model_name: claude-haiku-4-5-bedrock-invoke
+  - model_name: claude-haiku-5-5-bedrock-invoke
     litellm_params:
-      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      model: bedrock/us.anthropic.claude-haiku-5-5
       aws_region_name: us-east-1
-  - model_name: claude-sonnet-4-5-bedrock-invoke
+  - model_name: claude-sonnet-5-5-bedrock-invoke
     litellm_params:
-      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
-      aws_region_name: us-east-1
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
-  - model_name: claude-opus-4-7-bedrock-invoke
-    litellm_params:
-      model: bedrock/us.anthropic.claude-opus-4-7
+      model: bedrock/us.anthropic.claude-sonnet-5-5
       aws_region_name: us-east-1
       extra_headers:
         anthropic-beta: "context-1m-2025-08-07"
+  - model_name: claude-opus-5-5-bedrock-invoke
+    litellm_params:
+      model: bedrock/us.anthropic.claude-opus-5-5
+      aws_region_name: us-east-1
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
+  # TODO: add Fable 5.2 once the stage account has an AWS Marketplace subscription for it. Bedrock answers 403 "Model access is denied" until then
 
   # ---- Bedrock (Converse) ----
-  - model_name: claude-haiku-4-5-bedrock-converse
+  - model_name: claude-haiku-5-5-bedrock-converse
     litellm_params:
-      model: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      model: bedrock/converse/us.anthropic.claude-haiku-5-5
       aws_region_name: us-east-1
-  - model_name: claude-sonnet-4-5-bedrock-converse
+  - model_name: claude-sonnet-5-5-bedrock-converse
     litellm_params:
-      model: bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0
-      aws_region_name: us-east-1
-      extra_headers:
-        anthropic-beta: "context-1m-2025-08-07"
-  - model_name: claude-opus-4-7-bedrock-converse
-    litellm_params:
-      model: bedrock/converse/us.anthropic.claude-opus-4-7
+      model: bedrock/converse/us.anthropic.claude-sonnet-5-5
       aws_region_name: us-east-1
       extra_headers:
         anthropic-beta: "context-1m-2025-08-07"
+  - model_name: claude-opus-5-5-bedrock-converse
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-opus-5-5
+      aws_region_name: us-east-1
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
+  # TODO: add Fable 5.2 once the stage account has an AWS Marketplace subscription for it. Bedrock answers 403 "Model access is denied" until then
 
   # ---- Vertex AI ----
   # `use_in_pass_through: true` registers each deployment's
@@ -86,23 +95,23 @@ model_list:
   # reads the canonical `vertex_project`/`vertex_location` param names
   # (not the `vertex_ai_*` aliases); the chat translation path accepts
   # both.
-  - model_name: claude-haiku-4-5-vertex
+  - model_name: claude-haiku-5-5-vertex
     litellm_params:
-      model: vertex_ai/claude-haiku-4-5
+      model: vertex_ai/claude-haiku-5-5
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
       use_in_pass_through: true
-  - model_name: claude-sonnet-4-6-vertex
+  - model_name: claude-sonnet-5-5-vertex
     litellm_params:
-      model: vertex_ai/claude-sonnet-4-6
+      model: vertex_ai/claude-sonnet-5-5
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
       use_in_pass_through: true
       extra_headers:
         anthropic-beta: "context-1m-2025-08-07"
-  - model_name: claude-opus-4-7-vertex
+  - model_name: claude-opus-5-5-vertex
     litellm_params:
-      model: vertex_ai/claude-opus-4-7
+      model: vertex_ai/claude-opus-5-5
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: global
       use_in_pass_through: true
@@ -110,44 +119,56 @@ model_list:
         anthropic-beta: "context-1m-2025-08-07"
 
   # ---- Microsoft Foundry (Anthropic deployments on Azure) ----
-  - model_name: claude-haiku-4-5-azure
+  - model_name: claude-haiku-5-5-azure
     litellm_params:
-      model: azure_ai/claude-haiku-4-5
+      model: azure_ai/claude-haiku-5-5
       api_base: os.environ/AZURE_AI_API_BASE
       api_key: os.environ/AZURE_AI_API_KEY
-  - model_name: claude-sonnet-4-5-azure
+  - model_name: claude-sonnet-5-5-azure
     litellm_params:
-      model: azure_ai/claude-sonnet-4-5
+      model: azure_ai/claude-sonnet-5-5
       api_base: os.environ/AZURE_AI_API_BASE
       api_key: os.environ/AZURE_AI_API_KEY
       extra_headers:
         anthropic-beta: "context-1m-2025-08-07"
-  - model_name: claude-opus-4-7-azure
+  - model_name: claude-opus-5-5-azure
     litellm_params:
-      model: azure_ai/claude-opus-4-7
+      model: azure_ai/claude-opus-5-5
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"
+  - model_name: claude-fable-5-2-azure
+    litellm_params:
+      model: azure_ai/claude-fable-5-2
       api_base: os.environ/AZURE_AI_API_BASE
       api_key: os.environ/AZURE_AI_API_KEY
       extra_headers:
         anthropic-beta: "context-1m-2025-08-07"
 
-  # ---- OpenAI (GPT-5.6) ----
-  - model_name: gpt-5-6-sol-openai
+  # ---- OpenAI (GPT-6) ----
+  - model_name: gpt-6-2-sol-openai
     litellm_params:
-      model: openai/gpt-5.6-sol
+      model: openai/gpt-6.2-sol
       api_key: os.environ/OPENAI_API_KEY
-  - model_name: gpt-5-6-terra-openai
+  - model_name: gpt-6-1-terra-openai
     litellm_params:
-      model: openai/gpt-5.6-terra
+      model: openai/gpt-6.1-terra
       api_key: os.environ/OPENAI_API_KEY
-  - model_name: gpt-5-6-luna-openai
+  - model_name: gpt-6-luna-openai
     litellm_params:
-      model: openai/gpt-5.6-luna
+      model: openai/gpt-6-luna
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-6-2-astra-openai
+    litellm_params:
+      model: openai/gpt-6.2-astra
       api_key: os.environ/OPENAI_API_KEY
 
-  # ---- Azure OpenAI (GPT-5.6) ----
-  - model_name: gpt-5-6-sol-azure-openai
+  # ---- Azure OpenAI (GPT-6) ----
+  # TODO: move Terra off gpt-5.6-terra once Azure lists a GPT-6 Terra. Its catalog stops at gpt-6.1-sol, gpt-6-luna and gpt-6-astra
+  - model_name: gpt-6-1-sol-azure-openai
     litellm_params:
-      model: azure/gpt-5.6-sol
+      model: azure/gpt-6.1-sol
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
   - model_name: gpt-5-6-terra-azure-openai
@@ -155,27 +176,35 @@ model_list:
       model: azure/gpt-5.6-terra
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
-  - model_name: gpt-5-6-luna-azure-openai
+  - model_name: gpt-6-luna-azure-openai
     litellm_params:
-      model: azure/gpt-5.6-luna
+      model: azure/gpt-6-luna
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+  - model_name: gpt-6-astra-azure-openai
+    litellm_params:
+      model: azure/gpt-6-astra
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
 
-  # ---- Bedrock Mantle (GPT-5.6, Responses API) ----
-  # Sol is only served from us-east-1 / us-east-2 as of 2026-07;
-  # Terra and Luna additionally have us-west-2. One region keeps the
-  # column comparable across tiers.
-  - model_name: gpt-5-6-sol-bedrock-mantle
+  # ---- Bedrock Mantle (GPT-6, Responses API) ----
+  # One region keeps the column comparable across tiers; us-east-1
+  # serves all four models.
+  - model_name: gpt-6-2-sol-bedrock-mantle
     litellm_params:
-      model: bedrock_mantle/openai.gpt-5.6-sol
+      model: bedrock_mantle/openai.gpt-6.2-sol
       aws_region_name: us-east-1
-  - model_name: gpt-5-6-terra-bedrock-mantle
+  - model_name: gpt-6-1-terra-bedrock-mantle
     litellm_params:
-      model: bedrock_mantle/openai.gpt-5.6-terra
+      model: bedrock_mantle/openai.gpt-6.1-terra
       aws_region_name: us-east-1
-  - model_name: gpt-5-6-luna-bedrock-mantle
+  - model_name: gpt-6-luna-bedrock-mantle
     litellm_params:
-      model: bedrock_mantle/openai.gpt-5.6-luna
+      model: bedrock_mantle/openai.gpt-6-luna
+      aws_region_name: us-east-1
+  - model_name: gpt-6-2-astra-bedrock-mantle
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-6.2-astra
       aws_region_name: us-east-1
 
 general_settings:

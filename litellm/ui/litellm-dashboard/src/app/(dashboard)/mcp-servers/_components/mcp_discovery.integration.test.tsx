@@ -9,6 +9,9 @@ import { setServerRootPath } from "@/lib/serverRootPath";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { I18nextProvider } from "react-i18next";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 
 vi.mock("@/components/networking", () => ({
   fetchDiscoverableMCPServers: vi.fn(),
@@ -110,6 +113,30 @@ describe("MCPDiscovery", () => {
 
     await waitFor(() => expect(screen.queryByText("GitHub")).not.toBeInTheDocument());
     expect(screen.getByText("Slack")).toBeInTheDocument();
+  });
+
+  it("localizes catalog filters and group headings without changing the category used for filtering", async () => {
+    const localized = i18n.cloneInstance({ forkResourceStore: true });
+    localized.addResourceBundle("zh-CN", "translation", zh);
+    await localized.changeLanguage("zh-CN");
+    vi.mocked(fetchDiscoverableMCPServers).mockResolvedValue({
+      servers: [githubServer, { ...slackServer, category: "Partner Tools" }],
+      categories: ["Developer Tools", "Partner Tools"],
+    });
+
+    render(
+      <I18nextProvider i18n={localized}>
+        <MCPDiscovery {...defaultProps} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("GitHub")).toBeInTheDocument();
+    expect(groupHeading("开发者工具")).toHaveLength(1);
+    expect(groupHeading("Partner Tools")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Partner Tools" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "开发者工具" }));
+    expect(screen.getByText("GitHub")).toBeInTheDocument();
+    expect(screen.queryByText("Slack")).not.toBeInTheDocument();
   });
 
   it("filters the list by the search term", async () => {

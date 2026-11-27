@@ -403,7 +403,7 @@ class GenericPromptManager(CustomPromptManagement):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Get chat completion prompt and return processed model, messages, and parameters.
         """
@@ -438,7 +438,7 @@ class GenericPromptManager(CustomPromptManagement):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Get chat completion prompt and return processed model, messages, and parameters.
         """

@@ -879,7 +879,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """During-call hook to sanitize user prompts in parallel with LLM call."""
         verbose_proxy_logger.debug("Inside Model Armor Moderation Hook")
 

@@ -30,13 +30,19 @@ import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import Cache, CacheMode, enable_cache, response_cache_phase, update_cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
-from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, SEMANTIC_CACHE_POLICY_KEY
+from litellm.constants import (
+    CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS,
+    CALLER_MESSAGE_COUNT_KEY,
+    SEMANTIC_CACHE_POLICY_KEY,
+)
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisTimeoutLogThrottle
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.caching import (
     DEFAULT_CACHING_SUPPORTED_CALL_TYPES,
+    CachingSupportedCallTypes,
+    CallerMessageCount,
     EMBEDDING_CACHE_FORMAT_VERSION,
     LiteLLMCacheType,
     SemanticCacheScope,
@@ -591,6 +597,25 @@ def test_cache_key_tells_apart_requests_that_ask_for_token_ids() -> None:
     assert cache.get_cache_key(**request, return_token_ids=True) != plain_key
     assert cache.get_cache_key(**request, return_token_ids=False) == plain_key
     assert cache.get_cache_key(**request, return_token_ids=None) == plain_key
+
+
+def test_cache_key_tells_apart_requests_that_ask_for_the_prompt_text() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "count"}]}
+
+    token_ids_only: Final = cache.get_cache_key(**request, extra_body={"return_token_ids": True})
+    with_prompt_text: Final = cache.get_cache_key(
+        **request, extra_body={"return_token_ids": True, "return_prompt_text": True}
+    )
+
+    assert with_prompt_text != token_ids_only
+    assert cache.get_cache_key(**request, return_token_ids=True, return_prompt_text=True) != cache.get_cache_key(
+        **request, return_token_ids=True
+    )
+    assert (
+        cache.get_cache_key(**request, extra_body={"return_token_ids": True, "return_prompt_text": False})
+        == token_ids_only
+    )
 
 
 def test_cache_key_tells_apart_requests_that_ask_for_token_ids_through_extra_body() -> None:
@@ -1513,6 +1538,218 @@ def test_completion_past_max_messages_is_neither_served_from_nor_written_to_the_
     assert answer(four, "four second") == "four first", "a 4-message repeat missed the cache"
     assert answer(five, "five first") == "five first"
     assert answer(five, "five second") == "five second", "a 5-message repeat was served from the cache"
+
+
+@pytest.mark.parametrize(
+    ("controls", "messages", "expected"),
+    [
+        pytest.param(
+            {CALLER_MESSAGE_COUNT_KEY: CallerMessageCount(count=4)},
+            [_TOOL_TURN_ITEM] * 5,
+            True,
+            id="a-trusted-count-under-the-limit-is-cached",
+        ),
+        pytest.param(
+            {CALLER_MESSAGE_COUNT_KEY: CallerMessageCount(count=5)},
+            [_TOOL_TURN_ITEM],
+            False,
+            id="a-trusted-count-past-the-limit-skips-the-cache",
+        ),
+        pytest.param({CALLER_MESSAGE_COUNT_KEY: 0}, [_TOOL_TURN_ITEM] * 5, False, id="a-forged-int-is-ignored"),
+        pytest.param(
+            {CALLER_MESSAGE_COUNT_KEY: {"count": 0}}, [_TOOL_TURN_ITEM] * 5, False, id="a-forged-dict-is-ignored"
+        ),
+    ],
+)
+def test_should_use_cache_counts_a_trusted_caller_count_and_ignores_forged_ones(
+    controls: dict[str, object], messages: list[dict[str, str]], expected: bool
+) -> None:
+    assert Cache(type=LiteLLMCacheType.LOCAL).should_use_cache(messages=messages, cache=copy.deepcopy(controls)) is (
+        expected
+    )
+
+
+def test_a_stamped_caller_count_leaves_the_cache_key_unchanged() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "gpt-4o-mini", "messages": [_TOOL_TURN_ITEM]}
+
+    assert cache.get_cache_key(**request, cache={CALLER_MESSAGE_COUNT_KEY: CallerMessageCount(count=1)}) == (
+        cache.get_cache_key(**request)
+    )
+
+
+_GEMINI_REPLY: Final = MappingProxyType(
+    {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}, "finishReason": "STOP", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    }
+)
+_FIVE_PLAIN_TURNS: Final = tuple(
+    MappingProxyType({"role": "user" if index % 2 == 0 else "assistant", "content": f"turn {index}"})
+    for index in range(5)
+)
+
+
+def _tool_turn(tool_results: int) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "weather in each city"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": f"call_{index}", "name": "get_weather", "input": {"city": f"c{index}"}}
+                for index in range(tool_results)
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": f"call_{index}", "content": "sunny"}
+                for index in range(tool_results)
+            ],
+        },
+    ]
+
+
+def _five_plain_turns() -> list[dict[str, object]]:
+    return [dict(turn) for turn in _FIVE_PLAIN_TURNS]
+
+
+@pytest.fixture
+def gemini_route(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, fake_provider_credentials: None
+) -> respx.Route:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/[^/]+/models/gemini-3\.8-flash:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=dict(_GEMINI_REPLY)))
+
+
+def _send_messages_through_the_chat_bridge(
+    messages: list[dict[str, object]], cache: Mapping[str, object] | None = None, system: str | None = None
+) -> None:
+    litellm.anthropic.messages.create(
+        model="gemini/gemini-3.8-flash",
+        messages=messages,
+        max_tokens=16,
+        **({} if cache is None else {"cache": cache}),
+        **({} if system is None else {"system": system}),
+    )
+
+
+@pytest.mark.parametrize(
+    ("max_messages", "messages", "system", "provider_calls"),
+    [
+        pytest.param(4, _tool_turn(3), None, 1, id="three-messages-with-three-tool-results-are-cached"),
+        pytest.param(4, _tool_turn(2), None, 1, id="three-messages-with-two-tool-results-are-cached"),
+        pytest.param(4, _tool_turn(2), "Answer briefly", 1, id="a-separate-system-prompt-is-not-a-caller-message"),
+        pytest.param(3, _tool_turn(3), None, 1, id="a-custom-limit-counts-the-caller-messages"),
+        pytest.param(2, _tool_turn(3), None, 2, id="a-custom-limit-below-the-caller-messages-skips-the-cache"),
+        pytest.param(0, _tool_turn(3), None, 2, id="a-zero-limit-skips-the-cache"),
+        pytest.param(None, _tool_turn(3), None, 1, id="no-limit-caches"),
+        pytest.param(4, _five_plain_turns(), None, 2, id="five-caller-messages-skip-the-cache"),
+    ],
+)
+def test_sync_messages_chat_bridge_counts_the_caller_messages_against_max_messages(
+    monkeypatch: pytest.MonkeyPatch,
+    gemini_route: respx.Route,
+    max_messages: int | None,
+    messages: list[dict[str, object]],
+    system: str | None,
+    provider_calls: int,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, max_messages=max_messages))
+
+    _send_messages_through_the_chat_bridge(messages, system=system)
+    _send_messages_through_the_chat_bridge(messages, system=system)
+
+    assert gemini_route.call_count == provider_calls
+
+
+@pytest.mark.parametrize(
+    "controls",
+    [
+        pytest.param(None, id="no-controls"),
+        pytest.param({CALLER_MESSAGE_COUNT_KEY: 0}, id="a-forged-int"),
+        pytest.param({CALLER_MESSAGE_COUNT_KEY: {"count": 0}}, id="a-forged-dict"),
+    ],
+)
+def test_sync_messages_chat_bridge_neither_reads_nor_writes_past_max_messages(
+    monkeypatch: pytest.MonkeyPatch, gemini_route: respx.Route, controls: dict[str, object] | None
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    sent_controls: Final = copy.deepcopy(controls)
+
+    _send_messages_through_the_chat_bridge(_five_plain_turns(), cache=controls)
+    _send_messages_through_the_chat_bridge(_five_plain_turns(), cache=controls)
+    cache.max_messages = None
+    _send_messages_through_the_chat_bridge(_five_plain_turns())
+
+    assert gemini_route.call_count == 3, "a request past max_messages was served from or written to the cache"
+    assert controls == sent_controls
+
+
+def test_sync_messages_chat_bridge_keeps_the_caller_cache_controls(
+    monkeypatch: pytest.MonkeyPatch, gemini_route: respx.Route
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    controls: Final = {"no-cache": True}
+
+    _send_messages_through_the_chat_bridge(_tool_turn(3), cache=controls)
+    _send_messages_through_the_chat_bridge(_tool_turn(3), cache=controls)
+    _send_messages_through_the_chat_bridge(_tool_turn(3))
+
+    assert gemini_route.call_count == 2, "no-cache was dropped, or the response was never written"
+    assert controls == {"no-cache": True}
+
+
+def test_sync_messages_chat_bridge_keeps_a_count_an_outer_bridge_stamped(
+    monkeypatch: pytest.MonkeyPatch, gemini_route: respx.Route
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    outer_count: Final = {CALLER_MESSAGE_COUNT_KEY: CallerMessageCount(count=5)}
+
+    _send_messages_through_the_chat_bridge(_tool_turn(2), cache=outer_count)
+    _send_messages_through_the_chat_bridge(_tool_turn(2), cache=outer_count)
+
+    assert gemini_route.call_count == 2
+
+
+_SETTLE_TIMEOUT_SECONDS: Final = 10
+_COMPLETION_ONLY_CALL_TYPES: Final[tuple[CachingSupportedCallTypes, ...]] = ("completion", "acompletion")
+
+
+async def _await_cache_writes() -> None:
+    await asyncio.wait_for(asyncio.gather(*tuple(_PENDING_CACHE_WRITES)), timeout=_SETTLE_TIMEOUT_SECONDS)
+
+
+async def _settle_post_response_work() -> None:
+    await _await_cache_writes()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=_SETTLE_TIMEOUT_SECONDS)
+    await _await_cache_writes()
+
+
+@pytest.mark.asyncio
+async def test_async_messages_chat_bridge_counts_the_caller_messages_when_only_completions_are_cached(
+    monkeypatch: pytest.MonkeyPatch, gemini_route: respx.Route
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "cache",
+        Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=list(_COMPLETION_ONLY_CALL_TYPES)),
+    )
+
+    try:
+        for _ in range(2):
+            await litellm.anthropic.messages.acreate(
+                model="gemini/gemini-3.8-flash", messages=_tool_turn(3), max_tokens=16
+            )
+            await _settle_post_response_work()
+
+        assert gemini_route.call_count == 1, "three caller messages were counted as their five chat messages"
+    finally:
+        await _settle_post_response_work()
 
 
 @respx.mock

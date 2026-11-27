@@ -6116,7 +6116,7 @@ async def delete_verification_tokens(
     """
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
 
-    failed_tokens: list = []
+    failed_tokens: list[object] = []
     try:
         if prisma_client:
             hashed_tokens: Final[list[str]] = [hash_token_if_needed(token=key) for key in tokens]
@@ -6363,8 +6363,10 @@ async def reencrypt_credentials_for_aes_migration(
 
     encryption_key: Final = os.environ.get(SALT_KEY_ENV_VAR, new_master_key)
     try:
-        models: list | None = cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
-            "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
+        models: list[object] | None = (
+            cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
+                "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
+            )
         )
     except Exception:
         models = None

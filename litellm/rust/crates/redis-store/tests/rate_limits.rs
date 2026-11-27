@@ -99,7 +99,7 @@ const SCRIPTS: [(&str, &str); 8] = [
     ("parallel_count", "9ae6ae0ca54e4c1930356965275e1d442b2f25ba"),
     (
         "token_increment",
-        "bacdccafbf0cb85105a45154294f340c6275fe3f",
+        "90b63b55e8a1435055887c35e4225fd1d1a5b1d5",
     ),
 ];
 
@@ -133,6 +133,17 @@ fn store(deployment: &RedisDeployment) -> Arc<RateLimits> {
 
 async fn raw_text(raw: &RedisClient, key: &str) -> Option<String> {
     raw.send(commands::get(key)).await.unwrap()
+}
+
+async fn seed(raw: &RedisClient, key: &str, value: &str, ttl: Duration) {
+    raw.send(commands::set(key, value, ttl)).await.unwrap();
+}
+
+async fn ttl_of(raw: &RedisClient, key: &str) -> Duration {
+    let Ttl::Expires(ttl) = raw.send(commands::ttl(key)).await.unwrap() else {
+        panic!("{key} has no TTL");
+    };
+    ttl
 }
 
 async fn zcard(raw: &RedisClient, key: &str) -> i64 {
@@ -257,7 +268,7 @@ async fn every_script_runs_mains_bytes_under_mains_keys(
         let cached = cli(&deployment, &["SCRIPT", "EXISTS", sha]).await;
         assert!(
             cached.iter().any(|reply| reply.trim() == "1"),
-            "{name} ran under a different SHA than main's {sha}"
+            "{name} ran under a different SHA than {sha}"
         );
     }
 }
@@ -588,6 +599,14 @@ async fn token_increment_sets_a_ttl_only_on_a_key_without_one(
         amount,
         ttl: Some(Duration::from_secs(60)),
     };
+    let now = redis_now(&raw).await;
+    raw.send(commands::set(
+        "{user:u1}:window",
+        now.to_string(),
+        Duration::from_secs(600),
+    ))
+    .await
+    .unwrap();
     raw.send(commands::set(
         "{user:u1}:tokens",
         "10",
@@ -610,6 +629,102 @@ async fn token_increment_sets_a_ttl_only_on_a_key_without_one(
         panic!("the counter lost its TTL");
     };
     assert!(within(ttl, 600), "{ttl:?}");
+}
+
+#[rstest]
+#[tokio::test]
+async fn token_increment_into_a_closed_window_opens_it_so_admission_counts_the_tokens(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let limits = store(&deployment);
+    let key = scope("api_key", "relay-first");
+    let charge = |amount: i64| {
+        let pending = limits
+            .token_increment(
+                RedisSend::Now,
+                &[Increment {
+                    counter: counter(&key, Kind::Tokens),
+                    amount: Number::Int(amount),
+                    ttl: Some(Duration::from_secs(60)),
+                }],
+            )
+            .unwrap();
+        async move { pending.await.unwrap() }
+    };
+    let ten_minutes = Duration::from_secs(600);
+    seed(&raw, "{api_key:relay-first}:tokens", "900", ten_minutes).await;
+    seed(&raw, "{api_key:relay-first}:requests", "7", ten_minutes).await;
+
+    assert_eq!(charge(-50).await, vec![0.0]);
+    assert_eq!(raw_text(&raw, "{api_key:relay-first}:window").await, None);
+    assert_eq!(charge(360).await, vec![360.0]);
+    let now = redis_now(&raw).await;
+    let window_start: i64 = raw_text(&raw, "{api_key:relay-first}:window")
+        .await
+        .expect("the charge opened no window")
+        .parse()
+        .unwrap();
+    assert!((now - window_start).abs() <= 2, "{window_start} vs {now}");
+    assert_eq!(raw_text(&raw, "{api_key:relay-first}:requests").await, None);
+    let window_ttl = ttl_of(&raw, "{api_key:relay-first}:window").await;
+    assert!(within(window_ttl, 60), "{window_ttl:?}");
+    let tokens_ttl = ttl_of(&raw, "{api_key:relay-first}:tokens").await;
+    assert!(within(tokens_ttl, 60), "{tokens_ttl:?}");
+    assert_eq!(charge(720).await, vec![1080.0]);
+
+    assert_eq!(
+        limits
+            .check_and_increment(RedisSend::Now, &[atomic(&key, Kind::Tokens, 1000, 13)])
+            .unwrap()
+            .await
+            .unwrap(),
+        AtomicReply::OverLimit {
+            index: 0,
+            current: 1080,
+            limit: 1000
+        }
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn token_increment_keeps_a_live_window_that_outlasts_its_ttl(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let limits = store(&deployment);
+    let key = scope("api_key_tpd", "daily");
+    let window_start = (redis_now(&raw).await - 120).to_string();
+    let day = Duration::from_secs(86_400);
+    seed(&raw, "{api_key_tpd:daily}:window", &window_start, day).await;
+    seed(&raw, "{api_key_tpd:daily}:tokens", "500", day).await;
+    seed(&raw, "{api_key_tpd:daily}:requests", "3", day).await;
+
+    let charged = limits
+        .token_increment(
+            RedisSend::Now,
+            &[Increment {
+                counter: counter(&key, Kind::Tokens),
+                amount: Number::Int(100),
+                ttl: Some(Duration::from_secs(60)),
+            }],
+        )
+        .unwrap()
+        .await
+        .unwrap();
+
+    assert_eq!(charged, vec![600.0]);
+    assert_eq!(
+        raw_text(&raw, "{api_key_tpd:daily}:window").await,
+        Some(window_start)
+    );
+    assert_eq!(
+        raw_text(&raw, "{api_key_tpd:daily}:requests").await,
+        Some("3".to_owned())
+    );
 }
 
 #[rstest]

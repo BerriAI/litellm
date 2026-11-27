@@ -31,7 +31,7 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Returns:
         - model: str - the model to use (can be pulled from prompt management tool)

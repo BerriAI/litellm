@@ -59,6 +59,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.base_llm.base_model_iterator import UpstreamAbortError, upstream_abort_error
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -435,6 +436,11 @@ class _TextCompletionChoiceLike(Protocol):
     finish_reason: str | None
 
 
+def _raise_on_text_completion_abort(choices: Sequence[_TextCompletionChoiceLike]) -> None:
+    if any(choice.finish_reason == "abort" for choice in choices):
+        raise upstream_abort_error()
+
+
 class _VertexFunctionCallLike(Protocol):
     name: str
     args: Mapping[str, Iterable[object]]
@@ -498,7 +504,8 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _provider_response_model(chunk: object) -> str | None:
-    model: Final[object] = chunk.get("model") if isinstance(chunk, Mapping) else getattr(chunk, "model", None)
+    mapping: Final = as_str_mapping(chunk)
+    model: Final[object] = mapping.get("model") if mapping is not None else getattr(chunk, "model", None)
     return model if isinstance(model, str) and model else None
 
 
@@ -1066,6 +1073,7 @@ class CustomStreamWrapper:
             is_finished = False
             finish_reason = None
             choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
+            _raise_on_text_completion_abort(choices)
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -1080,6 +1088,13 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
+    def _surfaced_error(self, error: Exception) -> Exception:
+        if not isinstance(error, UpstreamAbortError):
+            return error
+        return litellm.InternalServerError(
+            message=error.message, model=self.logging_obj.model, llm_provider=self.custom_llm_provider
+        )
+
     def handle_openai_text_completion_chunk(self, chunk: object):
         try:
             text = ""
@@ -1087,6 +1102,7 @@ class CustomStreamWrapper:
             finish_reason = None
             usage = None
             choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
+            _raise_on_text_completion_abort(choices)
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -1292,6 +1308,7 @@ class CustomStreamWrapper:
             )
             or (getattr(model_response.choices[0].delta, "reasoning_items", None) is not None)
             or getattr(model_response.choices[0].delta, "thinking_blocks", None)
+            or getattr(model_response.choices[0].delta, "reasoning_details", None)
         ):
             return True
         else:
@@ -2137,6 +2154,8 @@ class CustomStreamWrapper:
 
         except StopIteration:
             raise StopIteration
+        except UpstreamAbortError:
+            raise
         except Exception as e:
             traceback.format_exc()
             setattr(e, "message", str(e))
@@ -2751,11 +2770,15 @@ class CustomStreamWrapper:
                 # __del__ guard instead.
                 return processed_chunk
         except Exception as e:
+            surfaced_error: Final = self._surfaced_error(e)
             traceback_exception: Final = traceback.format_exc()
+            self._record_partial_usage_for_failure()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
+            threading.Thread(
+                target=self.logging_obj.failure_handler, args=(surfaced_error, traceback_exception)
+            ).start()
             self.close()
-            self._handle_stream_fallback_error(e)
+            self._handle_stream_fallback_error(surfaced_error)
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
@@ -2881,6 +2904,13 @@ class CustomStreamWrapper:
             if self.received_finish_reason is None:
                 await self.aclose()
                 self._log_stream_failure_and_raise(e)
+            verbose_logger.warning(
+                "%s stream lost its upstream connection after finish_reason=%s, ending it normally: %s: %s",
+                self.custom_llm_provider,
+                self.received_finish_reason,
+                type(e).__name__,
+                e,
+            )
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
             await self.aclose()
@@ -2980,8 +3010,9 @@ class CustomStreamWrapper:
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
-        self._dispatch_stream_failure(e, traceback.format_exc())
-        self._handle_stream_fallback_error(e)
+        surfaced_error: Final = self._surfaced_error(e)
+        self._dispatch_stream_failure(surfaced_error, traceback.format_exc())
+        self._handle_stream_fallback_error(surfaced_error)
 
     def _dispatch_stream_failure(self, e: Exception, traceback_exception: str) -> None:
         self._record_partial_usage_for_failure()
@@ -3057,6 +3088,7 @@ class CustomStreamWrapper:
         "tool_calls",
         "function_call",
         "reasoning_content",
+        "reasoning_details",
         "thinking_blocks",
         "reasoning_items",
         "audio",

@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { Page } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
@@ -120,7 +121,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   variant = "dashboard",
 }) => {
   const term = useTerminology();
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const syntaxTheme = useSyntaxTheme(prism);
   const isChat = variant === "chat";
   // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
@@ -344,15 +345,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
     // Show the modal for selecting MCP servers to make public
     setIsMakeMcpPublicModalVisible(true);
-  };
-
-  const handleOk = () => {
-    setIsModalVisible(false);
-    setSelectedModel(null);
-    setIsAgentModalVisible(false);
-    setSelectedAgent(null);
-    setIsMcpModalVisible(false);
-    setSelectedMcpServer(null);
   };
 
   const handleCancel = () => {
@@ -1211,16 +1203,22 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   </div>
                   <div>
                     <p className="font-medium">{t("aiHub.modelHubTable.mcpDialog.createdAt")}</p>
-                    <p className="text-sm">{new Date(selectedMcpServer.created_at).toLocaleString()}</p>
+                    <p className="text-sm">
+                      {displayTimestamp(new Date(selectedMcpServer.created_at), locale.language)}
+                    </p>
                   </div>
                   <div>
                     <p className="font-medium">{t("aiHub.modelHubTable.mcpDialog.updatedAt")}</p>
-                    <p className="text-sm">{new Date(selectedMcpServer.updated_at).toLocaleString()}</p>
+                    <p className="text-sm">
+                      {displayTimestamp(new Date(selectedMcpServer.updated_at), locale.language)}
+                    </p>
                   </div>
                   {selectedMcpServer.last_health_check && (
                     <div>
                       <p className="font-medium">{t("aiHub.modelHubTable.mcpDialog.lastHealthCheck")}</p>
-                      <p className="text-sm">{new Date(selectedMcpServer.last_health_check).toLocaleString()}</p>
+                      <p className="text-sm">
+                        {displayTimestamp(new Date(selectedMcpServer.last_health_check), locale.language)}
+                      </p>
                     </div>
                   )}
                 </div>

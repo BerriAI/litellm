@@ -6,7 +6,6 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import urlparse, urlunparse
 
 from pydantic import JsonValue
 
@@ -16,6 +15,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.realtime.transcription_protocol import (
     RealtimeTranscriptionProtocolError,
     TranscriptionSessionUpdate,
+    build_realtime_wss_url,
     completed_event,
     decode_pcm16_append,
     delta_event,
@@ -197,20 +197,9 @@ def normalize_access_token(api_key: str) -> str:
 
 
 def build_muse_realtime_url(api_base: str | None) -> str:
-    if api_base is None:
-        return DEFAULT_MUSE_REALTIME_URL
-    parsed: Final = urlparse(api_base.strip())
-    scheme: Final = "wss" if parsed.scheme == "https" else parsed.scheme
-    if (
-        scheme != "wss"
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.fragment
-    ):
-        raise ValueError("Meta api_base must be an absolute wss:// or https:// URL without credentials or a fragment")
-    netloc: Final = f"{parsed.hostname}:{parsed.port}" if parsed.port is not None else parsed.hostname
-    return urlunparse((scheme, netloc, "/v1/asr/realtime", "", "", ""))
+    return build_realtime_wss_url(
+        api_base, default_url=DEFAULT_MUSE_REALTIME_URL, path="/v1/asr/realtime", provider="Meta"
+    )
 
 
 def _parse_sample_rate(update: TranscriptionSessionUpdate) -> MuseSampleRate:

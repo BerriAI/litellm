@@ -2538,6 +2538,24 @@ class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     item_id: ReadOnly[str]
 
 
+class OpenAIRealtimeInputAudioBufferCommitted(TypedDict):
+    type: ReadOnly[Literal["input_audio_buffer.committed"]]
+    event_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+    previous_item_id: ReadOnly[str | None]
+
+
+class OpenAIRealtimeTranscriptionSessionUpdated(TypedDict):
+    type: ReadOnly[Literal["session.updated"]]
+    event_id: ReadOnly[str]
+    session: ReadOnly["OpenAIRealtimeTranscriptionSession"]
+
+
+class OpenAIRealtimeInputAudioBufferCleared(TypedDict):
+    type: ReadOnly[Literal["input_audio_buffer.cleared"]]
+    event_id: ReadOnly[str]
+
+
 class OpenAIRealtimeErrorDetail(TypedDict):
     type: ReadOnly[str]
     message: ReadOnly[str]
@@ -2673,10 +2691,13 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent
+    | OpenAIRealtimeInputAudioBufferCleared
     | OpenAIRealtimeOutputVideoDelta
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
     | OpenAIRealtimeTranscriptionSessionCreated
+    | OpenAIRealtimeTranscriptionSessionUpdated
+    | OpenAIRealtimeInputAudioBufferCommitted
     | OpenAIRealtimeErrorEvent
     | OpenAIRealtimeTranslationClosedEvent
 )

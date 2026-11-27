@@ -4,6 +4,11 @@
 //! hands over, as [`prompt_estimate`](super::prompt_estimate) estimates them. router-core decides
 //! with them, and a route that hands over no prompt is held to no window.
 //!
+//! The estimate is a stand-in for the provider's tokenizer, so router-core keeps a deployment it
+//! overflows by up to twice its window for the provider to judge, as it keeps Python's stand-in
+//! count. A window the deployment's own `model_info.max_input_tokens` caps below the cost map's is
+//! the operator's limit and holds exactly, as Python's `_caps_below_catalog` reads it.
+//!
 //! A deployment's window depends on the deployment and the cost map alone, so [`ContextWindows`] reads
 //! each one once at boot. A call and `admit` read that one table, and so hold to the same window.
 //!
@@ -22,16 +27,25 @@ use litellm_router_core::{
     Deployment,
     model_info::{RouterModelInfoQuery, router_model_info},
     precall::{DeploymentFacts, PreCallFacts},
+    registry::ModelInfo,
 };
 use serde_json::Value;
 use tokio::sync::OnceCell;
 
 use super::{model_info::NativeModelInfoHost, prompt_estimate::Countable};
 
+/// A deployment's context window, and whether its own `model_info.max_input_tokens` caps it below
+/// the cost map's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Window {
+    limit: i64,
+    capped: bool,
+}
+
 /// The context window of each deployment the router was built with.
 #[derive(Default)]
 pub struct ContextWindows {
-    by_deployment: HashMap<String, i64>,
+    by_deployment: HashMap<String, Window>,
     /// The model group of each deployment no window was read for.
     windowless: HashSet<String>,
 }
@@ -57,7 +71,7 @@ impl ContextWindows {
         }
     }
 
-    fn of(&self, deployment: &Deployment) -> Option<i64> {
+    fn of(&self, deployment: &Deployment) -> Option<Window> {
         self.by_deployment.get(&deployment.id).copied()
     }
 
@@ -67,9 +81,35 @@ impl ContextWindows {
     }
 }
 
+async fn window(catalog: &Catalog, deployment: &Deployment) -> Option<Window> {
+    let limit = merged_window(catalog, deployment).await?;
+    let capped = match without_own_window(deployment) {
+        Some(uncapped) => merged_window(catalog, &uncapped)
+            .await
+            .is_some_and(|cost_maps| limit < cost_maps),
+        None => false,
+    };
+    Some(Window { limit, capped })
+}
+
+fn without_own_window(deployment: &Deployment) -> Option<Deployment> {
+    let raw = &deployment.model_info.raw;
+    raw.contains_key("max_input_tokens").then(|| Deployment {
+        model_info: ModelInfo {
+            raw: raw
+                .iter()
+                .filter(|(key, _)| *key != "max_input_tokens")
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            ..deployment.model_info.clone()
+        },
+        ..deployment.clone()
+    })
+}
+
 /// `_deployment_max_input_tokens`: the merged context window, or `None` when there is none or the
 /// deployment cannot be resolved.
-async fn window(catalog: &Catalog, deployment: &Deployment) -> Option<i64> {
+async fn merged_window(catalog: &Catalog, deployment: &Deployment) -> Option<i64> {
     let base_model = |named: Option<&Value>| named.cloned().unwrap_or(Value::Null);
     let query = RouterModelInfoQuery {
         deployment_id: Value::String(deployment.id.clone()),
@@ -124,21 +164,24 @@ pub(super) async fn facts(
     let has_window = candidates
         .iter()
         .any(|deployment| windows.of(deployment).is_some());
+    let input_tokens = if has_window {
+        *counted.get_or_init(|| tokens(&prompt)).await
+    } else {
+        None
+    };
     PreCallFacts {
         has_input: true,
         countable: true,
-        input_tokens: if has_window {
-            *counted.get_or_init(|| tokens(&prompt)).await
-        } else {
-            None
-        },
         allowed_model_region: ALLOWED_MODEL_REGION,
         requested_params: REQUESTED_PARAMS,
         deployments: candidates
             .iter()
             .map(|deployment| {
+                let window = windows.of(deployment);
                 let facts = DeploymentFacts {
-                    max_input_tokens: windows.of(deployment),
+                    max_input_tokens: window.map(|window| window.limit),
+                    input_tokens,
+                    estimated: window.is_some_and(|window| !window.capped),
                     ..DeploymentFacts::default()
                 };
                 (deployment.id.clone(), facts)
@@ -158,19 +201,28 @@ mod tests {
     const COST_MAP: &[u8] = br#"{"listed-model": {"litellm_provider": "anthropic", "mode": "chat", "max_input_tokens": 5000}}"#;
 
     #[rstest]
-    #[case::its_own_over_the_cost_maps("anthropic/listed-model", json!({"max_input_tokens": 100}), Some(100))]
-    #[case::the_cost_maps("anthropic/listed-model", json!({}), Some(5000))]
+    #[case::its_own_capping_the_cost_maps(
+        "anthropic/listed-model",
+        json!({"max_input_tokens": 100}),
+        Some((100, true))
+    )]
+    #[case::its_own_above_the_cost_maps(
+        "anthropic/listed-model",
+        json!({"max_input_tokens": 9000}),
+        Some((9000, false))
+    )]
+    #[case::the_cost_maps("anthropic/listed-model", json!({}), Some((5000, false)))]
     #[case::its_own_for_a_model_the_cost_map_does_not_list(
         "anthropic/in-house-9",
         json!({"max_input_tokens": 100}),
-        Some(100)
+        Some((100, false))
     )]
     #[case::none_for_a_model_the_cost_map_does_not_list("anthropic/in-house-9", json!({}), None)]
     #[tokio::test]
     async fn a_deployments_window_is(
         #[case] model: &str,
         #[case] model_info: Value,
-        #[case] expected: Option<i64>,
+        #[case] expected: Option<(i64, bool)>,
     ) {
         let catalog = Catalog::parse(COST_MAP).unwrap().value;
         let spec: DeploymentSpec = serde_json::from_value(json!({
@@ -181,6 +233,11 @@ mod tests {
         .unwrap();
         let deployment = Deployment::from_spec(spec).unwrap();
 
-        assert_eq!(window(&catalog, &deployment).await, expected);
+        assert_eq!(
+            window(&catalog, &deployment)
+                .await
+                .map(|window| (window.limit, window.capped)),
+            expected
+        );
     }
 }

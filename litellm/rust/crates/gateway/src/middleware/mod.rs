@@ -10,6 +10,7 @@ pub mod decompression;
 mod in_flight;
 mod panic;
 mod rate_limit;
+pub mod request_allowlist;
 mod request_log;
 mod request_volume;
 pub mod root_path;
@@ -89,6 +90,15 @@ pub fn global(
 /// known.
 pub(crate) fn rate_limited(router: Router, limiter: Arc<KeyLimiter>) -> Router {
     router.route_layer(from_fn_with_state(limiter, rate_limit::before_body))
+}
+
+/// The proxy's allowlists, as a route layer the caller's authentication sits inside, so they run
+/// only on the routes Python authenticates and before the credential is read.
+pub(crate) fn allowlisted(router: Router, settings: request_allowlist::Settings) -> Router {
+    router.route_layer(from_fn_with_state(
+        Arc::new(settings.allowlists),
+        request_allowlist::refuse_unlisted,
+    ))
 }
 
 /// Request logging skips UI routes because their bodies carry credentials, and Python resolves the

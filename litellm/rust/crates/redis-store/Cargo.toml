@@ -6,14 +6,17 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-call-scope.workspace = true
 futures-util.workspace = true
 jiff.workspace = true
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
+litellm-config.workspace = true
 litellm-python-compat.workspace = true
 litellm-redis-client.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 strum.workspace = true
 thiserror.workspace = true

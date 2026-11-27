@@ -1,10 +1,12 @@
 import asyncio
 import gc
+import sys
 import time
 import types
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import timedelta
+from types import MappingProxyType
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -16,9 +18,10 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisClusterException, ResponseError
 
 import litellm
+from litellm._redis import merge_redis_kwargs
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError, RedisHealth
-from litellm.redis.store_settings import RedisBreakerSettings
+from litellm.redis.store_settings import RedisBreakerSettings, breaker_settings
 from litellm.rust_bridge._native import NativeRedisBreaker
 
 
@@ -643,6 +646,19 @@ def test_batch_get_counts_reads_counters_in_order_and_keeps_unset_keys_apart(sto
     assert cache.batch_get_counts(["dep-a", "dep-b", "dep-c"]) == (3, None, 0)
 
 
+def _closed_port_whose_shared_breaker_is_closed() -> int:
+    settings: Final = breaker_settings()
+    return next(
+        port
+        for port in iter(_closed_port, None)
+        if settings is None
+        or NativeRedisBreaker.shared(
+            MappingProxyType(merge_redis_kwargs({"host": "127.0.0.1", "port": port})), settings
+        ).state
+        == "closed"
+    )
+
+
 @pytest.fixture
 def sync_batch_cache_with_service_logger(redis_no_ping: None) -> Iterator[tuple[RedisCache, ServiceLogging]]:
     service_logger = ServiceLogging(mock_testing=True)
@@ -651,7 +667,9 @@ def sync_batch_cache_with_service_logger(redis_no_ping: None) -> Iterator[tuple[
     with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
         "litellm._redis.get_redis_client", return_value=failing_client
     ):
-        cache = RedisCache(host="127.0.0.1", port=_closed_port(), service_logger_obj=service_logger)
+        cache = RedisCache(
+            host="127.0.0.1", port=_closed_port_whose_shared_breaker_is_closed(), service_logger_obj=service_logger
+        )
     yield cache, service_logger
 
 
@@ -781,6 +799,19 @@ def test_call_stack_info_skips_breaker_guard_frames():
         return caller_one()
 
     assert caller_two() == "caller_one <- caller_two"
+
+
+@pytest.mark.parametrize("num_frames", [0, 1, 2, -1])
+def test_call_stack_info_does_not_retain_caller_payload(num_frames: int) -> None:
+    from litellm.caching.redis_cache import _get_call_stack_info
+
+    def cache_method(_payload: object) -> str:
+        return _get_call_stack_info(num_frames)
+
+    payload: Final = object()
+    references_before: Final = sys.getrefcount(payload)
+    cache_method(payload)
+    assert sys.getrefcount(payload) == references_before
 
 
 def test_call_stack_info_skips_guard_frames_when_deployed_without_sources(monkeypatch: pytest.MonkeyPatch):

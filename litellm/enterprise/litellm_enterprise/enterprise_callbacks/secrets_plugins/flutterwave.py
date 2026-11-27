@@ -15,7 +15,7 @@ class FlutterwaveDetector(RegexBasedDetector):
         return "Flutterwave API Key"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Flutterwave Encryption Key
             re.compile(r"""(?i)FLWSECK_TEST-[a-h0-9]{12}"""),

@@ -323,6 +323,12 @@ def effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply: object) 
     return getattr(guardrail_to_apply, "scan_tool_calls_as_text", None) is True
 
 
+def tool_calls_in_guardrail_scope(guardrail_to_apply: object) -> bool:
+    return not effective_scan_only_tool_results_for_guardrail(
+        guardrail_to_apply
+    ) or effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
+
+
 def role_out_of_guardrail_scope(
     role: str,
     *,
@@ -392,6 +398,12 @@ def anthropic_tool_names(tool: object) -> tuple[str, ...]:
     function: Final = _dict_or_none(fields.get("function")) if fields.get("type") == "function" else None
     function_name: Final = function.get("name") if function is not None else None
     return tuple(name for name in (fields.get("name"), function_name) if isinstance(name, str) and name)
+
+
+def anthropic_mcp_server_name(server: object) -> str | None:
+    fields: Final = _dict_or_none(server)
+    name: Final = fields.get("name") if fields is not None else None
+    return name if isinstance(name, str) and name else None
 
 
 def anthropic_tool_name(tool: object) -> str | None:

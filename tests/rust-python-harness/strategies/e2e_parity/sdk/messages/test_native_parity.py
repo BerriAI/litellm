@@ -361,6 +361,10 @@ MARKED_TEXTS_REPLY: Final = (
 ).encode()
 
 
+def _text(text: object) -> dict[str, object]:  # mutable-ok: a block of the messages kwarg's list of dicts
+    return {"type": "text", "text": text}
+
+
 def _non_string_tool_result_texts(
     *texts: object,
 ) -> list[dict[str, object]]:  # mutable-ok: the messages kwarg is a list of dicts
@@ -1648,6 +1652,27 @@ FALLBACK_CASES: Final = (
         "drop_params_keeps_string_tool_result_texts",
         _kw(messages=_non_string_tool_result_texts("\uf8fflitellm-raw-json:1", "kept"), drop_params=True),
     ),
+    Case(
+        "non_string_user_texts_sent_without_drop_params",
+        _kw(messages=[{"role": "user", "content": [_text(None), _text(5), _text("Hi.")]}]),
+    ),
+    Case(
+        "drop_params_drops_non_string_user_texts",
+        _kw(messages=[{"role": "user", "content": [_text(None), _text(5), _text("Hi.")]}], drop_params=True),
+    ),
+    Case(
+        "drop_params_drops_a_user_turn_left_with_no_text",
+        _kw(
+            messages=[dict(USER), {"role": "assistant", "content": "Paris."}, {"role": "user", "content": [_text(None)]}],
+            drop_params=True,
+        ),
+    ),
+    Case(
+        "drop_params_that_leaves_no_message_rejected",
+        _kw(messages=[{"role": "user", "content": [_text(None)]}], drop_params=True),
+        upstream=(),
+    ),
+    Case("blank_texts_that_leave_no_message_rejected", _kw(messages=[{"role": "user", "content": [_text(" ")]}]), upstream=()),
     Case("modify_params_sync", _kw(max_tokens=200_000), sync=True, settings=_MODIFY_PARAMS),
     Case("request_timeout_kwarg", _kw(request_timeout=30)),
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
@@ -3919,7 +3944,7 @@ AZURE_SHAPING_CASES: Final = (
         model=AZURE_CLAUDE,
     ),
     Case(
-        "azure_ai_unparsed_message_non_string_text_block_dropped",
+        "azure_ai_unparsed_message_non_string_text_block_sent",
         _kw(messages=[{"role": "user", "content": [{"type": "text", "text": 5}, {"type": "text", "text": "Hi."}]}]),
         model=AZURE_CLAUDE,
     ),
@@ -6378,7 +6403,6 @@ async def test_an_anthropic_stream_stays_main_s_execution_stream(
 # By the owner's ruling anthropic, which has no Python path, keeps main's native route where the azure_ai port
 # matched Python. Each case pairs an anthropic call with what main's route does for it; the azure_ai cases of
 # the same behaviour compare with Python in `CASES`.
-_UNPARSED_TEXT: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "text", "text": 5})
 _SIGNED_COMPACTION: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {"type": "compaction", "content": "Summary.", "signature": "sig"}
 )
@@ -6387,10 +6411,6 @@ _TOOL_REFERENCE_ADDITION: Final[Mapping[str, JsonValue]] = MappingProxyType(
 )
 
 ANTHROPIC_SENT_AS_IS_CASES: Final = (
-    Case(
-        "anthropic_unparsed_message_non_string_text_block_sent",
-        _kw(messages=[{"role": "user", "content": [dict(_UNPARSED_TEXT), {"type": "text", "text": "Hi."}]}]),
-    ),
     Case(
         "anthropic_unparsed_message_tool_use_id_sent",
         _kw(

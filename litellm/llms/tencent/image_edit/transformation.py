@@ -91,12 +91,12 @@ class TencentImageEditConfig(BaseImageEditConfig):
     @override
     def validate_environment(
         self,
-        headers: Mapping[str, str],
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: mirrors override contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
         return dict(tokenhub_image_headers(headers, api_key, model))
 
     @override

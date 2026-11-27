@@ -262,6 +262,31 @@ class DroppingGuardrail(CustomGuardrail):
         return {**inputs, "tool_calls": []}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guardrail_type", [DroppingGuardrail, FlatShapeGuardrail], ids=["different-count", "no-arguments-string"]
+)
+async def test_history_tool_call_answer_that_cannot_be_written_back_is_rejected_and_leaves_request_untouched(
+    guardrail_type: type[CustomGuardrail],
+) -> None:
+    guardrail: Final = guardrail_type(guardrail_name="dropper")
+    guardrail.scan_tool_calls_as_text = True
+    data: Final = {
+        "model": "gpt-4o",
+        "input": [
+            {"type": "message", "role": "user", "content": "pay the invoice"},
+            {"type": "function_call", "call_id": "call_1", "name": "send_payment", "arguments": '{"note": "x"}'},
+        ],
+    }
+    original: Final = copy.deepcopy(data)
+
+    with pytest.raises(UnappliableRequestRewrite) as excinfo:
+        await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+    assert excinfo.value.guardrail_name == "dropper"
+    assert data["input"] == original["input"]
+
+
 CUSTOM_TOOL_CALL_ITEM = {
     "type": "custom_tool_call",
     "id": "ctc_1",

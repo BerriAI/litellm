@@ -15,7 +15,7 @@ class MicrosoftTeamsWebhookDetector(RegexBasedDetector):
         return "Microsoft Teams Webhook"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Microsoft Teams Webhook
             re.compile(

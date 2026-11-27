@@ -91,7 +91,7 @@ class A2AGuardrailHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process A2A input messages by applying guardrails to text content.
 

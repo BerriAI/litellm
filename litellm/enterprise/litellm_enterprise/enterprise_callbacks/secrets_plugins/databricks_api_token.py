@@ -15,7 +15,7 @@ class DatabricksApiTokenDetector(RegexBasedDetector):
         return "Databricks API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             re.compile(r"""(?i)\b(dapi[a-h0-9]{32})(?:['|\"|\n|\r|\s|\x60|;]|$)"""),
         ]

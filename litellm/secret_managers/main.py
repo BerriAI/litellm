@@ -359,7 +359,7 @@ def get_secret_bool(
 def get_secret(
     secret_name: str,
     default_value: str | bool | None = None,
-):
+) -> str | bool | None:
     key_management_system: Final = litellm._key_management_system
     key_management_settings: Final = litellm._key_management_settings
     secret = None

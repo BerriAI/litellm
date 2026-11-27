@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import i18n from "@/i18n/i18n";
 import {
   buildUsageChart,
+  formatUsageChartContext,
   formatUsageChartValue,
   usageChartRequestSchema,
   usageChartSource,
@@ -12,8 +14,8 @@ const admin = { mode: "admin" } as const;
 const report = { daily: [{ date: query.start_date, spend: 0 }], top_models: [], top_providers: [] };
 const source = (data: UsageChartSource["report"]): UsageChartSource => ({
   report: data,
-  period: `${query.start_date} to ${query.end_date} (UTC)`,
-  scope: "Gateway usage",
+  period: { start: query.start_date, end: query.end_date },
+  scope: "gateway",
 });
 
 describe("usage chart sources", () => {
@@ -25,15 +27,16 @@ describe("usage chart sources", () => {
         { ...query, user_id: "viewer" },
         { mode: "usage", scope: { type: "user", userId: "viewer" } },
       ),
-    ).toMatchObject({ scope: "Your usage" });
+    ).toMatchObject({ scope: "yours" });
   });
 
-  it.each(["All teams", "All tags"] as const)(
+  it.each(["allTeams", "allTags"] as const)(
     "should label an unfiltered %s report and retain combined filters",
     (scope) => {
       expect(usageChartSource(report, query, admin, scope)?.scope).toBe(scope);
       const filters = { ...query, user_id: "member", team_ids: "team-a", tags: "production" };
-      expect(usageChartSource(report, filters, admin, scope)?.scope).toBe(
+      const filtered = usageChartSource(report, filters, admin, scope)!;
+      expect(formatUsageChartContext(filtered, i18n.getFixedT("en")).scope).toBe(
         "User member · Teams team-a · Tags production",
       );
     },

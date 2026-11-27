@@ -13,13 +13,16 @@ jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
 litellm-config.workspace = true
 litellm-fnmatch.workspace = true
 litellm-python-compat.workspace = true
+litellm-router-types.workspace = true
 litellm-secret-value.workspace = true
 litellm-starlette.workspace = true
-serde_json.workspace = true
+fancy-regex.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 sha2.workspace = true
 strum.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+veil.workspace = true
 
 [dev-dependencies]
 jsonwebtoken = { workspace = true, features = ["rust_crypto", "use_pem"] }
