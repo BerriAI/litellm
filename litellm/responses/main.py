@@ -105,6 +105,7 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
     ToolChoice,
     ToolParam,
 )
@@ -466,7 +467,9 @@ async def aresponses_api_with_mcp(
     }
 
     # Handle MCP streaming if requested
-    if stream and mcp_tools_with_litellm_proxy:
+    if mcp_tools_with_litellm_proxy and (
+        stream or LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(mcp_tools_with_litellm_proxy)
+    ):
         # Generate MCP discovery events using the already processed tools
         from litellm._uuid import uuid
         from litellm.responses.mcp.mcp_streaming_iterator import (
@@ -497,7 +500,30 @@ async def aresponses_api_with_mcp(
             **kwargs,
         )
         await mcp_streaming_response.start_initial_response()
-        return mcp_streaming_response
+        if stream:
+            return mcp_streaming_response
+        events: Final = [event async for event in mcp_streaming_response]
+        for event in reversed(events):
+            terminal_response: Final[object] = getattr(event, "response", None)
+            if event.type in (
+                ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                ResponsesAPIStreamEvents.RESPONSE_FAILED,
+                ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            ) and isinstance(terminal_response, ResponsesAPIResponse):
+                return terminal_response
+            if event.type == ResponsesAPIStreamEvents.ERROR:
+                raise litellm.APIError(
+                    status_code=500,
+                    message=str(getattr(event, "error", "MCP gateway stream failed")),
+                    model=model,
+                    llm_provider=custom_llm_provider or "mcp",
+                )
+        raise litellm.APIError(
+            status_code=500,
+            message="MCP stream ended without a terminal response",
+            model=model,
+            llm_provider=custom_llm_provider or "mcp",
+        )
 
     # Determine if we should auto-execute tools
     should_auto_execute = bool(mcp_tools_with_litellm_proxy) and LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(

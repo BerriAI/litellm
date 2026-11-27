@@ -1,9 +1,10 @@
 import sys
 import types
+import unittest
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Final, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -44,7 +45,7 @@ class _FakeAsyncStream:
 
 
 def _output_item_added_chunk():
-    return SimpleNamespace(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED)
+    return SimpleNamespace(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, item={"type": "message"}, output_index=0)
 
 
 def _created_chunk(response_id: str):
@@ -154,7 +155,10 @@ async def test_second_round_tool_call_is_executed_and_reaches_final_text(monkeyp
 
     # Both rounds' tool calls were actually executed, not just streamed unexecuted.
     assert call_tool.call_count == 2
-    assert all(call.kwargs["guardrail_context"]["metadata"]["guardrails"] == ("block-all",) for call in call_tool.call_args_list)
+    assert all(
+        call.kwargs["guardrail_context"]["metadata"]["guardrails"] == ("block-all",)
+        for call in call_tool.call_args_list
+    )
     assert iterator.tool_call_round == 2
 
     # The stream reached round 3 and produced the final text response instead
@@ -222,12 +226,6 @@ async def test_follow_up_input_keeps_every_previous_tool_round(monkeypatch: pyte
     ),
 )
 async def test_tool_call_rounds_are_capped(monkeypatch, max_agentic_loops, expected_cap):
-    """
-    A model that keeps calling tools every round must not loop forever —
-    auto-execution stops at the configured round cap, and the follow-up made
-    at the cap drops "tools" from the request so the model is forced to
-    answer in text instead of the stream just hanging.
-    """
     call_tool = _mock_mcp_environment(monkeypatch)
 
     tool_call_streams: Final = tuple(
@@ -244,16 +242,19 @@ async def test_tool_call_rounds_are_capped(monkeypatch, max_agentic_loops, expec
         max_agentic_loops=max_agentic_loops,
     )
 
-    _ = [chunk async for chunk in iterator]
+    chunks = [chunk async for chunk in iterator]
 
     assert iterator.tool_call_round == expected_cap
     assert call_tool.call_count == expected_cap
-    assert aresponses_mock.call_count == expected_cap
+    assert aresponses_mock.call_count == expected_cap - 1
 
-    # Every follow-up before the cap still offered tools; only the capped one drops them.
-    for call in aresponses_mock.call_args_list[:-1]:
+    for call in aresponses_mock.call_args_list:
         assert "tools" in call.kwargs
-    assert "tools" not in aresponses_mock.call_args_list[-1].kwargs
+    assert chunks[-1].type == ResponsesAPIStreamEvents.RESPONSE_FAILED
+    assert chunks[-1].response.status == "failed"
+    assert "workflow is incomplete" in chunks[-1].response.error["message"]
+    assert len([item for item in chunks[-1].response.output if item.get("type") == "mcp_call"]) == expected_cap
+    assert all(chunk.type != ResponsesAPIStreamEvents.RESPONSE_COMPLETED for chunk in chunks)
 
 
 @pytest.mark.parametrize(("max_agentic_loops", "expected_error"), ((0, ValueError), ("three", TypeError)))
@@ -552,7 +553,9 @@ async def test_final_output_lists_executed_call_as_completed_mcp_call(monkeypatc
     assert executed_call["arguments"] == "{}"
 
     done_mcp_items = [
-        c.item for c in chunks if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _item_type(c.item) == "mcp_call"
+        c.item
+        for c in chunks
+        if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _item_type(c.item) == "mcp_call"
     ]
     assert [item.status for item in done_mcp_items] == ["completed"]
 
@@ -605,3 +608,138 @@ async def test_stream_without_auto_execute_is_forwarded_unchanged(monkeypatch):
     assert [c.output_index for c in chunks if hasattr(c, "output_index")] == [0, 0]
     assert [c.sequence_number for c in chunks if hasattr(c, "sequence_number")] == [0, 1, 2]
     aresponses_mock.assert_not_called()
+
+
+class HostedMCPBudgetTest(unittest.IsolatedAsyncioTestCase):
+    async def workflow(self, streaming, ceiling, fail_apply=False):
+        import json
+        import sys
+
+        from mcp.types import Tool
+
+        from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager as manager
+        from litellm.responses.mcp import litellm_proxy_mcp_handler as handler
+        from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+
+        main = sys.modules["litellm.responses.main"]
+        name = "mock-automations"
+        state = {"applied": False}
+
+        async def execute(*args, **kwargs):
+            action = kwargs["arguments"]["action"]
+            failed = fail_apply and action == "apply"
+            if action == "apply" and not failed:
+                state["applied"] = True
+            return CallToolResult.model_validate(
+                {
+                    "content": [
+                        {"type": "text", "text": json.dumps({"success": not failed, "applied": state["applied"]})}
+                    ],
+                    "isError": failed,
+                }
+            )
+
+        class Chunks:
+            def __init__(self, response):
+                self.events = iter([ResponseCompletedEvent(type="response.completed", response=response)])
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                value = next(self.events, None)
+                if value is None:
+                    raise StopAsyncIteration
+                return value
+
+        responses = [
+            ResponsesAPIResponse(
+                id="resp-" + str(i),
+                created_at=0,
+                status="completed",
+                output=[
+                    {
+                        "type": "function_call",
+                        "call_id": "call-" + str(i),
+                        "name": name,
+                        "arguments": json.dumps(
+                            {"action": "apply" if i == 6 else "read", "id": "fixture-rule", "lookbackDays": 90}
+                        ),
+                    }
+                ],
+            )
+            for i in range(1, 7)
+        ]
+        responses.append(
+            ResponsesAPIResponse(
+                id="resp-final",
+                created_at=0,
+                status="completed",
+                output=[_text_message("Tool reported failure" if fail_apply else "Applied successfully")],
+            )
+        )
+        llm = AsyncMock(side_effect=[Chunks(response) for response in responses])
+        tool = Tool(
+            name=name,
+            description="Isolated workflow fixture",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "id": {"type": "string"},
+                    "lookbackDays": {"type": "integer"},
+                },
+            },
+        )
+        with (
+            patch.object(main, "aresponses", new=llm),
+            patch.object(
+                LiteLLM_Proxy_MCP_Handler,
+                "process_mcp_tools_without_openai_transform",
+                new=AsyncMock(return_value=([tool], {name: "fixture"})),
+            ),
+            patch.object(manager, "get_mcp_server_by_name", return_value=None),
+            patch.object(manager, "get_mcp_server_from_tool_name", return_value=None),
+            patch.object(manager, "call_tool", new=AsyncMock(side_effect=execute)) as dispatch,
+            patch.object(handler, "function_setup", return_value=(None, {})),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+        ):
+            result = await main.aresponses_api_with_mcp(
+                input="Complete the six fixture stages",
+                model="mock-model",
+                stream=streaming,
+                store=False,
+                tools=[{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
+                max_agentic_loops=ceiling,
+            )
+            events = [event async for event in result] if streaming else []
+            terminal = events[-1].response if streaming else result
+        return terminal, events, state, llm, dispatch
+
+    async def test_sixth_tool_round_executes_before_confirmation_on_both_surfaces(self):
+        for streaming in (False, True):
+            with self.subTest(stream=streaming):
+                terminal, events, state, llm, dispatch = await self.workflow(streaming, 12)
+                self.assertEqual(terminal.status, "completed")
+                self.assertTrue(state["applied"])
+                self.assertEqual(dispatch.await_count, 6)
+                self.assertEqual(llm.await_count, 7)
+                self.assertTrue(all(call.kwargs["tools"] for call in llm.await_args_list))
+                calls = [item for item in terminal.output if item.get("type") == "mcp_call"]
+                self.assertEqual(len(calls), 6)
+                self.assertIn('"applied": true', calls[-1]["output"])
+
+    async def test_exhaustion_preserves_receipts_and_never_generates_toolless_confirmation(self):
+        for streaming in (False, True):
+            with self.subTest(stream=streaming):
+                terminal, events, state, llm, dispatch = await self.workflow(streaming, 5)
+                self.assertEqual(terminal.status, "failed")
+                self.assertIn("workflow is incomplete", terminal.error["message"])
+                self.assertFalse(state["applied"])
+                self.assertEqual(dispatch.await_count, 5)
+                self.assertEqual(llm.await_count, 5)
+                self.assertTrue(all(call.kwargs["tools"] for call in llm.await_args_list))
+                self.assertEqual(len([item for item in terminal.output if item.get("type") == "mcp_call"]), 5)
+                if streaming:
+                    self.assertEqual(events[-1].type, "response.failed")
+                    self.assertFalse(any(event.type == "response.completed" for event in events))
