@@ -22,7 +22,10 @@ pub use verify::{
     unverified_claims, verify, verify_assertion,
 };
 
-use crate::routes::{RouteGroups, passthrough::ForwardedRoutes};
+use crate::{
+    Model,
+    routes::{RouteGroups, passthrough::ForwardedRoutes},
+};
 
 /// `litellm_jwtauth` plus what the proxy reads from the environment for JWTs.
 #[derive(Clone, Debug, Default)]
@@ -50,7 +53,7 @@ pub struct JwtSettings {
 pub struct JwtRequest<'a> {
     pub route: &'a str,
     pub method: Option<&'a Method>,
-    pub model: Option<&'a str>,
+    pub model: Model<'a>,
     /// The `x-litellm-team-id` header.
     pub team_header: Option<&'a str>,
     pub runs_inference_checks: bool,

@@ -1,6 +1,7 @@
 # With scope based access enforced, the core checks a JWT's scopes against the model the request
-# names, which the gateway authenticates before it reads. So a JWT goes to Python, a key it maps to
-# included, and the master key, which no scope mapping limits, is still served.
+# names, which the gateway authenticates before it reads. So the core declines a JWT, which goes
+# to Python. A key a JWT maps to takes the key path, where the gateway sends it to Python over the
+# setting, and the master key, which no scope mapping limits, is still served.
 enterprise: true
 
 config:
@@ -32,15 +33,15 @@ requests:
     jwt: {claims: {scope: litellm_proxy_admin litellm.models.other}}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
-    reason: settings
-    over: enforce_scope_based_access
+    reason: credential
+    over: not_native
 
   - name: a user JWT with no team
     jwt: {claims: {sub: user-123, scope: litellm.models.other}}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
-    reason: settings
-    over: enforce_scope_based_access
+    reason: credential
+    over: not_native
 
   - name: a JWT mapped to a key
     jwt: {claims: {client_id: svc-claude, scope: litellm.models.other}}

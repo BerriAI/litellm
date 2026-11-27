@@ -2,18 +2,36 @@ use http::Method;
 use jiff::Timestamp;
 
 use crate::{
-    Token,
+    Error, Token,
     authn::{jwt::JwtRequest, key::KeyRequest},
     plan,
     routes::passthrough::ForwardedRoutes,
 };
+
+/// The model a request's body names. A host that authenticates before it reads the body says
+/// `Unread`, and a decision that depends on the model is then one that host does not serve.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Model<'a> {
+    #[default]
+    Unread,
+    Named(Option<&'a str>),
+}
+
+impl<'a> Model<'a> {
+    pub(crate) fn read(self) -> Result<Option<&'a str>, Error> {
+        match self {
+            Self::Unread => Err(Error::HostDeclined),
+            Self::Named(model) => Ok(model),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Request<'a> {
     pub route: &'a str,
     pub method: Option<&'a Method>,
     pub token: Option<&'a Token>,
-    pub model: Option<&'a str>,
+    pub model: Model<'a>,
     /// The end-user id the request's body and headers name, by Python's `get_end_user_id_from_request_body`.
     pub end_user_id: Option<&'a str>,
     /// The `x-litellm-team-id` header.

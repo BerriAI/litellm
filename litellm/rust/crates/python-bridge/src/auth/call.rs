@@ -2,7 +2,7 @@ use http::Method;
 use jiff::Timestamp;
 use litellm_config::RouteList;
 use litellm_gateway_auth_core::{
-    self as core, AgentIdentityFailure, BudgetExceeded, Error, Identity, JwtDenial, KeyHash,
+    self as core, AgentIdentityFailure, BudgetExceeded, Error, Identity, JwtDenial, KeyHash, Model,
     Outcome, PublicDenial, Refreshed, Request, Token, VerifyDenial,
     authn::{
         jwt::{self, Expected, KeyMappingWrite, KeyOrigin, MappedJwt, MappedKey},
@@ -79,7 +79,7 @@ impl RequestFacts {
             route: &self.route,
             method: self.method.as_ref(),
             token: self.token.as_ref(),
-            model: self.model.as_deref(),
+            model: Model::Named(self.model.as_deref()),
             end_user_id: self.end_user_id.as_deref(),
             team_header: self.team_header.as_deref(),
             is_llm_api_route: self.is_llm_api_route,
