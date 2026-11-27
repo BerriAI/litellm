@@ -10057,7 +10057,11 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
             "configured": stored_blob,
         }
     )
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpserveroauthclient=store))
+    replica: Final = _ConfigOAuthClientStore({})
+    prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_mcpserveroauthclient=replica),
+        writer_db=SimpleNamespace(litellm_mcpserveroauthclient=store),
+    )
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         await MCPServerManager().hydrate_config_servers_dcr_clients((server, malformed, second, configured))
 
@@ -10068,6 +10072,7 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
     assert malformed.client_id is None
     assert configured.client_id == "admin-client"
     assert store.reads == ((server.server_id, "malformed", "second"),)
+    assert replica.reads == ()
 
 
 @pytest.mark.asyncio
@@ -10089,7 +10094,7 @@ async def test_hydrate_config_servers_reads_across_chunk_boundaries(monkeypatch)
             ids[-1]: encrypt_credentials({"client_id": "last-client"}, encryption_key=salt),
         }
     )
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpserveroauthclient=store))
+    prisma: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_mcpserveroauthclient=store))
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         await MCPServerManager().hydrate_config_servers_dcr_clients(servers)
@@ -10106,7 +10111,7 @@ async def test_hydrate_config_servers_continues_when_oauth_client_batch_read_fai
 
     servers: Final = tuple(MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("one", "two"))
     store: Final = _ConfigOAuthClientStore({}, unavailable=True)
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpserveroauthclient=store))
+    prisma: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_mcpserveroauthclient=store))
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         await MCPServerManager().hydrate_config_servers_dcr_clients(servers)

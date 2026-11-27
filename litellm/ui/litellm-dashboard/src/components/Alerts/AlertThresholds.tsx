@@ -1,11 +1,14 @@
 import { useState } from "react";
+import { Controller } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import type { components } from "@/lib/http/schema";
+import { displayedMinimum, thresholdRules as rules, toAlertThresholdsFields, toThresholds } from "./mapper";
+import { alertThresholdsSchema, type AlertThresholdsFields } from "./schema";
 
 type Thresholds = components["schemas"]["PerformanceAlertThresholds"];
-const rules = ["spend", "traffic", "latency", "reliability"] as const;
 
 export default function AlertThresholds({
   thresholds,
@@ -23,26 +26,15 @@ export default function AlertThresholds({
   const { t, i18n } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState(false);
+  const { control, getValues, reset } = useZodForm(alertThresholdsSchema, {
+    defaultValues: toAlertThresholdsFields(thresholds),
+  });
   const disabled = !enterprise || readOnly || pending;
   const format = new Intl.NumberFormat(i18n.language, { maximumSignificantDigits: 15 });
-  const minimum = (rule: (typeof rules)[number]) =>
-    Number((thresholds[rule].minimum_increase * (rule === "reliability" ? 100 : 1)).toPrecision(15));
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const values = new FormData(event.currentTarget);
-    const threshold = (rule: (typeof rules)[number]) => ({
-      multiplier: Number(values.get(`${rule}-multiplier`)),
-      minimum_increase: Number(values.get(`${rule}-minimum`)) / (rule === "reliability" ? 100 : 1),
-    });
+  async function submit(fields: AlertThresholdsFields) {
     setSaved(false);
     try {
-      const updated = {
-        spend: threshold("spend"),
-        traffic: threshold("traffic"),
-        latency: threshold("latency"),
-        reliability: threshold("reliability"),
-      };
-      await save(updated);
+      await save(toThresholds(fields));
       setEditing(false);
       setSaved(true);
     } catch {
@@ -50,7 +42,14 @@ export default function AlertThresholds({
     }
   }
   return (
-    <form onSubmit={(event) => void submit(event)} onChange={() => setSaved(false)} className="space-y-4 py-4">
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        void submit(getValues());
+      }}
+      onChange={() => setSaved(false)}
+      className="space-y-4 py-4"
+    >
       <div className="space-y-1">
         <h3 className="text-sm font-semibold">{t("alerts.thresholds.title")}</h3>
         <p className="text-sm text-muted-foreground">{t("alerts.thresholds.description")}</p>
@@ -64,7 +63,7 @@ export default function AlertThresholds({
               <dd className="tabular-nums text-muted-foreground">
                 {t(`alerts.thresholds.summary.${rule}`, {
                   multiplier: format.format(thresholds[rule].multiplier),
-                  minimum: format.format(minimum(rule)),
+                  minimum: format.format(displayedMinimum(thresholds, rule)),
                 })}
               </dd>
             </div>
@@ -79,34 +78,48 @@ export default function AlertThresholds({
               <label htmlFor={`${rule}-multiplier`} className="text-xs text-muted-foreground">
                 {t("alerts.thresholds.multiplier")}
               </label>
-              <Input
-                id={`${rule}-multiplier`}
-                name={`${rule}-multiplier`}
-                type="number"
-                min="1"
-                step="any"
-                required
-                defaultValue={thresholds[rule].multiplier}
-                onChange={(event) =>
-                  event.currentTarget.setCustomValidity(
-                    event.currentTarget.valueAsNumber <= 1 ? t("alerts.thresholds.multiplierInvalid") : "",
-                  )
-                }
+              <Controller
+                control={control}
+                name={`${rule}.multiplier`}
+                render={({ field }) => (
+                  <Input
+                    id={`${rule}-multiplier`}
+                    name={`${rule}-multiplier`}
+                    type="number"
+                    min="1"
+                    step="any"
+                    required
+                    defaultValue={thresholds[rule].multiplier}
+                    onChange={(event) => {
+                      event.currentTarget.setCustomValidity(
+                        event.currentTarget.valueAsNumber <= 1 ? t("alerts.thresholds.multiplierInvalid") : "",
+                      );
+                      field.onChange(event);
+                    }}
+                  />
+                )}
               />
             </div>
             <div className="space-y-1">
               <label htmlFor={`${rule}-minimum`} className="text-xs text-muted-foreground">
                 {t(`alerts.thresholds.minimum.${rule}`)}
               </label>
-              <Input
-                id={`${rule}-minimum`}
-                name={`${rule}-minimum`}
-                type="number"
-                min="0"
-                step="any"
-                required
-                max={rule === "reliability" ? 100 : undefined}
-                defaultValue={minimum(rule)}
+              <Controller
+                control={control}
+                name={`${rule}.minimum`}
+                render={({ field }) => (
+                  <Input
+                    id={`${rule}-minimum`}
+                    name={`${rule}-minimum`}
+                    type="number"
+                    min="0"
+                    step="any"
+                    required
+                    max={rule === "reliability" ? 100 : undefined}
+                    defaultValue={displayedMinimum(thresholds, rule)}
+                    onChange={field.onChange}
+                  />
+                )}
               />
             </div>
           </fieldset>
@@ -124,7 +137,15 @@ export default function AlertThresholds({
               </Button>
             </>
           ) : (
-            <Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                reset(toAlertThresholdsFields(thresholds));
+                setEditing(true);
+              }}
+            >
               {t("alerts.thresholds.edit")}
             </Button>
           )}
