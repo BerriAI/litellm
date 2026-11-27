@@ -2211,13 +2211,35 @@ class LiteLLMCompletionResponsesConfig:
         ) -> None:
             pending_content_lists: Final = tuple(cl for _, _, cl in pending_items if cl is not None)
             if pending_content_lists:
-                # Interleaved content overrides the string content of the following message,
-                # restoring the original Anthropic block order for signature verification.
                 full_content: Final = pending_content_lists[-1]
-                if isinstance(msg, dict):
-                    cast(dict[str, object], msg)["content"] = full_content  # cast-ok: mutable reasoning carrier
-                else:
-                    setattr(msg, "content", full_content)  # noqa: B010  # attribute name is fixed, not dynamic
+                current_content: Final = _content(msg)
+                stored_text: Final = "".join(
+                    str(b.get("text", "")) for b in full_content if isinstance(b, Mapping) and b.get("type") == "text"
+                )
+                current_text: Final = current_content if isinstance(current_content, str) else ""
+                if stored_text == current_text:
+                    # Stored text matches the message item: safe to replace with the full
+                    # interleaved block list, restoring the original Anthropic block order
+                    # for signature verification. Skip when they differ (client edited the
+                    # message) so the client's text is not silently discarded.
+                    if isinstance(msg, dict):
+                        cast(dict[str, object], msg)["content"] = full_content  # cast-ok: mutable reasoning carrier
+                    else:
+                        setattr(msg, "content", full_content)  # noqa: B010  # attribute name is fixed, not dynamic
+                    return
+                # Text was edited by the caller: fall through to the thinking_blocks path so
+                # the caller's content is kept and thinking blocks still replay in order.
+                pending_thinking: Final = tuple(
+                    cast(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, b)
+                    for b in full_content
+                    if isinstance(b, Mapping) and b.get("type") in ("thinking", "redacted_thinking")
+                )
+                if pending_thinking:
+                    replayed_interleaved: Final = list(pending_thinking + (_thinking_blocks(msg) or ()))
+                    if isinstance(msg, dict):
+                        cast(dict[str, object], msg)["thinking_blocks"] = replayed_interleaved  # cast-ok: mutable reasoning carrier
+                    else:
+                        setattr(msg, "thinking_blocks", replayed_interleaved)  # noqa: B010  # attribute name is fixed, not dynamic
                 return
             pending_texts: Final = tuple(text for text, _, _ in pending_items if text)
             pending_blocks: Final = tuple(block for _, blocks, _ in pending_items for block in blocks or ())

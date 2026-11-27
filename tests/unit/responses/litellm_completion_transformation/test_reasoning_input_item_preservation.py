@@ -456,6 +456,39 @@ class TestInterleavedThinkingAndTextReplay:
         thinking_blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "thinking"]
         assert [b.get("signature") for b in thinking_blocks] == ["sig-1", "sig-2"]
 
+    def test_client_edited_message_text_is_kept_and_thinking_blocks_still_replay(self):
+        encrypted = encode_all_content_blocks(
+            [self._THINKING_1, self._TEXT_A, self._THINKING_2, self._TEXT_B]
+        )
+        input_items = [
+            {"role": "user", "content": "Tell me about France."},
+            {
+                "type": "reasoning",
+                "id": "rs_interleaved",
+                "summary": [],
+                "encrypted_content": encrypted,
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "EDITED BY CLIENT", "annotations": []}],
+            },
+            {"role": "user", "content": "continue"},
+        ]
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request=ResponsesAPIOptionalRequestParams(),
+            replay_reasoning=True,
+        )
+        assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+        assert len(assistant_messages) == 1
+        content = assistant_messages[0].get("content")
+        assert content == "EDITED BY CLIENT", f"client edit should be preserved, got: {content}"
+        thinking_blocks = assistant_messages[0].get("thinking_blocks")
+        assert thinking_blocks == [self._THINKING_1, self._THINKING_2], (
+            f"thinking blocks should still replay, got: {thinking_blocks}"
+        )
+
     def test_thinking_only_encrypted_content_still_uses_old_path(self):
         from litellm.responses.litellm_completion_transformation.reasoning_items import encode_thinking_blocks
 
