@@ -933,6 +933,84 @@ class TestOllamaToolCallTransformation:
             "call_first",
         ]
 
+    def test_transform_request_names_each_tool_result_after_its_call(self):
+        config: Final = OllamaChatConfig()
+        messages: Final = cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "Weather and local time in Bengaluru?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Bengaluru"}'},
+                        },
+                        {
+                            "id": "call_time",
+                            "type": "function",
+                            "function": {"name": "get_time", "arguments": '{"city": "Bengaluru"}'},
+                        },
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_time", "content": "19:05 IST"},
+                {"role": "tool", "tool_call_id": "call_weather", "content": "24C, light rain"},
+                {"role": "tool", "tool_call_id": "call_unknown", "content": "orphan"},
+                {"role": "tool", "tool_call_id": "call_weather", "name": "explicit_name", "content": "named"},
+            ],
+        )
+
+        result: Final = config.transform_request(
+            model="gpt-oss:20b",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert [message.get("tool_name") for message in result["messages"]] == [
+            None,
+            None,
+            "get_time",
+            "get_weather",
+            None,
+            "explicit_name",
+        ]
+
+    def test_transform_request_names_tool_result_after_pydantic_assistant_message(self):
+        config: Final = OllamaChatConfig()
+        assistant: Final = Message(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        )
+        messages: Final = cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "hi"},
+                assistant,
+                {"role": "tool", "tool_call_id": "call_1", "content": "found"},
+            ],
+        )
+
+        result: Final = config.transform_request(
+            model="gpt-oss:20b",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][2]["tool_name"] == "lookup"
+
     def test_transform_request_does_not_invent_an_id_for_an_unidentified_call(self):
         config: Final = OllamaChatConfig()
         messages: Final = cast(
