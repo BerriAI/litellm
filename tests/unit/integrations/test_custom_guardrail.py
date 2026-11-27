@@ -3547,7 +3547,7 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "allow"
-        assert self._logged_action(data) is None
+        assert self._logged_action(data) == "none"
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_returning_modified_copy_logs_mask(self):
@@ -3621,7 +3621,7 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         assert self._logged_response(data) == "mask"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(("masked_content", "expected_action"), [("[MASKED]", "mask"), (None, None)])
+    @pytest.mark.parametrize(("masked_content", "expected_action"), [("[MASKED]", "mask"), (None, "none")])
     async def test_pre_call_hook_returning_none_logs_a_masking_action_only_when_it_edited_the_request(
         self, masked_content: str | None, expected_action: str | None
     ):
@@ -3649,7 +3649,7 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("rewrite", "expected_action"),
-        [("in_place", "mask"), ("in_place_returning_none", "mask"), ("new_response", "mask"), ("untouched", None)],
+        [("in_place", "mask"), ("in_place_returning_none", "mask"), ("new_response", "mask"), ("untouched", "none")],
     )
     async def test_post_call_hook_logs_a_masking_action_only_when_it_changed_the_response(
         self, rewrite: str, expected_action: str | None
@@ -3725,7 +3725,7 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
             response=EmbeddingResponse(data=[{"object": "embedding", "index": 0, "embedding": [1.0]}]),
         )
 
-        assert self._logged_action(data) is None
+        assert self._logged_action(data) == "none"
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_returning_rejection_string_logs_that_string(self):
@@ -3788,15 +3788,15 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "mask"
-        assert self._logged_action(data) is None
+        assert self._logged_action(data) == "none"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("given_texts", "returned_texts", "expected_action"),
         [
-            (["SECRET_PROMPT"], ["SECRET_PROMPT"], None),
+            (["SECRET_PROMPT"], ["SECRET_PROMPT"], "none"),
             (["SECRET_PROMPT"], ["[MASKED]"], "mask"),
-            (None, [], None),
+            (None, [], "none"),
             (["SECRET_PROMPT"], [], "mask"),
         ],
         ids=["returns_fewer_keys_unchanged", "returns_rewritten_text", "returns_empty_for_missing", "returns_emptied"],

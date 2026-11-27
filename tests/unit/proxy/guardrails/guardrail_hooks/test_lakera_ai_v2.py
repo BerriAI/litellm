@@ -492,7 +492,7 @@ class TestLoggedRunKeepsItsRequestLogRow:
         [
             (True, "block", PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE, "block"),
             (True, "monitor", PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE, "flag"),
-            (True, "block", {"flagged": False, "payload": []}, None),
+            (True, "block", {"flagged": False, "payload": []}, "none"),
             (False, "block", PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE, None),
         ],
         ids=["blocked", "let_through", "passed", "setting_off"],
@@ -521,12 +521,12 @@ class TestLoggedRunKeepsItsRequestLogRow:
         assert span_actions == [span_action]
 
     @_EVERY_HOOK
-    async def test_passed_run_logs_no_action(self, run_hook: _RunHook, new_request: _NewRequest):
+    async def test_passed_run_logs_that_it_did_not_act(self, run_hook: _RunHook, new_request: _NewRequest):
         data: Final = new_request()
         guardrail: Final = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
         await run_hook(guardrail, {"flagged": False, "payload": []}, data)
         entry: Final = _logged_run(data)
-        assert entry.get("guardrail_action") is None
+        assert entry.get("guardrail_action") == "none"
         assert guardrail_ran_without_acting(entry) is True
 
 

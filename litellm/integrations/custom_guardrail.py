@@ -7,7 +7,7 @@ import os
 import secrets
 import sys
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -56,6 +56,7 @@ from litellm.types.utils import (
     GUARDRAIL_ACTION_BLOCK,
     GUARDRAIL_ACTION_FLAG,
     GUARDRAIL_ACTION_MASK,
+    GUARDRAIL_ACTION_NONE,
     CallTypes,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
@@ -110,36 +111,28 @@ _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.Cont
 )
 
 
-class _SkipPassedSwitch:
-    """The last time ``general_settings.guardrail_log_skip_passed`` may have been off for a request
-    this process writes to the request log: when the process started, since it cannot tell which
-    setting an earlier or another process ran a request under, then each time it saw the setting off."""
-
-    def __init__(self) -> None:
-        self.last_seen_off: datetime = datetime.now(timezone.utc)
+# Whether the current hook run logs its acting detail, read once when the run starts so every
+# part of the entry it logs agrees.
+_run_logs_acting_detail: Final[contextvars.ContextVar[bool | None]] = contextvars.ContextVar(
+    "litellm_guardrail_run_logs_acting_detail", default=None
+)
 
 
-_SKIP_PASSED_SWITCH: Final = _SkipPassedSwitch()
-
-
-def passed_runs_skipped_since() -> datetime | None:
-    """None while ``general_settings.guardrail_log_skip_passed`` is off, else the last time it may
-    have been off. A run logged while the setting was off carries no ``guardrail_action``, so the
-    request log writer skips passed runs only for requests that started after this time."""
+def _skip_passed_is_on() -> bool:
     if "litellm.proxy.proxy_server" not in sys.modules:
-        return None
+        return False
     from litellm.proxy.proxy_server import current_general_settings
 
-    if current_general_settings().get("guardrail_log_skip_passed") is not True:
-        _SKIP_PASSED_SWITCH.last_seen_off = datetime.now(timezone.utc)
-        return None
-    return _SKIP_PASSED_SWITCH.last_seen_off
+    return current_general_settings().get("guardrail_log_skip_passed") is True
 
 
 def acting_runs_are_logged() -> bool:
-    """True when ``general_settings.guardrail_log_skip_passed`` is on. Only then does a run that
-    acted with a success status log a ``guardrail_action``, which keeps its request log row."""
-    return passed_runs_skipped_since() is not None
+    """True when ``general_settings.guardrail_log_skip_passed`` was on when the current hook run
+    started, or is on now outside a run. Only then does a run log a ``guardrail_action``: its own
+    when it acted with a success status, and none when it did not act, which is what lets the
+    request log writer skip it."""
+    during_run: Final = _run_logs_acting_detail.get()
+    return _skip_passed_is_on() if during_run is None else during_run
 
 
 # The run the current hook last logged, so a guardrail that logs its verdict and then rejects
@@ -1843,14 +1836,15 @@ class CustomGuardrail(CustomLogger):
     def _tracing_detail_with_flag(
         tracing_detail: GuardrailTracingDetail | None, guardrail_status: GuardrailStatus
     ) -> GuardrailTracingDetail:
-        """``tracing_detail`` with ``guardrail_action`` flag added for a run that called
-        ``mark_run_as_flagging`` and logs a success status with no action of its own. Added only
-        with ``general_settings.guardrail_log_skip_passed`` on."""
+        """``tracing_detail`` with a ``guardrail_action`` added for a run that logs a success or
+        not_run status with no action of its own: flag when it called ``mark_run_as_flagging``,
+        else none. Added only with ``general_settings.guardrail_log_skip_passed`` on."""
         detail: Final[GuardrailTracingDetail] = tracing_detail or {}
-        flagged_as_passed: Final = _run_let_a_violation_through.get() and guardrail_status == "success"
-        if not flagged_as_passed or "guardrail_action" in detail or not acting_runs_are_logged():
+        has_action: Final = "guardrail_action" in detail and detail["guardrail_action"] is not None
+        if has_action or guardrail_status not in ("success", "not_run") or not acting_runs_are_logged():
             return detail
-        return {**detail, "guardrail_action": GUARDRAIL_ACTION_FLAG}
+        flagged: Final = _run_let_a_violation_through.get() and guardrail_status == "success"
+        return {**detail, "guardrail_action": GUARDRAIL_ACTION_FLAG if flagged else GUARDRAIL_ACTION_NONE}
 
     def mark_run_as_flagging(self) -> None:
         """Record that this run found a violation and let the request continue, for a guardrail
@@ -2329,6 +2323,7 @@ def log_guardrail_information(func):
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
         flagging_token: Final = _run_let_a_violation_through.set(False)
+        acting_detail_token: Final = _run_logs_acting_detail.set(_skip_passed_is_on())
         handed_response_token: Final = _handed_response.set(baseline.response)
         try:
             response: Final = await func(*args, **kwargs)
@@ -2356,6 +2351,7 @@ def log_guardrail_information(func):
             )
         finally:
             _handed_response.reset(handed_response_token)
+            _run_logs_acting_detail.reset(acting_detail_token)
             _run_let_a_violation_through.reset(flagging_token)
             _guardrail_self_recorded.reset(self_recorded_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
@@ -2379,6 +2375,7 @@ def log_guardrail_information(func):
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
         flagging_token: Final = _run_let_a_violation_through.set(False)
+        acting_detail_token: Final = _run_logs_acting_detail.set(_skip_passed_is_on())
         try:
             response: Final = func(*args, **kwargs)
             if self.records_own_guardrail_information or _guardrail_self_recorded.get():
@@ -2400,6 +2397,7 @@ def log_guardrail_information(func):
                 event_type=event_type,
             )
         finally:
+            _run_logs_acting_detail.reset(acting_detail_token)
             _run_let_a_violation_through.reset(flagging_token)
             _guardrail_self_recorded.reset(self_recorded_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)

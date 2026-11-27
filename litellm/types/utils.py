@@ -3898,6 +3898,9 @@ class StandardLoggingEvalInformation(TypedDict, total=False):
 GUARDRAIL_ACTION_MASK: Final = "mask"
 GUARDRAIL_ACTION_BLOCK: Final = "block"
 GUARDRAIL_ACTION_FLAG: Final = "flag"
+# The `guardrail_action` of a run that did not act, logged with the setting on. The request log
+# writer skips only runs that carry it, so a run logged while the setting was off keeps its row.
+GUARDRAIL_ACTION_NONE: Final = "none"
 
 
 class GuardrailTracingDetail(TypedDict, total=False):

@@ -1015,7 +1015,7 @@ def _monitor_run_logged(score: float) -> GraySwanGuardrail:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("skip_passed", "score", "logged_action"),
-    [(True, 1.0, "flag"), (True, 0.1, None), (False, 1.0, None)],
+    [(True, 1.0, "flag"), (True, 0.1, "none"), (False, 1.0, None)],
     ids=["violation_let_through", "clean", "setting_off"],
 )
 async def test_monitor_mode_logs_a_flagging_action_for_a_violation_it_lets_through(

@@ -57,7 +57,7 @@ async def _scan_body(guardrail: NomaV2Guardrail, respx_mock: respx.MockRouter) -
     [
         (True, "BLOCKED", "flag"),
         (True, "GUARDRAIL_INTERVENED", "flag"),
-        (True, "NONE", None),
+        (True, "NONE", "none"),
         (False, "BLOCKED", None),
     ],
 )

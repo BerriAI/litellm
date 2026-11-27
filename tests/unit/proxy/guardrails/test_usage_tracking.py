@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from itertools import chain
 from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
@@ -702,32 +702,29 @@ def _indexed(prisma: MagicMock) -> list[tuple[str, str, str | None]]:
 
 
 def _skip_passed(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
-    """Set the setting on a process that last saw it off before any request in the test."""
-    from litellm.integrations import custom_guardrail
-
-    monkeypatch.setattr(
-        custom_guardrail._SKIP_PASSED_SWITCH, "last_seen_off", datetime.min.replace(tzinfo=timezone.utc)
-    )
-    _set_skip_passed(monkeypatch, value)
-
-
-def _set_skip_passed(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", value)
 
 
 _ONE_RUN_PER_OUTCOME: Final = [
-    _entries_payload("passed", [{"guardrail_id": "g", "guardrail_status": "success"}]),
+    _entries_payload("passed", [{"guardrail_id": "g", "guardrail_status": "success", "guardrail_action": "none"}]),
     _entries_payload(
         "masked", [{"guardrail_id": "g", "guardrail_status": "success", "masked_entity_count": {"EMAIL": 0, "SSN": 2}}]
     ),
     _entries_payload("blocked", [{"guardrail_id": "g", "guardrail_status": "guardrail_intervened"}]),
     _entries_payload("flagged", [{"guardrail_id": "g", "guardrail_status": "guardrail_flagged"}]),
-    _entries_payload("not_run", [{"guardrail_id": "g", "guardrail_status": "not_run"}]),
+    _entries_payload("not_run", [{"guardrail_id": "g", "guardrail_status": "not_run", "guardrail_action": "none"}]),
     _entries_payload(
         "passed-empty-counts",
-        [{"guardrail_id": "g", "guardrail_status": "success", "masked_entity_count": {"SSN": 0, "EMAIL": True}}],
+        [
+            {
+                "guardrail_id": "g",
+                "guardrail_status": "success",
+                "guardrail_action": "none",
+                "masked_entity_count": {"SSN": 0, "EMAIL": True},
+            }
+        ],
     ),
 ]
 
@@ -768,7 +765,7 @@ async def test_guardrail_log_skip_passed_keeps_index_rows_only_for_runs_that_act
 @pytest.mark.parametrize(
     ("skip_passed", "kept"),
     [
-        (True, ["anonymized", "let-through", "masked-no-counts", "masked-prompts-not-stored", "rejected"]),
+        (True, ["anonymized", "let-through", "masked-no-counts", "masked-prompts-not-stored", "not-text", "rejected"]),
         (
             None,
             [
@@ -809,26 +806,20 @@ async def test_guardrail_log_skip_passed_keeps_a_run_that_acted_with_a_passed_st
 
 
 @pytest.mark.asyncio
-async def test_guardrail_log_skip_passed_keeps_the_rows_of_requests_that_started_before_it_turned_on(monkeypatch):
-    """A run logged while the setting was off carries no action, so its row must survive a flush
-    that happens after the setting turns on."""
-    from litellm.integrations.custom_guardrail import passed_runs_skipped_since
-
-    _skip_passed(monkeypatch, False)
-    assert passed_runs_skipped_since() is None
-    _set_skip_passed(monkeypatch, True)
-    last_seen_off: Final = passed_runs_skipped_since()
-    assert last_seen_off is not None
-    passed: Final = [{"guardrail_id": "g", "guardrail_status": "success"}]
+async def test_guardrail_log_skip_passed_keeps_a_run_logged_while_the_setting_was_off(monkeypatch):
+    """A run logged with the setting off carries no action even when it acted, so a flush after
+    the setting turns on keeps its row. A run logged with the setting on says it did not act."""
+    _skip_passed(monkeypatch, True)
+    passed: Final = {"guardrail_id": "g", "guardrail_status": "success"}
     logs: Final = [
-        {**_entries_payload("queued-before", passed), "startTime": last_seen_off - timedelta(seconds=1)},
-        {**_entries_payload("started-after", passed), "startTime": datetime.now(timezone.utc)},
+        _entries_payload("logged-with-setting-off", [passed]),
+        _entries_payload("logged-with-setting-on", [{**passed, "guardrail_action": "none"}]),
     ]
     prisma: Final = _prisma()
 
     await process_spend_logs_guardrail_usage(prisma, logs)
 
-    assert [request_id for request_id, _, _ in _indexed(prisma)] == ["queued-before"]
+    assert [request_id for request_id, _, _ in _indexed(prisma)] == ["logged-with-setting-off"]
 
 
 @pytest.mark.asyncio
@@ -844,16 +835,32 @@ async def test_guardrail_log_skip_passed_keeps_the_row_when_any_run_of_the_guard
                     "guardrail_id": "cf-uuid",
                     "policy_id": "pol-1",
                     "guardrail_status": "success",
+                    "guardrail_action": "none",
                 },
                 {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "guardrail_intervened"},
-                {"guardrail_name": "other", "guardrail_id": "other-uuid", "guardrail_status": "success"},
+                {
+                    "guardrail_name": "other",
+                    "guardrail_id": "other-uuid",
+                    "guardrail_status": "success",
+                    "guardrail_action": "none",
+                },
             ],
         ),
         _entries_payload(
             "r2",
             [
-                {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
-                {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
+                {
+                    "guardrail_name": "cf",
+                    "guardrail_id": "cf-uuid",
+                    "guardrail_status": "success",
+                    "guardrail_action": "none",
+                },
+                {
+                    "guardrail_name": "cf",
+                    "guardrail_id": "cf-uuid",
+                    "guardrail_status": "success",
+                    "guardrail_action": "none",
+                },
             ],
         ),
     ]
