@@ -1,6 +1,7 @@
 import type { TFunction } from "i18next";
 import React, { useState } from "react";
-import { FormProvider, useForm, useWatch } from "react-hook-form";
+import { useWatch } from "react-hook-form";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -61,12 +62,14 @@ import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow, type McpDcrCredentials } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import {
-  MountedFormField,
   MountedFormProvider,
   projectMountedValues,
   useMountRegistry,
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
+import { McpFormField as MountedFormField, McpFormProvider } from "./McpFormField";
+import { CREATE_DEFAULTS } from "./mapper";
+import { useMcpFormSchema } from "./schema";
 import { requiredRule, validatorRules } from "@/components/common_components/formRules";
 import { allFieldsValue, mountedPaths, resetFields, setFieldsValue, singleBranchChange } from "./mcpFormStore";
 import { numberControl, notOnlyWhitespace, selectControl, selectTriggerControl, textControl } from "./mcpFieldRules";
@@ -99,13 +102,6 @@ const payloadErrorMessage = (result: Exclude<BuildCreatePayloadResult, { kind: "
   }
 };
 
-const CREATE_DEFAULTS: MountedFormValues = {
-  allow_all_keys: false,
-  available_on_public_internet: true,
-  delegate_auth_to_upstream: false,
-  oauth_passthrough: false,
-};
-
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   userID,
   userRole,
@@ -120,7 +116,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   stdioEnabled = true,
 }) => {
   const { t } = useTranslation();
-  const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: CREATE_DEFAULTS });
+  const { schema, registerValidation } = useMcpFormSchema();
+  const form = useZodForm(schema, { mode: "onChange", defaultValues: CREATE_DEFAULTS });
   const registry = useMountRegistry();
   const [isLoading, setIsLoading] = useState(false);
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
@@ -328,6 +325,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       setModalVisible(true);
     }
     if (restored.transportType) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Restore the transport before applying the OAuth draft.
       setTransportType(restored.transportType);
     }
     if (restored.formValues) {
@@ -362,6 +360,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       return;
     }
     setFieldsValue(form, pendingRestoredValues.values);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Keep the mounted-field snapshot in sync with the restored draft.
     setFormValues(pendingRestoredValues.values);
     setPendingRestoredValues(null);
   }, [pendingRestoredValues, form, transportType]);
@@ -378,6 +377,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       .replace(/^_|_$/g, "");
 
     const transport = prefillData.transport || "";
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Apply the catalog draft when the dialog opens.
     setTransportType(transport);
 
     const prefillValues: Record<string, any> = {
@@ -557,6 +557,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if (!aliasManuallyEdited && formValues.server_name) {
       const normalized = formValues.server_name.replace(/\s+/g, "_");
       setFieldsValue(form, { alias: normalized });
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Keep the derived alias synchronized with the mounted fields.
       setFormValues((prev) => ({ ...prev, alias: normalized }));
     }
   }, [formValues.server_name]);
@@ -620,6 +621,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   };
 
   const valuesChangeRef = React.useRef(handleFormValuesChange);
+  // eslint-disable-next-line react-hooks/refs -- The RHF subscription needs the latest handler without resubscribing.
   valuesChangeRef.current = handleFormValuesChange;
 
   React.useEffect(() => {
@@ -656,7 +658,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         </DialogHeader>
 
         <div className="mt-6">
-          <FormProvider {...form}>
+          <McpFormProvider form={form} registerValidation={registerValidation}>
             <MountedFormProvider value={{ control: form.control, registry }}>
               <form onSubmit={handleSubmit} className="space-y-6">
                 {!isAdmin && (
@@ -1041,7 +1043,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 </div>
               </form>
             </MountedFormProvider>
-          </FormProvider>
+          </McpFormProvider>
         </div>
       </DialogContent>
     </Dialog>

@@ -11,11 +11,11 @@ import { Switch } from "@/components/ui/switch";
 import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
 import { MCPServer, AUTH_TYPE } from "@/components/mcp_tools/types";
 import {
-  MountedFormField,
   useMountedName,
   type MountedFieldControlProps,
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
+import { McpFormField as MountedFormField } from "./McpFormField";
 import { requiredRule } from "@/components/common_components/formRules";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { invertedSwitchControl, switchControl, tagsControl, textControl } from "./mcpFieldRules";

@@ -6,7 +6,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 
-import { MountedFormField } from "@/components/common_components/MountedFormField";
+import { McpFormField as MountedFormField } from "./McpFormField";
 import UpstreamTokenHeaderField from "./UpstreamTokenHeaderField";
 import { requiredRule } from "@/components/common_components/formRules";
 import { PasswordInput } from "@/components/shared/PasswordInput";

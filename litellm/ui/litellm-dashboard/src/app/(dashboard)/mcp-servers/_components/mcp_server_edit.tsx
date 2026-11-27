@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Info, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
-import { FormProvider, useForm } from "react-hook-form";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,12 +59,14 @@ import { toast } from "@/lib/toast";
 import { getEditToolPreview } from "./editToolPreview";
 import { useMcpOAuthFlow, type McpDcrCredentials } from "@/hooks/useMcpOAuthFlow";
 import {
-  MountedFormField,
   MountedFormProvider,
   projectMountedValues,
   useMountRegistry,
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
+import { McpFormField as MountedFormField, McpFormProvider } from "./McpFormField";
+import { mapMcpEditDefaults } from "./mapper";
+import { useMcpFormSchema } from "./schema";
 import { requiredRule, validatorRules } from "@/components/common_components/formRules";
 import {
   allFieldsValue,
@@ -110,65 +112,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   stdioEnabled = true,
 }) => {
   const { t } = useTranslation();
-  const initialStaticHeaders = React.useMemo(() => {
-    if (!mcpServer.static_headers) {
-      return [];
-    }
-    return Object.entries(mcpServer.static_headers).map(([header, value]) => ({
-      header,
-      value: value != null ? String(value) : "",
-    }));
-  }, [mcpServer.static_headers]);
-
-  const initialEnvVars = React.useMemo(() => {
-    if (!Array.isArray(mcpServer.env_vars)) {
-      return [];
-    }
-    return mcpServer.env_vars.map((entry) => ({
-      name: entry.name,
-      value: entry.value ?? "",
-      scope: entry.scope === "user" ? "user" : "global",
-      description: entry.description ?? "",
-    }));
-  }, [mcpServer.env_vars]);
-
-  const initialEnvJson = React.useMemo(() => {
-    const env = mcpServer.env ?? undefined;
-    if (!env || Object.keys(env).length === 0) {
-      return "";
-    }
-    try {
-      return JSON.stringify(env, null, 2);
-    } catch {
-      return "";
-    }
-  }, [mcpServer.env]);
-
-  // If server has spec_path, show it as "openapi" transport in the UI
-  const effectiveTransport = React.useMemo(() => {
-    if (mcpServer.spec_path && mcpServer.transport !== "stdio") {
-      return TRANSPORT.OPENAPI;
-    }
-    return mcpServer.transport;
-  }, [mcpServer]);
-
-  const initialValues = React.useMemo(
-    () => ({
-      ...mcpServer,
-      transport: effectiveTransport,
-      static_headers: initialStaticHeaders,
-      env_vars: initialEnvVars,
-      extra_headers: mcpServer.extra_headers || [],
-      oauth_flow_type: oauth2FlowToFormValue(mcpServer.oauth2_flow),
-      dcr_bridge: Boolean(mcpServer.dcr_bridge),
-      token_validation_json: mcpServer.token_validation
-        ? JSON.stringify(mcpServer.token_validation, null, 2)
-        : undefined,
-    }),
-    [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvVars, initialEnvJson],
-  );
-
-  const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: initialValues });
+  const initialValues = React.useMemo(() => mapMcpEditDefaults(mcpServer), [mcpServer]);
+  const { schema, registerValidation } = useMcpFormSchema();
+  const form = useZodForm(schema, { mode: "onChange", defaultValues: initialValues });
   const registry = useMountRegistry();
   const mountedValues = useMountedValues(form, registry);
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
@@ -365,17 +311,20 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   // Initialize cost config from existing server data
   useEffect(() => {
     if (mcpServer.mcp_info?.mcp_server_cost_info) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Initialize the cost draft from the selected server.
       setCostConfig(mcpServer.mcp_info.mcp_server_cost_info);
     }
   }, [mcpServer]);
 
   // Initialize allowed tools and tool overrides from existing server data
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Clear edit intent when switching servers.
     setHasToolAllowlistInteraction(false);
   }, [mcpServer.server_id]);
 
   useEffect(() => {
     if (hasExistingToolAllowlist) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Initialize the edit allowlist from the selected server.
       setAllowedTools(mcpServer.allowed_tools ?? []);
     }
     setToolNameToDisplayName(normalizeToolOverrideMap(mcpServer.tool_name_to_display_name));
@@ -414,6 +363,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           ...parsed.formValues,
           credentials: restoredCredentials,
         };
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- Apply the OAuth draft after its transport fields mount.
         setPendingRestoredValues(restoredValues);
       }
       // The ref is re-armed by onTokenReceived when the redirect completes the code exchange, so there
@@ -449,6 +399,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       return;
     }
     setFieldsValue(form, pendingRestoredValues);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Consume the OAuth draft after applying it to the form.
     setPendingRestoredValues(null);
   }, [pendingRestoredValues, form, mcpServer.transport, transportType]);
 
@@ -466,6 +417,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   useEffect(() => {
     const controller = new AbortController();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Clear prior preview results before scheduling the next request.
     setTools([]);
     setToolsError(null);
     setIsLoadingTools(false);
@@ -476,6 +428,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     setIsLoadingTools(true);
     const timer = setTimeout(
+      // eslint-disable-next-line react-hooks/immutability -- The timer runs after render has initialized fetchTools.
       () => fetchTools(() => !controller.signal.aborted),
       toolPreview.kind === "preview" ? 500 : 0,
     );
@@ -714,6 +667,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     };
 
   const valuesChangeRef = React.useRef(handleFormValuesChange);
+  // eslint-disable-next-line react-hooks/refs -- The RHF subscription needs the latest handler without resubscribing.
   valuesChangeRef.current = handleFormValuesChange;
 
   React.useEffect(() => {
@@ -842,7 +796,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       </TabsList>
       <div className="mt-6">
         <TabsContent value="server" keepMounted>
-          <FormProvider {...form}>
+          <McpFormProvider form={form} registerValidation={registerValidation}>
             <MountedFormProvider value={{ control: form.control, registry }}>
               <form
                 aria-label={t("mcpServers.serverEdit.formLabel")}
@@ -1370,7 +1324,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 </div>
               </form>
             </MountedFormProvider>
-          </FormProvider>
+          </McpFormProvider>
         </TabsContent>
 
         <TabsContent value="cost" keepMounted>

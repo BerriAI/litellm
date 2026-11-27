@@ -4,11 +4,12 @@ import * as React from "react";
 import { ChevronRight, CircleHelp } from "lucide-react";
 import {
   Controller,
+  FormProvider,
   useFormContext,
   type FieldPath,
-  type RegisterOptions,
   type ControllerProps,
   type ControllerRenderProps,
+  type UseFormReturn,
 } from "react-hook-form";
 
 import {
@@ -29,6 +30,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import i18n from "@/i18n/i18n";
 import type { KeyValueFormValue, KillSwitchConfig, KillSwitchFormValue } from "./kill_switch_config";
+import { AgentFieldRulesContext, useAgentFieldRules, type AgentFieldRules } from "./schema";
 
 export interface AgentSkillFormValue {
   id?: string;
@@ -105,6 +107,20 @@ export interface AgentFormValues {
 
 export type AgentFieldName = FieldPath<AgentFormValues>;
 
+export const AgentFormProvider = ({
+  form,
+  registerRules,
+  children,
+}: {
+  form: UseFormReturn<AgentFormValues>;
+  registerRules: React.ContextType<typeof AgentFieldRulesContext>;
+  children: React.ReactNode;
+}) => (
+  <AgentFieldRulesContext.Provider value={registerRules}>
+    <FormProvider {...form}>{children}</FormProvider>
+  </AgentFieldRulesContext.Provider>
+);
+
 export const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode => (
   <>
     {label}
@@ -136,7 +152,7 @@ interface AgentFormFieldProps {
   label?: React.ReactNode;
   description?: React.ReactNode;
   defaultValue?: AgentFormFieldValue;
-  rules?: Omit<RegisterOptions<AgentFormValues, AgentFieldName>, "valueAsNumber" | "valueAsDate" | "setValueAs">;
+  rules?: AgentFieldRules;
   className?: string;
   children: (control: AgentFieldControlProps) => React.ReactNode;
 }
@@ -151,6 +167,7 @@ export const AgentFormField = ({
   children,
 }: AgentFormFieldProps) => {
   const { control } = useFormContext<AgentFormValues>();
+  useAgentFieldRules(name, rules);
   const reactId = React.useId();
   const controlId = `${reactId}-control`;
   const descriptionId = `${reactId}-description`;
@@ -178,7 +195,7 @@ export const AgentFormField = ({
     );
   };
 
-  return <Controller control={control} name={name} defaultValue={defaultValue} rules={rules} render={renderField} />;
+  return <Controller control={control} name={name} defaultValue={defaultValue} render={renderField} />;
 };
 
 export interface CollapsiblePanelsState {

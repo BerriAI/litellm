@@ -1,7 +1,7 @@
 import { AgentIdentityFields } from "./AgentIdentityFields";
-import { withAgentIdentity } from "./agent_identity";
 import React, { useState, useEffect } from "react";
-import { FormProvider, useForm, useWatch } from "react-hook-form";
+import { useWatch } from "react-hook-form";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { Bot, Check, CircleCheck, Key, LayoutGrid } from "lucide-react";
@@ -36,16 +36,18 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import AgentFormFields from "./agent_form_fields";
 import AgentCardDiscovery, { DiscoveredAgentCardSelection } from "./agent_card_discovery";
-import { buildDiscoveryRequest, overlayDiscoveredCardParams } from "./agent_discovery_utils";
-import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
+import { buildDiscoveryRequest } from "./agent_discovery_utils";
+import DynamicAgentFormFields from "./dynamic_agent_form_fields";
 import { PasswordInput } from "@/components/shared/PasswordInput";
-import { AGENT_FORM_CONFIG, getDefaultFormValues, buildAgentDataFromForm } from "./agent_config";
+import { AGENT_FORM_CONFIG } from "./agent_config";
+import { buildInitialValues, CUSTOM_AGENT_TYPE, mapAgentCreate } from "./mapper";
+import { useAgentFormSchema } from "./schema";
 import {
   AgentFormField,
+  AgentFormProvider,
   AgentFormValues,
   AgentMultiSelect,
   AgentNumberInput,
-  AgentRequestPayload,
   AgentTagsInput,
   McpServerSelection,
   labelWithHint,
@@ -58,7 +60,6 @@ import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import i18n from "@/i18n/i18n";
 
-const CUSTOM_AGENT_TYPE = "custom";
 
 const STEP_TITLES = [
   "agents.addForm.steps.configure",
@@ -120,17 +121,7 @@ const StepProgress: React.FC<{ current: number }> = ({ current }) => (
   </ol>
 );
 
-const SHARED_INITIAL_VALUES: AgentFormValues = {
-  allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] },
-  mcp_tool_permissions: {},
-  entitlement_models: [],
-  entitlement_agents: [],
-  access_group_ids: [],
-  guardrails: [],
-};
 
-const buildInitialValues = (agentType: string): AgentFormValues =>
-  agentType === "a2a" ? { ...getDefaultFormValues(), ...SHARED_INITIAL_VALUES } : { ...SHARED_INITIAL_VALUES };
 
 interface AddAgentFormProps {
   visible: boolean;
@@ -143,7 +134,8 @@ interface AddAgentFormProps {
 const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessToken, onSuccess, teams }) => {
   const { t } = useTranslation();
   const { userId, userRole } = useAuthorized();
-  const form = useForm<AgentFormValues>({ defaultValues: buildInitialValues("a2a") });
+  const { schema, registerRules } = useAgentFormSchema();
+  const form = useZodForm(schema, { defaultValues: buildInitialValues("a2a") });
   const panels = useCollapsiblePanels([AGENT_FORM_CONFIG.basic.key]);
   const [currentStep, setCurrentStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -297,56 +289,6 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
     setCurrentStep((s) => Math.max(0, s - 1));
   };
 
-  const buildAgentData = (values: AgentFormValues): AgentRequestPayload | null => {
-    if (agentType === CUSTOM_AGENT_TYPE) {
-      if (values.identity_provider === "microsoft_entra") return { agent_name: values.agent_name };
-      return {
-        agent_name: values.agent_name,
-        agent_card_params: {
-          protocolVersion: "1.0",
-          name: values.agent_name,
-          description: values.description || "",
-          url: "",
-          version: "1.0.0",
-          defaultInputModes: ["text"],
-          defaultOutputModes: ["text"],
-          capabilities: { streaming: false },
-          skills: [],
-        },
-      };
-    }
-
-    if (agentType === "a2a") {
-      return overlayDiscoveredCardParams(buildAgentDataFromForm(values), appliedDiscoveredSelection?.selected_card);
-    }
-
-    if (!selectedAgentTypeInfo) return null;
-
-    if (!selectedAgentTypeInfo.use_a2a_form_fields) {
-      return overlayDiscoveredCardParams(
-        buildDynamicAgentData(values, selectedAgentTypeInfo),
-        appliedDiscoveredSelection?.selected_card,
-      );
-    }
-
-    const agentData: AgentRequestPayload = buildAgentDataFromForm(values);
-    if (selectedAgentTypeInfo.litellm_params_template) {
-      agentData.litellm_params = {
-        ...agentData.litellm_params,
-        ...selectedAgentTypeInfo.litellm_params_template,
-      };
-    }
-    const credentialParams = Object.fromEntries(
-      selectedAgentTypeInfo.credential_fields
-        .filter((field) => values[field.key] && field.include_in_litellm_params !== false)
-        .map((field) => [field.key, values[field.key]]),
-    );
-    if (Object.keys(credentialParams).length > 0) {
-      agentData.litellm_params = { ...agentData.litellm_params, ...credentialParams };
-    }
-    return overlayDiscoveredCardParams(agentData, appliedDiscoveredSelection?.selected_card);
-  };
-
   const handleCreateAgent = async () => {
     if (!accessToken) {
       toast.error(t("agents.addForm.toasts.noAccessToken"));
@@ -366,54 +308,19 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         return;
       }
       const values = form.getValues();
-      const built = buildAgentData(values);
-      if (!built) {
+      const createOptions = {
+        requireTraceIdInbound,
+        requireTraceIdOutbound,
+        maxIterations,
+        maxBudgetPerSession,
+      };
+      const mapped = mapAgentCreate(values, { agentType, selectedAgentTypeInfo, appliedDiscoveredSelection }, createOptions);
+      if (!mapped) {
         toast.error(t("agents.addForm.toasts.buildFailed"));
         setIsSubmitting(false);
         return;
       }
-      const agentData = withAgentIdentity(built, values);
-
-      // Build object_permission from MCP Tools step (allowed_mcp_servers_and_groups, mcp_tool_permissions)
-      const mcpServersAndGroups = values.allowed_mcp_servers_and_groups ?? {};
-      const toolPermissions = values.mcp_tool_permissions ?? {};
-      const entitlementModels = values.entitlement_models ?? [];
-      const entitlementAgents = values.entitlement_agents ?? [];
-      const objectPermission: Record<string, unknown> = {
-        ...(mcpServersAndGroups.servers?.length ? { mcp_servers: mcpServersAndGroups.servers } : {}),
-        ...(mcpServersAndGroups.accessGroups?.length ? { mcp_access_groups: mcpServersAndGroups.accessGroups } : {}),
-        ...(mcpServersAndGroups.toolsets?.length ? { mcp_toolsets: mcpServersAndGroups.toolsets } : {}),
-        ...(Object.keys(toolPermissions).length ? { mcp_tool_permissions: toolPermissions } : {}),
-        ...(entitlementModels.length ? { models: entitlementModels } : {}),
-        ...(entitlementAgents.length ? { agents: entitlementAgents } : {}),
-      };
-      if (Object.keys(objectPermission).length > 0) {
-        agentData.object_permission = objectPermission;
-      }
-      if (values.access_group_ids?.length) {
-        agentData.access_group_ids = values.access_group_ids;
-      }
-
-      // Wire trace-id flags and budget controls into agent litellm_params (before create call)
-      if (requireTraceIdInbound || requireTraceIdOutbound) {
-        agentData.litellm_params = {
-          ...agentData.litellm_params,
-          ...(requireTraceIdInbound ? { require_trace_id_on_calls_to_agent: true } : {}),
-          ...(requireTraceIdOutbound ? { require_trace_id_on_calls_by_agent: true } : {}),
-          ...(requireTraceIdOutbound && maxIterations ? { max_iterations: maxIterations } : {}),
-          ...(requireTraceIdOutbound && maxBudgetPerSession ? { max_budget_per_session: maxBudgetPerSession } : {}),
-        };
-      }
-
-      const selectedGuardrails = values.guardrails ?? [];
-      if (selectedGuardrails.length > 0) {
-        agentData.litellm_params = { ...agentData.litellm_params, guardrails: selectedGuardrails };
-      }
-
-      const selectedTeamId = values.team_id || null;
-      if (selectedTeamId) {
-        agentData.team_id = selectedTeamId;
-      }
+      const { agentData, selectedTeamId } = mapped;
 
       const agentResponse = await createAgentCall(accessToken, agentData);
       const agentId: string = agentResponse.agent_id;
@@ -1141,7 +1048,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           <div className="mt-4">
             <StepProgress current={currentStep} />
 
-            <FormProvider {...form}>
+            <AgentFormProvider form={form} registerRules={registerRules}>
               <form onSubmit={(event) => event.preventDefault()} className="space-y-4">
                 {currentStep === 0 && renderConfigureStep()}
                 {currentStep === 1 && renderEntitlementsStep()}
@@ -1149,7 +1056,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                 {currentStep === 3 && renderAssignKeyStep()}
                 {currentStep === 4 && renderReadyStep()}
               </form>
-            </FormProvider>
+            </AgentFormProvider>
 
             <div className="mt-6 flex items-center justify-between border-t border-border pt-6">
               <div>

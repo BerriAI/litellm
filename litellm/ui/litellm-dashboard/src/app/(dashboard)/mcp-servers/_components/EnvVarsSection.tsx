@@ -10,10 +10,10 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
 
 import {
-  MountedFormField,
   useMountedName,
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
+import { McpFormField as MountedFormField } from "./McpFormField";
 import { requiredRule } from "@/components/common_components/formRules";
 import { matchesPattern, selectControl, selectTriggerControl, textControl } from "./mcpFieldRules";
 import { listControl } from "./mcpFormStore";
