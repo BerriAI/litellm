@@ -230,6 +230,7 @@ class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
     connected_at: str
     scopes: list[str]
     server_id: str
+    needs_scopes: ReadOnly[Sequence[str]]
 
 
 OAuthGrantState = Literal["valid", "refreshable", "absent"]
@@ -762,9 +763,11 @@ async def _db_update_mcp_server_row(
 
 def _user_credential_actions(
     prisma_client: PrismaClient,
+    *,
+    use_writer: bool = False,
 ) -> "TableActions[prisma_db_models.LiteLLM_MCPUserCredentials]":
     table: Final[TableActions[prisma_db_models.LiteLLM_MCPUserCredentials]] = MCPUserCredentialsRepository(
-        prisma_client
+        prisma_client, use_writer=use_writer
     ).table
     return table
 
@@ -780,9 +783,9 @@ def _user_env_var_actions(
 
 
 async def _db_find_user_credential_row(
-    prisma_client: PrismaClient, user_id: str, server_id: str
+    prisma_client: PrismaClient, user_id: str, server_id: str, *, use_writer: bool = False
 ) -> "prisma_db_models.LiteLLM_MCPUserCredentials | None":
-    return await _user_credential_actions(prisma_client).find_unique(
+    return await _user_credential_actions(prisma_client, use_writer=use_writer).find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
 
@@ -1894,6 +1897,61 @@ async def get_user_oauth_credential(
     if decoded is None:
         _warn_undecryptable_credential(user_id, server_id)
     return _parse_oauth_payload(decoded)
+
+
+async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:
+    """Record a refused scope for the next connect flow without changing a newer grant."""
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
+    grant: Final = None if row is None else decode_oauth_payload(row.credential_b64)
+    if row is None or grant is None:
+        return
+    initial_updated_at: Final = row.updated_at
+    initial_connected_at: Final = grant.get("connected_at")
+    updated_count: Final = await _attempt_oauth_scope_refusal_update(prisma_client, row, grant, scope)
+    if updated_count is None or updated_count > 0:
+        return
+
+    async def retry_scope_refusal() -> bool:
+        current_row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
+        if current_row is None or current_row.updated_at != initial_updated_at:
+            return False
+        current_grant: Final = decode_oauth_payload(current_row.credential_b64)
+        if current_grant is None or current_grant.get("connected_at") != initial_connected_at:
+            return False
+        retry_count: Final = await _attempt_oauth_scope_refusal_update(prisma_client, current_row, current_grant, scope)
+        if retry_count is None or retry_count > 0:
+            return False
+        latest_row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
+        if (
+            latest_row is None
+            or latest_row.updated_at != initial_updated_at
+            or latest_row.credential_b64 == current_row.credential_b64
+        ):
+            return False
+        latest_grant: Final = decode_oauth_payload(latest_row.credential_b64)
+        return latest_grant is not None and latest_grant.get("connected_at") == initial_connected_at
+
+    while await retry_scope_refusal():
+        pass
+
+
+async def _attempt_oauth_scope_refusal_update(
+    prisma_client: PrismaClient,
+    row: "prisma_db_models.LiteLLM_MCPUserCredentials",
+    grant: OAuthCredentialPayload,
+    scope: str,
+) -> int | None:
+    waiting: Final = grant.get("needs_scopes", ())
+    refused: Final = tuple(name for name in dict.fromkeys(scope.split() or ("",)) if name not in waiting)
+    if not refused:
+        return None
+    return await _user_credential_actions(prisma_client).update_many(
+        where={"user_id": row.user_id, "server_id": row.server_id, "credential_b64": row.credential_b64},
+        data={
+            "credential_b64": encrypt_value_helper(json.dumps({**grant, "needs_scopes": [*waiting, *refused]})),
+            "updated_at": row.updated_at,
+        },
+    )
 
 
 def _server_user_credential_item(
