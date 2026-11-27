@@ -562,6 +562,7 @@ if MCP_AVAILABLE:
     from mcp.server.lowlevel.server import NotificationOptions
     from mcp.server.lowlevel.server import Server as MCPProtocolServer
     from mcp.server.models import InitializationOptions
+    from mcp.server.streamable_http import check_accept_headers
     from mcp.shared.exceptions import MCPError
     from mcp.shared.inbound import InboundLadderRejection, classify_inbound_request, find_duplicated_routing_header
     from mcp.types import (
@@ -569,6 +570,7 @@ if MCP_AVAILABLE:
         METHOD_NOT_FOUND,
         CallToolRequest,
         GetPromptRequest,
+        JSONRPCError,
         JSONRPCRequest,
         ListPromptsRequest,
         ListResourcesRequest,
@@ -606,6 +608,7 @@ if MCP_AVAILABLE:
         PaginatedRequestParams,
         ReadResourceRequestParams,
     )
+    from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
     from litellm.proxy.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
@@ -1748,6 +1751,71 @@ if MCP_AVAILABLE:
                 return self._consumed_messages.pop(0)
             return await self._receive()
 
+    async def _initialize_without_request_id(peek: _LazyPeekedBody, request: StarletteRequest) -> bool:
+        if not all(check_accept_headers(request)):
+            return False
+        content_types: Final = request.headers.get("content-type", "").split(";", 1)[0].split(",")
+        if not any(content_type.strip() == "application/json" for content_type in content_types):
+            return False
+        body: Final = await peek.body()
+        may_be_truncated: Final = len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+        if may_be_truncated:
+            method: Final = _jsonrpc_text_method(body.decode("utf-8", errors="replace"))
+            if method is not None and method != "initialize":
+                return False
+        try:
+            envelope: Final = TypeAdapter(dict[str, object]).validate_json(
+                await peek.full_body() if may_be_truncated else body
+            )
+        except ValidationError:
+            return False
+        return (
+            envelope.get("jsonrpc") == "2.0" and envelope.get("method") == "initialize" and envelope.get("id") is None
+        )
+
+    def _invalid_mcp_request(message: str) -> JSONResponse:
+        return JSONResponse(
+            {"jsonrpc": "2.0", "id": None, "error": {"code": INVALID_REQUEST, "message": message}}, status_code=400
+        )
+
+    def _normalize_sdk_invalid_request(send: Send) -> Send:
+        pending_start: Message | None = None  # rebind-ok: hold a candidate SDK error's headers until its body arrives
+
+        async def normalize(message: Message) -> None:
+            nonlocal pending_start
+            if (
+                message["type"] == "http.response.start"
+                and message.get("status") == 400
+                and (b"content-type", b"application/json") in message.get("headers", ())
+            ):
+                pending_start = message  # rebind-ok: inspect the SDK error before sending response headers
+                return
+            if pending_start is not None:
+                start: Final = pending_start
+                pending_start = None  # rebind-ok: flush response headers exactly once
+                if message["type"] == "http.response.body" and not message.get("more_body", False):
+                    try:
+                        error: Final = JSONRPCError.model_validate_json(message.get("body", b""))
+                    except ValidationError:
+                        pass
+                    else:
+                        if (
+                            error.id is None
+                            and error.error.code == INVALID_PARAMS
+                            and error.error.message.startswith("Validation error:")
+                        ):
+                            body: Final = _invalid_mcp_request("Invalid Request").body
+                            headers: Final = tuple(
+                                (key, val) for key, val in start.get("headers", ()) if key != b"content-length"
+                            )
+                            await send({**start, "headers": [*headers, (b"content-length", str(len(body)).encode())]})
+                            await send({**message, "body": body})
+                            return
+                await send(start)
+            await send(message)
+
+        return normalize
+
     async def _handle_stale_mcp_session(
         scope: Scope,
         receive: Receive,
@@ -2685,6 +2753,18 @@ if MCP_AVAILABLE:
                     return
                 session_id = _get_session_id_from_scope(scope)
 
+            protocol_version: Final = request_headers.get("mcp-protocol-version")
+            legacy_post: Final = (
+                peek if protocol_version is None or protocol_version in HANDSHAKE_PROTOCOL_VERSIONS else None
+            )
+            if (
+                legacy_post is not None
+                and (is_initialize or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES)
+                and await _initialize_without_request_id(legacy_post, StarletteRequest(scope))
+            ):
+                await _invalid_mcp_request("Initialize requires a request ID")(scope, receive, send)
+                return
+
             rejection: Final = await _preflight_streamable_http_modern_interaction(
                 peek=peek,
                 defer_upstream_probes=defer_upstream_probes,
@@ -2855,7 +2935,11 @@ if MCP_AVAILABLE:
                         is_initialize=is_initialize,
                     )
                 ):
-                    await target_manager.handle_request(scope, receive, local_send)
+                    await target_manager.handle_request(
+                        scope,
+                        receive,
+                        _normalize_sdk_invalid_request(local_send) if legacy_post is not None else local_send,
+                    )
                     if use_stateful and session_id and scope.get("method") == "DELETE":
                         _remove_stateful_session_tracking(session_id)
 
