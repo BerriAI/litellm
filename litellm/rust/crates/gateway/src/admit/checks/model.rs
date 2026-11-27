@@ -8,7 +8,7 @@ use axum::http::Uri;
 use litellm_config::{LitellmParams, Model, Spelled};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_model_catalog::Catalog;
-use litellm_router_core::Reached;
+use litellm_router_core::{Reached, registry::DeploymentFilter};
 use serde_json::{Map, Value};
 
 use super::{
@@ -95,18 +95,30 @@ fn unserved(admit: &Admit, reached: &Reached) -> Option<Box<str>> {
                 })
         })
         .or_else(|| {
+            let cost_map = admit.inference.as_ref()?.cost_map();
             admit
-                .aliased
+                .router
+                .registry()
+                .deployments(&DeploymentFilter {
+                    model_name: Some(group),
+                    ..DeploymentFilter::default()
+                })
                 .iter()
-                .find(|(aliased, _)| aliased == group)
-                .map(|(_, alias)| format!("model_list.litellm_params.model alias {alias}").into())
+                .find_map(|deployment| {
+                    alias(
+                        cost_map.catalog(),
+                        deployment.provider(),
+                        &deployment.params.model,
+                    )
+                })
+                .map(|alias| format!("model_list.litellm_params.model alias {alias}").into())
         })
 }
 
 /// The name `catalog` holds `model` of `provider` under as another model's alias, as it holds
 /// `claude-haiku-latest`. Python sends the model the alias stands for
 /// (`resolve_model_latest_alias`), and the native app sends the name as written.
-pub(in crate::admit) fn alias(catalog: &Catalog, provider: &str, model: &str) -> Option<Box<str>> {
+fn alias(catalog: &Catalog, provider: &str, model: &str) -> Option<Box<str>> {
     let name = model
         .strip_prefix(provider)
         .and_then(|rest| rest.strip_prefix('/'))

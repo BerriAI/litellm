@@ -1,7 +1,7 @@
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, TypeAlias, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -34,7 +34,9 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     cache_control_as_prompt_cache_breakpoint,
+    default_ttl_prompt_cache_breakpoint_for,
     prompt_cache_breakpoint_for_wire,
+    responses_prompt_cache_breakpoint_for,
     whole_prompt_cache_breakpoint_or_none,
     with_prompt_cache_breakpoint,
 )
@@ -217,20 +219,25 @@ def _provider_name(provider: LlmProviders | str) -> str:
     return provider.value if isinstance(provider, LlmProviders) else provider
 
 
-def _item_with_prompt_cache_breakpoints(item: object) -> object:
+_BreakpointFor: TypeAlias = Callable[[object], PromptCacheBreakpoint]
+
+
+def _item_with_prompt_cache_breakpoints(item: object, breakpoint_for: _BreakpointFor) -> object:
     """Marks on assistant output and on tools are left for the strip that follows: OpenAI writes no cache there."""
     try:
         fields: Final = _INPUT_ITEM.validate_python(item)
     except ValidationError:
         return item
     if fields.get("type") == "function_call_output":
-        return _with_prompt_cache_breakpoints_under(fields, "output")
+        return _with_prompt_cache_breakpoints_under(fields, "output", breakpoint_for)
     if fields.get("type", "message") == "message" and fields.get("role") in _ROLES_READING_PROMPT_CACHE_BREAKPOINTS:
-        return _with_prompt_cache_breakpoints_under(fields, "content")
+        return _with_prompt_cache_breakpoints_under(fields, "content", breakpoint_for)
     return item
 
 
-def _with_prompt_cache_breakpoints_under(item: Mapping[str, object], key: str) -> Mapping[str, object]:
+def _with_prompt_cache_breakpoints_under(
+    item: Mapping[str, object], key: str, breakpoint_for: _BreakpointFor
+) -> Mapping[str, object]:
     value: Final = item.get(key)
     item_mark: Final = item.get("cache_control")
     unmarked_item: Final = {name: field for name, field in item.items() if name != "cache_control"}
@@ -238,23 +245,28 @@ def _with_prompt_cache_breakpoints_under(item: Mapping[str, object], key: str) -
         if item_mark is None:
             return item
         text_part: Final[Mapping[str, object]] = {"type": "input_text", "text": value}
-        return {**unmarked_item, key: [with_prompt_cache_breakpoint(text_part, PromptCacheBreakpoint(mode="explicit"))]}
+        return {
+            **unmarked_item,
+            key: [with_prompt_cache_breakpoint(text_part, breakpoint_for(item_mark))],
+        }
     try:
         parts: Final = _CONTENT_PARTS.validate_python(value)
     except ValidationError:
         return item
-    swapped_parts: Final = tuple(_part_with_prompt_cache_breakpoint(part) for part in parts)
-    return {**unmarked_item, key: list(_with_breakpoint_on_last_reading_part(swapped_parts, item_mark))}
+    swapped_parts: Final = tuple(_part_with_prompt_cache_breakpoint(part, breakpoint_for) for part in parts)
+    return {**unmarked_item, key: list(_with_breakpoint_on_last_reading_part(swapped_parts, item_mark, breakpoint_for))}
 
 
-def _part_with_prompt_cache_breakpoint(part: Mapping[str, object]) -> Mapping[str, object]:
+def _part_with_prompt_cache_breakpoint(
+    part: Mapping[str, object], breakpoint_for: _BreakpointFor
+) -> Mapping[str, object]:
     if part.get("type") not in _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS:
         return part
-    return cache_control_as_prompt_cache_breakpoint(part)
+    return cache_control_as_prompt_cache_breakpoint(part, breakpoint_for)
 
 
 def _with_breakpoint_on_last_reading_part(
-    parts: Sequence[Mapping[str, object]], item_mark: object
+    parts: Sequence[Mapping[str, object]], item_mark: object, breakpoint_for: _BreakpointFor
 ) -> Sequence[Mapping[str, object]]:
     if item_mark is None:
         return parts
@@ -264,7 +276,7 @@ def _with_breakpoint_on_last_reading_part(
     if not reading_indexes:
         return parts
     last: Final = reading_indexes[-1]
-    marked_last: Final = with_prompt_cache_breakpoint(parts[last], PromptCacheBreakpoint(mode="explicit"))
+    marked_last: Final = with_prompt_cache_breakpoint(parts[last], breakpoint_for(item_mark))
     return (*parts[:last], marked_last, *parts[last + 1 :])
 
 
@@ -807,7 +819,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _replayable_input(
         self, input: str | ResponseInputParam, reads_breakpoints: bool, maps_anthropic_tool_search: bool
     ) -> str | ResponseInputParam:
-        marked_input: Final = self._input_with_prompt_cache_breakpoints(input) if reads_breakpoints else input
+        marked_input: Final = (
+            self._input_with_prompt_cache_breakpoints(input, self._cache_control_breakpoint_for())
+            if reads_breakpoints
+            else input
+        )
         if not maps_anthropic_tool_search:
             return marked_input
         return input_without_unanswered_anthropic_tool_search_calls(marked_input)
@@ -879,11 +895,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             model_info=deployment_model_info(litellm_params),
         )
 
+    def _cache_control_breakpoint_for(self) -> _BreakpointFor:
+        if self.custom_llm_provider == LlmProviders.OPENAI:
+            return responses_prompt_cache_breakpoint_for
+        return default_ttl_prompt_cache_breakpoint_for
+
     @staticmethod
-    def _input_with_prompt_cache_breakpoints(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    def _input_with_prompt_cache_breakpoints(
+        input: str | ResponseInputParam, breakpoint_for: _BreakpointFor
+    ) -> str | ResponseInputParam:
         if not isinstance(input, list):
             return input
-        marked_items: Final = [_item_with_prompt_cache_breakpoints(item) for item in input]
+        marked_items: Final = [_item_with_prompt_cache_breakpoints(item, breakpoint_for) for item in input]
         return cast("ResponseInputParam", marked_items)  # cast-ok: items keep their shape, marks renamed in place
 
     def _tools_with_object_parameters(

@@ -391,6 +391,7 @@ class RustHealthCallbacks:
         failed hop. The selection tag is not on it; a stream stall, a refused ``previous_response_id``
         and a generic call's 404 are."""
         from litellm.litellm_core_utils.batch_utils import is_batch_api_call_type
+        from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
         from litellm.router_rust.core import attempt_failure
         from litellm.router_utils.cooldown_handlers import (
             _is_per_user_provider_request,  # pyright: ignore[reportPrivateUsage]  # the cooldown check's own rule
@@ -410,6 +411,7 @@ class RustHealthCallbacks:
         if (
             is_advisor_orchestration_failure(exception)
             or is_previous_response_rejected(exception)
+            or is_answer_without_an_image(exception)
             or is_stream_stall(exception)
             or (generic and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES)  # pyright: ignore[reportArgumentType]  # the status as raised
             or is_caller_timeout_408(model_call_details, exception_status, ended=datetime.now())  # pyright: ignore[reportArgumentType]  # noqa: DTZ005  # see logged_call

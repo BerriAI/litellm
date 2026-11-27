@@ -10,11 +10,8 @@ config:
     master_key: gateway-key
 
 keys:
-  sk-tpm: []
-  sk-any: []
-
-tpm_limits:
-  sk-tpm: 100
+  sk-tpm: {tpm_limit: 100}
+  sk-any: {}
 
 requests:
   - name: text under a token limit

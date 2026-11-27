@@ -218,11 +218,15 @@ impl ParallelRequestLimiter {
     pub(crate) async fn pre_call_hosted(
         &self,
         state: &LimiterState,
+        held: &LimiterState,
         facts: PreCallFacts,
         ctx: Ctx<'_>,
         reservation: Reservation<'_>,
     ) -> Result<Option<Abort>, CallbackError> {
-        match self.admit_hosted(state, facts, ctx, reservation).await {
+        match self
+            .admit_hosted(state, held, facts, ctx, reservation)
+            .await
+        {
             Ok(()) => Ok(None),
             Err(Stop::Refused(abort)) => Ok(Some(*abort)),
             Err(Stop::Raised(error)) => Err(error),
@@ -232,14 +236,40 @@ impl ParallelRequestLimiter {
     async fn admit_hosted(
         &self,
         state: &LimiterState,
+        held: &LimiterState,
         facts: PreCallFacts,
         ctx: Ctx<'_>,
-        mut reservation: Reservation<'_>,
+        reservation: Reservation<'_>,
     ) -> Result<(), Stop> {
         refused(self.first_pass(state, &facts, ctx).await?)?;
         if !state.stash().first_pass_admitted {
             return Ok(());
         }
+        if !facts.nested_tool_call {
+            return self.reserve_hosted(state, facts, ctx, reservation).await;
+        }
+        held.stash().owned = true;
+        let reserved = self
+            .reserve_hosted(held, facts.clone(), ctx, reservation)
+            .await;
+        self.give_back_tool_call_reservation(
+            state,
+            &facts,
+            held,
+            matches!(reserved, Err(Stop::Refused(_))),
+            ctx,
+        )
+        .await;
+        reserved
+    }
+
+    async fn reserve_hosted(
+        &self,
+        state: &LimiterState,
+        facts: PreCallFacts,
+        ctx: Ctx<'_>,
+        mut reservation: Reservation<'_>,
+    ) -> Result<(), Stop> {
         let plan = self.plan(state);
         let cap = self.cap_settings();
         let configured = if plan.reserves {

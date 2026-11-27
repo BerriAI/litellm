@@ -16,9 +16,10 @@ A route host never builds a `PyErr` from a route error itself. It calls the mapp
 |---|---|---|
 | `RustUpstreamError` | the provider call was issued and the provider answered with a failure | `args == (status, body)` and a `headers` attribute of `(name, value)` pairs, always set |
 | `RustBridgeDeclined` | the route stopped before calling the provider, so the host may run its own path | `args == (message,)` |
+| `RustDocumentFetchError` | the OCR route could not reach the caller's document, so the provider was never called. A `ValueError` subclass | `args == (message,)` |
 | a standard class from `pyo3::exceptions` | whichever Python class means the same thing, such as `ValueError` or `TypeError` for the caller's input, `FileNotFoundError` or `OSError` for a file, `KeyError` or `OverflowError` where Python raises them, and `RuntimeError` for anything else | the rendered chain, or a parity text where Python pins one |
 
-The two native classes come from `create_exception!` in `crates/python-bridge/src/errors.rs` and are exported with `#[pymodule_export]`, which is how the [pyo3 guide](https://github.com/PyO3/pyo3/blob/main/guide/src/exception.md) makes an exception importable. Their docstrings are the contract Python reads. `errors::upstream_error(py, status, body, headers)` is the one constructor of `RustUpstreamError`, so the payload cannot differ between routes
+The three native classes come from `create_exception!` in `crates/python-bridge/src/errors.rs` and are exported with `#[pymodule_export]`, which is how the [pyo3 guide](https://github.com/PyO3/pyo3/blob/main/guide/src/exception.md) makes an exception importable. Their docstrings are the contract Python reads. `errors::upstream_error(py, status, body, headers)` is the one constructor of `RustUpstreamError`, so the payload cannot differ between routes
 
 Python decodes a `RustUpstreamError` in `litellm/rust_bridge/failures.py`, which validates `args` and `headers` with a `TypeAdapter` and rebuilds the provider's `httpx.Response`. `litellm/rust_bridge/runtime.py` catches `RustBridgeDeclined` and reads its reason. `_raise_upstream` in `runtime.py` still reads `args` a second time by hand for the `attempt` path, which is the one decode to fold into `failures.py`. A new fact goes into `args` or `headers`, and the decoder learns to read it in the same change
 
@@ -40,6 +41,7 @@ OCR puts Python parity arms in front of that order, each matching a top-level va
 | `RequestFormat` | `ValueError` flagged with `ocr_request_format_error` |
 | `FileRead` whose cause is `NotFound` | `FileNotFoundError` naming the path |
 | other `FileRead` | `OSError` with the io message |
+| an unreachable document | `RustDocumentFetchError` |
 
 Both routes ask `litellm_auth::Error::is_request()` through their own `is_request()`, so a missing key or API base is a `RuntimeError` on both, and a missing setting the caller can pass, such as a region, is a `ValueError`
 

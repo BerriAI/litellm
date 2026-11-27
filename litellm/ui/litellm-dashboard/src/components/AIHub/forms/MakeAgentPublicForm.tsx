@@ -9,6 +9,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { cn } from "@/lib/cva.config";
 import { makeAgentsPublicCall } from "../../networking";
 import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toAgentPublicationRequest } from "./makeAgentPublicMapper";
+import { makeAgentPublicSchema } from "./makeAgentPublicSchema";
 import { AgentHubData } from "@/components/AIHub/AgentHubTableColumns";
 
 const STEP_TITLES: ParseKeys[] = ["aiHub.makeAgentPublic.steps.selectAgents", "aiHub.makeAgentPublic.steps.confirm"];
@@ -30,18 +33,19 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 }) => {
   const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0);
-  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const { getValues, setValue, watch } = useZodForm(makeAgentPublicSchema, { defaultValues: { agentIds: [] } });
+  const selectedAgents = new Set(watch("agentIds"));
   const [loading, setLoading] = useState(false);
 
   const handleClose = () => {
     setCurrentStep(0);
-    setSelectedAgents(new Set());
+    setValue("agentIds", []);
     onClose();
   };
 
   const handleNext = () => {
     if (currentStep === 0) {
-      if (selectedAgents.size === 0) {
+      if (!makeAgentPublicSchema.safeParse(getValues()).success) {
         toast.fromError(t("aiHub.makeAgentPublic.selectAtLeastOne"));
         return;
       }
@@ -62,15 +66,15 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
     } else {
       newSelection.delete(agentId);
     }
-    setSelectedAgents(newSelection);
+    setValue("agentIds", Array.from(newSelection));
   };
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       const allAgentIds = agentHubData.map((agent) => agent.agent_id || agent.name);
-      setSelectedAgents(new Set(allAgentIds));
+      setValue("agentIds", Array.from(new Set(allAgentIds)));
     } else {
-      setSelectedAgents(new Set());
+      setValue("agentIds", []);
     }
   };
 
@@ -82,19 +86,20 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
         .filter((agent) => agent.is_public === true)
         .map((agent) => agent.agent_id || agent.name);
 
-      setSelectedAgents(new Set(alreadyPublicAgents));
+      setValue("agentIds", Array.from(new Set(alreadyPublicAgents)));
     }
-  }, [visible, agentHubData]);
+  }, [visible, agentHubData, setValue]);
 
   const handleSubmit = async () => {
-    if (selectedAgents.size === 0) {
+    const result = makeAgentPublicSchema.safeParse(getValues());
+    if (!result.success) {
       toast.fromError(t("aiHub.makeAgentPublic.selectAtLeastOne"));
       return;
     }
 
     setLoading(true);
     try {
-      const agentIdsToMakePublic = Array.from(selectedAgents);
+      const { agent_ids: agentIdsToMakePublic } = toAgentPublicationRequest(result.data);
 
       // Make batch API call for all agents
       await makeAgentsPublicCall(accessToken, agentIdsToMakePublic);

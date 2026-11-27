@@ -8,9 +8,10 @@ use std::{
 
 use litellm_callbacks::Abort;
 use litellm_callbacks_parallel_request_limiter::{
-    Candidate, Code, Ctx, Descriptor, Engine, LimiterState, ModelFacts, ParallelRequestLimiter,
-    Policy, PostCallFailureFacts, PreCallFacts, PriorResponse, RateLimitedModel, Settings,
-    SocketClose, SuccessFacts, TargetFacts,
+    Candidate, Code, Ctx, Descriptor, Engine, FailureFacts, LimiterState, LoggedCall, ModelFacts,
+    ParallelRequestLimiter, Policy, PostCallFailureFacts, PreCallFacts, PriorResponse,
+    RateLimitedModel, Resolved, Settings, SocketClose, SuccessFacts, TargetFacts,
+    TokenRateLimitType,
 };
 use litellm_redis_client::{
     Credentials, Namespace, RedisClient, RedisConfig, RedisUrl, Script, Target, Timeouts, commands,
@@ -233,6 +234,242 @@ async fn a_reservation_is_settled_to_actual_usage_and_refunded_on_failure() {
     assert_eq!(
         count(&store, "api_key", "k", Kind::Tokens),
         Some(Local::Number(Number::Int(120)))
+    );
+}
+
+fn key_usage(tokens: i64) -> SuccessFacts {
+    SuccessFacts {
+        call_id: Some("call".into()),
+        total_tokens: tokens,
+        targets: TargetFacts {
+            user_api_key_hash: Some("k".into()),
+            ..TargetFacts::default()
+        },
+        ..SuccessFacts::default()
+    }
+}
+
+#[rstest]
+#[case::outage_then_refusal_reserved(true, false, 0)]
+#[case::refusal_then_refusal_reserved(true, true, 777)]
+#[case::outage_then_refusal_unreserved(false, false, 0)]
+#[case::refusal_then_refusal_unreserved(false, true, 777)]
+#[tokio::test]
+async fn every_billed_refusal_of_a_fallback_chain_counts_toward_key_tpm(
+    #[case] reservation: bool,
+    #[case] first_hop_billed: bool,
+    #[case] first_hop_charged: i64,
+) {
+    let (limiter, store, _) = limiter(reservation);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 10_000}}]),
+    );
+    let state = LimiterState::default();
+    assert_eq!(
+        limiter.pre_call(&state, facts(tpm, Some(300)), None).await,
+        None
+    );
+    let counted_at_admission = i64::from(!reservation);
+
+    if first_hop_billed {
+        limiter
+            .settle_billed_failure(&state, key_usage(777), None)
+            .await;
+    } else {
+        limiter
+            .settle_failure(
+                &state,
+                FailureFacts {
+                    call_id: Some("call".into()),
+                    ..FailureFacts::default()
+                },
+                None,
+            )
+            .await;
+    }
+    limiter
+        .settle_billed_failure(&state, key_usage(900), None)
+        .await;
+    limiter.settle_success(&state, key_usage(1000), None).await;
+
+    assert_eq!(
+        count(&store, "api_key", "k", Kind::Tokens),
+        Some(Local::Number(Number::Int(
+            counted_at_admission + first_hop_charged + 900 + 1000
+        )))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_refused_fallback_hop_counts_toward_its_own_model_limit_on_the_key() {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(json!([
+        {"key": "model_per_key", "value": "k:gpt", "rate_limit": {"tokens_per_unit": 10_000}},
+    ]));
+    let state = LimiterState::default();
+    let reserved = PreCallFacts {
+        reserved_model: Some(RateLimitedModel {
+            requested: "gpt".into(),
+            group: "gpt".into(),
+        }),
+        ..facts(tpm, Some(300))
+    };
+    assert_eq!(limiter.pre_call(&state, reserved, None).await, None);
+    state.stash().fallback_models.insert("hop".into());
+    limiter
+        .settle_failure(
+            &state,
+            FailureFacts {
+                call_id: Some("call".into()),
+                ..FailureFacts::default()
+            },
+            None,
+        )
+        .await;
+    limiter
+        .settle_billed_failure(
+            &state,
+            SuccessFacts {
+                served_model: Some(RateLimitedModel {
+                    requested: "hop".into(),
+                    group: "hop".into(),
+                }),
+                models: [(
+                    "hop".to_owned(),
+                    ModelFacts {
+                        candidates: vec![Candidate {
+                            group: "hop".into(),
+                            key_owns: false,
+                            counts_cached_tokens: false,
+                        }],
+                        ptu: None,
+                    },
+                )]
+                .into(),
+                ..key_usage(900)
+            },
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        count(&store, "model_per_key", "k:hop", Kind::Tokens),
+        Some(Local::Number(Number::Int(900)))
+    );
+    assert_eq!(
+        count(&store, "model_per_key", "k:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Int(0)))
+    );
+}
+
+fn billed_refusal(prompt_tokens: i64) -> LoggedCall {
+    serde_json::from_value(json!({
+        "call_id": "call",
+        "provider_billed": true,
+        "combined": {"kind": "usage", "usage": {"kind": "chat", "members": {
+            "prompt_tokens": prompt_tokens, "completion_tokens": 0, "total_tokens": prompt_tokens,
+        }}},
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::reserved(true)]
+#[case::unreserved(false)]
+#[tokio::test]
+async fn every_billed_refusal_of_a_fallback_chain_counts_toward_project_itpm_under_an_output_limit(
+    #[case] reservation: bool,
+) {
+    let (limiter, store, _) = limiter(reservation);
+    let admitted: PreCallFacts = serde_json::from_value(json!({
+        "call_id": "call",
+        "requested_model": "gpt",
+        "descriptors": [{"key": "model_per_project_itpm", "value": "p:gpt",
+                         "rate_limit": {"tokens_per_unit": 10_000}}],
+        "io_estimate": {"input_tokens": 300, "output_tokens": 50},
+    }))
+    .unwrap();
+    let state = LimiterState::default();
+    assert_eq!(limiter.pre_call(&state, admitted, None).await, None);
+
+    let resolved = Resolved::default();
+    let refuse = |prompt_tokens| {
+        limiter.log_failure(
+            Some(&state),
+            false,
+            billed_refusal(prompt_tokens),
+            &resolved,
+            TokenRateLimitType::Output,
+            None,
+        )
+    };
+
+    refuse(777).await;
+    assert_eq!(
+        count(&store, "model_per_project_itpm", "p:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Float(777.0)))
+    );
+
+    refuse(900).await;
+    assert_eq!(
+        count(&store, "model_per_project_itpm", "p:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Float(777.0 + 900.0)))
+    );
+}
+
+#[rstest]
+#[case::fits(300, false)]
+#[case::over_the_limit(500, true)]
+#[tokio::test]
+async fn nested_tool_calls_are_checked_against_tpm_and_leave_the_requests_reservation_to_settle_at_its_end(
+    #[case] tool_call_tokens: i64,
+    #[case] refused: bool,
+) {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    let state = LimiterState::default();
+    assert_eq!(
+        limiter
+            .pre_call(&state, facts(tpm.clone(), Some(600)), None)
+            .await,
+        None
+    );
+    for _ in 0..2 {
+        let tool_call = PreCallFacts {
+            call_id: None,
+            nested_tool_call: true,
+            ..facts(tpm.clone(), Some(tool_call_tokens))
+        };
+        assert_eq!(
+            limiter.pre_call(&state, tool_call, None).await.is_some(),
+            refused
+        );
+    }
+    assert_eq!(
+        count(&store, "api_key", "k", Kind::Tokens),
+        Some(Local::Number(Number::Int(600)))
+    );
+    limiter
+        .settle_success(
+            &state,
+            SuccessFacts {
+                call_id: Some("call".into()),
+                total_tokens: 15,
+                targets: TargetFacts {
+                    user_api_key_hash: Some("k".into()),
+                    ..TargetFacts::default()
+                },
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    assert_eq!(
+        count(&store, "api_key", "k", Kind::Tokens),
+        Some(Local::Number(Number::Int(15)))
     );
 }
 
@@ -670,6 +907,34 @@ fn key_tokens(store: &RateLimits) -> Option<f64> {
         Local::Number(number) => Some(number.as_f64()),
         _ => None,
     }
+}
+
+#[rstest]
+#[case::no_slot(json!({"tokens_per_unit": 10000}))]
+#[case::reused_slot(json!({"tokens_per_unit": 10000, "max_parallel_requests": 1}))]
+#[tokio::test]
+async fn a_tool_call_inside_the_request_keeps_the_requests_rate_limit_headers(
+    #[case] limits: serde_json::Value,
+) {
+    let (limiter, _, _) = limiter(true);
+    let limited = descriptors(json!([{"key": "api_key", "value": "k", "rate_limit": limits}]));
+    let state = Arc::new(LimiterState::default());
+    assert_eq!(
+        limiter
+            .pre_call(&state, facts(limited.clone(), Some(52)), None)
+            .await,
+        None
+    );
+    let tool_call = PreCallFacts {
+        call_id: None,
+        nested_tool_call: true,
+        reuses_request_slot: state.snapshot().parallel_slot.is_some(),
+        ..facts(limited, Some(1026))
+    };
+    assert_eq!(limiter.pre_call(&state, tool_call, None).await, None);
+    let response = state.snapshot().rate_limit_response.unwrap();
+    let headers = litellm_callbacks_parallel_request_limiter::header_map(&response.statuses);
+    assert_eq!(headers["x-ratelimit-api_key-remaining-tokens"], json!(9948));
 }
 
 #[rstest]

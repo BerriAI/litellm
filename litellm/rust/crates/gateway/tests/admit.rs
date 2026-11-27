@@ -4,11 +4,16 @@
 
 mod keys;
 
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{collections::BTreeMap, net::SocketAddr, path::Path, sync::Arc};
 
-use axum::{body::Body, extract::Request, http::Method};
+use axum::{
+    body::Body,
+    extract::{ConnectInfo, Request},
+    http::Method,
+};
 use litellm_config::{Config, Environment};
 use litellm_gateway::{StoredConfig, host::auth::AuthStore};
+use litellm_model_catalog::{CostMap, IntegrityLimits};
 use litellm_repositories::StoredObjects;
 use rstest::rstest;
 use serde::Deserialize;
@@ -16,12 +21,9 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Scenario {
     config: serde_yaml_ng::Value,
-    /// The virtual keys the database holds, each token with its model list.
+    /// The virtual keys the database holds, each token with the columns set on its row.
     #[serde(default)]
-    keys: BTreeMap<String, Vec<String>>,
-    /// The `tpm_limit` of each key that holds one.
-    #[serde(default)]
-    tpm_limits: BTreeMap<String, i64>,
+    keys: BTreeMap<String, Columns>,
     /// What boot read of the config the proxy stores in its database.
     #[serde(default)]
     stored: Stored,
@@ -92,16 +94,14 @@ fn stored_config(stored: Stored, held: Held) -> StoredConfig {
     }
 }
 
-/// The database holding each key of the scenario, a plain row with the model list and the token
-/// limit it gives.
-async fn listed(
-    keys: &BTreeMap<String, Vec<String>>,
-    tpm_limits: &BTreeMap<String, i64>,
-) -> keys::Held {
+type Columns = serde_json::Map<String, serde_json::Value>;
+
+/// The database holding each key of the scenario, a plain row with its columns set on it.
+async fn listed(keys: &BTreeMap<String, Columns>) -> keys::Held {
     let held = keys::Held::start().await;
-    for (token, models) in keys {
-        let columns = serde_json::json!({"models": models, "tpm_limit": tpm_limits.get(token)});
-        held.key(token, columns).await;
+    for (token, columns) in keys {
+        held.key(token, serde_json::Value::Object(columns.clone()))
+            .await;
     }
     held
 }
@@ -121,6 +121,8 @@ struct Sent {
     expect: Who,
     reason: Option<String>,
     over: Option<String>,
+    /// The client's TCP peer, which the IP allowlist reads.
+    peer: Option<SocketAddr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -149,9 +151,12 @@ impl Sent {
         self.headers
             .iter()
             .fold(
-                Request::builder()
-                    .method(self.method.as_str())
-                    .uri(&self.path),
+                self.peer.into_iter().fold(
+                    Request::builder()
+                        .method(self.method.as_str())
+                        .uri(&self.path),
+                    |request, peer| request.extension(ConnectInfo(peer)),
+                ),
                 |request, (name, value)| request.header(name, value),
             )
             .body(body)
@@ -162,6 +167,9 @@ impl Sent {
 #[rstest]
 #[case::mixed_groups("mixed_groups")]
 #[case::honored_settings("honored_settings")]
+#[case::allowed_routes("allowed_routes")]
+#[case::allowed_routes_unwritten("allowed_routes_unwritten")]
+#[case::allowed_ips("allowed_ips")]
 #[case::setting_for_every_request("setting_for_every_request")]
 #[case::setting_for_messages_only("setting_for_messages_only")]
 #[case::fallback_shapes("fallback_shapes")]
@@ -180,6 +188,7 @@ impl Sent {
 #[case::router_host_steps("router_host_steps")]
 #[case::callers("callers")]
 #[case::virtual_key_models("virtual_key_models")]
+#[case::user_api_key_cache_settings("user_api_key_cache_settings")]
 #[case::virtual_key_token_limits("virtual_key_token_limits")]
 #[case::dynamic_rate_limiter("dynamic_rate_limiter")]
 #[case::dynamic_rate_limiter_borrowing("dynamic_rate_limiter_borrowing")]
@@ -205,12 +214,12 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
         .unwrap();
     let held = match scenario.keys.is_empty() {
         true => None,
-        false => Some(listed(&scenario.keys, &scenario.tpm_limits).await),
+        false => Some(listed(&scenario.keys).await),
     };
     let state = match &held {
         None => state,
         Some(held) => litellm_gateway::AppState {
-            keys: Some(Arc::new(AuthStore::new(
+            auth_store: Some(Arc::new(AuthStore::new(
                 keys::memory_cache(),
                 held.database(),
             ))),
@@ -258,4 +267,69 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
         })
         .collect();
     assert_eq!(answered, expected);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cost_map_installed_after_boot_decides_the_next_request() {
+    litellm_gateway::install_crypto_provider();
+    let config = Config::from_yaml(
+        "model_list:
+  - model_name: latest
+    litellm_params:
+      model: anthropic/claude-installed-latest
+      api_key: provider-key
+general_settings:
+  master_key: gateway-key
+",
+    )
+    .unwrap();
+    let resources =
+        litellm_gateway::Resources::over(&config, Arc::new(|_: &str| None::<String>)).unwrap();
+    let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
+        .await
+        .unwrap();
+    let admit = Arc::new(litellm_gateway::Admit::new(
+        &config,
+        &state,
+        StoredConfig::Unused,
+    ));
+    let over = || {
+        let admit = admit.clone();
+        async move {
+            let request = Request::post("/v1/messages")
+                .header("authorization", "Bearer gateway-key")
+                .body(Body::from(
+                    r#"{"model": "latest", "max_tokens": 16, "messages": []}"#,
+                ))
+                .unwrap();
+            admit
+                .admit(request)
+                .await
+                .map(drop)
+                .map_err(|(_, reason)| String::from(reason.over))
+        }
+    };
+
+    let before = over().await;
+    state.inference.install(
+        CostMap::read(
+            br#"{
+                "claude-installed-9": {"litellm_provider": "anthropic", "mode": "chat"},
+                "claude-installed-latest": {"alias_of": "claude-installed-9"}
+            }"#,
+            None,
+            IntegrityLimits::UNCHECKED,
+        )
+        .unwrap(),
+    );
+    let after = over().await;
+    state.close().await;
+
+    assert_eq!(
+        (before, after),
+        (
+            Ok(()),
+            Err("model_list.litellm_params.model alias claude-installed-latest".to_owned())
+        )
+    );
 }

@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.batch_utils import (
     job_to_charge_once,
 )
 from litellm.litellm_core_utils.core_helpers import finite_cost
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
@@ -233,6 +234,9 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 "MaxBudgetPerSessionHandler: error in async_log_success_event: %s",
                 str(e),
             )
+
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return is_answer_without_an_image(exception)
 
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object

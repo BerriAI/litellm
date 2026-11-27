@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import {
   ColumnDef,
@@ -27,6 +28,9 @@ import {
   orderAliases,
 } from "./model_group_alias_ordering";
 import { codeSamples } from "@/i18n/untranslated/codeSamples";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { aliasToFields, aliasToItem, emptyAlias } from "./model_group_alias_form/mapper";
+import { modelGroupAliasSchema } from "./model_group_alias_form/schema";
 
 type ModelGroupAliasValue = string | { model: string; hidden?: boolean };
 
@@ -74,9 +78,15 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
 
   const { t } = useTranslation();
   const [aliases, setAliases] = useState<AliasItem[]>([]);
-  const [newAlias, setNewAlias] = useState({ aliasName: "", targetModelGroup: "" });
-  const [editingAlias, setEditingAlias] = useState<AliasItem | null>(null);
+  const addForm = useZodForm(modelGroupAliasSchema, { defaultValues: emptyAlias });
+  const { field: newAliasName } = useController({ control: addForm.control, name: "aliasName" });
+  const { field: newTargetModelGroup } = useController({ control: addForm.control, name: "targetModelGroup" });
+  const editForm = useZodForm(modelGroupAliasSchema, { defaultValues: emptyAlias });
+  const { field: editAliasName } = useController({ control: editForm.control, name: "aliasName" });
+  const { field: editTargetModelGroup } = useController({ control: editForm.control, name: "targetModelGroup" });
+  const [editingAliasId, setEditingAliasId] = useState<string | null>(null);
   const writesDisabled = managedByConfig || ownershipLoading;
+  const addDisabled = writesDisabled || !newAliasName.value || !newTargetModelGroup.value;
   const [isExpanded, setIsExpanded] = useState(true);
   const { preferences, updatePreferences, unsavedPreferences } = useAliasDisplayPreferences(preferenceScope);
   const displayAliases = useMemo(() => orderAliases(aliases, preferences), [aliases, preferences]);
@@ -149,10 +159,12 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   const handleAddAlias = async () => {
     if (writesDisabled) return;
 
-    if (!newAlias.aliasName || !newAlias.targetModelGroup) {
+    const parsed = modelGroupAliasSchema.safeParse(addForm.getValues());
+    if (!parsed.success) {
       toast.fromError(t("modelGroupAliasSettings.toasts.missingFields"));
       return;
     }
+    const newAlias = parsed.data;
 
     // Check for duplicate alias names
     if (aliases.some((alias) => alias.aliasName === newAlias.aliasName)) {
@@ -160,17 +172,13 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
       return;
     }
 
-    const newAliasObj: AliasItem = {
-      id: `${Date.now()}-${newAlias.aliasName}`,
-      aliasName: newAlias.aliasName,
-      targetModelGroup: newAlias.targetModelGroup,
-    };
+    const newAliasObj = aliasToItem(`${Date.now()}-${newAlias.aliasName}`, newAlias);
 
     const updatedAliases = [...aliases, newAliasObj];
 
     if (await saveAliasesToBackend(updatedAliases)) {
       setAliases(updatedAliases);
-      setNewAlias({ aliasName: "", targetModelGroup: "" });
+      addForm.reset();
       toast.success(t("modelGroupAliasSettings.toasts.added"));
     }
   };
@@ -178,17 +186,20 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   const handleEditAlias = (alias: AliasItem) => {
     if (writesDisabled) return;
 
-    setEditingAlias({ ...alias });
+    editForm.reset(aliasToFields(alias));
+    setEditingAliasId(alias.id);
   };
 
   const handleUpdateAlias = async () => {
     if (writesDisabled) return;
-    if (!editingAlias) return;
+    if (editingAliasId === null) return;
 
-    if (!editingAlias.aliasName || !editingAlias.targetModelGroup) {
+    const parsed = modelGroupAliasSchema.safeParse(editForm.getValues());
+    if (!parsed.success) {
       toast.fromError(t("modelGroupAliasSettings.toasts.missingFields"));
       return;
     }
+    const editingAlias = aliasToItem(editingAliasId, parsed.data);
 
     // Check for duplicate alias names (excluding current alias)
     if (aliases.some((alias) => alias.id !== editingAlias.id && alias.aliasName === editingAlias.aliasName)) {
@@ -207,13 +218,13 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
         }));
       }
       setAliases(updatedAliases);
-      setEditingAlias(null);
+      setEditingAliasId(null);
       toast.success(t("modelGroupAliasSettings.toasts.updated"));
     }
   };
 
   const handleCancelEdit = () => {
-    setEditingAlias(null);
+    setEditingAliasId(null);
   };
 
   const deleteAlias = async (aliasId: string) => {
@@ -271,14 +282,9 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                 </label>
                 <input
                   type="text"
-                  value={newAlias.aliasName}
+                  value={newAliasName.value}
                   disabled={writesDisabled}
-                  onChange={(e) =>
-                    setNewAlias({
-                      ...newAlias,
-                      aliasName: e.target.value,
-                    })
-                  }
+                  onChange={newAliasName.onChange}
                   placeholder={t("modelGroupAliasSettings.add.aliasNamePlaceholder")}
                   className="w-full px-3 py-2 border border-border rounded-md text-sm disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
                 />
@@ -289,14 +295,9 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                 </label>
                 <input
                   type="text"
-                  value={newAlias.targetModelGroup}
+                  value={newTargetModelGroup.value}
                   disabled={writesDisabled}
-                  onChange={(e) =>
-                    setNewAlias({
-                      ...newAlias,
-                      targetModelGroup: e.target.value,
-                    })
-                  }
+                  onChange={newTargetModelGroup.onChange}
                   placeholder={t("modelGroupAliasSettings.add.targetModelGroupPlaceholder")}
                   className="w-full px-3 py-2 border border-border rounded-md text-sm disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
                 />
@@ -304,8 +305,8 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
               <div className="flex items-end">
                 <button
                   onClick={handleAddAlias}
-                  disabled={writesDisabled || !newAlias.aliasName || !newAlias.targetModelGroup}
-                  className={`flex items-center px-4 py-2 rounded-md text-sm ${writesDisabled || !newAlias.aliasName || !newAlias.targetModelGroup ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-success text-success-foreground hover:bg-success/80"}`}
+                  disabled={addDisabled}
+                  className={`flex items-center px-4 py-2 rounded-md text-sm ${addDisabled ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-success text-success-foreground hover:bg-success/80"}`}
                 >
                   <PlusCircleIcon className="w-4 h-4 mr-1" />
                   {t("modelGroupAliasSettings.add.submit")}
@@ -373,31 +374,21 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                 <TableBody>
                   {displayAliases.map((alias) => (
                     <TableRow key={alias.id} className="h-8">
-                      {editingAlias && !writesDisabled && editingAlias.id === alias.id ? (
+                      {editingAliasId === alias.id && !writesDisabled ? (
                         <>
                           <TableCell className="py-0.5">
                             <input
                               type="text"
-                              value={editingAlias.aliasName}
-                              onChange={(e) =>
-                                setEditingAlias({
-                                  ...editingAlias,
-                                  aliasName: e.target.value,
-                                })
-                              }
+                              value={editAliasName.value}
+                              onChange={editAliasName.onChange}
                               className="w-full px-2 py-1 border border-border rounded-md text-sm"
                             />
                           </TableCell>
                           <TableCell className="py-0.5">
                             <input
                               type="text"
-                              value={editingAlias.targetModelGroup}
-                              onChange={(e) =>
-                                setEditingAlias({
-                                  ...editingAlias,
-                                  targetModelGroup: e.target.value,
-                                })
-                              }
+                              value={editTargetModelGroup.value}
+                              onChange={editTargetModelGroup.onChange}
                               className="w-full px-2 py-1 border border-border rounded-md text-sm"
                             />
                           </TableCell>

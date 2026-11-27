@@ -291,6 +291,13 @@ def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | Non
     return {LITELLM_CALL_ID_HEADER: litellm_call_id}
 
 
+def failed_call_headers(
+    litellm_call_id: str | None, response_cost: float
+) -> dict[str, str]:  # mutable-ok: ProxyException.headers
+    cost_headers: Final = {"x-litellm-response-cost": str(response_cost)} if response_cost > 0 else {}
+    return {**(litellm_call_id_headers(litellm_call_id) or {}), **cost_headers}
+
+
 def with_litellm_call_id(exc: ProxyException, litellm_call_id: str | None) -> ProxyException:
     """The same error object, answering with ``x-litellm-call-id`` when it was raised without one."""
     if litellm_call_id is not None:

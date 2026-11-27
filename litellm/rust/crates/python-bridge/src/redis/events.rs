@@ -122,7 +122,7 @@ impl ServiceLoggingEvents {
     }
 
     fn report(&self, context: ReportContext, record: Arc<Py<PyAny>>, args: ReportArgs) {
-        self.runtime.spawn(async move {
+        litellm_call_scope::spawn_in_call_on(&self.runtime, async move {
             let reported = attach_blocking(context.0, move |py| match args {
                 ReportArgs::Call(call) => record
                     .bind(py)

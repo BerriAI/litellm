@@ -6,11 +6,12 @@ import { Message } from "./types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select as ShadcnSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { messageRoleLabels } from "@/i18n/untranslated/modelText";
 
 const ROLE_ITEMS = [
-  { value: "user", labelKey: "prompts.messagesCard.roles.user" },
-  { value: "assistant", labelKey: "prompts.messagesCard.roles.assistant" },
-  { value: "system", labelKey: "prompts.messagesCard.roles.system" },
+  { value: "user", label: messageRoleLabels.user },
+  { value: "assistant", label: messageRoleLabels.assistant },
+  { value: "system", label: messageRoleLabels.system },
 ] as const;
 
 interface PromptMessagesCardProps {
@@ -84,7 +85,7 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
           >
             <div className="bg-muted px-2 py-1.5 border-b border-border flex items-center justify-between">
               <ShadcnSelect
-                items={ROLE_ITEMS.map((item) => ({ value: item.value, label: t(item.labelKey) }))}
+                items={ROLE_ITEMS}
                 value={message.role}
                 onValueChange={(value) => onUpdateMessage(index, "role", String(value))}
               >
@@ -98,7 +99,7 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
                 <SelectContent>
                   {ROLE_ITEMS.map((item) => (
                     <SelectItem key={item.value} value={item.value}>
-                      {t(item.labelKey)}
+                      {item.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

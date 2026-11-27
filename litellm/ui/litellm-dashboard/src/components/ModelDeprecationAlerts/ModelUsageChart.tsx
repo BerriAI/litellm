@@ -12,8 +12,8 @@ import { seriesBy } from "@/app/(dashboard)/usage/_components/components/overvie
 import type { deprecationUsageRange } from "./deprecationAlerts";
 import { dailyModelRequests } from "./migrationData";
 
-const formatDate = (date: string) =>
-  new Date(`${date}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const formatDate = (date: string, language: string) =>
+  new Date(`${date}T00:00:00Z`).toLocaleDateString(language, { month: "short", day: "numeric", timeZone: "UTC" });
 
 export default function ModelUsageChart({
   model,
@@ -26,7 +26,7 @@ export default function ModelUsageChart({
   scope: string;
   range: ReturnType<typeof deprecationUsageRange>;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [legendExpanded, setLegendExpanded] = useState(false);
   const activityOptions = {
     queryKey: ["deprecationDailyUsage", scope, model, team, range],
@@ -63,13 +63,15 @@ export default function ModelUsageChart({
         ),
       ),
     );
-    const result = seriesBy(days, "api_keys", "requests", 100);
+    const result = seriesBy(days, "api_keys", "requests", { top: 100, language: i18n.language });
     const byDate = new Map(result.data.map((day) => [day.date, day]));
     const zeros = Object.fromEntries(result.keys.map((key) => [key, 0]));
-    result.data = daily.map((day) => byDate.get(day.date) ?? { date: day.date, label: formatDate(day.date), ...zeros });
+    result.data = daily.map(
+      (day) => byDate.get(day.date) ?? { date: day.date, label: formatDate(day.date, i18n.language), ...zeros },
+    );
     result.labels = result.labels.map((label) => aliases.get(label) || label);
     return result;
-  }, [activity.data, daily, t]);
+  }, [activity.data, daily, t, i18n.language]);
   function renderContent() {
     if (activity.isPending) return <ChartSkeleton className="h-64" />;
     if (activity.isError)
@@ -89,7 +91,7 @@ export default function ModelUsageChart({
           labels={series.labels}
           colors={series.colors}
           xKey="date"
-          xLabel={formatDate}
+          xLabel={(date) => formatDate(date, i18n.language)}
           format={(value) => value.toLocaleString()}
           totalFor={(date) => totals.get(date)}
           className="h-64"

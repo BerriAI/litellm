@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Ty
 import httpx
 from pydantic import (
     AfterValidator,
+    AliasChoices,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -2413,6 +2414,11 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=None,
         description="Upstream request timeout in seconds for this pass-through endpoint. If unset, uses general_settings.pass_through_request_timeout (default 600).",
     )
+    preserve_trace_context: bool = Field(
+        default=False,
+        description="Forward caller traceparent and tracestate even when forward_headers is disabled, "
+        "without injecting LiteLLM trace context on this HTTP endpoint.",
+    )
     auth: bool = Field(
         default=True,
         description="Whether authentication is required for the pass-through endpoint. Defaults to True so a pass-through silently created without an explicit value still requires a valid LiteLLM API key — set to False only if the endpoint is meant to be a public forwarder (e.g. an unauthenticated webhook target).",
@@ -3277,6 +3283,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
     )
+    customer_budget_response_headers: bool | None = Field(
+        None,
+        description="If True, responses carry x-litellm-app-customer-org-* and x-litellm-app-customer-member-* headers with the spend, max budget, remaining budget and reset time the calling app holds for the request's customer organization and member, one set per budget window. A key not pinned to one customer organization reads the budget of whichever organization it names.",
+    )
     forward_client_headers_to_llm_api: bool | None = Field(
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
@@ -3813,6 +3823,11 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     parallel_tool_calls: JsonValue = None
     response_format: JsonValue = None
     web_search_options: JsonValue = None
+    system_instruction: JsonValue = Field(
+        default=None,
+        validation_alias=AliasChoices("systemInstruction", "system_instruction"),
+        description="Google systemInstruction, counted with contents",
+    )
 
 
 from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export
@@ -3893,6 +3908,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "OTEL_ENDPOINT",
             "OTEL_TRACES_ENDPOINT",
             "OTEL_HEADERS",
+            "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS",
         ],
     )
 

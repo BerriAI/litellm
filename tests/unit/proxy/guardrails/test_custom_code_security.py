@@ -834,7 +834,7 @@ def test_module_level_busy_loop_fails_compilation_at_the_execution_timeout():
     with pytest.raises(CustomCodeCompilationError, match=r"exceeded the 0\.3s execution timeout"):
         CustomCodeGuardrail(custom_code=code, guardrail_name="busy", execution_timeout=0.3)
 
-    assert time.monotonic() - started < 2.0
+    assert time.monotonic() - started < DEFAULT_EXECUTION_TIMEOUT_SECONDS / 2
 
 
 @pytest.mark.parametrize("execution_timeout", [0, -1.0])

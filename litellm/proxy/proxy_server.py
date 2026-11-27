@@ -68,7 +68,7 @@ from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import PydanticUndefined
 from pydantic.main import IncEx
-from pydantic_core import PydanticSerializationError, to_jsonable_python
+from pydantic_core import PydanticSerializationError, to_json, to_jsonable_python
 from typing_extensions import Never, NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -228,6 +228,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
+    StreamingChoices,
     TextCompletionResponse,
     TokenCountMessagesFormat,
     TokenCountResponse,
@@ -353,7 +354,9 @@ import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import (
+    RUST_LOG_DRAIN_TIMEOUT_SECONDS,
     STARTUP_OUTPUT_SETTINGS,
+    drain_rust_log_lines,
     print_startup_message,
     redact_internal_details_from_client_message,
     redact_string,
@@ -750,6 +753,7 @@ from litellm.proxy.discovery_endpoints import (
 )
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
+from litellm.proxy.google_endpoints.endpoints import google_token_count_request
 from litellm.proxy.google_endpoints.endpoints import router as google_router
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
@@ -776,6 +780,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (  # noqa: F401, RUF1
     _OPTIONAL_PromptInjectionDetection,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF100  # legacy module exports
+    HealthProbeFailureBiller,
     ProxyDBLogger,
     _ProxyDBLogger,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     run_spend_event,
@@ -1009,6 +1014,7 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.middleware.request_body_decompression_middleware import RequestBodyDecompressionMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
+    max_request_size_bytes,
 )
 from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
@@ -1573,6 +1579,8 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         except Exception as e:  # noqa: BLE001  # shutdown must continue even if the flush fails
             verbose_proxy_logger.exception("Error flushing Langfuse export channels on shutdown: %s", e)
 
+    await drain_rust_log_lines(GracefulShutdownManager.remaining(RUST_LOG_DRAIN_TIMEOUT_SECONDS))
+
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
 
@@ -1618,6 +1626,10 @@ _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeaders
 _LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
+
+
+class _CacheConstructorKwargs(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class _AiohttpConnectorKwargs(TypedDict, total=False):
@@ -2370,7 +2382,14 @@ from litellm.integrations.otel.mount import (
     trace_response_headers,
 )
 
-instrument_fastapi_app(app)
+
+def _max_request_body_bytes(scope: Scope) -> int | None:
+    return max_request_size_bytes(
+        scope, configured_max_request_size_mb() if premium_user is True else None, _ROUTE_MAX_REQUEST_SIZE_MB
+    )
+
+
+instrument_fastapi_app(app, max_request_body_bytes=_max_request_body_bytes)
 
 vertex_live_passthrough_vertex_base: Final = VertexBase()
 
@@ -3266,12 +3285,12 @@ if docs_url != "/" and root_redirect_url is not None:
         return RedirectResponse(url=root_redirect_url)
 
 
-user_api_base = None
+user_api_base: str | None = None
 user_model = None
 user_debug = False
-user_max_tokens = None
-user_request_timeout = None
-user_temperature = None
+user_max_tokens: int | None = None
+user_request_timeout: float | None = None
+user_temperature: float | None = None
 user_config: Final = None
 user_headers = None
 user_config_file_path: str | None = None
@@ -3548,6 +3567,7 @@ def cost_tracking():
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
+        litellm.logging_callback_manager.add_litellm_async_failure_callback(HealthProbeFailureBiller())
         if _register_rust_spend_loggers():
             litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
             return
@@ -6441,7 +6461,8 @@ class ProxyConfig:
         if "default_redis_ttl" in cache_params:
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
-        litellm.cache = Cache(**without(cache_params, "default_redis_ttl"))
+        cache_settings: Final[Mapping[str, object]] = cache_params
+        litellm.cache = Cache(**_CacheConstructorKwargs(**without(cache_settings, "default_redis_ttl")))
 
         resolved_usage_cache = redis_usage_cache
         cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None
@@ -8702,12 +8723,13 @@ class ProxyConfig:
         )
         applied: Final = {**decrypted, **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()}}
         os.environ.update(applied)
+        previous_keys: Final = self._db_environment_keys
         if revision is None or revision == applied_revision:
             self._db_environment_keys = self._db_environment_keys | frozenset(applied)
         else:
             stored: Final = frozenset(key for key, stored_value in row.items() if stored_value is not None)
             still_stored: Final = stored | frozenset(key.upper() for key in stored)
-            removed: Final = self._db_environment_keys - still_stored
+            removed: Final = previous_keys - still_stored
             _restore_environment(removed - _SSO_ENVIRONMENT_VARIABLES, environment_before_db)
             self._sso_environment_removals = (
                 self._sso_environment_removals | (removed & _SSO_ENVIRONMENT_VARIABLES)
@@ -8715,6 +8737,30 @@ class ProxyConfig:
             self._db_environment_keys = (self._db_environment_keys & still_stored) | frozenset(applied)
             self._db_environment_revision = revision
         self.environment_variables.apply_db_row("environment_variables", _as_settings_mapping(applied))
+        self._apply_otel_background_service_spans(applied, previous_keys - self._db_environment_keys)
+
+    @staticmethod
+    def _apply_otel_background_service_spans(environment: Mapping[str, str], removed: frozenset[str]) -> None:
+        if open_telemetry_logger is None:
+            return
+        from litellm.integrations.otel.logger import OpenTelemetryV2
+        from litellm.integrations.otel.model.config import (
+            EMIT_BACKGROUND_SERVICE_SPANS_ENV,
+            background_service_spans_from_yaml,
+            parse_background_service_spans_setting,
+        )
+
+        if not isinstance(open_telemetry_logger, OpenTelemetryV2):
+            return
+        yaml_setting: Final = background_service_spans_from_yaml((litellm.callback_settings or {}).get("otel"))
+        if yaml_setting is None and EMIT_BACKGROUND_SERVICE_SPANS_ENV in removed:
+            restored: Final = parse_background_service_spans_setting(os.getenv(EMIT_BACKGROUND_SERVICE_SPANS_ENV))
+            open_telemetry_logger.restore_background_service_spans_setting(restored)
+        open_telemetry_logger.background_service_spans_db_override = (
+            None
+            if yaml_setting is not None
+            else parse_background_service_spans_setting(environment.get(EMIT_BACKGROUND_SERVICE_SPANS_ENV))
+        )
 
     def _restore_sso_environment_removals(self, sso_table_keys: frozenset[str]) -> None:
         _restore_environment(
@@ -8779,6 +8825,7 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
         *,
         ui_settings_already_synced: bool = False,
+        skip_unchanged_mcp_catalog: bool = False,
     ) -> ReconcileOutcome:
         """
         - Check db for new models
@@ -8805,12 +8852,18 @@ class ProxyConfig:
             await sync_ui_settings_to_general_settings(prisma_client)
 
         async with DB_RECONCILE_LOCK:
-            return await self.add_deployment_locked(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+            return await self.add_deployment_locked(
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                skip_unchanged_mcp_catalog=skip_unchanged_mcp_catalog,
+            )
 
     async def add_deployment_locked(
         self,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
+        *,
+        skip_unchanged_mcp_catalog: bool = False,
     ) -> ReconcileOutcome:
         """add_deployment's body, minus the locking. DB_RECONCILE_LOCK MUST already
         be held. Split out for clear_cache, which already holds the lock and would
@@ -8854,6 +8907,7 @@ class ProxyConfig:
             await self._init_non_llm_objects_in_db(
                 prisma_client=prisma_client,
                 refresh_pass_through_endpoints=_general_settings_row_is_readable(db_general_settings),
+                skip_unchanged_mcp_catalog=skip_unchanged_mcp_catalog,
             )
 
         except Exception as e:
@@ -8935,7 +8989,11 @@ class ProxyConfig:
         channel.stop()
 
     async def _init_non_llm_objects_in_db(
-        self, prisma_client: PrismaClient, *, refresh_pass_through_endpoints: bool = True
+        self,
+        prisma_client: PrismaClient,
+        *,
+        refresh_pass_through_endpoints: bool = True,
+        skip_unchanged_mcp_catalog: bool = False,
     ):
         """
         Use this to read non-llm objects from the db and initialize them
@@ -8955,7 +9013,7 @@ class ProxyConfig:
             await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="mcp"):
-            await self._init_mcp_servers_in_db()
+            await self._init_mcp_servers_in_db(skip_unchanged=skip_unchanged_mcp_catalog)
 
         if self._should_load_db_object(object_type="agents"):
             await self._init_agents_in_db(prisma_client=prisma_client)
@@ -9628,7 +9686,7 @@ class ProxyConfig:
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - %s", e
             )
 
-    async def _init_mcp_servers_in_db(self):
+    async def _init_mcp_servers_in_db(self, *, skip_unchanged: bool = False) -> None:
         from litellm.proxy.mcp_server.utils import is_mcp_available
 
         if not is_mcp_available():
@@ -9662,7 +9720,7 @@ class ProxyConfig:
             )
 
         try:
-            await global_mcp_server_manager.reload_servers_from_database()
+            await global_mcp_server_manager.reload_servers_from_database(skip_unchanged=skip_unchanged)
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - %s", e)
 
@@ -10275,6 +10333,8 @@ _SSE_NESTED_RESPONSE_MARKER: Final = b'"response"'
 _SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[object, object])
 _JSON_ARRAY: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_NULLABLE_CHAT_CHOICE_FIELDS: Final = ("finish_reason", *VLLM_CHOICE_FIELDS)
+_JSON_OBJECTS: Final = TypeAdapter(tuple[dict[str, object], ...])
 
 
 def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
@@ -10344,71 +10404,76 @@ def _unencodable_indexes(items: Iterable[tuple[int, object]], lineage: frozenset
     return {index: _unencodable_part(item, lineage) for index, item in items if not _json_encodes(item)}
 
 
-def _serialize_chat_chunk_leniently(chunk: ModelResponseStream) -> bytes:
-    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
-    if exclude:
-        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
-    jsonable: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
-    return json.dumps(jsonable, ensure_ascii=True, separators=(",", ":")).encode()
-
-
 def _serialize_chat_chunk(chunk: ModelResponseStream) -> bytes:
+    null_choice_fields: Final = tuple(_null_chat_choice_fields(choice) for choice in chunk.choices)
     try:
-        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
-    except PydanticSerializationError:
-        return _serialize_chat_chunk_leniently(chunk)
+        return _serialize_keeping_null_choice_fields(chunk, null_choice_fields)
+    except ValueError:
+        return _json_bytes(_with_null_choice_fields(_dump_encodable_fields(chunk), null_choice_fields))
 
 
 def _serialize_streaming_chunk(chunk: BaseModel) -> bytes:
-    choices: Final = _streaming_chunk_choices(chunk)
-    null_choice_fields: Final = tuple(_null_vllm_choice_fields(choice) for choice in choices)
-    if any(null_choice_fields):
-        serialized_chunk: Final = _serialize_keeping_null_choice_fields(chunk, choices, null_choice_fields)
-        if serialized_chunk is not None:
-            return serialized_chunk
-    if isinstance(chunk, ModelResponseStream):
-        return _serialize_chat_chunk(chunk)
-    return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
-
-
-def _serialize_keeping_null_choice_fields(
-    chunk: BaseModel, choices: Sequence[BaseModel], null_choice_fields: Sequence[Mapping[str, None]]
-) -> bytes | None:
-    try:
-        return json.dumps(
-            {
-                **_dump_set_fields(chunk, exclude=frozenset({"choices"})),
-                "choices": [
-                    {**_dump_set_fields(choice), **nulls}
-                    for choice, nulls in zip(choices, null_choice_fields, strict=True)
-                ],
-            },
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode()
-    except ValueError:
-        return None
-
-
-def _streaming_chunk_choices(chunk: BaseModel) -> Sequence[BaseModel]:
     match chunk:
-        case ModelResponseStream() | TextCompletionResponse():
-            return chunk.choices
+        case ModelResponseStream():
+            return _serialize_chat_chunk(chunk)
+        case TextCompletionResponse():
+            null_choice_fields: Final = tuple(_null_vllm_choice_fields(choice) for choice in chunk.choices)
+            return _serialize_keeping_null_choice_fields(chunk, null_choice_fields)
         case _:
-            return ()
+            return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+
+
+def _serialize_keeping_null_choice_fields(chunk: BaseModel, null_choice_fields: Sequence[Mapping[str, None]]) -> bytes:
+    if not any(null_choice_fields):
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+    payload: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+    return _json_bytes(_with_null_choice_fields(payload, null_choice_fields))
+
+
+def _with_null_choice_fields(
+    payload: Mapping[str, object], null_choice_fields: Sequence[Mapping[str, None]]
+) -> Mapping[str, object]:
+    choices: Final = _JSON_OBJECTS.validate_python(payload.get("choices", ()))
+    return {
+        **payload,
+        "choices": [{**choice, **nulls} for choice, nulls in zip(choices, null_choice_fields, strict=True)],
+    }
+
+
+def _json_bytes(payload: Mapping[str, object]) -> bytes:
+    try:
+        return to_json(payload, inf_nan_mode="null")
+    except PydanticSerializationError:
+        return json.dumps(
+            to_jsonable_python(payload, inf_nan_mode="null"), ensure_ascii=True, separators=(",", ":")
+        ).encode()
+
+
+def _null_chat_choice_fields(choice: StreamingChoices) -> Mapping[str, None]:
+    choice_extras: Final = choice.model_extra or {}
+    return MappingProxyType(
+        {
+            field: None
+            for field in _NULLABLE_CHAT_CHOICE_FIELDS
+            if field in choice_extras and choice_extras[field] is None
+        }
+    )
 
 
 def _null_vllm_choice_fields(choice: BaseModel) -> Mapping[str, None]:
     return MappingProxyType({field: None for field, value in _vllm_choice_fields(choice).items() if value is None})
 
 
-def _dump_set_fields(model: BaseModel, exclude: AbstractSet[str] = frozenset()) -> Mapping[str, object]:
-    return model.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=set(exclude))
+def _dump_encodable_fields(chunk: ModelResponseStream) -> Mapping[str, object]:
+    exclude: Final = _unencodable_keys(iter(chunk), frozenset({id(chunk)}))
+    if exclude:
+        verbose_proxy_logger.warning("Dropping streamed chunk fields that JSON cannot encode: %s", exclude)
+    return chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True, exclude=exclude)
 
 
 async def _apply_streaming_chunk_hooks(
     *,
-    chunk: Any,
+    chunk: object,
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict[str, object],
     str_so_far: str,
@@ -11716,6 +11781,7 @@ class ProxyStartupEvent:
                 seconds=config_reload_interval_seconds,
                 # REMOVED jitter parameter - major cause of memory leak
                 args=[prisma_client, proxy_logging_obj],
+                kwargs={"skip_unchanged_mcp_catalog": True},
                 id="add_deployment_job",
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
@@ -16376,23 +16442,27 @@ async def token_counter(
         user_api_key_dict: the caller, whose team picks the deployment the count runs on
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
-    return await answered_with_litellm_call_id(
-        count_request_tokens(
-            request=request,
-            call_endpoint=call_endpoint,
-            request_litellm_params=MappingProxyType(
-                {}
-                if request.additional_drop_params is None
-                else {"additional_drop_params": request.additional_drop_params}
-            ),
-            litellm_call_id=call_id,
-            caller=user_api_key_dict,
-            request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
-        ),
-        call_id,
-        http_request,
-        fastapi_response,
-    )
+    match google_token_count_request(request):
+        case ProxyException() as invalid_body:
+            raise with_litellm_call_id(rejected_token_count(invalid_body, call_id, request.model), call_id)
+        case counted_request:
+            return await answered_with_litellm_call_id(
+                count_request_tokens(
+                    request=counted_request,
+                    call_endpoint=call_endpoint,
+                    request_litellm_params=MappingProxyType(
+                        {}
+                        if counted_request.additional_drop_params is None
+                        else {"additional_drop_params": counted_request.additional_drop_params}
+                    ),
+                    litellm_call_id=call_id,
+                    caller=user_api_key_dict,
+                    request_routing=request_routing_metadata(http_request, {}, user_api_key_dict),
+                ),
+                call_id,
+                http_request,
+                fastapi_response,
+            )
 
 
 async def count_request_tokens(
@@ -21525,6 +21595,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "mcp_prefer_client_id_metadata_document": "Boolean",
         "always_include_stream_usage": "Boolean",
         "forward_client_headers_to_llm_api": "Boolean",
+        "customer_budget_response_headers": "Boolean",
         "mcp_required_fields": "List",
         "mcp_disabled_capabilities": "List",
         "cancel_on_disconnect": "Boolean",

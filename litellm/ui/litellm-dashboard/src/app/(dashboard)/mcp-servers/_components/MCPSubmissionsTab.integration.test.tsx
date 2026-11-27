@@ -1,9 +1,10 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MCPServer, MCPSubmissionsSummary } from "@/components/mcp_tools/types";
 import { fetchMCPSubmissions, getGeneralSettingsCall, updateConfigFieldSetting } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { act, fireEvent, renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   approveMCPServer: vi.fn(),
@@ -61,7 +62,7 @@ describe("MCPSubmissionsTab", () => {
   });
 
   it("renders configured submission rules and card compliance checks", async () => {
-    render(<MCPSubmissionsTab accessToken={token} />);
+    renderWithProviders(<MCPSubmissionsTab accessToken={token} />);
 
     expect(await screen.findByText("(3 required fields)")).toBeInTheDocument();
     expect(screen.queryByText("no rules set")).not.toBeInTheDocument();
@@ -71,7 +72,7 @@ describe("MCPSubmissionsTab", () => {
 
   it("preloads the rules editor and preserves them when adding a field", async () => {
     const user = userEvent.setup();
-    render(<MCPSubmissionsTab accessToken={token} />);
+    renderWithProviders(<MCPSubmissionsTab accessToken={token} />);
 
     await user.click(await screen.findByText("Submission Rules"));
 
@@ -100,7 +101,7 @@ describe("MCPSubmissionsTab", () => {
       Promise.withResolvers<Awaited<ReturnType<typeof getGeneralSettingsCall>>>();
     vi.mocked(getGeneralSettingsCall).mockReturnValue(settingsPromise);
 
-    render(<MCPSubmissionsTab accessToken={token} />);
+    renderWithProviders(<MCPSubmissionsTab accessToken={token} />);
     await user.click(screen.getByText("Submission Rules"));
 
     const descriptionCheckbox = screen.getByRole("checkbox", { name: /Description/ });
@@ -134,8 +135,98 @@ describe("MCPSubmissionsTab", () => {
   it("shows no rules when the general settings array is empty", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([]);
 
-    render(<MCPSubmissionsTab accessToken={token} />);
+    renderWithProviders(<MCPSubmissionsTab accessToken={token} />);
 
     expect(await screen.findByText("no rules set")).toBeInTheDocument();
+  });
+});
+
+const submission = (alias: string, approval_status: MCPServer["approval_status"]): MCPServer => ({
+  server_id: `id-${alias}`,
+  alias,
+  url: `https://${alias}.example.com/mcp`,
+  approval_status,
+  created_at: "2024-01-01T00:00:00Z",
+  created_by: "user-1",
+  updated_at: "2024-01-01T00:00:00Z",
+  updated_by: "user-1",
+});
+
+const SUBMISSION_NAMES = ["github-pending", "github-live", "linear-pending"];
+
+const shownSubmissions = () =>
+  screen
+    .getAllByRole("heading", { level: 3 })
+    .map((heading) => heading.textContent)
+    .filter((name) => name !== null && SUBMISSION_NAMES.includes(name));
+
+const renderAt = (searchParams: string, onUrlUpdate?: OnUrlUpdateFunction) =>
+  renderWithProviders(<MCPSubmissionsTab accessToken={token} />, { searchParams, onUrlUpdate });
+
+const filterSummary: MCPSubmissionsSummary = {
+  total: 3,
+  pending_review: 2,
+  active: 1,
+  rejected: 0,
+  items: [
+    submission("github-pending", "pending_review"),
+    submission("github-live", "active"),
+    submission("linear-pending", "pending_review"),
+  ],
+};
+
+describe("MCPSubmissionsTab filter URL state", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchMCPSubmissions).mockResolvedValue(filterSummary);
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([]);
+  });
+
+  it("lists every submission without filters", async () => {
+    renderAt("");
+
+    await screen.findByRole("heading", { level: 3, name: "linear-pending" });
+    expect(shownSubmissions()).toEqual(SUBMISSION_NAMES);
+  });
+
+  it("applies the search and status in the URL", async () => {
+    renderAt("?sub_search=github&sub_status=pending_review");
+
+    await screen.findByRole("heading", { level: 3, name: "github-pending" });
+    expect(shownSubmissions()).toEqual(["github-pending"]);
+    expect(screen.getByPlaceholderText("Search MCP servers...")).toHaveValue("github");
+    expect(screen.getByRole("combobox")).toHaveValue("pending_review");
+  });
+
+  it("ignores an unknown status in the URL", async () => {
+    renderAt("?sub_status=archived");
+
+    await screen.findByRole("heading", { level: 3, name: "linear-pending" });
+    expect(shownSubmissions()).toEqual(SUBMISSION_NAMES);
+    expect(screen.getByRole("combobox")).toHaveValue("all");
+  });
+
+  it("writes the search and status the user picks", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderAt("?tab=submitted", onUrlUpdate);
+    await screen.findByRole("heading", { level: 3, name: "linear-pending" });
+
+    fireEvent.change(screen.getByPlaceholderText("Search MCP servers..."), { target: { value: "pending" } });
+
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("sub_search")).toBe("pending"));
+    expect(shownSubmissions()).toEqual(["github-pending", "linear-pending"]);
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "active" } });
+
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("sub_status")).toBe("active"));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("sub_search")).toBe("pending");
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("tab")).toBe("submitted");
+    expect(new Set(onUrlUpdate.mock.calls.map(([update]) => update.options.history))).toEqual(new Set(["replace"]));
+    expect(screen.getByText("No MCP server submissions match your filters.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "all" } });
+
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("sub_status")).toBe(false));
+    expect(shownSubmissions()).toEqual(["github-pending", "linear-pending"]);
   });
 });

@@ -32,6 +32,7 @@ pub(super) const MANAGED_GENERAL_SETTINGS: &[&str] = &[
     "control_plane_url",
     "coordination_redis",
     "custom_auth",
+    "customer_budget_response_headers",
     "customer_member_id_header",
     "customer_org_alias_header",
     "dangerously_permit_weak_or_unset_master_key",

@@ -8,8 +8,9 @@
 //! A step this host does not answer yet declines, which sends the request to Python. A later
 //! change serves more keys by answering one more step.
 
-#[macro_use]
+mod carried;
 mod key;
+mod models;
 mod store;
 
 use std::{convert::Infallible, sync::Arc, time::Duration};
@@ -17,12 +18,13 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use litellm_config::{Config, LitellmRole};
 use litellm_gateway_auth::{Auth, BearerOrXApiKey, KeyAuthenticator, SystemClock};
 use litellm_gateway_auth_core::{
-    AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey, OperatorHooks,
+    AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey, OperatorHooks, Refreshed,
     RouteGroups, Rows, Settings, Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
-        key::{CachedTeam, Keyed},
+        key::Keyed,
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
@@ -30,39 +32,55 @@ use litellm_gateway_auth_core::{
         },
         key::Owner,
     },
+    record::{EndUserRecord, MembershipRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
 };
-use litellm_redis_store::auth_cache::CachedKey;
+use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
 pub use key::Key;
+pub(crate) use models::{allowed_models, layers};
 pub use store::AuthStore;
-pub(crate) use store::KEY_TTL;
 
-/// The rows the native host hands the core: a key's, and none of the objects it does not read
-/// yet. `Infallible` is a row this host does not read, so no identity that needs one exists. The
-/// end user's is `()`, since the key path asks for it on every request and a request that names
-/// no end user reads none.
+/// The rows the native host hands the core: a key's, and a core record for each thing a caller
+/// belongs to. The steps that would read those records still decline, so no caller this host
+/// serves holds one yet. `Infallible` is a row this host has no record for, so no identity that
+/// needs one exists. The end user's record is empty for a request that names none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeRows;
 
 impl Rows for NativeRows {
     type Key = Key;
-    type User = Infallible;
-    type Team = Infallible;
-    type EndUser = ();
+    type User = UserRecord;
+    type Team = TeamRecord;
+    type EndUser = EndUserRecord;
     type ObjectPermission = Infallible;
-    type Project = Infallible;
-    type Membership = Infallible;
-    type Org = Infallible;
+    type Project = ProjectRecord;
+    type Membership = MembershipRecord;
+    type Org = OrgRecord;
     type Agent = Infallible;
 }
 
 pub struct NativeAuthHost {
     /// Where a virtual key is read from. `None` without a database, where the master key is the
     /// only caller.
-    keys: Option<Arc<AuthStore>>,
+    store: Option<Arc<AuthStore>>,
     /// The hash Python caches the master key's identity under, which is no key row.
     master: Option<KeyHash>,
+}
+
+impl NativeAuthHost {
+    /// The host the request body check reads stored credentials through, which reads no key.
+    pub(crate) fn credential_store() -> Self {
+        Self {
+            store: None,
+            master: None,
+        }
+    }
+
+    /// The store, or `step` declined without a database to read.
+    fn store(&self, step: &'static str) -> Result<&AuthStore, Error> {
+        self.store.as_deref().map_or_else(|| declined(step), Ok)
+    }
 }
 
 /// The request needs `step`, which this host does not answer yet.
@@ -74,7 +92,7 @@ fn declined<T>(step: &'static str) -> Result<T, Error> {
     Err(Error::HostDeclined)
 }
 
-fn keyed(key: &CachedKey) -> Result<Option<Keyed<Key>>, Error> {
+fn keyed(key: &KeyEntry) -> Result<Option<Keyed<Key>>, Error> {
     match key::read(key) {
         Ok(key) => Ok(Some(key)),
         Err(field) => declined(field),
@@ -112,12 +130,12 @@ fn settings(config: &Config, database: bool) -> Settings {
 }
 
 /// Who the inference routes and `admit` authenticate: the callers the core finds over this host
-/// for `config`, the master key and with `keys` a virtual key read from them, taken from the
+/// for `config`, the master key and with `store` a virtual key read through it, taken from the
 /// header an inference client sends its key in.
-pub fn auth(config: &Config, keys: Option<Arc<AuthStore>>) -> Auth<NativeRows> {
-    let settings = settings(config, keys.is_some());
+pub fn auth(config: &Config, store: Option<Arc<AuthStore>>) -> Auth<NativeRows> {
+    let settings = settings(config, store.is_some());
     let host = NativeAuthHost {
-        keys,
+        store,
         master: master_key(config).map(|key| Token::new(key.clone()).hash()),
     };
     let keys = KeyAuthenticator::new(host, settings, Arc::new(SystemClock));
@@ -139,7 +157,7 @@ impl AuthHost for NativeAuthHost {
         if self.master.as_ref() == Some(hash) {
             return Ok(None);
         }
-        let Some(store) = &self.keys else {
+        let Some(store) = &self.store else {
             return Ok(None);
         };
         match Box::pin(store.cached(hash)).await {
@@ -150,10 +168,8 @@ impl AuthHost for NativeAuthHost {
 
     /// The core asks here only after `cached_key` missed, so the cache is not read again. The
     /// store caches the key it found, whoever answers the request.
-    async fn db_key(&self, hash: &KeyHash, _: &()) -> Result<Option<Keyed<Key>>, Error> {
-        let Some(store) = &self.keys else {
-            return declined("db_key");
-        };
+    async fn db_key(&self, hash: &KeyHash, _: &EndUserRecord) -> Result<Option<Keyed<Key>>, Error> {
+        let store = self.store("db_key")?;
         match Box::pin(store.loaded(hash)).await {
             Ok(Some(key)) => keyed(&key),
             Ok(None) => Ok(None),
@@ -242,11 +258,11 @@ impl AuthHost for NativeAuthHost {
         declined("delegated_agent_team")
     }
 
-    async fn key_owner(&self, _: &str) -> Result<Option<Owner<Infallible>>, Error> {
+    async fn key_owner(&self, _: &str) -> Result<Option<Owner<UserRecord>>, Error> {
         declined("key_owner")
     }
 
-    async fn user(&self, _: &UserLookup<'_>) -> Result<UserRead<Infallible>, Error> {
+    async fn user(&self, _: &UserLookup<'_>) -> Result<UserRead<UserRecord>, Error> {
         declined("user")
     }
 
@@ -258,46 +274,50 @@ impl AuthHost for NativeAuthHost {
         declined("resolve_user_identity")
     }
 
-    async fn cached_team(&self, _: &str) -> Result<Option<CachedTeam<Infallible>>, Error> {
+    async fn cached_team(&self, _: &str) -> Result<Option<Refreshed<TeamRecord>>, Error> {
         declined("cached_team")
     }
 
-    async fn key_team(&self, _: &str) -> Result<Option<Infallible>, Error> {
+    async fn key_team(&self, _: &str) -> Result<Option<TeamRecord>, Error> {
         declined("key_team")
     }
 
-    async fn team(&self, _: &str, _: bool) -> Result<TeamRead<Infallible>, Error> {
+    async fn team(&self, _: &str, _: bool) -> Result<TeamRead<TeamRecord>, Error> {
         declined("team")
     }
 
-    async fn granting_team(&self, _: &str) -> Result<TeamRead<Infallible>, Error> {
+    async fn granting_team(&self, _: &str) -> Result<TeamRead<TeamRecord>, Error> {
         declined("granting_team")
     }
 
-    async fn team_by_alias(&self, _: &str) -> Result<AliasRead<Infallible>, Error> {
+    async fn team_by_alias(&self, _: &str) -> Result<AliasRead<TeamRecord>, Error> {
         declined("team_by_alias")
     }
 
-    async fn load_team_membership(&self, _: &str, _: &str) -> Result<Option<Infallible>, Error> {
+    async fn load_team_membership(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<MembershipRecord>, Error> {
         declined("load_team_membership")
     }
 
-    async fn org(&self, _: &str) -> Result<Option<Org<Infallible>>, Error> {
+    async fn org(&self, _: &str) -> Result<Option<Org<OrgRecord>>, Error> {
         declined("org")
     }
 
-    async fn org_by_alias(&self, _: &str) -> Result<Option<Org<Infallible>>, Error> {
+    async fn org_by_alias(&self, _: &str) -> Result<Option<Org<OrgRecord>>, Error> {
         declined("org_by_alias")
     }
 
-    async fn jwt_end_user(&self, _: &str) -> Result<(), Error> {
+    async fn jwt_end_user(&self, _: &str) -> Result<EndUserRecord, Error> {
         declined("jwt_end_user")
     }
 
     /// A request that names no end user reads none.
-    async fn end_user(&self, end_user_id: Option<&str>) -> Result<(), Error> {
+    async fn end_user(&self, end_user_id: Option<&str>) -> Result<EndUserRecord, Error> {
         match end_user_id {
-            None => Ok(()),
+            None => Ok(EndUserRecord::default()),
             Some(_) => declined("end_user"),
         }
     }
@@ -310,7 +330,7 @@ impl AuthHost for NativeAuthHost {
         declined("object_permission")
     }
 
-    async fn project(&self, _: &str) -> Result<Option<Infallible>, Error> {
+    async fn project(&self, _: &str) -> Result<Option<ProjectRecord>, Error> {
         declined("project")
     }
 
@@ -319,21 +339,21 @@ impl AuthHost for NativeAuthHost {
         Ok(())
     }
 
-    async fn prefetch_auth_objects(&self, _: &Key, _: &()) -> Result<(), Error> {
+    async fn prefetch_auth_objects(&self, _: &Key, _: &EndUserRecord) -> Result<(), Error> {
         Ok(())
     }
 
-    async fn set_user_role(&self, user: &Infallible, _: LitellmRole) -> Result<Infallible, Error> {
-        match *user {}
+    async fn set_user_role(&self, _: &UserRecord, _: LitellmRole) -> Result<UserRecord, Error> {
+        declined("set_user_role")
     }
 
     async fn patch_team_membership(
         &self,
-        user: &Infallible,
+        _: &UserRecord,
         _: &[String],
         _: &[String],
-    ) -> Result<Infallible, Error> {
-        match *user {}
+    ) -> Result<UserRecord, Error> {
+        declined("patch_team_membership")
     }
 
     async fn normalize_model(&self, key: &Key) -> Result<(), Error> {
@@ -354,16 +374,16 @@ impl AuthHost for NativeAuthHost {
         Ok(false)
     }
 
-    async fn team_model_access(&self, team: &Infallible, _: &str) -> Result<ModelAccess, Error> {
-        match *team {}
+    async fn team_model_access(&self, _: &TeamRecord, _: &str) -> Result<ModelAccess, Error> {
+        declined("team_model_access")
     }
 
     /// A key this host read has no team and no owner, so no membership budgets it.
-    async fn team_member_budget(&self, _: &Key, _: Option<&Infallible>) -> Result<(), Error> {
+    async fn team_member_budget(&self, _: &Key, _: Option<&UserRecord>) -> Result<(), Error> {
         Ok(())
     }
 
-    async fn key_budgets(&self, key: &Key, _: Option<&Infallible>, _: bool) -> Result<(), Error> {
+    async fn key_budgets(&self, key: &Key, _: Option<&UserRecord>, _: bool) -> Result<(), Error> {
         match key.budget {
             Some(column) => declined(column),
             None => Ok(()),
@@ -393,8 +413,14 @@ impl AuthHost for NativeAuthHost {
         declined("finish_jwt")
     }
 
-    async fn with_team(&self, _: &Key, team: &Infallible) -> Result<Key, Error> {
-        match *team {}
+    async fn with_team(&self, _: &Key, _: &TeamRecord) -> Result<Key, Error> {
+        declined("with_team")
+    }
+
+    // TODO: declined until the gateway reads the credentials table, which the native request body
+    // check needs once a gateway route runs it
+    async fn credential(&self, _: &str) -> Result<Option<Params>, Error> {
+        declined("credential")
     }
 }
 
@@ -414,11 +440,11 @@ mod tests {
         routing::get,
     };
     use jiff::Timestamp;
-    use litellm_auth_store::KeyDatabase;
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
-    use litellm_gateway_auth_core::Caller;
+    use litellm_gateway_auth_core::Credential;
     use litellm_redis_store::cache_invalidation::CacheInvalidation;
     use litellm_redis_testing::{RedisServer, eventually};
+    use litellm_repositories::Database;
     use rstest::rstest;
     use serde_json::{Value as Columns, json};
     use tower::ServiceExt;
@@ -462,13 +488,13 @@ mod tests {
     }
 
     /// The store a gateway with no coordination Redis reads `database` through.
-    fn memory_only(database: KeyDatabase) -> Arc<AuthStore> {
+    fn memory_only(database: Database) -> Arc<AuthStore> {
         Arc::new(AuthStore::new(keys::memory_cache(), database))
     }
 
     async fn authenticate(
         config: &Config,
-        keys: Option<KeyDatabase>,
+        keys: Option<Database>,
         header: (&str, &str),
     ) -> Result<Authenticated<NativeRows>, Rejected> {
         auth(config, keys.map(memory_only))
@@ -488,7 +514,7 @@ mod tests {
 
     /// What `token` gets as a bearer from a gateway that reads its keys from `database`.
     async fn presenting(
-        database: KeyDatabase,
+        database: Database,
         token: &str,
     ) -> Result<Authenticated<NativeRows>, Rejected> {
         bearing(
@@ -518,7 +544,7 @@ mod tests {
     #[case::with_a_database_that_is_never_read(Some(keys::unreachable()))]
     #[tokio::test]
     async fn the_master_key_is_the_admin_caller_with_and_without_a_database(
-        #[case] keys: Option<KeyDatabase>,
+        #[case] keys: Option<Database>,
         #[values(("authorization", "Bearer sk-master-credential"), ("x-api-key", MASTER_KEY))]
         header: (&str, &str),
     ) {
@@ -527,8 +553,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            (&*caller, caller.role()),
-            (&Caller::MasterKey, LitellmRole::ProxyAdmin)
+            (&caller.credential, caller.role()),
+            (&Credential::MasterKey, LitellmRole::ProxyAdmin)
         );
     }
 
@@ -626,15 +652,15 @@ mod tests {
     ) {
         let caller = authenticate_holding(columns).await.unwrap();
 
-        let Caller::Key(key) = &*caller else {
+        let Credential::Key { key } = &caller.credential else {
             panic!("the key authenticated as the master key");
         };
         assert_eq!(
             (
                 caller.hash(),
                 caller.role(),
-                key.key.record.expires,
-                key.key.models().to_vec(),
+                key.record.expires,
+                allowed_models(&caller),
             ),
             (
                 Some(&Token::new(VIRTUAL_KEY).hash()),
@@ -710,10 +736,10 @@ mod tests {
     async fn a_keys_limits_reach_its_caller(#[case] columns: Columns, #[case] limits: KeyLimits) {
         let caller = authenticate_holding(columns).await.unwrap();
 
-        let Caller::Key(key) = &*caller else {
+        let Credential::Key { key } = &caller.credential else {
             panic!("the key authenticated as the master key");
         };
-        assert_eq!(key.key.limits(), &limits);
+        assert_eq!(key.limits(), &limits);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -722,10 +748,10 @@ mod tests {
             .await
             .unwrap();
 
-        let Caller::Key(key) = &*caller else {
+        let Credential::Key { key } = &caller.credential else {
             panic!("the key authenticated as the master key");
         };
-        assert_eq!(key.key.priority().map(|class| &**class), Some("prod"));
+        assert_eq!(key.priority().map(|class| &**class), Some("prod"));
     }
 
     #[rstest]
@@ -779,7 +805,9 @@ mod tests {
         let caller = presenting(held.database(), token).await;
 
         assert_eq!(
-            caller.ok().map(|caller| *caller == Caller::MasterKey),
+            caller
+                .ok()
+                .map(|caller| caller.credential == Credential::MasterKey),
             authenticated.then_some(true)
         );
         assert_eq!(held.key_reads(), 0);
@@ -813,8 +841,8 @@ mod tests {
     async fn pod_for(config: &Config, held: &Held) -> Auth<NativeRows> {
         let resources = crate::Resources::build(config).unwrap();
         let clients = crate::redis::connect(config, &resources).await.unwrap();
-        let keys = crate::state::keys(config, &clients, held.repositories());
-        auth(config, Some(Arc::new(keys)))
+        let store = crate::state::auth_store(config, &clients, held.database());
+        auth(config, Some(Arc::new(store)))
     }
 
     /// One gateway pod as `AppState` builds its auth with `enable_redis_auth_cache` on: its own
@@ -955,5 +983,111 @@ mod tests {
             (from_redis, read(59).await, read(61).await),
             (true, true, false)
         );
+    }
+
+    /// The clock a test moves, at the seconds it was last set to.
+    fn frozen() -> (
+        litellm_redis_store::Clock,
+        Arc<std::sync::atomic::AtomicU64>,
+    ) {
+        let elapsed = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let read = elapsed.clone();
+        let now =
+            Arc::new(move || Duration::from_secs(read.load(std::sync::atomic::Ordering::SeqCst)));
+        (now, elapsed)
+    }
+
+    /// One gateway pod with no coordination Redis, its auth cache built as `AppState` builds it for
+    /// `general_settings`, over the database `held`, on the clock `now`.
+    fn pod_on_clock(
+        general_settings: &str,
+        held: &Held,
+        now: litellm_redis_store::Clock,
+    ) -> Auth<NativeRows> {
+        let config = config(&format!("  master_key: {MASTER_KEY}\n{general_settings}"));
+        let cache = crate::state::auth_cache(&config, &crate::RedisClients::default(), now);
+        auth(
+            &config,
+            Some(Arc::new(AuthStore::new(Arc::new(cache), held.database()))),
+        )
+    }
+
+    #[rstest]
+    #[case::unset("", 59, 61)]
+    #[case::configured("  user_api_key_cache_ttl: 600\n", 599, 601)]
+    #[case::configured_as_text("  user_api_key_cache_ttl: \"30\"\n", 29, 31)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_is_read_from_the_database_again_once_the_cache_ttl_passes(
+        #[case] general_settings: &str,
+        #[case] still_cached: u64,
+        #[case] expired: u64,
+    ) {
+        let held = holding(json!({})).await;
+        let (now, elapsed) = frozen();
+        let gateway = pod_on_clock(general_settings, &held, now);
+        let read_at = async |seconds: u64| {
+            elapsed.store(seconds, std::sync::atomic::Ordering::SeqCst);
+            assert!(bearing(&gateway, VIRTUAL_KEY).await.is_ok());
+            held.key_reads()
+        };
+
+        let reads = (
+            read_at(0).await,
+            read_at(still_cached).await,
+            read_at(expired).await,
+        );
+
+        assert_eq!(reads, (1, 1, 2));
+    }
+
+    #[rstest]
+    #[case::unset("", 1..=60)]
+    #[case::configured("  user_api_key_cache_ttl: 600\n", 541..=600)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_shared_cache_keeps_a_key_for_the_cache_ttl(
+        #[case] general_settings: &str,
+        #[case] expected: std::ops::RangeInclusive<i64>,
+    ) {
+        let redis = RedisServer::start().await.unwrap();
+        let held = holding(json!({})).await;
+        let config = Config::from_yaml(&format!(
+            "general_settings:\n  master_key: {MASTER_KEY}\n  coordination_redis:\n    host: 127.0.0.1\n    port: {}\n{general_settings}litellm_settings:\n  enable_redis_auth_cache: true\n",
+            redis.port()
+        ))
+        .unwrap();
+
+        let authenticated = bearing(&pod_for(&config, &held).await, VIRTUAL_KEY).await;
+
+        let seconds = seconds_cached(&redis).await;
+        assert!(authenticated.is_ok());
+        assert!(expected.contains(&seconds), "{seconds}");
+    }
+
+    #[rstest]
+    #[case::full_at_two("  user_api_key_cache_max_size: 2\n", (3, 4))]
+    #[case::unset("", (3, 3))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_full_cache_evicts_the_key_soonest_to_expire(
+        #[case] general_settings: &str,
+        #[case] expected: (usize, usize),
+    ) {
+        let held = Held::start().await;
+        held.key("sk-first", json!({})).await;
+        held.key("sk-second", json!({})).await;
+        held.key("sk-third", json!({})).await;
+        let (now, elapsed) = frozen();
+        let gateway = pod_on_clock(general_settings, &held, now);
+        let read_at = async |token: &str, seconds: u64| {
+            elapsed.store(seconds, std::sync::atomic::Ordering::SeqCst);
+            assert!(bearing(&gateway, token).await.is_ok());
+            held.key_reads()
+        };
+        read_at("sk-first", 0).await;
+        read_at("sk-second", 1).await;
+        read_at("sk-third", 2).await;
+
+        let reads = (read_at("sk-third", 2).await, read_at("sk-first", 2).await);
+
+        assert_eq!(reads, expected);
     }
 }

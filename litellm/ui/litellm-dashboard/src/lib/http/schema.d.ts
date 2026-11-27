@@ -33088,6 +33088,11 @@ export interface components {
              */
             custom_auth?: string | null;
             /**
+             * Customer Budget Response Headers
+             * @description If True, responses carry x-litellm-app-customer-org-* and x-litellm-app-customer-member-* headers with the spend, max budget, remaining budget and reset time the calling app holds for the request's customer organization and member, one set per budget window. A key not pinned to one customer organization reads the budget of whichever organization it names.
+             */
+            customer_budget_response_headers?: boolean | null;
+            /**
              * Customer Member Id Header
              * @description Request header for the customer member ID. Replaces x-litellm-customer-member-id when set. Use only with trusted callers or an ingress that sets the header. JWT customer claim mappings take precedence.
              */
@@ -44946,6 +44951,12 @@ export interface components {
              */
             path: string;
             /**
+             * Preserve Trace Context
+             * @description Forward caller traceparent and tracestate even when forward_headers is disabled, without injecting LiteLLM trace context on this HTTP endpoint.
+             * @default false
+             */
+            preserve_trace_context: boolean;
+            /**
              * Show In Model Hub
              * @description If True, this endpoint is published on the public Model Hub as a row in mode 'passthrough'.
              * @default false
@@ -52955,6 +52966,8 @@ export interface components {
             response_format?: components["schemas"]["JsonValue"];
             /** System */
             system?: unknown | null;
+            /** @description Google systemInstruction, counted with contents */
+            systemInstruction?: components["schemas"]["JsonValue"];
             thinking?: components["schemas"]["JsonValue"];
             tool_choice?: components["schemas"]["JsonValue"];
             /** Tools */

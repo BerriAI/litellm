@@ -42,6 +42,7 @@ _T_co = TypeVar("_T_co", covariant=True)
 
 class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
+class RustDocumentFetchError(ValueError): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 class NativeRedisStoreError(Exception): ...
@@ -60,21 +61,26 @@ def drain_post_call_redis_batches() -> Future[None]: ...
 @final
 class NativeCostMapSource:
     def __new__(cls, url: str, *, use_http_settings: bool) -> NativeCostMapSource: ...
-    def fetch(self, policy: NativeFetchPolicy) -> Future[NativeFetched | NativeFetchFailed]: ...
-    def fetch_blocking(
-        self, policy: NativeFetchPolicy, resume_from: NativeFetchFailed | None = None
-    ) -> NativeFetched | NativeFetchFailed: ...
+    @staticmethod
+    def remote(
+        url: str, *, local_only: bool, offline: bool, use_http_settings: bool
+    ) -> NativeCostMapSource | None: ...
+    @property
+    def shown_url(self) -> str: ...
+    def fetch_blocking(self, policy: NativeFetchPolicy) -> NativeFetched | NativeFetchFailed: ...
 
 @final
 class NativeFetchPolicy:
     def __new__(
         cls,
         *,
-        max_attempts: int,
-        max_wait_seconds: float,
-        timeout_seconds: float,
-        min_delay_seconds: float,
+        max_attempts: int | None = None,
+        max_wait_seconds: float | None = None,
+        timeout_seconds: float | None = None,
+        min_delay_seconds: float | None = None,
     ) -> NativeFetchPolicy: ...
+    @property
+    def max_attempts(self) -> int: ...
 
 @final
 class NativeFetched:
@@ -115,6 +121,25 @@ class NativeRejected:
     def reason(self) -> str: ...
     @property
     def integrity(self) -> bool: ...
+
+@final
+class CostMapRefreshed: ...
+
+@final
+class CostMapKept:
+    @property
+    def detail(self) -> str: ...
+    @property
+    def reason(self) -> str: ...
+    @property
+    def fallback_reason(self) -> str: ...
+    @property
+    def retryable(self) -> bool: ...
+
+@final
+class CostMapRefreshStop:
+    def __new__(cls) -> CostMapRefreshStop: ...
+    def stop(self) -> None: ...
 
 @final
 class NativeProvenance:
@@ -252,9 +277,22 @@ class NativeRateCard:
 @final
 class NativeModelCostMap:
     @staticmethod
-    def bundled(min_model_count: int, max_shrink_ratio: float) -> NativeModelCostMap: ...
+    def bundled(
+        min_model_count: int | None = None, max_shrink_ratio: float | None = None
+    ) -> NativeModelCostMap: ...
+    @property
+    def min_model_count(self) -> int: ...
+    @property
+    def max_shrink_ratio(self) -> float: ...
     def install(self, body: bytes, etag: str | None = None) -> NativeInstalled | NativeRejected: ...
     def install_bundled(self) -> NativeInstalled: ...
+    def refresh_blocking(
+        self, source: NativeCostMapSource, policy: NativeFetchPolicy, stop: CostMapRefreshStop
+    ) -> CostMapRefreshed | CostMapKept | None: ...
+    def refresh(
+        self, source: NativeCostMapSource, policy: NativeFetchPolicy
+    ) -> Future[CostMapRefreshed | CostMapKept]: ...
+    def install_refreshed(self, refreshed: CostMapRefreshed) -> NativeInstalled: ...
     @staticmethod
     def finalize(body: bytes) -> NativeInstalled | NativeRejected: ...
     def register(
@@ -1282,6 +1320,8 @@ class RustAuthOutcome:
     def mapping(self) -> RustJwtMapping | None: ...
     @property
     def mapped_key(self) -> UserAPIKeyAuth | None: ...
+    @property
+    def failed_authentication(self) -> bool: ...
     @property
     def denied_key(self) -> UserAPIKeyAuth | None: ...
 
@@ -2694,6 +2734,7 @@ class HuggingFaceEncoding:
     def n_sequences(self) -> int: ...
 
 def gil_stats() -> dict[str, int]: ...
+def rust_log_lines_delivered() -> Future[None]: ...
 def process_state_started() -> bool: ...
 def reserve_process_for_forking() -> None: ...
 
@@ -2705,6 +2746,9 @@ __all__ = [
     "AtomicOverLimit",
     "AttemptShape",
     "AuthObject",
+    "CostMapKept",
+    "CostMapRefreshStop",
+    "CostMapRefreshed",
     "DatabaseEndpoint",
     "ForkedAfterNativeRuntimeStarted",
     "GaugeOverLimit",
@@ -2777,6 +2821,7 @@ __all__ = [
     "RustBudgetRepository",
     "RustClaimIdentity",
     "RustDenial",
+    "RustDocumentFetchError",
     "RustEndUserRepository",
     "RustIdentity",
     "RustJwtKeyMappingRepository",
@@ -2841,6 +2886,7 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
+    "rust_log_lines_delivered",
     "trace_encode_error",
     "transcription",
     "unsupported_tls_settings",
@@ -3061,7 +3107,6 @@ class _ModelInfoStep(_Step):
         "bedrock_base",
         "discovered",
         "user_model_info",
-        "log",
         "group_params",
         "group_deployment",
         "group_capabilities",
@@ -3076,8 +3121,6 @@ class _ModelInfoStep(_Step):
     name: NotRequired[str]
     model_id: NotRequired[str]
     id: NotRequired[JsonValue]
-    level: NotRequired[Literal["debug", "error"]]
-    message: NotRequired[str]
     index: NotRequired[int]
     model_info: NotRequired[JsonValue]
     litellm_model: NotRequired[JsonValue]
@@ -3549,9 +3592,14 @@ class NativeParallelRequestLimiter:
         /,
         request: NativeRequestRedis | None = None,
         turn: bool = False,
+        provider_billed: bool = False,
     ) -> Future[None]: ...
     def log_post_call_failure(
-        self, state: NativeParallelRequestLimiterState, request_data: Mapping[str, object], rate_limit_type: str
+        self,
+        state: NativeParallelRequestLimiterState,
+        request_data: Mapping[str, object],
+        rate_limit_type: str,
+        provider_billed: bool = False,
     ) -> Future[None]: ...
     def reservation_aware(
         self,

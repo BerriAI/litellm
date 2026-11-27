@@ -6,14 +6,15 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aws-lc-rs.workspace = true
 futures-util.workspace = true
+hex.workspace = true
 litellm-callbacks.workspace = true
 litellm-python-compat.workspace = true
 litellm-redis-store.workspace = true
 litellm-tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

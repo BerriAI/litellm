@@ -355,7 +355,7 @@ pub enum FailureKind {
     #[strum(serialize = "GuardrailIntervention")]
     GuardrailIntervention,
     /// litellm rejected the request before calling the deployment (`MalformedRequestFieldError`,
-    /// `UnsupportedEndpointError`): never cools the deployment down.
+    /// `UnsupportedEndpointError`, `DocumentFetchError`): never cools the deployment down.
     #[strum(serialize = "Declined")]
     Declined,
     /// The caller's own stored credential was rejected, not the deployment's
@@ -441,7 +441,7 @@ pub struct AttemptError {
     pub detail: Option<Arc<str>>,
     /// The exception's class names, most specific first (its `__mro__`), for the rules Python
     /// decides by `isinstance`. Empty when the host reports none; the kind then stands in.
-    pub classes: Vec<Arc<str>>,
+    pub classes: Box<[Arc<str>]>,
     /// The host already recorded what this failure does to the deployment's health (a routing
     /// pre-call check's failure, which Python's attempt handles itself: a rate limit cools the
     /// deployment down, anything else records nothing), or no failure callback runs for it (it
@@ -471,6 +471,7 @@ pub struct AttemptError {
     /// The failure counts against no per-minute requests: `async_deployment_callback_on_failure`
     /// does not run for a sync call, and returns at once for a batch retrieve.
     pub uncounted_request: bool,
+    pub answered_tokens: u32,
 }
 
 impl AttemptError {
@@ -482,7 +483,7 @@ impl AttemptError {
             num_retries: None,
             failed_deployment_id: None,
             detail: None,
-            classes: Vec::new(),
+            classes: Box::default(),
             recorded: false,
             names_provider: false,
             agentic_followup: false,
@@ -491,6 +492,7 @@ impl AttemptError {
             caller_scoped: false,
             status_absent: false,
             uncounted_request: false,
+            answered_tokens: 0,
         }
     }
 
@@ -515,6 +517,10 @@ impl AttemptError {
     /// `isinstance(error, <class named name>)`.
     pub fn is_a(&self, name: &str) -> bool {
         self.class_names().contains(&name)
+    }
+
+    pub fn is_retried_refusal(&self) -> bool {
+        self.is_a("UnsupportedEndpointError") || self.is_a("DocumentFetchError")
     }
 
     /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, a

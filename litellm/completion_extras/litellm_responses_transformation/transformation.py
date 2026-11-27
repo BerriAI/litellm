@@ -2422,9 +2422,6 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if isinstance(str_line, BaseModel):
             return self.chunk_parser(str_line.model_dump())
 
-        if not str_line or str_line.startswith("event:"):
-            # ignore.
-            return GenericStreamingChunk(text="", tool_use=None, is_finished=False, finish_reason="", usage=None)
         index: Final = str_line.find("data:")
         if index != -1:
             str_line = str_line[index + 5 :]
@@ -2488,6 +2485,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
         if isinstance(parsed_chunk, BaseModel):
             parsed_chunk = _DECODED_JSON.validate_python(parsed_chunk.model_dump())
+        stream_event: Final = parsed_chunk
         if not isinstance(parsed_chunk, dict):
             raise ValueError(f"Chat provider: Invalid chunk type {type(parsed_chunk)}")
 
@@ -2648,6 +2646,21 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif (
+            event_type == ResponsesAPIStreamEvents.REFUSAL_DELTA.value
+            and isinstance(refusal := require_attributes(stream_event, _StreamEvent, "get").get("delta"), str)
+            and refusal
+        ):
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(content=refusal),
+                        finish_reason=None,
+                    )
+                ],
+                provider_specific_fields={PHASE_FIELD: item_phase} if item_phase is not None else None,
+            )
         elif event_type == "response.reasoning_summary_part.added" and reasoning_summary_streamed:
             return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=" "))])
         elif event_type == "response.reasoning_summary_text.delta":
@@ -2793,7 +2806,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         return (
             self._structured_output
             and self._first_message_item_done
-            and _responses_event_type(chunk) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA.value
+            and _responses_event_type(chunk)
+            in (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA.value, ResponsesAPIStreamEvents.REFUSAL_DELTA.value)
         )
 
     @staticmethod

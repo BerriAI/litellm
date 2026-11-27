@@ -1,8 +1,10 @@
 "use client";
 
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
+import { parseAsStringLiteral, useQueryState } from "nuqs";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -27,6 +29,8 @@ type RequestsResponse = RequestsEndpoint["responses"][200]["content"]["applicati
 type RequestsQuery = NonNullable<RequestsEndpoint["parameters"]["query"]>;
 type RequestFilter = NonNullable<RequestsQuery["filter"]>;
 type RequestCursor = RequestsResponse["next_cursor"];
+const REQUEST_FILTERS = ["all", "injected", "hits"] as const satisfies readonly RequestFilter[];
+const requestFilterParser = parseAsStringLiteral(REQUEST_FILTERS).withDefault("all");
 
 interface PromptCachingRequestsTableProps {
   accessToken: string;
@@ -34,8 +38,8 @@ interface PromptCachingRequestsTableProps {
 }
 
 export default function PromptCachingRequestsTable({ accessToken, dateValue }: PromptCachingRequestsTableProps) {
-  const { t } = useTranslation();
-  const [filter, setFilter] = useState<RequestFilter>("all");
+  const { t, i18n: locale } = useTranslation();
+  const [filter, setFilter] = useQueryState("requests_filter", requestFilterParser);
   const [pageSize, setPageSize] = useState(10);
   const window = activityWindow(dateValue, new Date());
   const startDate = window.start_date ? `${window.start_date}T00:00:00.000Z` : "";
@@ -72,9 +76,8 @@ export default function PromptCachingRequestsTable({ accessToken, dateValue }: P
   const nextCursor = requests.data?.next_cursor;
 
   const changeFilter = (value: unknown) => {
-    if (value === "all" || value === "injected" || value === "hits") {
-      setFilter(value);
-    }
+    const next = REQUEST_FILTERS.find((requestFilter) => requestFilter === value);
+    if (next) void setFilter(next);
   };
 
   return (
@@ -155,7 +158,7 @@ export default function PromptCachingRequestsTable({ accessToken, dateValue }: P
                           {request.request_id}
                         </Link>
                         <time dateTime={request.start_time} className="mt-1 block text-xs text-muted-foreground">
-                          {new Date(request.start_time).toLocaleString()}
+                          {displayTimestamp(new Date(request.start_time), locale.language)}
                         </time>
                       </TableCell>
                       <TableCell>

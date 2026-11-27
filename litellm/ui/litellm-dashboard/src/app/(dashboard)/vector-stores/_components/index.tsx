@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { useTranslation } from "react-i18next";
+import { displayTimestamp } from "@/i18n/displayDate";
 import { Database, RefreshCw } from "lucide-react";
 import {
   vectorStoreListCall,
@@ -31,13 +32,13 @@ interface VectorStoreProps {
 }
 
 const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID, userRole, isViewOnly }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [vectorStores, setVectorStores] = useState<VectorStore[]>([]);
   const [isLoadingVectorStores, setIsLoadingVectorStores] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [vectorStoreToDelete, setVectorStoreToDelete] = useState<string | null>(null);
-  const [lastRefreshed, setLastRefreshed] = useState("");
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
   const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | null>(null);
   const [editVectorStore, setEditVectorStore] = useState(false);
@@ -77,8 +78,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   const handleRefreshClick = () => {
     fetchVectorStores();
     fetchCredentials();
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
+    setLastRefreshed(new Date());
   };
 
   const handleDelete = async (vectorStoreId: string) => {
@@ -149,7 +149,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           <>
             {lastRefreshed && (
               <p className="text-sm text-muted-foreground">
-                {t("vectorStores.page.lastRefreshed", { time: lastRefreshed })}
+                {t("vectorStores.page.lastRefreshed", { time: displayTimestamp(lastRefreshed, i18n.language) })}
               </p>
             )}
             <Button

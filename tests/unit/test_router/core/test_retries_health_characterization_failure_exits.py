@@ -28,6 +28,7 @@ from tests.unit.test_router.core.retries_health_helpers import (
     fresh,
     not_found,
     previous_response_rejected,
+    usage_since,
 )
 from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
@@ -144,8 +145,9 @@ async def test_a_background_poll_404_on_an_attempt_is_neither_counted_nor_cooled
 
 @pytest.mark.asyncio
 async def test_a_stream_failure_outside_the_deployment_still_counts_its_request(
-    make_core: MakeCore, host: ScriptedHost
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     host.answer("openai/a", chat_stream("partial", error=selection_failure(), logged=True))
     core: Final = make_core(
         model_list=[deployment("g", "a", rpm=100, order=1), deployment("g", "b", order=2)],
@@ -161,7 +163,7 @@ async def test_a_stream_failure_outside_the_deployment_still_counts_its_request(
     assert cooled_down(core, ["a", "b"]) == {}
     assert core.health().failures_this_minute("a") == 0
     # `async_deployment_callback_on_failure` makes none of the failure callback's exits.
-    assert await core.health().usage("g") == (0, 2)
+    assert await usage_since(core, monkeypatch, "g", started) == (0, 2)
 
 
 def test_a_sync_stream_failure_outside_the_deployment_is_neither_counted_nor_cooled(

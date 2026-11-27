@@ -20,7 +20,7 @@ import { HOME_USAGE_DAYS, useHomeUsage } from "./useHomeUsage";
 const LEADERBOARD = { metric: "tokens", dimension: "model_groups" } as const;
 
 export default function HomePage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { isViewOnly } = useAuthorized();
   const usage = useHomeUsage();
   const blog = useBlogPosts();
@@ -89,7 +89,7 @@ export default function HomePage() {
                         <div className="line-clamp-2 text-base font-semibold leading-tight">{cardTitle(post)}</div>
                         <p className="m-0 line-clamp-3 text-sm text-muted-foreground">{cardSummary(post)}</p>
                         <div className="mt-auto flex items-center justify-between pt-1 text-xs text-muted-foreground">
-                          <span>{formatPublishedOn(post.date)}</span>
+                          <span>{formatPublishedOn(post.date, i18n.language)}</span>
                           <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
                         </div>
                       </Card>

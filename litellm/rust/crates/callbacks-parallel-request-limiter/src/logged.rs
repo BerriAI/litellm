@@ -113,6 +113,8 @@ pub struct LoggedCall {
     /// The callback's `combined_usage_object`.
     #[serde(default)]
     pub combined: LoggedObject,
+    #[serde(default)]
+    pub provider_billed: bool,
     /// Whether a non-streamed round ended before a nested call reused the request's slot, so the
     /// slot is now that call's to release.
     #[serde(default)]
@@ -448,7 +450,7 @@ impl LoggedCall {
     pub fn recovered(&self, kind: TokenRateLimitType) -> (i64, i64, Option<Usage>) {
         match self.combined_usage() {
             Some(usage @ UsageObject::Chat { members })
-                if count(members.get("completion_tokens")) > 0 =>
+                if self.provider_billed || count(members.get("completion_tokens")) > 0 =>
             {
                 (
                     charged_tokens(Some(usage), kind),
@@ -458,6 +460,12 @@ impl LoggedCall {
             }
             _ => (0, 0, None),
         }
+    }
+
+    pub fn billed_with_usage(&self) -> bool {
+        self.provider_billed
+            && reconciled(self.combined_usage())
+                .is_some_and(|usage| usage.prompt_tokens > 0 || usage.completion_tokens > 0)
     }
 
     pub fn failure_facts(&self, kind: TokenRateLimitType) -> FailureFacts {
@@ -733,6 +741,31 @@ mod tests {
                 Some(Usage {
                     prompt_tokens: 10,
                     completion_tokens: 5,
+                    cached_tokens: 0,
+                })
+            )
+        );
+    }
+
+    #[test]
+    fn a_failure_the_provider_billed_settles_at_its_usage_without_output() {
+        let call = LoggedCall {
+            combined: LoggedObject::Usage {
+                usage: chat(
+                    json!({"prompt_tokens": 777, "completion_tokens": 0, "total_tokens": 777}),
+                ),
+            },
+            provider_billed: true,
+            ..LoggedCall::default()
+        };
+        assert_eq!(
+            call.recovered(TokenRateLimitType::Total),
+            (
+                777,
+                0,
+                Some(Usage {
+                    prompt_tokens: 777,
+                    completion_tokens: 0,
                     cached_tokens: 0,
                 })
             )

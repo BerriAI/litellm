@@ -5,6 +5,7 @@ success callbacks count, blocked deployments and health-check-driven filtering.
 """
 
 import time
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -25,6 +26,7 @@ from tests.unit.test_router.core.retries_health_helpers import (
     not_found,
     permission_denied,
     service_unavailable,
+    usage_since,
 )
 from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
@@ -640,15 +642,16 @@ async def test_async_success_callback_counts_successes_for_an_untracked_deployme
 @pytest.mark.parametrize("limit", [{"rpm": 100}, {"tpm": 1000}], ids=["rpm", "tpm"])
 @pytest.mark.asyncio
 async def test_a_successful_request_counts_its_tokens_and_one_request_once(
-    make_core: MakeCore, host: ScriptedHost, limit: dict[str, int]
+    make_core: MakeCore, host: ScriptedHost, limit: dict[str, int], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     core: Final = make_core(model_list=group("a", **limit))
+    started: Final = datetime.now(timezone.utc)
 
     await attempt(core)
     if isinstance(host, BackgroundSuccessLoggingHost):
         await host.drain()
 
-    assert await core.health().usage("g") == (10, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (10, 1)
 
 
 @pytest.fixture
@@ -660,13 +663,16 @@ def host(request: pytest.FixtureRequest) -> ScriptedHost:
 
 
 @pytest.mark.asyncio
-async def test_a_failed_request_counts_one_request_and_no_tokens(make_core: MakeCore, host: ScriptedHost) -> None:
+async def test_a_failed_request_counts_one_request_and_no_tokens(
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
     core: Final = make_core(model_list=group("a", rpm=100), num_retries=0)
     host.answer("openai/a", fresh(bad_request))
+    started: Final = datetime.now(timezone.utc)
 
     await attempt(core)
 
-    assert await core.health().usage("g") == (None, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (None, 1)
     assert core.health().failures_this_minute("a") == 1
 
 

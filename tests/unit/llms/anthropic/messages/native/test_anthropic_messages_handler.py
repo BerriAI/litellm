@@ -85,6 +85,54 @@ async def test_openai_messages_forwards_stop_sequences_to_chat_completions(
         assert "stop_sequences" not in body
 
 
+CONTAINER_RESPONSE: Final = {
+    "id": "resp_container",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.5",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+async def test_openai_messages_container_answers_400_unless_drop_params_drops_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = {
+        "model": "openai/gpt-5.5",
+        "max_tokens": 80,
+        "messages": [{"role": "user", "content": "hi"}],
+        "container": {"id": "container_abc"},
+        "api_key": "test-api-key",
+    }
+    with respx.mock as upstream:
+        bridge: Final = upstream.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=CONTAINER_RESPONSE)
+        )
+        with pytest.raises(litellm.BadRequestError) as rejected:
+            await litellm.anthropic.messages.acreate(**request)
+        assert rejected.value.status_code == 400
+        assert "no equivalent for container" in rejected.value.message
+        assert not bridge.called
+
+        await litellm.anthropic.messages.acreate(**request, drop_params=True)
+        assert "container" not in json.loads(bridge.calls.last.request.content)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
 @pytest.mark.parametrize("base_from_env", [False, True], ids=["deployment_api_base", "anthropic_api_base_env"])
@@ -386,6 +434,337 @@ async def test_anthropic_messages_sanitizes_tool_use_ids_before_dispatch():
 
 async def _async_return(value):
     return value
+
+
+def _replayed_tool_round(tool_use_id: str) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "run ls"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": "ls"}}],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": "README.md"}]},
+    ]
+
+
+_ANTHROPIC_MESSAGE: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "kimi-k2",
+    "content": [{"type": "text", "text": "done"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "api_base", "base_env", "sent_id"),
+    [
+        pytest.param("anthropic/kimi-k2", "http://kimi.test", None, "functions.Bash:0", id="other-model-custom-base"),
+        pytest.param("anthropic/sonnet-prod", "http://gateway.test", None, "functions.Bash:0", id="alias-gateway-base"),
+        pytest.param(
+            "anthropic/claude-sonnet-4-5", "http://kimi.test", None, "functions.Bash:0", id="claude-name-custom-base"
+        ),
+        pytest.param("anthropic/kimi-k2", None, "ANTHROPIC_API_BASE", "functions.Bash:0", id="anthropic-api-base-env"),
+        pytest.param("anthropic/kimi-k2", None, "ANTHROPIC_BASE_URL", "functions.Bash:0", id="anthropic-base-url-env"),
+        pytest.param("anthropic/kimi-k2", None, None, "functions_Bash_0", id="anthropics-own-api"),
+        pytest.param(
+            "anthropic/my-sonnet",
+            "https://example.services.ai.azure.com/anthropic",
+            None,
+            "functions_Bash_0",
+            id="foundry",
+        ),
+    ],
+)
+async def test_replayed_tool_use_ids_are_rewritten_only_for_an_upstream_that_enforces_anthropics_pattern(
+    monkeypatch: pytest.MonkeyPatch, model: str, api_base: str | None, base_env: str | None, sent_id: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    if base_env is not None:
+        monkeypatch.setenv(base_env, "http://kimi.test")
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(url__regex=r"/v1/messages").mock(
+            return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE)
+        )
+        await python_messages.anthropic_messages(
+            max_tokens=16,
+            messages=_replayed_tool_round("functions.Bash:0"),
+            model=model,
+            api_base=api_base,
+            api_key="sk-test",
+        )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == _replayed_tool_round(sent_id)
+
+
+@pytest.mark.asyncio
+async def test_an_empty_replayed_tool_use_id_reaches_a_backend_that_keeps_ids_as_the_fallback_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(url__regex=r"/v1/messages").mock(
+            return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE)
+        )
+        await python_messages.anthropic_messages(
+            max_tokens=16,
+            messages=_replayed_tool_round(""),
+            model="anthropic/kimi-k2",
+            api_base="http://kimi.test",
+            api_key="sk-test",
+        )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == _replayed_tool_round("tool_use_id")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "token_dir_env"),
+    [("github_copilot/gpt-5.4", "GITHUB_COPILOT_TOKEN_DIR"), ("chatgpt/gpt-5.4", "CHATGPT_TOKEN_DIR")],
+    ids=["github_copilot", "chatgpt"],
+)
+async def test_deciding_tool_use_ids_never_logs_in_to_a_provider_that_authenticates_on_lookup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model: str, token_dir_env: str
+) -> None:
+    from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
+
+    monkeypatch.setenv(token_dir_env, str(tmp_path))
+
+    prepared, _system = prepare_native_messages(_replayed_tool_round("functions.Bash:0"), None, {}, model=model)
+
+    assert prepared == _replayed_tool_round("functions.Bash:0")
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", "azure_ai/my-deployment"],
+    ids=["bedrock_application_inference_profile", "azure_ai_deployment"],
+)
+def test_replayed_tool_use_ids_are_rewritten_for_a_host_that_can_serve_claude_under_any_name(model: str) -> None:
+    from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
+
+    prepared, _system = prepare_native_messages(_replayed_tool_round("functions.Bash:0"), None, {}, model=model)
+
+    assert prepared == _replayed_tool_round("functions_Bash_0")
+
+
+def test_replayed_tool_use_ids_are_rewritten_when_no_provider_can_be_resolved_for_the_model() -> None:
+    from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
+
+    prepared, _system = prepare_native_messages(_replayed_tool_round("functions.Bash:0"), None, {}, model="kimi-k2")
+
+    assert prepared == _replayed_tool_round("functions_Bash_0")
+
+
+_TOOL_USE_ID_REJECTION: Final = "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"
+_THINKING_REJECTION: Final = "messages.1.content.0: Invalid `signature` in `thinking` block"
+_STRICT_TOOLS_REJECTION: Final = "Too many strict tools (21). The maximum number of strict tools supported is 20."
+
+
+def _anthropic_rejection(message: str) -> httpx.Response:
+    return httpx.Response(
+        400, json={"type": "error", "error": {"type": "invalid_request_error", "message": message}}
+    )
+
+
+def _replayed_thinking_tool_round(tool_use_id: str, thinking: bool) -> list[dict[str, object]]:
+    user, assistant, result = _replayed_tool_round(tool_use_id)
+    signed: Final = [{"type": "thinking", "thinking": "plan", "signature": "sig"}] if thinking else []
+    return [user, {**assistant, "content": [*signed, *assistant["content"]]}, result]
+
+
+def _bash_tool(strict: bool) -> dict[str, object]:
+    return {"name": "Bash", "input_schema": {"type": "object"}, **({"strict": True} if strict else {})}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rejections", "sent_rounds"),
+    [
+        pytest.param(
+            [_TOOL_USE_ID_REJECTION],
+            [("functions.Bash:0", True, True), ("functions_Bash_0", True, True)],
+            id="tool-use-id-pattern",
+        ),
+        pytest.param(
+            [_TOOL_USE_ID_REJECTION, _THINKING_REJECTION],
+            [("functions.Bash:0", True, True), ("functions_Bash_0", True, True), ("functions_Bash_0", False, True)],
+            id="tool-use-id-pattern-then-thinking-signature",
+        ),
+        pytest.param(
+            [_STRICT_TOOLS_REJECTION, _TOOL_USE_ID_REJECTION, _THINKING_REJECTION],
+            [
+                ("functions.Bash:0", True, True),
+                ("functions.Bash:0", True, False),
+                ("functions_Bash_0", True, False),
+                ("functions_Bash_0", False, False),
+            ],
+            id="strict-tools-then-tool-use-id-pattern-then-thinking-signature",
+        ),
+    ],
+)
+async def test_a_gateway_that_rejects_the_callers_tool_use_ids_gets_one_retry_with_renamed_ids(
+    monkeypatch: pytest.MonkeyPatch, rejections: list[str], sent_rounds: list[tuple[str, bool, bool]]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://gateway.test/v1/messages").mock(
+            side_effect=[
+                *(_anthropic_rejection(message) for message in rejections),
+                httpx.Response(200, json=_ANTHROPIC_MESSAGE),
+            ]
+        )
+        await python_messages.anthropic_messages(
+            max_tokens=4096,
+            messages=_replayed_thinking_tool_round("functions.Bash:0", thinking=True),
+            model="anthropic/sonnet-prod",
+            api_base="http://gateway.test",
+            api_key="sk-test",
+            thinking={"type": "enabled", "budget_tokens": 2048},
+            tools=[_bash_tool(strict=True)],
+            drop_params=True,
+        )
+
+    sent: Final = [json.loads(call.request.content) for call in route.calls]
+    assert [(body["messages"], body["tools"]) for body in sent] == [
+        (_replayed_thinking_tool_round(tool_use_id, thinking), [_bash_tool(strict)])
+        for tool_use_id, thinking, strict in sent_rounds
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rejection", "tool_use_id"),
+    [
+        pytest.param("tools.0.name: String should match pattern '^[a-zA-Z0-9_-]{1,128}$'", "functions.Bash:0", id="other-field"),
+        pytest.param(_TOOL_USE_ID_REJECTION, "toolu_01", id="ids-already-match"),
+    ],
+)
+async def test_a_gateway_rejection_that_renaming_cannot_fix_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, rejection: str, tool_use_id: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://gateway.test/v1/messages").mock(
+            side_effect=[_anthropic_rejection(rejection), httpx.Response(200, json=_ANTHROPIC_MESSAGE)]
+        )
+        with pytest.raises(litellm.BadRequestError):
+            await python_messages.anthropic_messages(
+                max_tokens=16,
+                messages=_replayed_tool_round(tool_use_id),
+                model="anthropic/sonnet-prod",
+                api_base="http://gateway.test",
+                api_key="sk-test",
+            )
+
+    assert route.call_count == 1
+
+
+_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "claude-gateway",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("rejection", "sent_ids"),
+    [
+        pytest.param(_TOOL_USE_ID_REJECTION, ["functions.Bash:0", "functions_Bash_0"], id="tool-use-id-pattern"),
+        pytest.param("messages: text content blocks must be non-empty", ["functions.Bash:0"], id="other-400"),
+    ],
+)
+async def test_a_chat_bridged_gateway_that_rejects_the_callers_tool_use_ids_gets_them_renamed_once(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, rejection: str, sent_ids: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock as upstream:
+        chat: Final = upstream.post("http://gateway.test/v1/chat/completions").mock(
+            side_effect=[
+                httpx.Response(400, json={"error": {"message": rejection, "type": "invalid_request_error"}}),
+                httpx.Response(200, json=_CHAT_COMPLETION),
+            ]
+        )
+        create: Final = litellm.anthropic.messages.acreate if is_async else litellm.anthropic.messages.create
+        try:
+            pending: Final = create(
+                model="hosted_vllm/claude-gateway",
+                api_base="http://gateway.test/v1",
+                api_key="sk-test",
+                max_tokens=16,
+                messages=_replayed_tool_round("functions.Bash:0"),
+                tools=[{"name": "Bash", "input_schema": {"type": "object", "properties": {}}}],
+            )
+            _ = await pending if is_async else pending
+        except litellm.BadRequestError:
+            pass
+
+    sent: Final = [json.loads(call.request.content)["messages"] for call in chat.calls]
+    assert [messages[1]["tool_calls"][0]["id"] for messages in sent] == sent_ids
+    assert [messages[2]["tool_call_id"] for messages in sent] == sent_ids
+
+
+@pytest.mark.asyncio
+async def test_a_chat_bridged_backend_gets_and_returns_its_own_tool_call_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as upstream:
+        chat: Final = upstream.post("http://kimi.test/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "kimi-k2",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "functions.Bash:1",
+                                        "type": "function",
+                                        "function": {"name": "Bash", "arguments": '{"command": "pwd"}'},
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        )
+        response: Final = await python_messages.anthropic_messages(
+            max_tokens=64,
+            messages=_replayed_tool_round("functions.Bash:0"),
+            model="hosted_vllm/kimi-k2",
+            api_base="http://kimi.test/v1",
+            api_key="sk-test",
+            tools=[{"name": "Bash", "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}}}],
+        )
+
+    sent: Final = json.loads(chat.calls.last.request.content)
+    assert [call["id"] for call in sent["messages"][1]["tool_calls"]] == ["functions.Bash:0"]
+    assert sent["messages"][2]["tool_call_id"] == "functions.Bash:0"
+    assert [block["id"] for block in response["content"] if block["type"] == "tool_use"] == ["functions.Bash:1"]
 
 
 def test_anthropic_messages_handler_custom_llm_provider():

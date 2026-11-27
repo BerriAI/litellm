@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { CoordinationField } from "./coordinationRedisFields";
-import type { CoordinationFormValues } from "./coordinationRedisUtils";
+import type { CoordinationFormValues } from "./schema";
 
 export const SECRET_ALREADY_SET_PLACEHOLDER = "caching.coordinationRedis.field.secretAlreadySet";
 

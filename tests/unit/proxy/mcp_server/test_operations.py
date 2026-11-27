@@ -1,6 +1,7 @@
 import asyncio
 import traceback
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
@@ -25,7 +26,7 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -37,6 +38,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
 )
 from litellm.proxy.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
+    MCPServerConfig,
     MCPServerManager,
 )
 from litellm.proxy.mcp_server.operations import GatewayOperations, prepare_context
@@ -44,7 +46,7 @@ from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPResourceURIMatch, MCPServer
 from tests._support.clock_loops import AutojumpClockLoop
 
 
@@ -70,7 +72,7 @@ async def _served_catalog_tool() -> str:
         "ambiguous",
         "missing",
         "failure",
-        "slow_failure",
+        "incomplete_missing",
         "blocked_stdio",
         "scoped_bearer",
         "legacy_delegates",
@@ -84,7 +86,6 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
     caller_bearer: Final = "Bearer caller-upstream-token"
     reads: Final[asyncio.Queue[tuple[str, str | None]]] = asyncio.Queue()
     listing_authorizations: Final[asyncio.Queue[str | None]] = asyncio.Queue()
-    slow_listing_cancelled: Final = asyncio.Event()
     message: Final = TypeAdapter(JSONRPCMessage)
 
     async def respond(request: httpx2.Request) -> httpx2.Response:
@@ -122,13 +123,8 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
         listing_authorizations.put_nowait(request.headers.get("authorization"))
         if case == "failure" and request.url.host == "other.example":
             return httpx2.Response(503, text="private upstream diagnostic")
-        if case == "slow_failure" and request.url.host == "owner.example":
+        if case == "incomplete_missing" and request.url.host == "owner.example":
             return httpx2.Response(503, text="private upstream diagnostic")
-        if case == "slow_failure":
-            try:
-                await asyncio.Event().wait()
-            finally:
-                slow_listing_cancelled.set()
         if not (payload.params or {}).get("cursor"):
             return httpx2.Response(
                 200,
@@ -209,7 +205,7 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
             ),
         )
 
-    if case in ("unique", "blocked_stdio", "scoped_bearer", "legacy_delegates"):
+    if case in ("unique", "failure", "blocked_stdio", "scoped_bearer", "legacy_delegates"):
         result: Final = await read()
         assert result == ReadResourceResult(contents=[TextResourceContents(uri=uri, text="owner.example")])
         assert reads.qsize() == 1
@@ -238,18 +234,361 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
     with pytest.raises(MCPError) as rejected:
         await asyncio.wait_for(read(), timeout=30)
     assert rejected.value.error.code == INVALID_REQUEST, "owner failures must reach MCP clients as MCPError, not 500"
-    assert {"ambiguous": "ambiguous", "missing": "not found", "failure": "list resources", "slow_failure": "owner"}[
+    assert {"ambiguous": "ambiguous", "missing": "not found", "incomplete_missing": "owner"}[
         case
     ] in rejected.value.error.message.lower()
     assert reads.empty()
     assert "private upstream diagnostic" not in rejected.value.error.message
-    if case == "slow_failure":
-        await asyncio.wait_for(slow_listing_cancelled.wait(), timeout=30)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_source", ("config", "database"))
+@pytest.mark.parametrize(
+    ("mode", "requested_uri", "owner_uris", "other_uris", "other_fails", "expected_host", "expected_error"),
+    [
+        pytest.param(None, "ui://widget/app?v=1", ("ui://widget/app?v=2",), (), False, None, "not found", id="default"),
+        pytest.param(
+            "strict", "ui://widget/app?v=1", ("ui://widget/app?v=2",), (), False, None, "not found", id="strict"
+        ),
+        pytest.param(
+            "path_only", "ui://widget/app?v=1", ("ui://widget/app?v=2",), (), False, "owner.example", None, id="version"
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?theme=light",
+            ("ui://widget/app?theme=dark",),
+            (),
+            False,
+            "owner.example",
+            None,
+            id="any-query-key",
+        ),
+        pytest.param(
+            "path_only", "ui://widget/app", ("ui://widget/app?v=2",), (), False, "owner.example", None, id="no-query"
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            ("ui://widget/app?v=2",),
+            ("ui://widget/app?v=1",),
+            False,
+            "other.example",
+            None,
+            id="exact-owner-priority",
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            ("ui://widget/app?v=2",),
+            ("ui://widget/app?v=3",),
+            False,
+            None,
+            "ambiguous",
+            id="ambiguous-including-strict-peer",
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            ("ui://widget/app?v=2", "ui://widget/app?v=3"),
+            (),
+            False,
+            "owner.example",
+            None,
+            id="two-uris-one-owner",
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            ("ui://widget/app?v=2",),
+            (),
+            True,
+            None,
+            "owner is unknown",
+            id="failed-listing",
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1#one",
+            ("ui://widget/app?v=2#two",),
+            (),
+            False,
+            None,
+            "not found",
+            id="distinct-fragment",
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            ("ui://different/app?v=2",),
+            (),
+            False,
+            None,
+            "not found",
+            id="distinct-authority",
+        ),
+        pytest.param(
+            "path_only",
+            "https://example.com/app?a=1",
+            ("https://example.com/app?a=2",),
+            ("ui://[invalid",),
+            False,
+            "owner.example",
+            None,
+            id="non-ui-and-malformed-listing",
+        ),
+        pytest.param(
+            "path_only",
+            "ui://widget/app?v=1",
+            (),
+            ("ui://widget/app?v=2",),
+            False,
+            None,
+            "not found",
+            id="strict-server-never-selected-via-path",
+        ),
+    ],
+)
+async def test_resource_read_uri_match_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    server_source: str,
+    mode: MCPResourceURIMatch | None,
+    requested_uri: str,
+    owner_uris: tuple[str, ...],
+    other_uris: tuple[str, ...],
+    other_fails: bool,
+    expected_host: str | None,
+    expected_error: str | None,
+) -> None:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_REQUEST, ReadResourceRequest, ReadResourceRequestParams
+
+    forwarded_reads: Final[asyncio.Queue[tuple[str, str]]] = asyncio.Queue()
+    message: Final = TypeAdapter[JSONRPCMessage](JSONRPCMessage)
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = message.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": "2025-03-26",
+                        "serverInfo": {"name": "upstream", "version": "1"},
+                        "capabilities": {"resources": {}},
+                    },
+                },
+            )
+        if payload.method == "resources/list":
+            if other_fails and request.url.host == "other.example":
+                return httpx2.Response(503, text="private upstream diagnostic")
+            uris: Final = owner_uris if request.url.host == "owner.example" else other_uris
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {"resources": [{"name": "widget", "uri": item} for item in uris]},
+                },
+            )
+        assert payload.method == "resources/read"
+        read_uri: Final[object] = (payload.params or {}).get("uri")
+        assert isinstance(read_uri, str)
+        forwarded_reads.put_nowait((request.url.host, read_uri))
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {"contents": [{"uri": read_uri, "text": f"{request.url.host}:{read_uri}"}]},
+            },
+        )
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-resource-read-policy"))
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", _mcp_rate_limited_proxy_logging())
+    metadata: Final = {"resource_uri_match": mode} if mode is not None else {}
+    if server_source == "config":
+        servers: Final[dict[str, MCPServerConfig]] = {
+            name: {
+                "url": f"https://{name}.example/mcp",
+                "transport": MCPTransport.http,
+                "mcp_info": metadata if name == "owner" else {},
+                "allow_all_keys": True,
+            }
+            for name in ("owner", "other")
+        }
+        await manager.load_servers_from_config(servers)
+    else:
+        timestamp: Final = datetime(2026, 1, 1, tzinfo=UTC)
+        for name in ("owner", "other"):
+            await manager.add_server(
+                LiteLLM_MCPServerTable(
+                    server_id=name,
+                    server_name=name,
+                    url=f"https://{name}.example/mcp",
+                    transport=MCPTransport.http,
+                    mcp_info=metadata if name == "owner" else {},
+                    allow_all_keys=True,
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                )
+            )
+
+    async def invoke() -> object:
+        return await GatewayOperations().execute(
+            ReadResourceRequest(params=ReadResourceRequestParams(uri=requested_uri)),
+            prepare_context(caller),
+        )
+
+    if expected_host is not None:
+        result: Final = await invoke()
+        assert result == ReadResourceResult(
+            contents=[TextResourceContents(uri=requested_uri, text=f"{expected_host}:{requested_uri}")]
+        )
+        assert forwarded_reads.qsize() == 1
+        assert forwarded_reads.get_nowait() == (expected_host, requested_uri)
+        return
+
+    assert expected_error is not None
+    with pytest.raises(MCPError) as rejected:
+        await invoke()
+    assert rejected.value.error.code == INVALID_REQUEST
+    assert expected_error in rejected.value.error.message.lower()
+    assert forwarded_reads.empty()
+
+
+@pytest.mark.asyncio
+async def test_resource_read_continuation_preserves_requested_uri(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp.types import ElicitResult, InputRequiredResult, ReadResourceRequest, ReadResourceRequestParams
+
+    from litellm.proxy.mcp_server.contracts import WireCompat
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "resource-continuation-salt")
+    stale_uri: Final = "ui://widget/app.html?v=1"
+    advertised_uri: Final = "ui://widget/app.html?v=2"
+    list_calls: Final[asyncio.Queue[str]] = asyncio.Queue()
+    read_calls: Final[asyncio.Queue[tuple[str, str, object]]] = asyncio.Queue()
+    messages: Final = TypeAdapter[JSONRPCMessage](JSONRPCMessage)
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = messages.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        host: Final = request.url.host
+        envelope: Final = {"jsonrpc": "2.0", "id": payload.id}
+        if payload.method == "server/discover":
+            return httpx2.Response(
+                200,
+                json={
+                    **envelope,
+                    "result": {
+                        "supportedVersions": ["2026-07-28"],
+                        "resultType": "complete",
+                        "cacheScope": "private",
+                        "ttlMs": 0,
+                        "capabilities": {"resources": {}},
+                    },
+                },
+            )
+        if payload.method == "resources/list":
+            list_calls.put_nowait(host)
+            resources: Final = [{"name": "widget", "uri": advertised_uri}] if host == "owner.example" else []
+            return httpx2.Response(
+                200,
+                json={
+                    **envelope,
+                    "result": {"resources": resources, "resultType": "complete", "cacheScope": "private", "ttlMs": 0},
+                },
+            )
+        assert payload.method == "resources/read"
+        params: Final = payload.params or {}
+        uri: Final[object] = params.get("uri")
+        assert isinstance(uri, str)
+        request_state: Final[object] = params.get("requestState")
+        read_calls.put_nowait((host, uri, request_state))
+        if request_state is None:
+            return httpx2.Response(
+                200,
+                json={
+                    **envelope,
+                    "result": {
+                        "resultType": "input_required",
+                        "requestState": "upstream-step-1",
+                        "inputRequests": {
+                            "confirm": {
+                                "method": "elicitation/create",
+                                "params": {
+                                    "message": "Confirm",
+                                    "requestedSchema": {"type": "object", "properties": {}},
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+        assert params.get("inputResponses") == {"confirm": {"action": "accept"}}
+        return httpx2.Response(
+            200,
+            json={**envelope, "result": {"resultType": "complete", "contents": [{"uri": uri, "text": "resumed-ok"}]}},
+        )
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    servers: Final = tuple(
+        MCPServer(
+            server_id=f"{name}-id",
+            name=name,
+            url=f"https://{name}.example/mcp",
+            transport=MCPTransport.http,
+            protocol_version="2026-07-28",
+            allow_elicitation=True,
+            allow_all_keys=True,
+            mcp_info={"resource_uri_match": "path_only"} if name == "owner" else None,
+        )
+        for name in ("owner", "other")
+    )
+    for server in servers:
+        monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", _mcp_rate_limited_proxy_logging())
+
+    caller: Final = UserAPIKeyAuth(user_id="alice", api_key=hash_token("sk-resource-continuation"))
+    context: Final = prepare_context(caller, wire_compat=WireCompat.MODERN)
+    initial: Final = ReadResourceRequest(params=ReadResourceRequestParams(uri=stale_uri))
+
+    suspended: Final = await GatewayOperations().execute(initial, context)
+    assert isinstance(suspended, InputRequiredResult)
+    assert suspended.request_state is not None
+    assert read_calls.get_nowait() == ("owner.example", stale_uri, None)
+    assert list_calls.qsize() == 2
+
+    resumed_request: Final = ReadResourceRequest(
+        params=ReadResourceRequestParams(
+            uri=stale_uri,
+            request_state=suspended.request_state,
+            input_responses={"confirm": ElicitResult(action="accept")},
+        )
+    )
+    completed: Final = await GatewayOperations().execute(resumed_request, context)
+    assert completed == ReadResourceResult(contents=[TextResourceContents(uri=stale_uri, text="resumed-ok")])
+    assert read_calls.get_nowait() == ("owner.example", stale_uri, "upstream-step-1")
+    assert list_calls.qsize() == 2
 
 
 @pytest.mark.parametrize("slow_method", ("initialize", "resources/list", "DELETE"))
+@pytest.mark.parametrize("stalled_host", ("owner.example", "other.example"))
 def test_resource_read_times_out_an_incomplete_lookup_without_remembering_the_failure(
-    monkeypatch: pytest.MonkeyPatch, slow_method: str
+    monkeypatch: pytest.MonkeyPatch, slow_method: str, stalled_host: str
 ) -> None:
     from mcp.shared.exceptions import MCPError
     from mcp.types import ReadResourceRequest, ReadResourceRequestParams
@@ -264,7 +603,7 @@ def test_resource_read_times_out_an_incomplete_lookup_without_remembering_the_fa
         if request.method == "GET":
             return httpx2.Response(405)
         if request.method == "DELETE":
-            if request.url.host == "other.example" and entered.empty():
+            if request.url.host == stalled_host and entered.empty():
                 entered.put_nowait(slow_method)
                 await asyncio.sleep(2)
             return httpx2.Response(200)
@@ -272,7 +611,7 @@ def test_resource_read_times_out_an_incomplete_lookup_without_remembering_the_fa
         if not isinstance(payload, JSONRPCRequest):
             return httpx2.Response(202)
         owner: Final = request.url.host == "owner.example"
-        if not owner and payload.method == slow_method and entered.empty():
+        if request.url.host == stalled_host and payload.method == slow_method and entered.empty():
             entered.put_nowait(slow_method)
             await asyncio.sleep(2)
         result: Final = {
@@ -305,12 +644,15 @@ def test_resource_read_times_out_an_incomplete_lookup_without_remembering_the_fa
     context: Final = prepare_context(UserAPIKeyAuth(api_key=hash_token("sk-resource-read")))
     request: Final = ReadResourceRequest(params=ReadResourceRequestParams(uri=uri))
 
+    expected: Final = ReadResourceResult(contents=[TextResourceContents(uri=uri, text="owner.example")])
     with asyncio.Runner(loop_factory=AutojumpClockLoop) as runner:
-        with pytest.raises(MCPError, match="resource owner is unknown"):
-            runner.run(GatewayOperations().execute(request, context))
+        if stalled_host == "owner.example":
+            with pytest.raises(MCPError, match="resource owner is unknown"):
+                runner.run(GatewayOperations().execute(request, context))
+        else:
+            assert runner.run(GatewayOperations().execute(request, context)) == expected
         assert runner.get_loop().time() == pytest.approx(1)
-        result: Final = runner.run(GatewayOperations().execute(request, context))
-        assert result == ReadResourceResult(contents=[TextResourceContents(uri=uri, text="owner.example")])
+        assert runner.run(GatewayOperations().execute(request, context)) == expected
 
 
 def _listing_client() -> SimpleNamespace:

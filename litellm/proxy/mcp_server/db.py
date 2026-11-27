@@ -544,7 +544,7 @@ def _prepare_mcp_server_data(
         data_dict["is_byok"] = getattr(data, "is_byok", False)
 
     if "events" in data_dict:
-        return {**data_dict, "events": safe_dumps(data_dict["events"])}
+        return {**data_dict, "events": safe_dumps(_DECODED_JSON.validate_python(data_dict["events"]))}
     return data_dict
 
 
@@ -1534,7 +1534,9 @@ async def get_mcp_server_oauth_client_credentials(prisma_client: PrismaClient, s
 async def get_mcp_server_oauth_client_credentials_by_id(
     prisma_client: PrismaClient, server_ids: Sequence[str]
 ) -> Mapping[str, object]:
-    rows: Final = await find_many_in(_oauth_client_table_actions(prisma_client), "server_id", server_ids)
+    """Read credentials from the writer so hydration sees the catalog revision's writes."""
+    table: Final = MCPServerOAuthClientRepository(prisma_client, use_writer=True).table
+    rows: Final = await find_many_in(table, "server_id", server_ids)
     return {row.server_id: row.credentials for row in rows}
 
 

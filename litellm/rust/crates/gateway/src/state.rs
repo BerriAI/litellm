@@ -1,9 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use axum::extract::FromRef;
 use futures_util::StreamExt;
-use litellm_auth_store::KeyDatabase;
-use litellm_config::{Config, Environment};
+use litellm_config::{Config, Environment, GeneralSettings};
 use litellm_db::Pools;
 use litellm_env::{Lookup, ProcessEnvironment};
 use litellm_gateway_auth::Auth;
@@ -17,9 +16,7 @@ use litellm_redis_store::{
     spend_counters::SpendCounters,
     system_clock,
 };
-use litellm_repositories::{
-    Database, GatewayRequestRepository, KeyRepository, ObjectPermissionRepository,
-};
+use litellm_repositories::{Database, GatewayRequestRepository};
 use tokio::runtime::Handle;
 
 use crate::{
@@ -27,10 +24,7 @@ use crate::{
     callbacks::parallel_request_limiter,
     db,
     gateway_requests::GatewayRequests,
-    host::{
-        self, NativeRows,
-        auth::{AuthStore, KEY_TTL},
-    },
+    host::{self, NativeRows, auth::AuthStore},
     license::build_license,
     periodic::{self, PeriodicJob},
 };
@@ -42,7 +36,7 @@ pub struct AppState {
     pub database: Option<Pools>,
     /// Where a virtual key is read from: the auth cache in front of the proxy's database. `None`
     /// without a database.
-    pub keys: Option<Arc<AuthStore>>,
+    pub auth_store: Option<Arc<AuthStore>>,
     pub entitlements: Arc<Entitlements>,
     /// The proxy's `parallel_request_limiter_v3`, which the inference routes' callback stage runs
     /// and the limit check before the body asks.
@@ -106,18 +100,18 @@ impl AppState {
                     GatewayRequestRepository::new(repositories.clone()),
                     environment,
                 );
-                let keys = Arc::new(keys(config, &redis, repositories));
-                (pools, (keys, (requests, Arc::new(flush))))
+                let auth_store = Arc::new(auth_store(config, &redis, repositories));
+                (pools, (auth_store, (requests, Arc::new(flush))))
             })
             .unzip();
-        let (keys, gateway_requests) = connected.unzip();
+        let (auth_store, gateway_requests) = connected.unzip();
         let (gateway_requests, gateway_requests_flush) = gateway_requests.unzip();
         let entitlements = Arc::new(build_license(config, environment, resources).await);
         Ok(Self {
             inference,
             redis,
             database,
-            keys,
+            auth_store,
             entitlements,
             key_limiter,
             spend_logs,
@@ -132,7 +126,9 @@ impl AppState {
     /// The state `config` describes, built over what this one keeps for the life of the process:
     /// the Redis clients, the database pools and the keys read through them, the license, the
     /// HTTP client pool, the deployments' routing state and the limiters' counters. Only what
-    /// `config` decides is built again, its environment, router and callbacks.
+    /// `config` decides is built again, its environment, router and callbacks, and the kept auth
+    /// cache takes its `user_api_key_cache_max_size`, as the proxy's reload resizes it. Its TTL
+    /// stays the one boot read, as the proxy reads `user_api_key_cache_ttl` only at startup.
     pub async fn next(&self, config: &Config) -> Result<Self, Error> {
         let resources = Resources::sharing(
             config,
@@ -153,6 +149,10 @@ impl AppState {
             self.spend_logs.as_deref(),
         )
         .await?;
+        if let Some(auth_store) = &self.auth_store {
+            auth_store.resize(auth_cache_settings(&config.general_settings).memory_entries);
+        }
+        inference.install((*self.inference.cost_map()).clone());
         Ok(Self {
             inference,
             key_limiter,
@@ -165,7 +165,7 @@ impl AppState {
     /// Who the inference routes and `admit` authenticate, which the core decides over the native
     /// host: the master key of `config`, and with a database a virtual key it holds.
     pub(crate) fn auth(&self, config: &Config) -> Auth<NativeRows> {
-        host::auth::auth(config, self.keys.clone())
+        host::auth::auth(config, self.auth_store.clone())
     }
 
     /// Drains the spend logs still queued, writes the gateway request counts still in memory,
@@ -201,11 +201,7 @@ fn gateway_requests_flush(
 /// this process's memory in front of the database, with the coordination Redis between them when
 /// `enable_redis_auth_cache` attaches it. Every pod's evictions reach the memory whenever a
 /// coordination Redis carries them, as Python subscribes with the flag on or off.
-pub(crate) fn keys(config: &Config, redis: &RedisClients, database: Database) -> AuthStore {
-    let database = KeyDatabase::new(
-        Arc::new(KeyRepository::new(database.clone())),
-        Arc::new(ObjectPermissionRepository::new(database)),
-    );
+pub(crate) fn auth_store(config: &Config, redis: &RedisClients, database: Database) -> AuthStore {
     let cache = Arc::new(auth_cache(config, redis, system_clock()));
     if let Some(client) = &redis.coordination {
         hear_evictions(&cache, client);
@@ -225,7 +221,7 @@ fn hear_evictions(cache: &Arc<AuthCache>, client: &RedisClient) {
     let mut evictions = channel.subscribe();
     let cache = Arc::downgrade(cache);
     let spend_counters = SpendCounters::new(None);
-    tokio::spawn(async move {
+    litellm_call_scope::spawn_detached(async move {
         while let Some(invalidation) = evictions.next().await {
             let Some(cache) = cache.upgrade() else {
                 return;
@@ -236,9 +232,8 @@ fn hear_evictions(cache: &Arc<AuthCache>, client: &RedisClient) {
 }
 
 /// Python's `UserApiKeyCache`, with the coordination Redis attached when
-/// `enable_redis_auth_cache` is on. Its memory keeps a Redis hit for Python's
-/// `default_in_memory_ttl`, and every write the gateway makes names its own TTL, so no Redis
-/// write takes the default.
+/// `enable_redis_auth_cache` is on, sized as `general_settings` sizes it (see [`auth_cache_settings`]).
+/// Every write the gateway makes takes the cache's TTL, so no Redis write takes the client's default.
 pub(crate) fn auth_cache(config: &Config, redis: &RedisClients, now: Clock) -> AuthCache {
     const NEVER_TAKEN: Duration = Duration::ZERO;
     let remote = redis
@@ -249,11 +244,24 @@ pub(crate) fn auth_cache(config: &Config, redis: &RedisClients, now: Clock) -> A
             client,
             default_ttl: NEVER_TAKEN,
         });
-    let settings = Settings {
-        memory_ttl: Some(KEY_TTL),
-        ..Settings::default()
-    };
-    AuthCache::with_clock(remote, settings, now)
+    AuthCache::with_clock(remote, auth_cache_settings(&config.general_settings), now)
+}
+
+/// `UserAPIKeyCacheTTLEnum.in_memory_cache_ttl`, what the proxy keeps an auth object for unless
+/// `user_api_key_cache_ttl` says otherwise.
+const KEY_TTL: Duration = Duration::from_secs(60);
+
+/// What the proxy's startup makes of `user_api_key_cache` (`load_config` in `proxy_server.py`):
+/// `user_api_key_cache_ttl` seconds for every entry, in memory and in Redis, else
+/// `UserAPIKeyCacheTTLEnum`'s 60, and `user_api_key_cache_max_size` entries in each partition, else
+/// `InMemoryCache`'s 200.
+fn auth_cache_settings(settings: &GeneralSettings) -> Settings {
+    Settings {
+        memory_entries: settings
+            .user_api_key_cache_max_size
+            .map_or(Settings::default().memory_entries, NonZeroUsize::get),
+        memory_ttl: Some(settings.user_api_key_cache_ttl.unwrap_or(KEY_TTL)),
+    }
 }
 
 impl FromRef<AppState> for RedisClients {
@@ -270,9 +278,12 @@ impl FromRef<AppState> for Option<Pools> {
 
 #[cfg(test)]
 mod tests {
+    use litellm_gateway_auth_core::Token;
     use rstest::rstest;
+    use serde_json::json;
 
     use super::*;
+    use crate::host::auth::keys::Held;
 
     #[rstest]
     #[case::unset("model_list: []\n", 60)]
@@ -293,5 +304,48 @@ mod tests {
 
         assert_eq!(state.key_limiter.window_size(), window_size);
         state.close().await;
+    }
+
+    #[rstest]
+    #[case::shrunk(
+        "  user_api_key_cache_max_size: 2\n",
+        "  user_api_key_cache_max_size: 1\n",
+        false
+    )]
+    #[case::back_to_the_default("  user_api_key_cache_max_size: 1\n", "", true)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_reload_resizes_the_auth_cache_it_keeps(
+        #[case] booted: &str,
+        #[case] reloaded: &str,
+        #[case] first_kept: bool,
+    ) {
+        let held = Held::start().await;
+        held.key("sk-first", json!({})).await;
+        held.key("sk-second", json!({})).await;
+        let config = |general_settings: &str| {
+            Config::from_yaml(&format!(
+                "model_list: []\ngeneral_settings:\n  database_url: {}\n{general_settings}",
+                held.url()
+            ))
+            .unwrap()
+        };
+        let hash = |token: &str| Token::new(token).hash();
+        let state = AppState::build(&config(booted), &Environment::default())
+            .await
+            .unwrap();
+        let keys = state.auth_store.clone().unwrap();
+        assert!(keys.loaded(&hash("sk-first")).await.unwrap().is_some());
+
+        let next = state.next(&config(reloaded)).await.unwrap();
+        assert!(keys.loaded(&hash("sk-second")).await.unwrap().is_some());
+
+        assert_eq!(
+            (
+                keys.cached(&hash("sk-first")).await.is_some(),
+                keys.cached(&hash("sk-second")).await.is_some()
+            ),
+            (first_kept, true)
+        );
+        next.close().await;
     }
 }

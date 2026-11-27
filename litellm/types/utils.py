@@ -1286,15 +1286,15 @@ class ChatCompletionTokenLogprob(OpenAIObject):
             return []
         return v
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -1307,15 +1307,15 @@ class ChoiceLogprobs(OpenAIObject):
 
     refusal: Sequence[ChatCompletionTokenLogprob] | None = None
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -1368,19 +1368,19 @@ class Function(OpenAIObject):
 
         super().__init__(**data)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1391,34 +1391,34 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
     type: str | None = None
     index: int
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
 
 class _CustomToolCallAccess(OpenAIObject):
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         setattr(self, key, value)
 
 
@@ -1469,19 +1469,19 @@ class ChatCompletionMessageToolCall(OpenAIObject):
         else:
             self.type = "function"
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1518,19 +1518,19 @@ class ChatCompletionAudioResponse(ChatCompletionAudio):
             id = f"{uuid.uuid4()}"
         super().__init__(data=data, expires_at=expires_at, transcript=transcript, id=id, **params)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1648,15 +1648,15 @@ class Message(SafeAttributeModel, OpenAIObject):
 
         add_provider_specific_fields(self, provider_specific_fields)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1788,19 +1788,19 @@ class Delta(SafeAttributeModel, OpenAIObject):
             if hasattr(self, "reasoning_items"):
                 del self.reasoning_items
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -1865,19 +1865,19 @@ class Choices(SafeAttributeModel, OpenAIObject):
         if self.provider_specific_fields is None:
             del self.provider_specific_fields
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2204,19 +2204,19 @@ class Usage(SafeAttributeModel, CompletionUsage):
     def dropped_non_finite_cost(usage: "Usage") -> bool:
         return usage._dropped_non_finite_cost
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2263,19 +2263,19 @@ class StreamingChoices(OpenAIObject):
         else:
             set_extra_attribute(self, "logprobs", logprobs)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2395,15 +2395,15 @@ class ModelResponseStream(ModelResponseBase):
         if usage_to_set is not None:
             self.usage = usage_to_set
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -2504,15 +2504,15 @@ class ModelResponse(ModelResponseBase):
             **params,
         )
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -2529,15 +2529,15 @@ class Embedding(OpenAIObject):
     index: int
     object: Literal["embedding"]
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2619,19 +2619,19 @@ class EmbeddingResponse(OpenAIObject):
         except ValidationError:
             return ()
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2670,19 +2670,19 @@ class TextChoices(OpenAIObject):
             else:
                 self.logprobs = logprobs
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2792,19 +2792,19 @@ class TextCompletionResponse(OpenAIObject):
             self._response_ms = None
         self._hidden_params = HiddenParams()
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -2842,19 +2842,19 @@ class ImageObject(OpenAIImage):
         if provider_specific_fields:
             self.provider_specific_fields = provider_specific_fields
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -3018,19 +3018,19 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         self.size = kwargs.get("size", None)
         self._hidden_params = hidden_params or {}
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -3114,19 +3114,19 @@ class TranscriptionResponse(OpenAIObject):
         if self.usage is None and isinstance(duration, (int, float)) and duration > 0:
             self.usage = TranscriptionUsageDurationObject(type="duration", seconds=duration)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -5309,15 +5309,15 @@ class LiteLLMBatch(Batch):
             ),
         }
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -5361,15 +5361,15 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     def _serialize_results(self, results: OpenAIRealtimeStreamList) -> list[dict[str, Any]]:
         return [dict(event) for event in results]
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 

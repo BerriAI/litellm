@@ -1340,7 +1340,25 @@ def _authorization_is_litellm_admission_credential_with_settings(
     authorization: Final = _raw_header_value(raw_headers, "authorization")
     if admission_header and authorization:
         return strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(admission_header, "Bearer")
-    return bool(user_api_key_auth and user_api_key_auth.api_key and not admission_header)
+    return bool(
+        user_api_key_auth
+        and (user_api_key_auth.api_key or user_api_key_auth.mcp_authorization_is_admission_credential)
+        and not admission_header
+    )
+
+
+def without_admission_authorization(
+    raw_headers: Mapping[str, str], user_api_key_auth: UserAPIKeyAuth | None
+) -> Mapping[str, str]:
+    """Drop ``Authorization`` when it is the dashboard login an inference request was admitted with, so
+    neither guardrails nor a server listing it in ``extra_headers`` receive it."""
+    if (
+        user_api_key_auth is not None
+        and user_api_key_auth.mcp_authorization_is_admission_credential
+        and _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth)
+    ):
+        return {name: value for name, value in raw_headers.items() if name.lower() != "authorization"}
+    return raw_headers
 
 
 def _authorization_is_admission_jwt(
@@ -3080,7 +3098,7 @@ class MCPServerManager:
 
         self.initialize_tool_name_to_mcp_server_name_mapping()
 
-    async def hydrate_config_servers_dcr_clients(self, servers: Sequence[MCPServer] | None = None) -> None:
+    async def hydrate_config_servers_dcr_clients(self, servers: Sequence[MCPServer] | None = None) -> bool:
         """Overlay each config-declared server's persisted DCR client (from the server-scoped
         store) onto its in-memory object so token refresh authenticates after a restart. A
         best-effort no-op when the DB is unreachable at config-load time."""
@@ -3088,7 +3106,9 @@ class MCPServerManager:
             hydrate_config_dcr_clients,
         )
 
-        await hydrate_config_dcr_clients(servers if servers is not None else tuple(self.config_mcp_servers.values()))
+        return await hydrate_config_dcr_clients(
+            servers if servers is not None else tuple(self.config_mcp_servers.values())
+        )
 
     async def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
         """
@@ -5356,7 +5376,7 @@ class MCPServerManager:
         self,
         server: MCPServer,
         user_api_key_auth: UserAPIKeyAuth | None,
-        url: AnyUrl,
+        url: AnyUrl | str,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
@@ -7663,8 +7683,8 @@ class MCPServerManager:
 
     _get_mcp_server_from_tool_name = get_mcp_server_from_tool_name
 
-    async def reload_servers_from_database(self):
-        await self.catalog.reload()
+    async def reload_servers_from_database(self, *, skip_unchanged: bool = False) -> None:
+        await self.catalog.reload(skip_unchanged=skip_unchanged)
 
     def get_mcp_servers_from_ids(self, server_ids: list[str]) -> list[MCPServer]:
         servers: Final = list[MCPServer]()

@@ -15,11 +15,14 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
 
+import httpx
 import logging
 import pytest
+import respx
 from fastapi import HTTPException
 
 import litellm
+from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
@@ -401,6 +404,67 @@ async def test_a_cost_that_is_not_a_finite_number_leaves_the_session_spend_alone
         )
 
     assert await handler._get_current_spend(cache_key) == 0.25
+
+
+_IMAGE_REFUSAL: Final = {
+    "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}],
+    "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16},
+}
+
+
+def _refusal_reply(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=_IMAGE_REFUSAL)
+
+
+async def _session_spend_after_refusals(monkeypatch, deployments: int) -> float:
+    handler: Final = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [handler])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    groups: Final = tuple(f"image-{index}" for index in range(deployments))
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.invalid/v1",
+                },
+            }
+            for group in groups
+        ],
+        fallbacks=[{groups[0]: list(groups[1:])}],
+        num_retries=0,
+    )
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model=groups[0],
+        prompt="a single small red dot",
+        litellm_call_id=f"session-refusals-{deployments}",
+        metadata={"session_id": "session-images", "agent_id": "agent-budget-123"},
+    )
+    with (
+        patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry,
+        respx.mock(assert_all_called=False) as upstream,
+    ):
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
+        upstream.post(url__regex=r"https://image-\d+\.invalid/").mock(side_effect=_refusal_reply)
+        with pytest.raises(litellm.ContentPolicyViolationError):
+            await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+    return await handler._get_current_spend(handler._make_cache_key("session-images"))
+
+
+@pytest.mark.asyncio
+async def test_every_billed_image_refusal_of_a_fallback_chain_counts_toward_the_session_budget(monkeypatch):
+    one_refusal: Final = await _session_spend_after_refusals(monkeypatch, deployments=1)
+    refused_by_every_fallback: Final = await _session_spend_after_refusals(monkeypatch, deployments=3)
+
+    assert one_refusal > 0
+    assert refused_by_every_fallback == pytest.approx(3 * one_refusal)
 
 
 @pytest.mark.asyncio

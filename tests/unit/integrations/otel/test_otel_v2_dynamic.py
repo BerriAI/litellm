@@ -650,9 +650,9 @@ def test_requires_headers_spec_skipped_without_headers():
     )
     provider = build_tracer_provider(cfg)
     processors = provider._active_span_processor._span_processors
-    # Only the baggage processor: the keyless spec must not export (New Relic
+    # Only the span-marking processors: the keyless spec must not export (New Relic
     # rejects unauthenticated posts with a 4xx per span batch).
-    assert [type(p).__name__ for p in processors] == ["LiteLLMBaggageSpanProcessor"]
+    assert [type(p).__name__ for p in processors] == ["LiteLLMBaggageSpanProcessor", "NamedTraceSpanProcessor"]
 
     keyed = OpenTelemetryV2Config(
         exporters=[
@@ -662,7 +662,7 @@ def test_requires_headers_spec_skipped_without_headers():
         ]
     )
     keyed_provider = build_tracer_provider(keyed)
-    assert len(keyed_provider._active_span_processor._span_processors) == 2
+    assert len(keyed_provider._active_span_processor._span_processors) == 3
 
 
 def test_newrelic_key_only_team_routes_to_us_not_operator_region(monkeypatch):

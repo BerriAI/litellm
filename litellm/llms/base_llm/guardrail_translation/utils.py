@@ -400,6 +400,12 @@ def anthropic_tool_names(tool: object) -> tuple[str, ...]:
     return tuple(name for name in (fields.get("name"), function_name) if isinstance(name, str) and name)
 
 
+def anthropic_mcp_server_name(server: object) -> str | None:
+    fields: Final = _dict_or_none(server)
+    name: Final = fields.get("name") if fields is not None else None
+    return name if isinstance(name, str) and name else None
+
+
 def anthropic_tool_name(tool: object) -> str | None:
     names: Final = anthropic_tool_names(tool)
     return names[0] if names else None
