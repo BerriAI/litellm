@@ -111,36 +111,29 @@ _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.Cont
 
 
 class _SkipPassedSwitch:
-    """When this process saw ``general_settings.guardrail_log_skip_passed`` turn on."""
+    """The last time ``general_settings.guardrail_log_skip_passed`` may have been off for a request
+    this process writes to the request log: when the process started, since it cannot tell which
+    setting an earlier or another process ran a request under, then each time it saw the setting off."""
 
     def __init__(self) -> None:
-        self.seen_off: bool = False
-        self.on_since: datetime | None = None
+        self.last_seen_off: datetime = datetime.now(timezone.utc)
 
 
 _SKIP_PASSED_SWITCH: Final = _SkipPassedSwitch()
-_BEFORE_ANY_REQUEST: Final = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def passed_runs_skipped_since() -> datetime | None:
-    """The time from which ``general_settings.guardrail_log_skip_passed`` has been on in this
-    process, None while it is off. A run logged while the setting was off carries no
-    ``guardrail_action``, so the request log writer skips passed runs only for requests that
-    started at or after this time. A process that never saw the setting off returns the earliest
-    time."""
+    """None while ``general_settings.guardrail_log_skip_passed`` is off, else the last time it may
+    have been off. A run logged while the setting was off carries no ``guardrail_action``, so the
+    request log writer skips passed runs only for requests that started after this time."""
     if "litellm.proxy.proxy_server" not in sys.modules:
         return None
     from litellm.proxy.proxy_server import current_general_settings
 
     if current_general_settings().get("guardrail_log_skip_passed") is not True:
-        _SKIP_PASSED_SWITCH.seen_off = True
-        _SKIP_PASSED_SWITCH.on_since = None
+        _SKIP_PASSED_SWITCH.last_seen_off = datetime.now(timezone.utc)
         return None
-    if _SKIP_PASSED_SWITCH.on_since is None:
-        _SKIP_PASSED_SWITCH.on_since = (
-            datetime.now(timezone.utc) if _SKIP_PASSED_SWITCH.seen_off else _BEFORE_ANY_REQUEST
-        )
-    return _SKIP_PASSED_SWITCH.on_since
+    return _SKIP_PASSED_SWITCH.last_seen_off
 
 
 def acting_runs_are_logged() -> bool:

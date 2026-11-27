@@ -702,11 +702,12 @@ def _indexed(prisma: MagicMock) -> list[tuple[str, str, str | None]]:
 
 
 def _skip_passed(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
-    """Set the setting on a process that has never seen it off."""
+    """Set the setting on a process that last saw it off before any request in the test."""
     from litellm.integrations import custom_guardrail
 
-    monkeypatch.setattr(custom_guardrail._SKIP_PASSED_SWITCH, "seen_off", False)
-    monkeypatch.setattr(custom_guardrail._SKIP_PASSED_SWITCH, "on_since", None)
+    monkeypatch.setattr(
+        custom_guardrail._SKIP_PASSED_SWITCH, "last_seen_off", datetime.min.replace(tzinfo=timezone.utc)
+    )
     _set_skip_passed(monkeypatch, value)
 
 
@@ -816,11 +817,11 @@ async def test_guardrail_log_skip_passed_keeps_the_rows_of_requests_that_started
     _skip_passed(monkeypatch, False)
     assert passed_runs_skipped_since() is None
     _set_skip_passed(monkeypatch, True)
-    turned_on_at: Final = passed_runs_skipped_since()
-    assert turned_on_at is not None
+    last_seen_off: Final = passed_runs_skipped_since()
+    assert last_seen_off is not None
     passed: Final = [{"guardrail_id": "g", "guardrail_status": "success"}]
     logs: Final = [
-        {**_entries_payload("queued-before", passed), "startTime": turned_on_at - timedelta(seconds=1)},
+        {**_entries_payload("queued-before", passed), "startTime": last_seen_off - timedelta(seconds=1)},
         {**_entries_payload("started-after", passed), "startTime": datetime.now(timezone.utc)},
     ]
     prisma: Final = _prisma()

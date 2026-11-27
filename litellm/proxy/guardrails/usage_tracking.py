@@ -263,6 +263,12 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
+def _skips_passed_runs(request_start: datetime, skipped_since: datetime | None) -> bool:
+    """True for a request that started after `guardrail_log_skip_passed` was last off, so every one
+    of its runs logged a `guardrail_action` if it acted."""
+    return skipped_since is not None and _as_utc(request_start) > skipped_since
+
+
 def _date_str(dt: datetime) -> str:
     """YYYY-MM-DD in UTC."""
     return _as_utc(dt).strftime("%Y-%m-%d")
@@ -435,7 +441,6 @@ async def _record_guardrail_usage(
         if not isinstance(request_id, str) or not request_id or start_time is None:
             continue
         date_key = _date_str(start_time)
-        skip_passed = skipped_since is not None and _as_utc(start_time) >= skipped_since
 
         entries = _parse_guardrail_info_from_payload(payload)
         ids_by_name = MappingProxyType(
@@ -461,7 +466,7 @@ async def _record_guardrail_usage(
                     daily_guardrail[key]["blocked_count"] += 1
                 else:
                     daily_guardrail[key]["flagged_count"] += 1
-            if not (skip_passed and guardrail_ran_without_acting(entry)):
+            if not (_skips_passed_runs(start_time, skipped_since) and guardrail_ran_without_acting(entry)):
                 kept_index_keys.add((request_id, guardrail_id))
             policy_id = entry.get("policy_id")
             prior = index_rows_by_key.get((request_id, guardrail_id))
