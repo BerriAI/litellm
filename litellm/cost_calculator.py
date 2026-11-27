@@ -2649,7 +2649,7 @@ def _video_input_image_cost(
     usage: object,
 ) -> float:
     match usage:
-        case {"billable_input_image_count": int(billable_input_images)} if billable_input_images > 0:
+        case {"billable_input_image_count": int(billable_input_images)} if not isinstance(billable_input_images, bool) and billable_input_images > 0:
             deployment_rate: Final = model_info.get("input_cost_per_image") if model_info is not None else None
             image_rate: Final = (
                 deployment_rate

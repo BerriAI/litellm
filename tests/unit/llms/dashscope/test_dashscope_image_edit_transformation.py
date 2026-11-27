@@ -301,6 +301,19 @@ def test_the_input_images_dashscope_reports_are_billed_on_top_of_the_edited_imag
     ) == pytest.approx(2 * 0.004 + 0.04)
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_boolean_input_image_count_is_not_reported_as_billable() -> None:
+    def reply(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={**EDITED, "usage": {"input_image_count": True, "output_image_count": 1}})
+
+    response: Final = litellm.image_edit(
+        model="dashscope/qwen-image-3.0", image=[PNG], prompt="p", api_key="k", client=_sync_client([], reply)
+    )
+
+    assert isinstance(response, litellm.ImageResponse)
+    assert "billable_input_image_count" not in response.hidden_params
+
+
 def _edited_images(count: int, input_images: int) -> litellm.ImageResponse:
     response: Final = litellm.ImageResponse(data=[{"url": EDITED_URL}] * count)
     response.hidden_params = {"billable_input_image_count": input_images}
