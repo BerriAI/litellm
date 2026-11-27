@@ -13,6 +13,7 @@ from mcp.types import CallToolResult, TextContent
 import litellm  # noqa: F401 - ensures litellm.responses.main is registered in sys.modules
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
+from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.mcp.mcp_streaming_iterator import (
     MCPEnhancedStreamingIterator,
 )
@@ -611,7 +612,7 @@ async def test_stream_without_auto_execute_is_forwarded_unchanged(monkeypatch):
 
 
 class HostedMCPBudgetTest(unittest.IsolatedAsyncioTestCase):
-    async def workflow(self, streaming, ceiling, fail_apply=False):
+    async def workflow(self, streaming, ceiling, fail_apply=False, terminal_status="completed"):
         import json
         import sys
 
@@ -619,7 +620,12 @@ class HostedMCPBudgetTest(unittest.IsolatedAsyncioTestCase):
 
         from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager as manager
         from litellm.responses.mcp import litellm_proxy_mcp_handler as handler
-        from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponseFailedEvent,
+            ResponseIncompleteEvent,
+            ResponsesAPIResponse,
+        )
 
         main = sys.modules["litellm.responses.main"]
         name = "mock-automations"
@@ -641,7 +647,12 @@ class HostedMCPBudgetTest(unittest.IsolatedAsyncioTestCase):
 
         class Chunks:
             def __init__(self, response):
-                self.events = iter([ResponseCompletedEvent(type="response.completed", response=response)])
+                event_class = {
+                    "completed": ResponseCompletedEvent,
+                    "failed": ResponseFailedEvent,
+                    "incomplete": ResponseIncompleteEvent,
+                }[response.status]
+                self.events = iter([event_class(type="response." + response.status, response=response)])
 
             def __aiter__(self):
                 return self
@@ -674,8 +685,14 @@ class HostedMCPBudgetTest(unittest.IsolatedAsyncioTestCase):
             ResponsesAPIResponse(
                 id="resp-final",
                 created_at=0,
-                status="completed",
-                output=[_text_message("Tool reported failure" if fail_apply else "Applied successfully")],
+                status=terminal_status,
+                error={"code": "server_error", "message": "Fixture provider failure"}
+                if terminal_status == "failed"
+                else None,
+                incomplete_details={"reason": "max_output_tokens"} if terminal_status == "incomplete" else None,
+                output=[_text_message("Tool reported failure" if fail_apply else "Applied successfully")]
+                if terminal_status == "completed"
+                else [],
             )
         )
         llm = AsyncMock(side_effect=[Chunks(response) for response in responses])
@@ -743,3 +760,19 @@ class HostedMCPBudgetTest(unittest.IsolatedAsyncioTestCase):
                 if streaming:
                     self.assertEqual(events[-1].type, "response.failed")
                     self.assertFalse(any(event.type == "response.completed" for event in events))
+
+    async def test_provider_incomplete_and_failed_preserve_all_executed_receipts(self):
+        for streaming in (False, True):
+            for status in ("incomplete", "failed"):
+                with self.subTest(stream=streaming, status=status):
+                    terminal, events, state, llm, dispatch = await self.workflow(streaming, 12, terminal_status=status)
+                    self.assertEqual(terminal.status, status)
+                    self.assertTrue(state["applied"])
+                    self.assertEqual(dispatch.await_count, 6)
+                    calls = [item for item in terminal.output if item.get("type") == "mcp_call"]
+                    self.assertEqual(len(calls), 6)
+                    self.assertEqual(len({item["id"] for item in calls}), 6)
+                    self.assertIn('"applied": true', calls[-1]["output"])
+                    if streaming:
+                        self.assertEqual(events[-1].type, "response." + status)
+                        self.assertFalse(any(event.type == "response.completed" for event in events))

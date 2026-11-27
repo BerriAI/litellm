@@ -722,7 +722,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             if self._output_index_offset:
                 _set_event_field(chunk, "output_index", output_index + self._output_index_offset)
 
-        if self.should_auto_execute and chunk_type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE:
+        if self.should_auto_execute and chunk_type in (
+            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            ResponsesAPIStreamEvents.RESPONSE_FAILED,
+        ):
             return self._charge_incomplete_round(chunk)
         if not (self.should_auto_execute and self._is_response_completed(chunk)):
             return chunk
@@ -764,16 +767,25 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _charge_incomplete_round(self, chunk: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse:
         response_obj: Final[object] = getattr(chunk, "response", None)
-        if self._round_billing is None or not isinstance(response_obj, ResponsesAPIResponse):
+        if not isinstance(response_obj, ResponsesAPIResponse):
+            return chunk
+        merged_response: Final = (
+            response_obj.model_copy(update={"output": [*self._composed_output, *_output_items(response_obj)]})
+            if self._composed_output
+            else response_obj
+        )
+        if merged_response is not response_obj:
+            _set_event_field(chunk, "response", merged_response)
+        if self._round_billing is None:
             return chunk
         if not self._round_billed_early():
             self._round_billing.complete_round(
-                chunk, response_obj, _output_items(response_obj), self._restore_round_headers
+                chunk, response_obj, _output_items(merged_response), self._restore_round_headers
             )
         client_response: Final = self._round_billing.charge_final_round(
-            chunk, response_obj, self._restore_round_headers
+            chunk, merged_response, self._restore_round_headers
         )
-        if client_response is not response_obj:
+        if client_response is not merged_response:
             _set_event_field(chunk, "response", client_response)
         return chunk
 
