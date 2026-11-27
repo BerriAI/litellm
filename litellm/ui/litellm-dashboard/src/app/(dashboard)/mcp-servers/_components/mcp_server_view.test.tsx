@@ -311,6 +311,25 @@ describe("MCPServerView", () => {
     expect(onUrlUpdate.mock.calls.some(([update]) => !update.searchParams.has("server_tab"))).toBe(false);
   });
 
+  it.each([
+    ["Admin", "User Credentials"],
+    ["Internal User", "Overview"],
+  ])("opens a user credentials link for %s on the %s tab", (userRole, tabName) => {
+    renderViewAt("?server=srv-1&server_tab=user-credentials", { userRole });
+
+    expect(screen.getByRole("tab", { name: tabName })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("writes the user credentials tab the user picks", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    vi.mocked(networking.fetchMCPServerUserCredentials).mockResolvedValue([]);
+    renderViewAt("?server=srv-1", {}, onUrlUpdate);
+
+    await userEvent.click(screen.getByRole("tab", { name: "User Credentials" }));
+
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("server_tab")).toBe("user-credentials");
+  });
+
   it("reopens the edit form when returning from an edit OAuth redirect for this server", () => {
     setSecureItem(EDIT_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "srv-1" }));
 

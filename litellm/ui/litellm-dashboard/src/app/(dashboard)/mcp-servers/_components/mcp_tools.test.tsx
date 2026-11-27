@@ -267,11 +267,13 @@ describe("MCPToolsViewer URL state", () => {
     expect(await screen.findByText("Tool executed successfully")).toBeInTheDocument();
   });
 
-  it("shows the empty playground for a tool the server does not list", async () => {
-    renderViewer(M2M, "?tool=gone");
+  it("shows the empty playground for a tool the server does not list and keeps the link", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderViewer(M2M, "?tool=gone", onUrlUpdate);
 
     await screen.findByRole("heading", { level: 4, name: "search_docs" });
     expect(screen.getByText("Select a Tool to Test")).toBeInTheDocument();
+    expect(onUrlUpdate.mock.calls.some(([update]) => !update.searchParams.has("tool"))).toBe(false);
   });
 
   it("pushes the clicked tool, clears it on close, and drops the previous result", async () => {

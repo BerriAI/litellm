@@ -42,6 +42,7 @@ vi.mock("@/components/networking", () => ({
   fetchMCPGatewaySessions: vi.fn(),
   terminateMCPGatewaySessions: vi.fn(),
   getUiConfig: vi.fn().mockResolvedValue({}),
+  getMCPSemanticFilterSettings: vi.fn().mockResolvedValue({}),
 }));
 
 const stubUiConfig = (config: object) =>
@@ -1025,11 +1026,72 @@ describe("MCPServers URL state", () => {
     expect(await openedServer("Bravo")).toBeInTheDocument();
   });
 
-  it("shows the list instead of a placeholder detail for an unknown server", async () => {
-    renderPage("?server=missing");
+  it("shows the list instead of a placeholder detail for an unknown server and keeps the link", async () => {
+    const onUrlUpdate = renderPage("?server=missing", {}, { keepMountWrites: true });
 
     await screen.findByText("Alpha");
     expect(screen.queryByRole("button", { name: /Back to All Servers/ })).not.toBeInTheDocument();
+    expect(onUrlUpdate.mock.calls.some(([update]) => !update.searchParams.has("server"))).toBe(false);
+  });
+
+  it("ignores a server tab link without a server", async () => {
+    renderPage("?server_tab=settings");
+
+    expect(await screen.findByTestId("mcp-servers-grid")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Back to All Servers/ })).not.toBeInTheDocument();
+  });
+
+  it("leaves a bare URL untouched until the user opens a server", async () => {
+    const onUrlUpdate = renderPage("", {}, { keepMountWrites: true });
+
+    await screen.findByText("Alpha");
+    await userEvent.click(cardFor("Alpha"));
+    await openedServer("Alpha");
+    expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows markup in the search link as literal text", async () => {
+    const payload = "<img src=x onerror=alert(1)>";
+    renderPage(`?search=${encodeURIComponent(payload)}`);
+
+    expect(await screen.findByText("No servers match the current filters or search.")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search by name, alias, URL, or ID")).toHaveValue(payload);
+    expect(screen.queryByRole("img", { name: "" })).not.toBeInTheDocument();
+    expect(document.querySelector('img[src="x"]')).toBeNull();
+  });
+
+  it("opens an admin tab link once the role finishes loading", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const page = (userRole: string) => (
+      <NuqsTestingAdapter
+        searchParams="?tab=semantic-filter"
+        onUrlUpdate={onUrlUpdate}
+        hasMemory
+        resetUrlUpdateQueueOnMount={false}
+      >
+        <QueryClientProvider client={createQueryClient()}>
+          <MCPServers {...urlProps} userRole={userRole} />
+        </QueryClientProvider>
+      </NuqsTestingAdapter>
+    );
+    const { rerender } = renderWithoutNuqs(page("Undefined Role"));
+
+    expect(await screen.findByText("Alpha")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "All Servers" })).toHaveAttribute("aria-selected", "true");
+    expect(networking.getMCPSemanticFilterSettings).not.toHaveBeenCalled();
+
+    rerender(page("Admin"));
+
+    expect(await screen.findByRole("tab", { name: "Semantic Filter" })).toHaveAttribute("aria-selected", "true");
+    expect(onUrlUpdate.mock.calls.some(([update]) => !update.searchParams.has("tab"))).toBe(false);
+  });
+
+  it("never loads admin-only tab data for an internal user who opens an admin tab link", async () => {
+    renderPage("?tab=semantic-filter", { userRole: "Internal User" });
+
+    expect(await screen.findByText("Alpha")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "All Servers" })).toHaveAttribute("aria-selected", "true");
+    expect(networking.getMCPSemanticFilterSettings).not.toHaveBeenCalled();
   });
 
   it("pushes the clicked server and clears it on Back", async () => {
