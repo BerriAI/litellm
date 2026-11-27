@@ -343,7 +343,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   )}
                 </MountedFormField>
 
-                {pricingModel === "per_token" ? (
+                {pricingModel === "per_token" && (
                   <>
                     <MountedFormField
                       name="input_cost_per_token"
@@ -433,7 +433,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       )}
                     </MountedFormField>
                   </>
-                ) : pricingModel === "per_second" ? (
+                )}
+                {pricingModel === "per_second" && (
                   <MountedFormField
                     name="input_cost_per_second"
                     label={t("addModel.advancedSettings.costPerSecond")}
@@ -449,7 +450,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       />
                     )}
                   </MountedFormField>
-                ) : (
+                )}
+                {pricingModel === "per_request" && (
                   <MountedFormField
                     name="input_cost_per_query"
                     label={t("addModel.advancedSettings.costPerRequest")}
