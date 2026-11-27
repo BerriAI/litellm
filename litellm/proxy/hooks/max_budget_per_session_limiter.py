@@ -25,10 +25,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.gemini.empty_image_response import (
-    image_answer_cost_on_failure,
-    success_cost_without_failed_image_answers,
-)
+from litellm.llms.gemini.empty_image_response import success_cost_without_failed_image_answers
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
@@ -187,10 +184,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        if image_answer_cost_on_failure(kwargs) > 0:
-            await self.async_log_success_event(  # pyright: ignore[reportUnknownMemberType]  # legacy callback signature is untyped
-                kwargs, response_obj, start_time, end_time
-            )
+        await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""

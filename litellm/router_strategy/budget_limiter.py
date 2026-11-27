@@ -40,10 +40,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
-from litellm.llms.gemini.empty_image_response import (
-    image_answer_cost_on_failure,
-    success_cost_without_failed_image_answers,
-)
+from litellm.llms.gemini.empty_image_response import success_cost_without_failed_image_answers
 from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.router_utils.batch_utils import batch_charged_once_marker_key, batch_id_to_charge_once
 from litellm.router_utils.cooldown_callbacks import (
@@ -57,6 +54,12 @@ from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
 _CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
 _BATCH_CHARGE_VALUES: Final = TypeAdapter(tuple[object, float])
+
+
+def _billed_failure_cost(kwargs: Mapping[str, object]) -> float:
+    payload: Final = kwargs.get("standard_logging_object")
+    cost: Final = _CALLBACK_FIELDS.validate_python(payload).get("response_cost") if isinstance(payload, dict) else None
+    return float(cost) if isinstance(cost, int | float) else 0.0
 
 
 class _LiteLLMParamsDictView:
@@ -577,10 +580,8 @@ class RouterBudgetLimiting(CustomLogger):
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        if image_answer_cost_on_failure(kwargs) > 0:
-            await self.async_log_success_event(  # pyright: ignore[reportUnknownMemberType]  # legacy callback signature is untyped
-                kwargs, response_obj, start_time, end_time
-            )
+        if _billed_failure_cost(kwargs) > 0:
+            await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     async def _increment_spend_for_key(
         self,

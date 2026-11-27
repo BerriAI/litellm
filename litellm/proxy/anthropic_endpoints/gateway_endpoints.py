@@ -49,7 +49,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import SessionPrincipal
-from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+from litellm.proxy._types import CLAUDE_CODE_GATEWAY_PREFIX, LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -60,7 +60,6 @@ from litellm.proxy.management_endpoints.sso_helper_utils import CLI_SSO_SESSIONS
 from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
 from litellm.types.llms.base import LiteLLMBaseModel
 
-GATEWAY_PREFIX: Final = "/claude_code_gateway"
 CLAUDE_CODE_CLIENT_ID: Final = "claude_code"
 _DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
 _REFRESH_TOKEN_GRANT: Final = "refresh_token"
@@ -152,7 +151,7 @@ def _oauth_error_response(err: _OAuthError) -> JSONResponse:
 
 
 router: Final = APIRouter(
-    prefix=GATEWAY_PREFIX,
+    prefix=CLAUDE_CODE_GATEWAY_PREFIX,
     tags=["Claude Code gateway"],
 )
 _GATEWAY_ENABLED: Final = (Depends(ensure_gateway_enabled),)
