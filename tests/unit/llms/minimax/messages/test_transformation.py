@@ -2,9 +2,12 @@
 Test MiniMax Anthropic-compatible API support
 """
 
-from unittest.mock import MagicMock, patch
+from typing import Final
+
+import pytest
 
 import litellm
+from litellm.exceptions import AuthenticationError
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 
 
@@ -98,3 +101,73 @@ def test_minimax_messages_explicit_key_wins_over_env(monkeypatch):
         api_key="param-key",
     )
     assert headers["x-api-key"] == "param-key"
+
+
+@pytest.mark.parametrize("minimax_api_key", [None, "   "])
+@pytest.mark.parametrize(
+    ("anthropic_env", "anthropic_secret"),
+    [
+        ("ANTHROPIC_API_KEY", "sk-ant-secret"),
+        ("ANTHROPIC_AUTH_TOKEN", "oauth-ant-secret"),
+    ],
+)
+def test_missing_minimax_key_does_not_fall_back_to_anthropic(
+    monkeypatch: pytest.MonkeyPatch,
+    minimax_api_key: str | None,
+    anthropic_env: str,
+    anthropic_secret: str,
+) -> None:
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    if minimax_api_key is not None:
+        monkeypatch.setenv("MINIMAX_API_KEY", minimax_api_key)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv(anthropic_env, anthropic_secret)
+    monkeypatch.setattr(litellm, "api_key", None)
+    headers: Final[dict[str, object]] = {}
+
+    with pytest.raises(AuthenticationError) as error:
+        MinimaxMessagesConfig().validate_anthropic_messages_environment(
+            headers=headers,
+            model="MiniMax-M2.1",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base="https://api.minimax.io/anthropic",
+        )
+
+    assert "MiniMax" in str(error.value)
+    assert anthropic_secret not in str(error.value)
+    assert {name.lower() for name in headers}.isdisjoint({"x-api-key", "authorization"})
+
+
+@pytest.mark.parametrize(
+    ("header_name", "header_value"),
+    [
+        ("x-api-key", "caller-key"),
+        ("Authorization", "Bearer caller-token"),
+    ],
+)
+def test_caller_auth_header_is_honored_without_minimax_key(
+    monkeypatch: pytest.MonkeyPatch,
+    header_name: str,
+    header_value: str,
+) -> None:
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+    monkeypatch.setattr(litellm, "api_key", None)
+    headers: Final[dict[str, object]] = {header_name: header_value}
+
+    resolved_headers, _ = MinimaxMessagesConfig().validate_anthropic_messages_environment(
+        headers=headers,
+        model="MiniMax-M2.1",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base="https://api.minimax.io/anthropic",
+    )
+
+    assert resolved_headers[header_name] == header_value
+    assert "sk-ant-secret" not in resolved_headers.values()
