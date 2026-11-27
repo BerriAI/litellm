@@ -259,3 +259,63 @@ async def _drain(it):
     async for chunk in it:
         out.append(chunk)
     return out
+
+
+class _SourceThatOutlivesItsConsumer(SimpleNamespace):
+    def outlive_consumer_until_settled(self) -> None:
+        self.kept_open = True
+
+    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+        self.settled_with_drain = (*self.settled_with_drain, drain)
+        return drain
+
+
+async def _wrapped_by_the_router(source: _SourceThatOutlivesItsConsumer):
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "openai/gpt-5.5", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-test"}}
+        ]
+    )
+    return await router._aresponses_streaming_iterator(response=source, initial_kwargs={})
+
+
+def _source_that_outlives_its_consumer() -> _SourceThatOutlivesItsConsumer:
+    return _SourceThatOutlivesItsConsumer(
+        response=None,
+        model="openai/gpt-5.5",
+        logging_obj=None,
+        responses_api_provider_config=None,
+        start_time=None,
+        litellm_metadata=None,
+        custom_llm_provider="openai",
+        request_data={},
+        call_type="aresponses",
+        _hidden_params={},
+        kept_open=False,
+        settled_with_drain=(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_cut_stream_served_by_its_primary_deployment_is_drained_to_the_provider_usage():
+    source = _source_that_outlives_its_consumer()
+    wrapper = await _wrapped_by_the_router(source)
+
+    wrapper.outlive_consumer_until_settled()
+    drained = await wrapper.settle_after_consumer_left(drain=True)
+
+    assert source.kept_open is True
+    assert (drained, source.settled_with_drain) == (True, (True,))
+
+
+@pytest.mark.asyncio
+async def test_a_cut_stream_that_fell_back_is_closed_so_both_deployments_keep_their_partial_bill():
+    source = _source_that_outlives_its_consumer()
+    wrapper = await _wrapped_by_the_router(source)
+    wrapper.adopt_fallback_headers(SimpleNamespace(_hidden_params={}))
+
+    drained = await wrapper.settle_after_consumer_left(drain=True)
+
+    assert (drained, source.settled_with_drain) == (False, (False,))

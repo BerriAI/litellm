@@ -9540,3 +9540,28 @@ def test_anthropic_messages_pt_merges_a_long_assistant_run_in_linear_time():
     growth: Final = _merged_assistant_run_cost(4000) / _merged_assistant_run_cost(1000)
 
     assert growth < 8.0, f"cost grew {growth:.1f}x for 4x the assistant run"
+
+
+@pytest.mark.parametrize("tool_call_id", [5, ["srvtoolu_"]], ids=["int", "list"])
+@pytest.mark.parametrize("rewrites_tool_use_ids", [True, False], ids=["renamed", "callers"])
+def test_a_tool_message_whose_tool_call_id_is_not_a_string_is_refused_whether_or_not_ids_are_renamed(
+    tool_call_id: object, rewrites_tool_use_ids: bool
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "toolu_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": tool_call_id, "content": "sunny"},
+    ]
+    with pytest.raises(TypeError):
+        anthropic_messages_pt(
+            messages=messages,  # pyright: ignore[reportArgumentType]  # the malformed id a caller can send
+            model="claude-sonnet-4-5",
+            llm_provider="anthropic",
+            rewrites_tool_use_ids=rewrites_tool_use_ids,
+        )

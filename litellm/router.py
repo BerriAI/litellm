@@ -3750,6 +3750,17 @@ class Router:
                 self.fallback_headers_adopted = True
                 return prepared
 
+            def outlive_consumer_until_settled(self) -> None:
+                from litellm.responses.streaming_iterator import keep_responses_stream_open_for_disconnect_drain
+
+                keep_responses_stream_open_for_disconnect_drain(source_iterator)
+
+            async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+                from litellm.responses.streaming_iterator import settle_responses_stream_after_consumer_left
+
+                primary_alone: Final = self._billing_source is source_iterator and self._primary_partial is None
+                return await settle_responses_stream_after_consumer_left(source_iterator, drain=drain and primary_alone)
+
             def hold_primary_partial(self) -> None:
                 from litellm.responses.streaming_iterator import held_partial_on_disconnect
 

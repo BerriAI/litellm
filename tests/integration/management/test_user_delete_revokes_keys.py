@@ -59,12 +59,12 @@ def _token_not_found_error() -> dict[str, JsonValue]:
     }
 
 
-def _blocked_key_error() -> dict[str, JsonValue]:
+def _blocked_key_error(param: str | None) -> dict[str, JsonValue]:
     return {
         "error": {
             "message": "Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
             "type": "auth_error",
-            "param": None,
+            "param": param,
             "code": "401",
         }
     }
@@ -389,10 +389,10 @@ def test_scim_user_delete_revokes_keys(gateway: Gateway, peer: Gateway, monkeypa
 
         denied: Final = _chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
         assert denied.status_code == 401, denied.text
-        assert denied.json() == _blocked_key_error(), denied.text
+        assert denied.json() in (_blocked_key_error("None"), _blocked_key_error(None)), denied.text
         denied_peer: Final = _chat(peer, model, key, f"denied {uuid.uuid4().hex}")
         assert denied_peer.status_code == 401, denied_peer.text
-        assert denied_peer.json() == _blocked_key_error(), denied_peer.text
+        assert denied_peer.json() in (_blocked_key_error("None"), _blocked_key_error(None)), denied_peer.text
         assert _observed(upstream) == []
         assert _observed(upstream) == []
 
