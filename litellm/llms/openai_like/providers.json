@@ -268,6 +268,19 @@
     "api_base_env": "SAIL_API_BASE",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
+  "proxystacks": {
+    "base_url": "https://proxystacks.com/v1",
+    "api_key_env": "RELAY_API_KEY",
+    "api_base_env": "RELAY_API_BASE",
+    "constraints": {
+      "cache_control_ttl": true
+    },
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
   "reka": {
     "base_url": "https://api.reka.ai/v1",
     "api_key_env": "REKA_API_KEY",
