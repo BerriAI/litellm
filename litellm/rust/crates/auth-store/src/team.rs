@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use litellm_redis_store::auth_cache::TeamEntry;
-use litellm_repositories::{ObjectPermissionRepository, Side, Team, TeamRepository};
+use litellm_repositories::{
+    Inserted, NewTeam, ObjectPermissionRepository, Side, Team, TeamRepository,
+};
 
 use crate::{
     Error,
@@ -41,6 +43,27 @@ impl TeamDatabase {
         self.nested(team_entry(row)?, side).await.map(Some)
     }
 
+    /// Creates `team` as `_get_team_db_check` does under `team_id_upsert`, through `new_team` as a
+    /// proxy admin, and returns the entry for the row as stored, or for the team a concurrent
+    /// writer stored first, with the object permission it points at. A created team points at
+    /// none. The license's team limit, the reserved UI team id and the organization's limits are
+    /// the caller's to check first, and the audit log and the access group caches its to write
+    /// and drop after.
+    pub async fn insert(&self, team: &NewTeam) -> Result<CreatedTeam, Error> {
+        let stored = self.teams.insert(team).await?;
+        let team = match stored.team {
+            Inserted::Created(row) => Inserted::Created(team_entry(row)?),
+            Inserted::Conflict(None) => Inserted::Conflict(None),
+            Inserted::Conflict(Some(row)) => {
+                Inserted::Conflict(Some(self.nested(team_entry(row)?, Side::Writer).await?))
+            }
+        };
+        Ok(CreatedTeam {
+            team,
+            access_groups: stored.access_groups,
+        })
+    }
+
     async fn nested(&self, team: TeamEntry, side: Side) -> Result<TeamEntry, Error> {
         let object_permission = self
             .object_permissions
@@ -70,6 +93,14 @@ impl TeamDatabase {
             Err(_) => AliasMatch::Ambiguous,
         })
     }
+}
+
+/// What a team insert stored, and the access groups whose teams it reconciled, whose cached
+/// entries the host drops.
+#[derive(Debug, PartialEq)]
+pub struct CreatedTeam {
+    pub team: Inserted<TeamEntry>,
+    pub access_groups: Vec<String>,
 }
 
 /// What a read by alias finds: the one row with that alias, none, or more than one, which
