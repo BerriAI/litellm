@@ -1234,8 +1234,8 @@ async def test_audit_events_flush_at_the_same_batch_size(
 async def test_both_loggers_keep_uploads_that_fail_in_transport(
     golden: Golden, bucket: FakeBucket, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
-    monkeypatch.setattr(s3_v2, "S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 0.3)
     if failure == "timeout":
+        monkeypatch.setattr(s3_v2, "S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 0.3)
         bucket.delays.append(("_a\\.json", 1.0))
     else:
         bucket.failures.append(("_a\\.json", 0, ""))
