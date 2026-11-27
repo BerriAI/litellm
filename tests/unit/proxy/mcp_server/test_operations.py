@@ -3059,5 +3059,8 @@ async def test_a_tool_listing_with_no_usable_server_fails_without_reaching_the_u
     with pytest.raises(HTTPException) as unavailable:
         await operations._get_tools_from_mcp_servers(caller_granted("ghost"), None, None)
 
-    assert (unavailable.value.status_code, unavailable.value.detail) == (503, PROFILE_UNAVAILABLE)
+    assert (unavailable.value.status_code, unavailable.value.detail) == (
+        500,
+        unusable_profile_detail(MissingProfile("tickets", "ghost")),
+    )
     assert upstream.request_count() == 0
