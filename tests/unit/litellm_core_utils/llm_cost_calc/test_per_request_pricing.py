@@ -90,23 +90,20 @@ class _CostRecorder(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_streamed_completion_logs_flat_price_once() -> None:
+async def test_streamed_completion_logs_flat_price_once(monkeypatch: pytest.MonkeyPatch) -> None:
     recorder = _CostRecorder()
-    litellm.callbacks = [recorder]
-    try:
-        stream = await _router(input_cost_per_query=REQUEST_PRICE).acompletion(
-            model="flat-model",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="a streamed answer with several chunks",
-            stream=True,
-        )
-        _ = [chunk async for chunk in stream]
-        for _attempt in range(50):
-            if recorder.costs:
-                break
-            await asyncio.sleep(0.05)
-    finally:
-        litellm.callbacks = []
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    stream = await _router(input_cost_per_query=REQUEST_PRICE).acompletion(
+        model="flat-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="a streamed answer with several chunks",
+        stream=True,
+    )
+    _ = [chunk async for chunk in stream]
+    for _attempt in range(50):
+        if recorder.costs:
+            break
+        await asyncio.sleep(0.05)
 
     assert recorder.costs == [pytest.approx(REQUEST_PRICE)]
 
