@@ -24,10 +24,10 @@ class DeploymentState(IntEnum):
 
 @dataclass(frozen=True, slots=True)
 class DeploymentStateSeries:
-    litellm_model_name: str
-    model_id: str | None
-    api_base: str | None
-    api_provider: str
+    litellm_model_name: object
+    model_id: object
+    api_base: object
+    api_provider: object
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,14 +73,14 @@ class DeploymentStateSeriesTracker:
 
     def __init__(
         self,
-        write: Callable[[DeploymentState, str, str | None, str | None, str], None],
+        write: Callable[[DeploymentState, object, object, object, object], None],
         lock: AbstractContextManager[object] | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self._write = write
         self._clock: Final = monotonic_seconds if clock is None else clock
-        self._serving: OrderedDict[str | None, Serving] = OrderedDict()  # mutable-ok: O(1) LRU
-        self._cooling: dict[str | None, CoolingDown] = {}  # mutable-ok: emptied by each deployment's next success
+        self._serving: OrderedDict[object, Serving] = OrderedDict()  # mutable-ok: O(1) LRU
+        self._cooling: dict[object, CoolingDown] = {}  # mutable-ok: emptied by each deployment's next success
         self._lock: AbstractContextManager[object] = Lock() if lock is None else lock
 
     def healthy(self, series: DeploymentStateSeries) -> None:
@@ -116,7 +116,7 @@ class DeploymentStateSeriesTracker:
             self._write_all(DeploymentState.COMPLETE_OUTAGE, marked)
             self._remember(derived_from_config.model_id, CoolingDown(written=marked, ends_at=math.inf))
 
-    def cooldown_lasts(self, model_id: str | None, seconds: float) -> None:
+    def cooldown_lasts(self, model_id: object, seconds: float) -> None:
         with self._lock:
             cooling: Final = self._cooling.get(model_id)
             if cooling is not None:
@@ -126,11 +126,11 @@ class DeploymentStateSeriesTracker:
         for item in series:
             self._write(state, item.litellm_model_name, item.model_id, item.api_base, item.api_provider)
 
-    def _history(self, model_id: str | None) -> SeriesHistory:
+    def _history(self, model_id: object) -> SeriesHistory:
         cooling: Final = self._cooling.get(model_id)
         return self._serving.get(model_id, Serving()) if cooling is None else cooling
 
-    def _remember(self, model_id: str | None, history: SeriesHistory) -> None:
+    def _remember(self, model_id: object, history: SeriesHistory) -> None:
         match history:
             case Serving():
                 self._cooling.pop(model_id, None)

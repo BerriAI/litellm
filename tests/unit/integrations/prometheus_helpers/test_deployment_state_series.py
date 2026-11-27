@@ -22,9 +22,9 @@ StateChange: TypeAlias = Callable[[DeploymentStateSeriesTracker, DeploymentState
 
 def gauge_writer(
     gauge: Gauge, before_write: Callable[[DeploymentState], None] = lambda state: None
-) -> Callable[[DeploymentState, str, str | None, str | None, str], None]:
+) -> Callable[[DeploymentState, object, object, object, object], None]:
     def write(
-        state: DeploymentState, litellm_model_name: str, model_id: str | None, api_base: str | None, api_provider: str
+        state: DeploymentState, litellm_model_name: object, model_id: object, api_base: object, api_provider: object
     ) -> None:
         before_write(state)
         gauge[DeploymentStateSeries(litellm_model_name, model_id, api_base, api_provider)] = state
