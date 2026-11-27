@@ -1119,7 +1119,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             start_time=start_time if isinstance(start_time, float) else None,
         )
         found_nothing: Final = not blocked and not self._should_block_content(armor_response)
-        if found_nothing and self._get_sanitized_content(armor_response) in (None, scanned) and acting_runs_are_logged():
+        if (
+            found_nothing
+            and self._get_sanitized_content(armor_response) in (None, scanned)
+            and acting_runs_are_logged()
+        ):
             run["guardrail_action"] = GUARDRAIL_ACTION_NONE
         add_guardrail_response_to_standard_logging_object(
             litellm_logging_obj=logging_obj if isinstance(logging_obj, Logging) else None,
