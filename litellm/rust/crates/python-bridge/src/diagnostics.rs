@@ -21,6 +21,15 @@ pub(crate) fn reserve_process_for_forking() -> PyResult<()> {
     Ok(litellm_host_python::reserve_process_for_forking()?)
 }
 
+/// Resolves once every log line a native task queued so far has gone through Python's handlers.
+#[pyfunction]
+pub(crate) fn native_log_lines_delivered(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    litellm_host_python::run_async_value(py, async {
+        crate::logger::delivered().await;
+        Ok(())
+    })
+}
+
 #[cfg(feature = "panic-test")]
 #[pyfunction]
 pub(crate) fn _panic_for_test() {

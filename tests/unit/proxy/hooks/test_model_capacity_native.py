@@ -45,7 +45,6 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
 )
 from litellm.proxy.hooks import dynamic_rate_limiter_v3, model_capacity_native, parallel_request_limiter_v3
 from litellm.proxy.hooks.model_capacity_native import (
-    UNLICENSED_PRIORITY_MESSAGE,
     NativeDynamicRateLimiter,
     build_native_dynamic_rate_limiter,
     native_dynamic_rate_limiter,
@@ -64,6 +63,7 @@ from litellm.proxy.v2_proxy_fields import (
     PRE_CALL_SOURCES,
 )
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, RateLimitScope, RateLimitStore
+from litellm.rust_bridge._native import native_log_lines_delivered
 from litellm.rust_bridge.host import redis_events
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
 from litellm.types.utils import (
@@ -530,6 +530,12 @@ class _MetricsTap(PrometheusLogger):
         )
 
 
+UNLICENSED_PRIORITY_MESSAGE: Final = (
+    "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your "
+    ".env to enable this.\nGet a license: https://docs.litellm.ai/docs/enterprise."
+)
+
+
 class _UnlicensedTap(logging.Handler):
     def __init__(self, refused: str | None = None, renamed: Mapping[str, str] = MappingProxyType({})) -> None:
         super().__init__(level=logging.INFO)
@@ -601,13 +607,19 @@ async def _differential(
     return transcript
 
 
+async def _logged_step(side: Side, step: Step, tap: _UnlicensedTap) -> list[object]:
+    outcome: Final = await _run_step(side, step)
+    await native_log_lines_delivered()
+    return [*outcome, ("unlicensed", tap.take()), ("logged", tap.take_lines())]
+
+
 async def _transcript(
     side: Side, clock: Clock, steps: Sequence[Step], scopes: Sequence[tuple[str, str]], tap: _UnlicensedTap
 ) -> list[object]:
     transcript: Final[list[object]] = []
     for step in steps:
         clock.advance(step.advance)
-        transcript.append([*await _run_step(side, step), ("unlicensed", tap.take()), ("logged", tap.take_lines())])
+        transcript.append(await _logged_step(side, step, tap))
     transcript.append(await _counters(side, scopes))
     return transcript
 

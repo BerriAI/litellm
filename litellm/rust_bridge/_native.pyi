@@ -2732,6 +2732,7 @@ class HuggingFaceEncoding:
     def n_sequences(self) -> int: ...
 
 def gil_stats() -> dict[str, int]: ...
+def native_log_lines_delivered() -> Future[None]: ...
 def process_state_started() -> bool: ...
 def reserve_process_for_forking() -> None: ...
 
@@ -2873,6 +2874,7 @@ __all__ = [
     "jwt_unverified_claims",
     "messages",
     "messages_optional_params",
+    "native_log_lines_delivered",
     "native_redis_breaker_states",
     "ocr",
     "ocr_health_check_document",
@@ -3100,7 +3102,6 @@ class _ModelInfoStep(_Step):
         "bedrock_base",
         "discovered",
         "user_model_info",
-        "log",
         "group_params",
         "group_deployment",
         "group_capabilities",
@@ -3115,8 +3116,6 @@ class _ModelInfoStep(_Step):
     name: NotRequired[str]
     model_id: NotRequired[str]
     id: NotRequired[JsonValue]
-    level: NotRequired[Literal["debug", "error"]]
-    message: NotRequired[str]
     index: NotRequired[int]
     model_info: NotRequired[JsonValue]
     litellm_model: NotRequired[JsonValue]
