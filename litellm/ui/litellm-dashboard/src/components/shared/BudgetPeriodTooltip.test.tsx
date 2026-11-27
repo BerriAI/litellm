@@ -2,6 +2,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import { BudgetPeriodTooltip, budgetPeriodLines } from "./BudgetPeriodTooltip";
 
 const originalTimezone: string | undefined = process.env.TZ;
@@ -22,6 +24,18 @@ const noBudget = { spend: null, maxBudget: null, budgetDuration: "30d", budgetRe
 const noBudgetNoDuration = { spend: 2, maxBudget: null, budgetDuration: null, budgetResetAt: null };
 
 describe("budgetPeriodLines", () => {
+  it("shows the UTC range in Chinese date order", async () => {
+    i18n.addResourceBundle("zh-CN", "translation", zh);
+    await i18n.changeLanguage("zh-CN");
+    try {
+      const lines = budgetPeriodLines(scheduled);
+      expect(lines[0]).toContain("2026年3月1日 00:00");
+      expect(lines[0]).toContain("2026年4月1日 00:00");
+    } finally {
+      await i18n.changeLanguage("en");
+    }
+  });
+
   it("describes the current period in UTC, max budget, interval and spend when a reset is scheduled", () => {
     process.env.TZ = "America/Los_Angeles";
     expect(budgetPeriodLines(scheduled)).toEqual([

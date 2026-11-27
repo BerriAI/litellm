@@ -1,5 +1,6 @@
 "use client";
 
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
@@ -37,7 +38,7 @@ interface PromptCachingRequestsTableProps {
 }
 
 export default function PromptCachingRequestsTable({ accessToken, dateValue }: PromptCachingRequestsTableProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [filter, setFilter] = useQueryState("requests_filter", requestFilterParser);
   const [pageSize, setPageSize] = useState(10);
   const window = activityWindow(dateValue, new Date());
@@ -157,7 +158,7 @@ export default function PromptCachingRequestsTable({ accessToken, dateValue }: P
                           {request.request_id}
                         </Link>
                         <time dateTime={request.start_time} className="mt-1 block text-xs text-muted-foreground">
-                          {new Date(request.start_time).toLocaleString()}
+                          {displayTimestamp(new Date(request.start_time), locale.language)}
                         </time>
                       </TableCell>
                       <TableCell>

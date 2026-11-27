@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import { MemberRoleSelect } from "./MemberRoleSelect";
@@ -88,7 +89,7 @@ export default function UserInfoView({
   initialTab = 0,
   startInEditMode = false,
 }: UserInfoViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const { premiumUser, userId: signedInUserId } = useAuthorized();
   const canViewAutoRouterUsage = hasProxyWideSpendView(userRole);
   const canViewUserUsage = canViewAutoRouterUsage || (Boolean(userId.trim()) && userId === signedInUserId);
@@ -674,12 +675,20 @@ export default function UserInfoView({
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.created")}</p>
-                  <p>{userData.created_at ? new Date(userData.created_at).toLocaleString() : unknownTimestamp}</p>
+                  <p>
+                    {userData.created_at
+                      ? displayTimestamp(new Date(userData.created_at), locale.language)
+                      : unknownTimestamp}
+                  </p>
                 </div>
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.lastUpdated")}</p>
-                  <p>{userData.updated_at ? new Date(userData.updated_at).toLocaleString() : unknownTimestamp}</p>
+                  <p>
+                    {userData.updated_at
+                      ? displayTimestamp(new Date(userData.updated_at), locale.language)
+                      : unknownTimestamp}
+                  </p>
                 </div>
 
                 <div>

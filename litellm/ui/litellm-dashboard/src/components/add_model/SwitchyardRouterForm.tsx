@@ -116,7 +116,7 @@ export default function SwitchyardRouterForm({ accessToken, onSuccess, initial }
   const [config, setConfig] = useState<SwitchyardConfig>(parsed.success ? parsed.data : emptySwitchyardConfig());
   const [name, setName] = useState(initial.name);
   const [error, setError] = useState<string | null>(
-    parsed.success ? null : "The stored Switchyard configuration is invalid. Correct it before saving.",
+    parsed.success ? null : t("addModel.switchyardRouterForm.invalidStoredConfig"),
   );
   const [toolError, setToolError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -136,7 +136,7 @@ export default function SwitchyardRouterForm({ accessToken, onSuccess, initial }
         switchyard_router_config: payload.litellm_params.switchyard_router_config,
       });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Unable to save Switchyard router");
+      setError(failure instanceof Error ? failure.message : t("addModel.switchyardRouterForm.saveFailed"));
     } finally {
       setSaving(false);
     }

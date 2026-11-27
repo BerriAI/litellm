@@ -199,6 +199,43 @@
       "discovered": "在 {{type}} 中找到 {{count}} 个现有资源",
       "more": "以及另外 {{count}} 个",
       "lockHint": "一旦有资源配置了应用预算设置，此选项将无法更改。"
+    },
+    "groups": {
+      "title": "应用组",
+      "count_one": "{{count}} 个应用组",
+      "count_other": "{{count}} 个应用组",
+      "manageBudgetGroups": "管理应用组预算组",
+      "selectApps": "选择应用",
+      "selectionHint": "选择此组中的应用。每个应用只能属于一个组。选择应用后，它会从原来的组移到此组，并保留自己的预算。",
+      "search": "搜索应用组",
+      "noMatches": "没有符合搜索条件的应用组。",
+      "hint": "相关应用可共享预算，同时保留各自的限额。",
+      "create": "创建应用组",
+      "edit": "编辑应用组",
+      "empty": "创建一个应用组，然后选择要加入该组的应用。",
+      "choose": "选择应用组",
+      "notFound": "找不到应用组。",
+      "name": "组名称",
+      "description": "说明",
+      "nameRequired": "请输入组名称。",
+      "customerRequired": "请选择客户组织。",
+      "sharedBudget": "共享预算",
+      "capHint": "每个请求都必须同时满足组预算和应用自身的限额。",
+      "customerBudget": "应用组的客户预算",
+      "budgetSettings": "应用组预算设置",
+      "customer": "客户组织",
+      "apps": "此组中的应用",
+      "appLimitsHint": "应用限额不会预留预算。所有应用共享组内的剩余预算。",
+      "usageHint": "用量图表显示归属于客户组织的请求。共享预算涵盖所有请求。",
+      "noApps": "未选择应用。请编辑此应用组以添加应用。",
+      "editApp": "编辑应用设置",
+      "customers": "客户组织预算",
+      "setCustomerBudget": "设置客户预算",
+      "noCustomers": "暂无客户用量或预算。",
+      "editBudget": "编辑预算",
+      "parent": "应用组",
+      "noGroup": "无应用组",
+      "membershipHint": "新请求计入所选应用组。历史用量仍归属于处理这些请求的应用组。"
     }
   },
   "format": {
@@ -2255,7 +2292,10 @@
         "refresh": "刷新",
         "refreshing": "正在刷新下载历史…",
         "loadMore": "加载更多",
-        "loadingMore": "正在加载更多下载记录…"
+        "loadingMore": "正在加载更多下载记录…",
+        "downloadCsv": "下载 CSV",
+        "exporting": "正在导出…",
+        "exportFailed": "无法导出下载历史记录。请重试。"
       },
       "properties": {
         "category": "类别",
@@ -2398,7 +2438,9 @@
         "overview": "概览",
         "savings": "节省费用",
         "autoRouterUsage": "自动路由用量",
-        "settings": "设置"
+        "settings": "设置",
+        "label": "密钥详情分区",
+        "autoRouterShort": "路由器"
       },
       "overview": {
         "lifetimeSpendHintLabel": "为什么历史累计费用低于当前费用",
@@ -2455,7 +2497,8 @@
         "unlimited": "无限制",
         "default": "默认",
         "metadata": "元数据"
-      }
+      },
+      "keyNotFoundDescription": "此链接中的 ID 未匹配到密钥。该密钥可能已删除或重新生成。"
     },
     "keyInfoHeader": {
       "backToKeys": "返回密钥列表",
@@ -2480,7 +2523,16 @@
       },
       "fields": {
         "team": "团队",
-        "organization": "组织"
+        "organization": "组织",
+        "project": "项目"
+      },
+      "noOwner": "服务账号，无所有者",
+      "secretKey": "密钥",
+      "status": {
+        "active": "正常",
+        "blocked": "已封禁",
+        "overBudget": "超出预算",
+        "expired": "已过期"
       }
     },
     "keyEditView": {
@@ -2619,6 +2671,195 @@
     },
     "keySavingsTab": {
       "scopeNote": "仅显示您自己通过此密钥发出的请求。如果密钥在团队内共享，其他成员产生的费用不会计入此处。"
+    },
+    "overview": {
+      "spend": {
+        "title": "费用",
+        "openActivity": "查看活动",
+        "thisPeriod": "本周期",
+        "spend": "费用",
+        "periodRange": "{{start}} 至 {{end}}，于 {{reset}} 重置",
+        "resetsAt": "于 {{time}} 重置",
+        "neverResets": "不会重置。",
+        "neverResetsNoBudget": "不会重置。此密钥未设置预算。",
+        "lifetime": "累计",
+        "since": "自 {{date}} 起",
+        "alertsTitle": "密钥预算告警",
+        "alertAt": "达到 ",
+        "alertEmails": " 时发送邮件至 ",
+        "fallbacksTitle": "模型自身的预算用尽时",
+        "fallsBackTo": "回退到"
+      },
+      "canStillSpend": {
+        "title": "剩余可用费用",
+        "noBudget": "此密钥不受预算限制，可以继续产生费用。",
+        "unmeasured": "此密钥关联的预算不报告费用，因此无法确定剩余额度。",
+        "beforeBlocks": "达到此额度后，{{owner}}将拦截此密钥的请求",
+        "beforeThrottles": "达到此额度后，{{owner}}将限制此密钥的请求速率",
+        "usedUp": "{{owner}}已用尽",
+        "figures": "{{limit}} 中的 {{spend}}",
+        "usedFigures": "，已用 {{figures}}",
+        "usedUpFigures": "，{{figures}}",
+        "resetsAt": "于 {{time}} 重置。",
+        "resetsEvery": "每 {{duration}} 重置一次。",
+        "noReset": "不会重置。",
+        "owner": {
+          "key": "密钥预算",
+          "team": "{{name}} 团队的预算",
+          "teamMember": "{{name}} 的团队成员预算",
+          "organization": "{{name}} 组织的预算",
+          "user": "{{name}} 的用户预算"
+        },
+        "ownerTitle": {
+          "key": "密钥预算",
+          "team": "{{name}} 团队的预算",
+          "teamMember": "{{name}} 的团队成员预算",
+          "organization": "{{name}} 组织的预算",
+          "user": "{{name}} 的用户预算"
+        }
+      },
+      "budgets": {
+        "scopes": {
+          "key": "密钥预算",
+          "team": "团队预算",
+          "teamMember": "团队成员预算",
+          "organization": "组织预算",
+          "user": "用户预算"
+        },
+        "throttlesInstead": "{{scope}}，限流而非拦截",
+        "throttled": "已限流",
+        "blocking": "正在拦截请求",
+        "spendNotReported": "此预算不报告费用",
+        "limitOnly": "限额为 {{limit}}",
+        "ofLimit": " / {{limit}}",
+        "percent": "{{percent}}%",
+        "resetsAt": "于 {{time}} 重置"
+      },
+      "alerts": {
+        "blockedTitle": "此密钥已被封禁",
+        "blockedDescription": "在解除封禁之前，使用此密钥的请求将失败。",
+        "unblock": "解除封禁",
+        "usedUpTitle": "{{owner}}已用尽",
+        "usedUpDescription": "在预算重置之前，使用此密钥的请求将失败。已用 {{spend}}，限额为 {{limit}}。{{reset}}",
+        "open": {
+          "team": "查看团队",
+          "teamMember": "查看团队",
+          "organization": "查看组织",
+          "user": "查看用户",
+          "key": "查看密钥"
+        }
+      },
+      "lifecycle": {
+        "title": "生命周期",
+        "created": "创建时间",
+        "by": "创建者：",
+        "lastRotated": "上次轮换",
+        "lastUpdated": "上次更新",
+        "lastUsed": "上次使用",
+        "never": "从未",
+        "expires": "到期时间",
+        "expired": "已过期",
+        "nextRotation": "下次轮换",
+        "notScheduled": "尚未安排",
+        "afterExpiry": "密钥过期后",
+        "every": "每 {{interval}} 一次",
+        "autoRotation": "自动轮换",
+        "off": "关闭"
+      },
+      "rateLimits": {
+        "title": "速率限制",
+        "rpm": "每分钟请求数",
+        "tpm": "每分钟 Token 数",
+        "tpd": "每日 Token 数",
+        "parallel": "并行请求数",
+        "noLimit": "不限",
+        "perModel": "按模型",
+        "perTag": "按标签",
+        "model": "模型",
+        "tag": "标签",
+        "searchModels": "搜索模型",
+        "searchTags": "搜索标签"
+      },
+      "limitTable": {
+        "showAll": "显示全部 {{count}} 项",
+        "showFewer": "收起",
+        "noMatch": "没有符合“{{query}}”的结果"
+      },
+      "access": {
+        "title": "访问权限",
+        "models": "模型",
+        "everyTeamModelPrefix": "可使用 ",
+        "everyTeamModelSuffix": " 团队的所有模型",
+        "everyProxyModel": "可使用代理提供的所有模型",
+        "noModelList": "。此密钥未单独设置模型列表。",
+        "moreModels": "另有 {{count}} 项",
+        "searchModels": "搜索模型",
+        "mcpServers": "MCP 服务器",
+        "mcpBlocked": "不允许访问 MCP 服务器",
+        "mcpAllProxy": "代理上的所有 MCP 服务器",
+        "allowedTools": "{{name}} 上允许使用的工具",
+        "toolsets": "工具集 {{toolsets}}",
+        "accessGroups": "访问组 {{groups}}",
+        "vectorStores": "向量存储",
+        "agents": "智能体",
+        "searchTools": "搜索工具",
+        "allAllowed": "全部允许",
+        "skills": "技能",
+        "skillsNote": "此处仅显示此密钥直接获得的技能，不包括通过访问组获得的技能。",
+        "serverTools_one": "{{name}}，{{count}} 个工具",
+        "serverTools_other": "{{name}}，{{count}} 个工具"
+      },
+      "guardrails": {
+        "title": "护栏",
+        "onThisKey": "此密钥上的护栏",
+        "fromPolicies": "来自策略",
+        "adds": "添加",
+        "addsNone": "未添加护栏",
+        "globalOff": "全局护栏已关闭",
+        "globalOffNote": "代理级护栏不适用于此密钥。",
+        "globalOn": "全局护栏也会应用于此密钥。"
+      },
+      "logging": {
+        "title": "日志记录",
+        "integrations": "集成",
+        "integrationDetail_one": "{{events}}，已设置 {{count}} 个参数",
+        "integrationDetail_other": "{{events}}，已设置 {{count}} 个参数",
+        "turnedOff": "此密钥已关闭：",
+        "noneTurnedOff": "此密钥未关闭任何回调。"
+      },
+      "notSet": {
+        "title": "此密钥未设置",
+        "sections": {
+          "rateLimits": "速率限制",
+          "mcpServers": "MCP 服务器",
+          "vectorStores": "向量存储",
+          "agents": "智能体",
+          "skills": "技能",
+          "guardrails": "护栏",
+          "policies": "策略",
+          "logging": "日志记录"
+        }
+      },
+      "other": {
+        "title": "其他设置",
+        "subtitle": "仅显示此密钥上已配置的项目",
+        "tags": "标签",
+        "allowedRoutes": "允许的路由",
+        "passThroughRoutes": "直通路由",
+        "prompts": "提示词",
+        "promptCaching": "提示词缓存",
+        "on": "开启",
+        "estimatedOutputTokens": "预估输出 Token 数",
+        "byDefault": "默认为 {{tokens}}",
+        "estimatedPerModel": "各模型的预估输出 Token 数",
+        "tokens": "Token",
+        "routerSettings": "路由器设置",
+        "metadata": "元数据",
+        "fields_one": "{{count}} 个字段",
+        "fields_other": "{{count}} 个字段",
+        "view": "查看",
+        "viewJson": "查看 JSON"
+      }
     }
   },
   "apiKeys": {
@@ -3392,7 +3633,8 @@
       "zerobus": "Databricks Zerobus Ingest 日志集成",
       "s3": "S3 存储桶（AWS）日志集成",
       "signoz": "SigNoz 日志集成。设置说明：https://signoz.io/docs/litellm-observability/",
-      "sqs": "SQS 队列（AWS）日志集成"
+      "sqs": "SQS 队列（AWS）日志集成",
+      "mixpanel": "Mixpanel Agent Intelligence 的 OpenTelemetry 集成。设置方法：https://docs.mixpanel.com/docs/agent-intelligence"
     }
   },
   "projects": {
@@ -3748,7 +3990,8 @@
         "emptyTitle": "未配置提供商加价",
         "emptyHint": "点击“添加提供商加价”开始配置",
         "dialogTitle": "添加提供商加价",
-        "dialogDescription": "选择提供商，或选择“全局”以应用于全部提供商，然后配置百分比或固定金额加价。"
+        "dialogDescription": "选择提供商，或选择“全局”以应用于全部提供商，然后配置百分比或固定金额加价。",
+        "configOwnedHint": "由 config.yaml 控制。请在其中编辑 litellm_settings.cost_margin_config。"
       },
       "blockUnpriced": {
         "title": "阻止未定价模型",
@@ -4079,6 +4322,11 @@
     "usage": {
       "perDay": "每日",
       "savings": {
+        "drivers": {
+          "compression": "压缩",
+          "promptCaching": "提示词缓存",
+          "autoRouter": "自动路由"
+        },
         "runningTotal": "累计节省费用",
         "savedPerInterval": "节省额（{{interval}}）",
         "rangeUtc": "{{range}}（UTC）",
@@ -6033,6 +6281,7 @@
     },
     "chart": {
       "valuesLabel": "{{title}} 的值",
+      "period": "{{start}} 至 {{end}}（UTC）",
       "category": "类别",
       "valuesUnavailable": "以下项的数值不可用：{{labels}}。",
       "unavailable": "暂无数据",
@@ -6048,7 +6297,16 @@
         "gateway": "网关用量",
         "allTeams": "所有团队",
         "allTags": "所有标签",
-        "yours": "您的用量"
+        "yours": "您的用量",
+        "permittedTeams": "您有权查看的团队用量",
+        "user": "用户 {{id}}",
+        "teams": "团队 {{ids}}",
+        "tags": "标签 {{tags}}"
+      },
+      "units": {
+        "usd": "美元",
+        "requests": "请求",
+        "tokens": "Token"
       },
       "labels": {
         "unknown": "未知",
@@ -6171,7 +6429,8 @@
           "ratio": "每日错误率"
         }
       },
-      "promptCacheError": "无法加载提示词缓存告警。"
+      "promptCacheError": "无法加载提示词缓存告警。",
+      "inboxDescription": "查看网关告警并管理监控设置。"
     },
     "page": {
       "tabs": {
@@ -9394,6 +9653,15 @@
         "userId": "用户 ID",
         "copyLabel": "复制{{label}}"
       }
+    },
+    "semanticCaching": {
+      "title": "响应缓存",
+      "mode": "缓存模式",
+      "inherit": "继承",
+      "enabled": "启用",
+      "disabled": "禁用",
+      "threshold": "相似度阈值",
+      "ttl": "TTL（秒）"
     }
   },
   "commonComponents": {
@@ -9914,7 +10182,7 @@
       "stopFailed": "无法停止运行。请重新连接后再次点击“停止”。"
     },
     "chatHistory": {
-      "imageConversation": "图像对话"
+      "newConversation": "新对话"
     },
     "imageHelpers": {
       "generatedImageName": "生成的图像 {{number}}"
@@ -11619,6 +11887,9 @@
         },
         "airia": {
           "description": "Airia AI 安全与治理平台。提供针对提示词注入、数据泄露防护和负责任 AI 的运行时护栏，作用于每一条提示词和响应。"
+        },
+        "reco": {
+          "description": "Reco AI 智能体安全服务。在调用模型前，按您的 Reco 策略检查每条提示词，拦截提示词注入并防止敏感数据泄露。"
         }
       },
       "subcategories": {
@@ -12791,6 +13062,8 @@
     },
     "scoreChart": {
       "title": "请求结果趋势",
+      "passed": "已通过",
+      "blocked": "已拦截",
       "empty": "此期间暂无图表数据"
     },
     "logViewer": {
@@ -13775,6 +14048,18 @@
       "customServer": "+ 自定义服务器",
       "allCategories": "全部",
       "otherCategory": "其他",
+      "categories": {
+        "developerTools": "开发者工具",
+        "communication": "沟通协作",
+        "databases": "数据库",
+        "productivity": "办公效率",
+        "search": "搜索",
+        "webAndBrowser": "网页与浏览器",
+        "cloud": "云服务",
+        "system": "系统",
+        "finance": "金融",
+        "eCommerce": "电子商务"
+      },
       "searchPlaceholder": "搜索服务器…",
       "errors": {
         "loadFailed": "加载 MCP 服务器失败"
@@ -15210,7 +15495,8 @@
         "auditLogs": "审计日志",
         "deletedKeys": "已删除的密钥",
         "deletedTeams": "已删除的团队"
-      }
+      },
+      "description": "查看请求、审计活动和已删除的资源。"
     },
     "request": {
       "panel": {
@@ -15222,7 +15508,10 @@
       },
       "toolbar": {
         "customRange": "自定义范围",
-        "rangeSeparator": "至"
+        "rangeSeparator": "至",
+        "export": "导出",
+        "exportCapped": "仅导出前 {{count}} 条日志。",
+        "exportEmpty": "没有可导出的匹配日志。"
       },
       "timeRange": {
         "lastMinute": "最近 1 分钟",
@@ -15337,6 +15626,8 @@
         "created": "已创建",
         "updated": "已更新",
         "deleted": "已删除",
+        "blocked": "已封禁",
+        "unblocked": "已解除封禁",
         "rotated": "已轮换",
         "killSwitchFired": "已触发紧急开关"
       },
@@ -15454,6 +15745,18 @@
     }
   },
   "activityMetrics": {
+    "series": {
+      "spend": "费用",
+      "promptTokens": "提示词 Token",
+      "completionTokens": "补全 Token",
+      "totalTokens": "Token 总数",
+      "apiRequests": "API 请求",
+      "successfulRequests": "成功请求",
+      "failedRequests": "失败请求",
+      "avgResponseTimeMs": "平均响应时间（毫秒）",
+      "cacheReadInputTokens": "缓存读取输入 Token",
+      "cacheCreationInputTokens": "缓存写入输入 Token"
+    },
     "topKeys": {
       "title": "费用最高的虚拟密钥",
       "loading": "正在加载密钥排行...",
@@ -16313,13 +16616,13 @@
         "frameTitle": "用量报告",
         "summary": {
           "title": "汇总",
-          "spend": "总花费",
+          "spend": "总费用",
           "requests": "请求数",
           "successful": "成功请求",
           "failed": "失败请求",
-          "tokens": "总令牌数",
-          "promptTokens": "提示令牌",
-          "completionTokens": "补全令牌"
+          "tokens": "总 Token 数",
+          "promptTokens": "提示 Token",
+          "completionTokens": "补全 Token"
         },
         "breakdown": "明细",
         "columns": {
@@ -16327,12 +16630,12 @@
           "key": "密钥",
           "model": "模型",
           "user": "用户",
-          "spend": "花费",
+          "spend": "费用",
           "requests": "请求数",
           "successful": "成功",
           "failed": "失败",
-          "promptTokens": "提示令牌",
-          "completionTokens": "补全令牌"
+          "promptTokens": "提示 Token",
+          "completionTokens": "补全 Token"
         },
         "meta": {
           "dateRange": "日期范围",
@@ -16929,7 +17232,9 @@
           "thresholdPlaceholder": "% 预算",
           "recipientsPlaceholder": "其他收件人，例如 finance@example.com",
           "removeThreshold": "移除预算告警阈值",
-          "addThreshold": "添加预算告警阈值"
+          "addThreshold": "添加预算告警阈值",
+          "rolloverCap": "成员结转上限（USD）",
+          "rolloverCapHint": "每位成员的总预算上限，含结转金额。请设置重置周期，并输入高于默认成员预算的上限。团队预算仍然适用。"
         },
         "resetBudget": "重置预算",
         "resetBudgetPlaceholder": "不重置",
@@ -17068,7 +17373,9 @@
         "rpmLimitPlaceholder": "此成员在团队内每分钟可发起的请求上限",
         "allowedModels": "允许的模型",
         "allowedModelsTooltip": "此成员在团队内可访问的模型，留空则继承团队的所有模型。",
-        "allowedModelsPlaceholder": "留空则继承团队的所有模型"
+        "allowedModelsPlaceholder": "留空则继承团队的所有模型",
+        "addModelsOnKey": "如需添加模型且不更改继承的访问权限，请将访问组关联到继承权限的虚拟密钥。",
+        "viewMemberKeys": "查看成员的密钥"
       },
       "deleteMember": {
         "title": "删除团队成员",
@@ -17277,7 +17584,8 @@
         "summary": "自定义预算：<strong>{{budget}}</strong>。其费用将保留。之后对团队成员预算的更改将再次应用于该成员。",
         "cancel": "取消",
         "confirm": "使用团队默认值"
-      }
+      },
+      "rolledOver": "已结转 ${{amount}}"
     },
     "myUserTab": {
       "infoAriaLabel": "{{label}}信息",
@@ -17845,6 +18153,8 @@
       "judgeModel": "评判模型",
       "selectDecisionModel": "请选择决策模型",
       "selectJudgeModel": "选择评判模型",
+      "selectConcreteModel": "请选择具体模型",
+      "selectClassifierJudge": "启用分类器时，请选择评判模型",
       "confidenceThreshold": "置信度阈值",
       "fallbackToJudge": "置信度低于此值时，使用评判模型。严重错误仍可能选择高能力模型。",
       "fallbackToDefault": "置信度低于此值时，使用当前偏好对应的默认模型。严重错误仍可能选择高能力模型。",
@@ -17876,6 +18186,10 @@
       "classifierPromptPlaceholder": "使用 Switchyard 内置提示词"
     },
     "switchyardRouterForm": {
+      "nameRequired": "请输入路由名称",
+      "selfSelection": "路由不能选择自身",
+      "invalidStoredConfig": "已保存的 Switchyard 配置无效。请修正后再保存。",
+      "saveFailed": "无法保存 Switchyard 路由",
       "modelFields": {
         "description": "根据对话中的工具调用历史，在高能力模型与高效模型之间进行路由。",
         "modelsLoadFailed": "无法加载可用模型。"
@@ -20545,6 +20859,8 @@
       "fields": {
         "supplyUserId": "自定义用户 ID",
         "userId": "用户 ID",
+        "userIdRequired": "请输入用户 ID",
+        "userIdContainsNul": "用户 ID 不能包含空字符（NUL）",
         "userIdDescription": "此用户的唯一 ID。不勾选复选框则自动生成。",
         "userEmail": "用户邮箱",
         "userRole": "用户角色",
@@ -20818,7 +21134,8 @@
         "noTeams": "暂无团队",
         "moreTeams_one": "另有 {{count}} 项",
         "moreTeams_other": "另有 {{count}} 项",
-        "showLess": "收起"
+        "showLess": "收起",
+        "rolledOver": "已结转 ${{amount}}"
       },
       "details": {
         "title": "用户设置",
@@ -20894,7 +21211,9 @@
         "metadataPlaceholder": "以 JSON 格式输入元数据",
         "mcpServers": "MCP 服务器 / 访问组",
         "mcpServersHint": "限制此用户可访问的 MCP 服务器、访问组和工具。用户持有的每个密钥都受此范围约束。",
-        "mcpServersPlaceholder": "选择 MCP 服务器或访问组（可选）"
+        "mcpServersPlaceholder": "选择 MCP 服务器或访问组（可选）",
+        "rolloverCap": "结转上限（USD）",
+        "rolloverCapHint": "包含结转金额的总预算上限。请设置重置周期，并输入高于基础预算的上限。留空则不结转。"
       },
       "actions": {
         "cancel": "取消",
@@ -21034,7 +21353,8 @@
       "pauseUntilReset": "暂停至重置",
       "pauseAllowIncrease": "暂停，可申请提高额度",
       "title": "预算组",
-      "discard": "放弃编辑并重新加载"
+      "discard": "放弃编辑并重新加载",
+      "appGroupTab": "应用组预算组"
     },
     "limits": {
       "byline": "免费版：最多 5 个客户，每个客户最多 5 个团队，每个团队最多 5 名成员。LiteLLM <enterprise>Enterprise</enterprise> 可解除这些限制。",
@@ -21212,7 +21532,8 @@
       "budgetUsed": "已使用 {{percentage}}",
       "noMaxBudget": "无预算上限",
       "zeroBudgetPercentage": "预算为 $0 时无法计算百分比",
-      "budgetAndMembersHelp": "费用、请求和 Token 数按所选日期统计。预算百分比将已记录的预算费用与配置的预算进行比较；当已记录的预算费用与所选日期的费用不同时，会显示在费用下方。客户成员数包括当前所有已注册的客户成员，即使其没有任何用量。"
+      "budgetAndMembersHelp": "费用、请求和 Token 数按所选日期统计。预算百分比将已记录的预算费用与配置的预算进行比较；当已记录的预算费用与所选日期的费用不同时，会显示在费用下方。客户成员数包括当前所有已注册的客户成员，即使其没有任何用量。",
+      "description": "管理客户组织并查看其用量。"
     },
     "detail": {
       "spendThisMonth": "本月费用",
@@ -21439,6 +21760,10 @@
       "teams": "客户团队",
       "member": "客户成员",
       "members": "客户成员"
+    },
+    "appGroupBudgetGroups": {
+      "title": "应用组预算组",
+      "help": "可重复使用的预算，适用于整个应用组。创建或编辑应用组时可选择一个预算组。更改会应用到使用该预算的所有应用组。"
     }
   },
   "lensWorkspace": {

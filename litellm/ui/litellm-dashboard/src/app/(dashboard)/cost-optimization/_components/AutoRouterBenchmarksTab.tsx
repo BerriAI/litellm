@@ -403,7 +403,7 @@ export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({
   apiKey,
   userId,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { dateValue, onDateChange } = activity;
   const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue, apiKey, userId);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
@@ -411,7 +411,7 @@ export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({
 
   const groups = data?.groups ?? [];
   const selectedLabel = data ? viewFor(data, selectedKey, t).label : t("costOptimization.autoRouter.allRouters");
-  const rangeLabel = formatRangeLabel(dateValue.from, dateValue.to);
+  const rangeLabel = formatRangeLabel(dateValue.from, dateValue.to, i18n.language);
 
   return (
     <div className="w-full space-y-6">

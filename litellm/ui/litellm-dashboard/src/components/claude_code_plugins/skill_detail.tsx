@@ -1,3 +1,4 @@
+import { displayDate } from "@/i18n/displayDate";
 import React, { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy, Download, Link2 } from "lucide-react";
@@ -128,7 +129,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
   onRestored,
   isAdmin = false,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
@@ -187,7 +188,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({
       ? [
           {
             property: t("claudeCodePlugins.skillDetail.properties.added"),
-            value: new Date(skill.created_at).toLocaleDateString(),
+            value: displayDate(new Date(skill.created_at), locale.language),
           },
         ]
       : []),

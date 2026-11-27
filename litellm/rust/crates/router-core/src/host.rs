@@ -263,8 +263,6 @@ pub enum ModelInfoLookup {
     /// The queried deployment's own `model_info`, read when the merge reaches it (a malformed one
     /// raises there).
     UserModelInfo,
-    /// A log record, emitted where the Python router logs it.
-    Log { level: LogLevel, message: String },
     /// Group info: deployment `index`'s validated params (`LiteLLM_Params(**litellm_params)`, which
     /// raises on bad params): answered with `{"model", "configurable_clientside_auth_params"}`.
     GroupParams { index: usize },
@@ -288,13 +286,6 @@ pub enum ModelInfoLookup {
     GroupSeed { info: Map<String, Value> },
     /// `intersect_supported_reasoning_efforts(current, resolved)`, in the host's advertisement order.
     ReasoningIntersect { current: Value, resolved: Value },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LogLevel {
-    Debug,
-    Error,
 }
 
 /// One attempt against one deployment.
