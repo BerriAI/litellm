@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime as dt_object
@@ -608,6 +608,19 @@ def _timestamp_seconds(moment: object) -> float | None:
     if isinstance(moment, (int, float)):
         return float(moment)
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class BilledRoundsSpend:
+    usage: Usage
+    cost: float
+    cost_breakdown: CostBreakdown | None
+
+
+@dataclass(frozen=True, slots=True)
+class BilledRoundsDispatch:
+    dispatch: Coroutine[object, object, None]
+    spend: BilledRoundsSpend
 
 
 def configured_callbacks(configured: object) -> tuple[str | Callable[..., object] | CustomLogger, ...] | None:
@@ -2523,6 +2536,10 @@ class Logging(LiteLLMLoggingBaseClass):
         """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
+
+    def record_billed_rounds_for_failure(self, spend: BilledRoundsSpend) -> None:
+        self.record_partial_usage_for_failure(spend.usage, spend.cost)
+        self.cost_breakdown = spend.cost_breakdown
 
     def owe_failed_attempt_on_success(self, usage: Usage, response_cost: float) -> None:
         """A failed attempt the router falls back from stays owed by the attempt that serves the request."""
