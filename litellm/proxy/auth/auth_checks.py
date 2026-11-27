@@ -746,10 +746,11 @@ def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> b
         if model_id is None:
             continue
         raw_entry = as_str_mapping(litellm.model_cost.get(model_id)) or _EMPTY_COST_ENTRY
+        flat_request_price = deployment_request_price(model_id) if isinstance(model_id, str) else None
         if (
             _prices_tokens_above_zero(_deployment_rate_card(deployment))
             or _is_positive_cost(_deployment_query_price(deployment["litellm_params"], raw_entry))
-            or (isinstance(model_id, str) and _is_positive_cost(deployment_request_price(model_id)))
+            or _is_positive_cost(flat_request_price)
         ):
             return True
     return False
