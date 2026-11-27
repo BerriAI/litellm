@@ -167,6 +167,14 @@ class _UserCredentialsTable:
         self.rows = {**self.rows, (pair["user_id"], pair["server_id"]): row}
         return row
 
+    async def delete_many(self, where: Mapping[str, str]) -> int:
+        key: Final = (where["user_id"], where["server_id"])
+        existing: Final = self.rows.get(key)
+        if existing is None or existing.credential_b64 != where["credential_b64"]:
+            return 0
+        self.rows = {pair: row for pair, row in self.rows.items() if pair != key}
+        return 1
+
     async def update_many(self, data: Mapping[str, object], where: Mapping[str, str]) -> int:
         key: Final = (where["user_id"], where["server_id"])
         existing: Final = self.rows.get(key)
