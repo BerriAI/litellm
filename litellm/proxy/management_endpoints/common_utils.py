@@ -890,7 +890,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
 
     if field_name in updated_kv and (updated_kv[field_name] is not None or field_name == "team_member_key_duration"):
         # remove field from updated_kv
-        _raw_value: Final = updated_kv.pop(field_name)
+        _raw_value: Final[object] = updated_kv.pop(field_name)
         _value: Final = (
             None if field_name == "team_member_key_duration" and not _has_non_empty_value(_raw_value) else _raw_value
         )

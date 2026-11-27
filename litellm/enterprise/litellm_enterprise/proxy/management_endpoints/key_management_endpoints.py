@@ -14,7 +14,7 @@ def add_team_member_key_duration(
     if data.user_id is None:  # only apply for team member keys, not service accounts
         return data
 
-    team_duration: Final = (team_table.metadata or {}).get("team_member_key_duration")
+    team_duration: Final[object] = (team_table.metadata or {}).get("team_member_key_duration")
     if not isinstance(team_duration, str) or not team_duration.strip():
         return data
 
