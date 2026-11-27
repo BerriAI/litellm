@@ -113,6 +113,14 @@ def unconvertible_blocks_error(
             assert_never(messages_format)
 
 
+def deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:
+    match deployment:
+        case {"litellm_params": {"drop_params": object() as drop_params}}:
+            return drops_unsupported_params(drop_params)
+        case _:
+            return drops_unsupported_params(None)
+
+
 _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 
 

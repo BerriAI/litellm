@@ -336,12 +336,14 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
 
 
 _COUNTED_LITELLM_PARAMS: Final = (*SYSTEM_PLACEMENT_PARAMS, "drop_params")
+_FORWARDED_COUNT_OPTIONS: Final = ("tool_choice",)
 
 
 class _CountTokensBodyOptions(TypedDict):
     output_format: ReadOnly[JsonValue]
     context_management: ReadOnly[JsonValue]
     request_litellm_params: ReadOnly[Mapping[str, JsonValue]]
+    count_options: ReadOnly[Mapping[str, JsonValue]]
 
 
 def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: bool) -> _CountTokensBodyOptions:
@@ -352,6 +354,7 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
         "request_litellm_params": MappingProxyType(
             {"drop_params": True, **sent_params} if auto_drop_params else sent_params
         ),
+        "count_options": MappingProxyType({name: data[name] for name in _FORWARDED_COUNT_OPTIONS if name in data}),
     }
 
 

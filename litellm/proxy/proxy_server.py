@@ -14350,6 +14350,7 @@ async def _try_provider_token_count(
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14376,6 +14377,7 @@ async def _try_provider_token_count(
             messages_format=messages_format,
             output_format=output_format,
             context_management=context_management,
+            count_options=count_options,
         )
     except httpx.HTTPStatusError as e:
         return ProviderCountFailure(
@@ -14854,6 +14856,27 @@ def _deployment_for_messages_responses_count(
     return {**deployment, "litellm_params": {**params, **overrides}}
 
 
+def _count_options_kept_by(
+    count_options: Mapping[str, JsonValue], additional_drop_params: object
+) -> Mapping[str, JsonValue]:
+    return MappingProxyType(
+        {
+            name: value
+            for name, value in count_options.items()
+            if not (isinstance(additional_drop_params, list) and name in additional_drop_params)
+        }
+    )
+
+
+def _deployment_with_request_drop_params(
+    deployment: Mapping[str, object] | None, sent_params: Mapping[str, object]
+) -> Mapping[str, object] | None:
+    if deployment is None or "drop_params" not in sent_params:
+        return deployment
+    params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
+    return {**deployment, "litellm_params": {**params, "drop_params": sent_params["drop_params"]}}
+
+
 async def count_request_tokens(
     request: TokenCountRequest,
     call_endpoint: bool = False,
@@ -14861,6 +14884,7 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14939,6 +14963,18 @@ async def count_request_tokens(
     )
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    count_litellm_params: Final = {
+        **deployment_view.get("litellm_params", {}),
+        **(_router_default_litellm_params(llm_router) if llm_router is not None else {}),
+        **request_litellm_params,
+    }
+    forwarded_count_options: Final = _count_options_kept_by(
+        count_options, count_litellm_params.get("additional_drop_params")
+    )
+    count_deployment: Final = _deployment_with_request_drop_params(
+        deployment,
+        {**(_router_default_litellm_params(llm_router) if llm_router is not None else {}), **request_litellm_params},
+    )
     ladder: Final = (
         None
         if provider_counter is None
@@ -14950,9 +14986,9 @@ async def count_request_tokens(
                 messages=[{"role": "user", "content": prompt}] if prompt_as_message else request_messages,
                 contents=None if prompt_as_message else contents,
                 deployment=(
-                    _deployment_for_messages_responses_count(deployment, llm_router, request_litellm_params)
+                    _deployment_for_messages_responses_count(count_deployment, llm_router, request_litellm_params)
                     if messages_format == "anthropic" and custom_llm_provider == litellm.LlmProviders.OPENAI.value
-                    else deployment
+                    else count_deployment
                 ),
                 request_model=request.model,
                 tools=tools,
@@ -14960,6 +14996,7 @@ async def count_request_tokens(
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=_count_context_management(context_management, request.model, request_litellm_params),
+                count_options=forwarded_count_options,
             ),
             model_to_use=model_to_use,
             settings=settings,
