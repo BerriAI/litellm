@@ -468,6 +468,7 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_cached = False
         self._completed_response_logged = False
         self._reading_on_after_consumer_left = False
+        self._ended_in_a_failed_response = False
         self._completed_response_cache_hit: bool | None = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
@@ -797,6 +798,7 @@ class BaseResponsesAPIStreamingIterator:
             getattr(self.completed_response, "response", None) if self.completed_response else None
         )
         error_info: Final = getattr(response_obj, "error", None) if response_obj else None
+        self._ended_in_a_failed_response = True
         self._record_failed_response_usage(response_obj)
         self._handle_failure(self._map_error_event_exception(error_info))
 
@@ -1197,13 +1199,18 @@ class BaseResponsesAPIStreamingIterator:
         service_tier) plus the text and tool arguments relayed so far, with counted
         usage since the provider never sent any. None when nothing was relayed yet,
         the stream already reached its terminal event and billed itself, or its failure
-        log already billed the relayed output.
+        log already billed the relayed output. A response the provider failed while the
+        stream was read on has no failure log, so it is billed here, with the usage the
+        provider reported on that event when it reported one.
         """
         created: Final = self._created_response
-        generated: Final = self._generated_content + self._generated_tool_arguments
-        if self._replays_stored_stream or created is None or not generated or self._billed_without_disconnect():
+        if self._replays_stored_stream or created is None or self._billed_without_disconnect():
             return None
-        usage: Final = _estimate_usage_safely(
+        generated: Final = self._generated_content + self._generated_tool_arguments
+        reported: Final = self._usage_of_the_response_failed_while_read_on()
+        if reported is None and not generated:
+            return None
+        usage: Final = reported or _estimate_usage_safely(
             self.model or "",
             self.request_data.get("input"),
             self.request_data,
@@ -1223,7 +1230,18 @@ class BaseResponsesAPIStreamingIterator:
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
 
     def _billed_without_disconnect(self) -> bool:
+        if self._failed_while_read_on():
+            return False
         return self.completed_response is not None or self._failure_handled
+
+    def _failed_while_read_on(self) -> bool:
+        return self._reading_on_after_consumer_left and self._ended_in_a_failed_response
+
+    def _usage_of_the_response_failed_while_read_on(self) -> ResponseAPIUsage | None:
+        if not self._failed_while_read_on():
+            return None
+        failed: Final[object] = getattr(self.completed_response, "response", None)
+        return _usage_as_model(getattr(failed, "usage", None))
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
