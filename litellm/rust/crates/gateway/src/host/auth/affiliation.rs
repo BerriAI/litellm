@@ -12,7 +12,10 @@ use litellm_gateway_auth_core::{
 };
 use litellm_redis_store::auth_cache::TeamEntry;
 
-use super::carried::{Carried, carried, newer};
+use super::{
+    carried::{Carried, carried, newer},
+    metadata::Metadata,
+};
 
 /// The team's record, or the first field it holds that no record field has a type for yet.
 pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
@@ -57,7 +60,6 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
     let unread_models = ModelList::read(models) == ModelList::Unread;
     let held = unread_models.then_some("models").or_else(|| {
         carried![
-            metadata,
             budget_limits,
             router_settings,
             budget_reset_at,
@@ -72,6 +74,16 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
     if let Some(field) = held {
         return Err(field);
     }
+    let Some(Metadata {
+        model_rpm_limit,
+        model_tpm_limit,
+        priority,
+    }) = metadata
+        .as_ref()
+        .map_or(Some(Metadata::default()), Metadata::read)
+    else {
+        return Err("metadata");
+    };
     Ok(Team {
         team_id: team_id.clone(),
         models: Some(models.clone()),
@@ -102,6 +114,9 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
             default_team_member_models: default_team_member_models.clone().unwrap_or_default(),
             policies: policies.clone().unwrap_or_default(),
             allow_team_guardrail_config: allow_team_guardrail_config.unwrap_or_default(),
+            model_rpm_limit,
+            model_tpm_limit,
+            priority,
             ..TeamRecord::default()
         },
     })
@@ -134,6 +149,9 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         default_team_member_models,
         policies,
         allow_team_guardrail_config,
+        model_rpm_limit,
+        model_tpm_limit,
+        priority,
         member_max_budget,
     } = team;
     carried![
@@ -150,12 +168,17 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         default_team_member_models,
         policies,
         allow_team_guardrail_config,
+        model_rpm_limit,
+        model_tpm_limit,
+        priority,
         member_max_budget,
     ]
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use litellm_python_compat::json;
     use litellm_redis_store::FromValue;
     use rstest::rstest;
@@ -173,6 +196,27 @@ mod tests {
         assert_eq!(
             (team.row.organization_id.as_deref(), unserved(&team.row)),
             (Some("org"), Some("organization_id"))
+        );
+    }
+
+    #[test]
+    fn a_teams_metadata_limits_and_priority_are_copied() {
+        let team = team(&cached(
+            r#"{"team_id": "squad", "metadata": {"model_rpm_limit": {"claude": 2}, "model_tpm_limit": {"claude": 100}, "priority": "prod"}}"#,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            (
+                team.row.model_rpm_limit,
+                team.row.model_tpm_limit,
+                team.row.priority
+            ),
+            (
+                BTreeMap::from([("claude".to_owned(), 2)]),
+                BTreeMap::from([("claude".to_owned(), 100)]),
+                Some("prod".to_owned())
+            )
         );
     }
 

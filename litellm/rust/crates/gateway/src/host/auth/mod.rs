@@ -12,6 +12,7 @@ mod affiliation;
 mod carried;
 mod end_user;
 mod key;
+mod metadata;
 mod models;
 mod store;
 
@@ -948,6 +949,8 @@ mod tests {
     #[case::object_permission_id(json!({"object_permission_id": "permission"}))]
     #[case::model_aliases(json!({"model_id": 7}))]
     #[case::metadata(json!({"metadata": {"guardrails": ["pii"]}}))]
+    #[case::metadata_beside_a_model_limit(json!({"metadata": {"model_rpm_limit": {"claude": 2}, "tags": ["a"]}}))]
+    #[case::a_priority_that_is_no_text(json!({"metadata": {"priority": 5}}))]
     #[case::budget_reset_at(json!({"budget_reset_at": "1970-01-01T00:00:09"}))]
     #[case::budget_limits(json!({"budget_limits": [{"a": 1}]}))]
     #[case::model_max_budget(json!({"model_max_budget": {"claude": 1}}))]
@@ -989,6 +992,9 @@ mod tests {
         json!({"allow_team_guardrail_config": true}),
         "allow_team_guardrail_config"
     )]
+    #[case::model_rpm_limit(json!({"metadata": {"model_rpm_limit": {"claude": 2}}}), "model_rpm_limit")]
+    #[case::model_tpm_limit(json!({"metadata": {"model_tpm_limit": {"claude": 100}}}), "model_tpm_limit")]
+    #[case::priority(json!({"metadata": {"priority": "prod"}}), "priority")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_key_in_a_team_copies_each_plain_column_its_team_holds_and_names_it_unserved(
         #[case] team: Columns,
