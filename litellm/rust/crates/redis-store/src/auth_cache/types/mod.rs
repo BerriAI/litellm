@@ -10,6 +10,7 @@ mod organization_membership;
 mod project;
 mod record;
 mod settings;
+mod tag;
 mod team;
 mod team_membership;
 mod user;
@@ -28,6 +29,7 @@ pub use self::{
     project::ProjectEntry,
     record::ExcludedIfNone,
     settings::Settings,
+    tag::TagEntry,
     team::{ModelAliases, ModelTableEntry, TeamEntry},
     team_membership::{TeamMembershipEntry, TeamMembershipReservation},
     user::UserEntry,

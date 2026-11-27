@@ -11,18 +11,18 @@ use crate::{RawJson, budget::Budget, utc_timestamp};
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(serde::Serialize)]
 pub struct Tag {
-    tag_name: String,
-    description: Option<String>,
-    models: Vec<String>,
-    model_info: Option<RawJson>,
-    spend: f64,
-    budget_id: Option<String>,
+    pub tag_name: String,
+    pub description: Option<String>,
+    pub models: Vec<String>,
+    pub model_info: Option<RawJson>,
+    pub spend: f64,
+    pub budget_id: Option<String>,
     #[serde(with = "utc_timestamp")]
-    created_at: NaiveDateTime,
-    created_by: Option<String>,
+    pub created_at: NaiveDateTime,
+    pub created_by: Option<String>,
     #[serde(with = "utc_timestamp")]
-    updated_at: NaiveDateTime,
-    litellm_budget_table: Option<Json<Budget>>,
+    pub updated_at: NaiveDateTime,
+    pub litellm_budget_table: Option<Json<Budget>>,
 }
 
 /// The rows for `tag_names` that exist, in no particular order.
