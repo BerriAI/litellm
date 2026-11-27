@@ -88,19 +88,25 @@ class BoatSandboxConfig(BaseSandboxConfig):
         key: Final = self.validate_environment(api_key=api_key)
         base: Final = api_base or BOAT_API_BASE
         created_at: Final = time.time()
+        ttl: Final = timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT
         response: Final = await self._http(client).post(
             url=join_api_base(base, "sandboxes"),
             headers={"Authorization": f"Bearer {key}", "Idempotency-Key": uuid.uuid4().hex},
             json={
                 "type": template or BOAT_DEFAULT_TYPE,
-                "ttlSeconds": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
+                "ttlSeconds": ttl,
                 "noEnv": True,
                 **({"network": {"mode": "deny"}} if allow_internet_access is False else {}),
             },
         )
         sandbox: Final = _Created.model_validate(response.json()).sandbox
         handle: Final = ContainerHandle(
-            id=sandbox.id, provider="boat", created_at=created_at, vcpus=sandbox.vcpu, memory_gib=sandbox.memoryGB
+            id=sandbox.id,
+            provider="boat",
+            created_at=created_at,
+            expires_at=created_at + ttl,
+            vcpus=sandbox.vcpu,
+            memory_gib=sandbox.memoryGB,
         )
         handle.hidden_params = {"api_key": key, "api_base": base}
         return handle

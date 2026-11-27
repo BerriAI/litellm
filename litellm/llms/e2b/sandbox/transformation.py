@@ -64,9 +64,10 @@ class E2BSandboxConfig(BaseSandboxConfig):
         key: Final = self.validate_environment(api_key=api_key)
         base: Final = api_base or E2B_API_BASE
         created_at: Final = time.time()
+        ttl: Final = timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT
         body: Final = {
             "templateID": template or E2B_DEFAULT_TEMPLATE,
-            "timeout": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
+            "timeout": ttl,
             "secure": True,
             "allow_internet_access": (True if allow_internet_access is None else allow_internet_access),
         }
@@ -86,6 +87,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
                 "provider": "e2b",
                 "domain": data.get("domain") or E2B_DEFAULT_DOMAIN,
                 "created_at": created_at,
+                "expires_at": created_at + ttl,
                 "vcpus": data.get("cpuCount"),
                 "memory_gib": memory_mb / 1024 if isinstance(memory_mb := data.get("memoryMB"), int | float) else None,
             }

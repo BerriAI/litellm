@@ -8,11 +8,13 @@ Run only these tests:
 """
 
 import os
+import subprocess
 from typing import Final
 
 import pytest
 
 import litellm
+from litellm.llms.base_llm.sandbox.transformation import shell_command
 
 PROVIDER_ENV: Final = {
     "boat": ("BOAT_API_KEY",),
@@ -58,3 +60,25 @@ async def test_integration_ephemeral_reports_cost(provider):
 
     assert result.stdout.strip() == "42"
     assert result._hidden_params["response_cost"] >= 0
+
+
+def _run_locally(command: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=30, check=False)
+
+
+def test_integration_the_sandbox_command_runs_the_code_with_its_streams_and_exit_code():
+    code = "import sys; print('a b'); print(\"c\"); print('bad', file=sys.stderr); sys.exit(3)"
+    ran = _run_locally(shell_command(code, "python"))
+    assert (ran.stdout, ran.stderr, ran.returncode) == ("a b\nc\n", "bad\n", 3)
+
+
+@pytest.mark.parametrize("stream", ["", " >&2"])
+def test_integration_a_command_that_never_stops_printing_is_ended_one_byte_past_the_cap(stream):
+    ran = _run_locally(shell_command(f"yes{stream}", "bash", max_output_bytes=1000))
+    assert len(ran.stdout + ran.stderr) == 1001
+    assert ran.returncode != 0
+
+
+def test_integration_a_command_that_reads_stdin_gets_end_of_file():
+    ran = _run_locally(shell_command("cat; echo done", "bash"))
+    assert (ran.stdout, ran.returncode) == ("done\n", 0)

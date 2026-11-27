@@ -11,6 +11,7 @@ Each entrypoint is `@client`-decorated, so every operation is logged the same
 way `litellm.asearch` is.
 """
 
+import asyncio
 import time
 from collections.abc import Mapping
 from typing import Final
@@ -37,6 +38,7 @@ __all__ = [
     "asandbox_cost",
 ]
 
+COST_BEFORE_DELETE_TIMEOUT_SECONDS: Final = 10.0
 _LITELLM_INTERNAL_KWARGS: Final = {
     "litellm_logging_obj",
     "litellm_call_id",
@@ -133,8 +135,11 @@ async def _reported_cost(
     client: AsyncHTTPHandler | None,
 ) -> SandboxCost:
     try:
-        return await config.aget_sandbox_cost(container=container, api_key=api_key, api_base=api_base, client=client)
-    except (httpx.HTTPError, ValueError) as e:
+        return await asyncio.wait_for(
+            config.aget_sandbox_cost(container=container, api_key=api_key, api_base=api_base, client=client),
+            timeout=COST_BEFORE_DELETE_TIMEOUT_SECONDS,
+        )
+    except (httpx.HTTPError, ValueError, asyncio.TimeoutError) as e:
         verbose_logger.debug("sandbox: failed to read cost before delete: %s", e)
         return SandboxCost()
 
@@ -147,7 +152,7 @@ async def _delete_with_final_cost(
     client: AsyncHTTPHandler | None,
     kwargs: Mapping[str, object],
 ) -> bool:
-    if not isinstance(container, ContainerHandle):
+    if not isinstance(container, ContainerHandle) or container.final_cost is not None:
         return await config.adelete_sandbox(
             container=container, api_key=api_key, api_base=api_base, client=client, **_forward_kwargs(kwargs)
         )

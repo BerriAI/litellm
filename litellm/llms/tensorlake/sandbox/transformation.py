@@ -5,6 +5,7 @@ Commands run as sandbox processes: start one, poll until it exits, then read its
 """
 
 import asyncio
+import re
 import time
 from collections.abc import Mapping
 from typing import Final
@@ -24,6 +25,7 @@ from litellm.secret_managers.main import get_secret_str
 
 TENSORLAKE_API_BASE: Final = "https://api.tensorlake.ai"
 DEFAULT_SANDBOX_TIMEOUT: Final = 300
+_SANDBOX_ID: Final = re.compile(r"[A-Za-z0-9_-]+")
 DEFAULT_CPUS: Final = 1.0
 DEFAULT_MEMORY_MB: Final = 1024
 DEFAULT_DISK_MB: Final = 10240
@@ -82,11 +84,12 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
         key: Final = self.validate_environment(api_key=api_key)
         base: Final = api_base or TENSORLAKE_API_BASE
         created_at: Final = time.time()
+        ttl: Final = timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT
         response: Final = await self._http(client).post(
             url=join_api_base(base, "sandboxes"),
             headers={"Authorization": f"Bearer {key}"},
             json={
-                "timeout_secs": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
+                "timeout_secs": ttl,
                 "resources": {"cpus": cpus, "memory_mb": memory_mb},
                 **({"image": template} if template else {}),
                 **({"network": {"allow_internet_access": False}} if allow_internet_access is False else {}),
@@ -97,6 +100,7 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
             id=created.sandbox_id,
             provider="tensorlake",
             created_at=created_at,
+            expires_at=created_at + ttl,
             vcpus=cpus,
             memory_gib=memory_mb / 1024,
             disk_gib=DEFAULT_DISK_MB / 1024,
@@ -115,6 +119,8 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
         **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> CodeExecutionResult:
         key: Final = self._key(container, api_key)
+        if not isinstance(container, ContainerHandle) and not _SANDBOX_ID.fullmatch(container):
+            raise ValueError("Invalid Tensorlake sandbox id.")
         sandbox_url: Final = (
             str(container.hidden_params.get("sandbox_url") or "") if isinstance(container, ContainerHandle) else ""
         ) or f"https://{container.id if isinstance(container, ContainerHandle) else container}.sandbox.tensorlake.ai"

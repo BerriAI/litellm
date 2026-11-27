@@ -93,17 +93,23 @@ class ModalSandboxConfig(BaseSandboxConfig):
             app_name or get_secret_str("MODAL_APP_NAME") or MODAL_APP_NAME, create_if_missing=True, client=client
         )
         created_at: Final = time.time()
+        ttl: Final = timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT
         sandbox: Final = await modal.Sandbox.create.aio(
             app=app,
             image=modal.Image.from_registry(template) if template else modal.Image.debian_slim(),
-            timeout=timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
+            timeout=ttl,
             cpu=(cpus, cpus),
             memory=(memory_mb, memory_mb),
             block_network=allow_internet_access is False,
             client=client,
         )
         handle: Final = ContainerHandle(
-            id=sandbox.object_id, provider="modal", created_at=created_at, vcpus=cpus, memory_gib=memory_mb / 1024
+            id=sandbox.object_id,
+            provider="modal",
+            created_at=created_at,
+            expires_at=created_at + ttl,
+            vcpus=cpus,
+            memory_gib=memory_mb / 1024,
         )
         handle.hidden_params = {"api_key": self.validate_environment(api_key=api_key)}
         return handle

@@ -85,6 +85,7 @@ class BlaxelSandboxConfig(BaseSandboxConfig):
         base: Final = api_base or BLAXEL_API_BASE
         headers: Final = self._headers(None, api_key)
         created_at: Final = time.time()
+        ttl: Final = max(timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT, MIN_TTL_SECONDS)
         response: Final = await self._http(client).post(
             url=join_api_base(base, "sandboxes"),
             headers=headers,
@@ -94,7 +95,7 @@ class BlaxelSandboxConfig(BaseSandboxConfig):
                     "runtime": {
                         "image": template or BLAXEL_DEFAULT_IMAGE,
                         "memory": memory_mb,
-                        "ttl": f"{max(timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT, MIN_TTL_SECONDS)}s",
+                        "ttl": f"{ttl}s",
                     }
                 },
             },
@@ -104,6 +105,7 @@ class BlaxelSandboxConfig(BaseSandboxConfig):
             id=metadata.name,
             provider="blaxel",
             created_at=created_at,
+            expires_at=created_at + ttl,
             vcpus=memory_mb / MEMORY_MB_PER_VCPU,
             memory_gib=memory_mb / 1024,
         )

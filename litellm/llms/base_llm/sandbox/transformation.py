@@ -59,6 +59,7 @@ class ContainerHandle(LiteLLMPydanticObjectBase):
     domain: str | None = None
     created_at: float | None = None
     ended_at: float | None = None
+    expires_at: float | None = None
     vcpus: float | None = None
     memory_gib: float | None = None
     disk_gib: float | None = None
@@ -81,7 +82,9 @@ def estimate_sandbox_cost(container: ContainerHandle | str, now: float | None = 
     """Price the sandbox's allocated resources over its lifetime from `sandbox_prices.json`."""
     if not isinstance(container, ContainerHandle) or container.created_at is None:
         return SandboxCost()
-    end: Final = container.ended_at if container.ended_at is not None else (time.time() if now is None else now)
+    current: Final = time.time() if now is None else now
+    running_until: Final = current if container.expires_at is None else min(current, container.expires_at)
+    end: Final = container.ended_at if container.ended_at is not None else running_until
     seconds: Final = max(end - container.created_at, 0.0)
     price: Final = get_sandbox_prices().get(container.provider)
     if price is None or container.memory_gib is None or container.vcpus is None:
