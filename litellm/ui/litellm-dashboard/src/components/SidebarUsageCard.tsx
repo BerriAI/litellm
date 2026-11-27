@@ -82,7 +82,7 @@ const buildMeters = (data: RemainingUsage | null, t: TFunction): MeterData[] => 
  * design's Spend / API-request meters are intentionally omitted.
  */
 export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail }: SidebarUsageCardProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const licenseInfo = useLicenseInfo(accessToken).data ?? null;
   const { data: usageData, isLoading } = useQuery(remainingUsersQuery(accessToken));
   const data = usageData ?? null;
@@ -108,7 +108,7 @@ export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail 
   }
 
   const subtitle = licenseInfo?.expiration_date
-    ? formatExpirationStatus(licenseInfo.expiration_date)
+    ? formatExpirationStatus(licenseInfo.expiration_date, undefined, i18n)
     : t("shell.sidebarUsageCard.activePlan");
   const meters = buildMeters(data, t);
 

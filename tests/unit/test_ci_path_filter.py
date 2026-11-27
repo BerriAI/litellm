@@ -149,6 +149,42 @@ def test_python_310_path_filter(changed: str, expected: str) -> None:
     assert classify("python-310", [changed]) == expected
 
 
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    (
+        ("litellm/deploy/helm/litellm/values.yaml", "run"),
+        ("litellm/deploy/helm/litellm/tests/deployment_tests.yaml", "run"),
+        ("litellm/deploy/helm/litellm/templates/_helpers.tpl", "run"),
+        (".github/workflows/test-unit.yml", "run"),
+        ("litellm/deploy/docker/Dockerfile", "skip"),
+        ("litellm/proxy/proxy_server.py", "skip"),
+        ("litellm/ui/litellm-dashboard/src/App.tsx", "skip"),
+        ("docs/my-website/helm.md", "skip"),
+    ),
+)
+def test_helm_path_filter(changed: str, expected: str) -> None:
+    assert classify("helm", [changed]) == expected
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    (
+        ("litellm/ui/litellm-dashboard/src/App.tsx", "run"),
+        ("litellm/ui/litellm-dashboard/package-lock.json", "run"),
+        ("litellm/deploy/docker/Dockerfile", "run"),
+        ("litellm/deploy/docker/Dockerfile.dockerignore", "run"),
+        (".github/workflows/test-unit.yml", "run"),
+        ("litellm/deploy/docker/Dockerfile.fips", "skip"),
+        ("litellm/ui/some_other_tool/main.py", "skip"),
+        ("tests/e2e/ui/test_login.py", "skip"),
+        ("litellm/proxy/proxy_server.py", "skip"),
+        ("README.md", "skip"),
+    ),
+)
+def test_dashboard_build_path_filter(changed: str, expected: str) -> None:
+    assert classify("dashboard-build", [changed]) == expected
+
+
 def test_markdown_under_ui_counts_as_client_not_docs() -> None:
     assert classify("client", ["litellm/ui/litellm-dashboard/README.md"]) == "run"
     assert classify("backend", ["litellm/ui/litellm-dashboard/README.md"]) == "skip"
@@ -162,6 +198,8 @@ def test_ci_config_changes_reach_every_category() -> None:
     assert classify("ui", CI) == "run"
     assert classify("backend", CI) == "run"
     assert classify("client", CI) == "run"
+    assert classify("helm", CI) == "run"
+    assert classify("dashboard-build", CI) == "run"
 
 
 def test_markdown_under_dot_github_is_still_docs() -> None:

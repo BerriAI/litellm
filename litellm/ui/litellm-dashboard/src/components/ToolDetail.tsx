@@ -1,5 +1,6 @@
 "use client";
 
+import { displayTimestamp } from "@/i18n/displayDate";
 import { ArrowLeft, History, Wrench } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ParseKeys } from "i18next";
@@ -64,7 +65,7 @@ function getDefaultLogsDateRange(): { start: string; end: string } {
 }
 
 export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const queryClient = useQueryClient();
   const [overrideSaving, setOverrideSaving] = useState(false);
   const [inputPolicySaving, setInputPolicySaving] = useState(false);
@@ -279,13 +280,13 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
               {tool.created_at && (
                 <div className="flex items-center gap-1.5">
                   <dt className="font-medium whitespace-nowrap">{t("toolPolicies.detail.meta.firstDiscovered")}</dt>
-                  <dd>{new Date(tool.created_at).toLocaleString()}</dd>
+                  <dd>{displayTimestamp(new Date(tool.created_at), locale.language)}</dd>
                 </div>
               )}
               {tool.last_used_at && (
                 <div className="flex items-center gap-1.5">
                   <dt className="font-medium whitespace-nowrap">{t("toolPolicies.detail.meta.lastUsed")}</dt>
-                  <dd>{new Date(tool.last_used_at).toLocaleString()}</dd>
+                  <dd>{displayTimestamp(new Date(tool.last_used_at), locale.language)}</dd>
                 </div>
               )}
             </dl>

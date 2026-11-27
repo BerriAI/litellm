@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM \"LiteLLM_TeamMembership\"\nWHERE user_id = $1\n  AND team_id = $2\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "631d6d4b977f5a8e891041b11df1dfe519ce94eff67790089e698e173ce1bcd4"
+}

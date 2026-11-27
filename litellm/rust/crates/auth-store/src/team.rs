@@ -2,15 +2,16 @@
 
 use std::sync::Arc;
 
-use litellm_python_compat::{Value, json};
-use litellm_redis_store::auth_cache::{MemberEntry, TeamEntry};
-use litellm_repositories::{ObjectPermissionRepository, RawJson, Side, Team, TeamRepository};
+use litellm_redis_store::auth_cache::TeamEntry;
+use litellm_repositories::{
+    Inserted, NewTeam, ObjectPermissionRepository, Side, Team, TeamRepository,
+};
 
 use crate::{
     Error,
     budget_limit::windows,
     column::{nullable, nullable_or_text, time},
-    member::member,
+    member::roster,
     object_permission::ObjectPermissions,
 };
 
@@ -40,6 +41,27 @@ impl TeamDatabase {
             return Ok(None);
         };
         self.nested(team_entry(row)?, side).await.map(Some)
+    }
+
+    /// Creates `team` as `_get_team_db_check` does under `team_id_upsert`, through `new_team` as a
+    /// proxy admin, and returns the entry for the row as stored, or for the team a concurrent
+    /// writer stored first, with the object permission it points at. A created team points at
+    /// none. The license's team limit, the reserved UI team id and the organization's limits are
+    /// the caller's to check first, and the audit log and the access group caches its to write
+    /// and drop after.
+    pub async fn insert(&self, team: &NewTeam) -> Result<CreatedTeam, Error> {
+        let stored = self.teams.insert(team).await?;
+        let team = match stored.team {
+            Inserted::Created(row) => Inserted::Created(team_entry(row)?),
+            Inserted::Conflict(None) => Inserted::Conflict(None),
+            Inserted::Conflict(Some(row)) => {
+                Inserted::Conflict(Some(self.nested(team_entry(row)?, Side::Writer).await?))
+            }
+        };
+        Ok(CreatedTeam {
+            team,
+            access_groups: stored.access_groups,
+        })
     }
 
     async fn nested(&self, team: TeamEntry, side: Side) -> Result<TeamEntry, Error> {
@@ -73,6 +95,14 @@ impl TeamDatabase {
     }
 }
 
+/// What a team insert stored, and the access groups whose teams it reconciled, whose cached
+/// entries the host drops.
+#[derive(Debug, PartialEq)]
+pub struct CreatedTeam {
+    pub team: Inserted<TeamEntry>,
+    pub access_groups: Vec<String>,
+}
+
 /// What a read by alias finds: the one row with that alias, none, or more than one, which
 /// Python refuses rather than pick one.
 #[derive(Debug, PartialEq)]
@@ -80,19 +110,6 @@ pub enum AliasMatch<E> {
     Found(E),
     Absent,
     Ambiguous,
-}
-
-/// The roster as the model reads it, each entry what `Member` dumps. The column's default is
-/// an empty object, which the model reads as no members.
-fn roster(raw: &RawJson) -> Result<Vec<MemberEntry>, Error> {
-    match json::loads(raw.get()) {
-        Ok(Value::List(entries)) => entries
-            .iter()
-            .map(|entry| member("members_with_roles", entry))
-            .collect(),
-        Ok(Value::Dict(fields)) if fields.is_empty() => Ok(Vec::new()),
-        _ => Err(Error::row("members_with_roles")),
-    }
 }
 
 /// What `LiteLLM_TeamTableCachedObj.model_dump(mode="json")` holds for `team`, or the column
@@ -138,7 +155,7 @@ fn team_entry(team: Team) -> Result<TeamEntry, Error> {
         organization_id,
         admins,
         members,
-        members_with_roles: roster(&members_with_roles)?,
+        members_with_roles: roster(members_with_roles.get())?,
         team_member_permissions: Some(team_member_permissions),
         metadata: nullable_or_text("metadata", Some(&metadata))?,
         tpm_limit,

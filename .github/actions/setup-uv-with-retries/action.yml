@@ -13,6 +13,10 @@ inputs:
       prebuilt Rust bridge and never compile Rust.
     required: false
     default: "true"
+  cache-suffix:
+    description: "Suffix for the uv cache key, for a job whose cache must not collide with another job's"
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -30,6 +34,7 @@ runs:
       with:
         version: ${{ inputs.version }}
         save-cache: ${{ github.ref == 'refs/heads/main' }}
+        cache-suffix: ${{ inputs.cache-suffix }}
 
     - name: Wait before attempt 2
       if: steps.attempt-1.outcome == 'failure'
@@ -44,6 +49,7 @@ runs:
       with:
         version: ${{ inputs.version }}
         save-cache: ${{ github.ref == 'refs/heads/main' }}
+        cache-suffix: ${{ inputs.cache-suffix }}
 
     - name: Wait before attempt 3
       if: steps.attempt-2.outcome == 'failure'
@@ -56,3 +62,4 @@ runs:
       with:
         version: ${{ inputs.version }}
         save-cache: ${{ github.ref == 'refs/heads/main' }}
+        cache-suffix: ${{ inputs.cache-suffix }}

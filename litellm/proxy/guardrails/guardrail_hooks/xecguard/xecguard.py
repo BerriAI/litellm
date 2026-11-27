@@ -54,9 +54,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
     )
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import (
-        GuardrailConfigModel,
-    )
+    from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import XecGuardConfigModel
 
 
 def _dict_fields(value: object) -> Mapping[str, object] | None:
@@ -143,7 +141,7 @@ class XecGuardGuardrail(CustomGuardrail):
         super().__init__(**forwarded)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[XecGuardConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
             XecGuardConfigModel,
         )
