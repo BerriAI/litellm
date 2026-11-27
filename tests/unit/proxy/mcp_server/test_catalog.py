@@ -1276,3 +1276,44 @@ async def test_reload_null_updated_at_respects_openapi_spec_path_and_registry_dr
     await manager.catalog._fresh_snapshot()
     assert len(build_calls) == 3
     assert manager.registry["openapi-null-ts"].url == "https://api.example.com"
+
+
+@pytest.mark.asyncio
+async def test_reload_null_updated_at_ignores_non_config_row_metadata_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import datetime, timezone
+
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+
+    current_rows: list[LiteLLM_MCPServerTable] = [
+        LiteLLM_MCPServerTable(
+            server_id="http-null-ts-meta",
+            server_name="remote_meta",
+            transport="http",
+            url="https://mcp.example.com/v1",
+            auth_type="none",
+            updated_at=None,
+            approval_status="active",
+        )
+    ]
+    manager, _fake_prisma, build_calls = _setup_null_ts_reload(monkeypatch, lambda _client: list(current_rows))
+
+    await manager.reload_servers_from_database()
+    first_instance: Final = manager.registry["http-null-ts-meta"]
+    assert len(build_calls) == 1
+
+    # Non-config health/audit/review metadata changes must not invalidate NULL-timestamp reuse.
+    current_rows[0] = current_rows[0].model_copy(
+        update={
+            "status": "healthy",
+            "last_health_check": datetime(2026, 11, 27, 4, 0, tzinfo=timezone.utc),
+            "health_check_error": "transient timeout",
+            "updated_by": "health-worker",
+            "review_notes": "checked",
+        }
+    )
+    await manager.reload_servers_from_database()
+
+    assert len(build_calls) == 1
+    assert manager.registry["http-null-ts-meta"] is first_instance

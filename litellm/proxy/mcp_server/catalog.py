@@ -90,8 +90,35 @@ def _configuration_identity(server: MCPServer) -> str:
     )
 
 
+_ROW_FINGERPRINT_EXCLUDE_FIELDS: Final[Mapping[str, bool]] = MappingProxyType(
+    {
+        "is_config": True,
+        "created_by": True,
+        "updated_at": True,
+        "updated_by": True,
+        "teams": True,
+        "status": True,
+        "last_health_check": True,
+        "health_check_error": True,
+        "has_user_credential": True,
+        "connected_app_reachable": True,
+        "approval_status": True,
+        "submitted_by": True,
+        "submitted_at": True,
+        "reviewed_at": True,
+        "review_notes": True,
+    }
+)
+
+
 def _row_fingerprint(row: BaseModel) -> str:
-    return hashlib.sha256(json.dumps(row.model_dump(mode="json"), sort_keys=True, default=str).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            row.model_dump(mode="json", exclude=_ROW_FINGERPRINT_EXCLUDE_FIELDS),
+            sort_keys=True,
+            default=str,
+        ).encode()
+    ).hexdigest()
 
 
 def _check_oauth_revision(selected: MCPServer, candidate: MCPServer | None) -> None:
@@ -476,7 +503,7 @@ class CatalogSnapshots:
         for row in rows:
             try:
                 server = LiteLLM_MCPServerTable.model_validate(row.model_dump())
-                row_fingerprint = _row_fingerprint(row)
+                row_fingerprint = _row_fingerprint(server)
                 existing_server = previous_registry.get(server.server_id)
 
                 if self._can_reuse_staged_server(
