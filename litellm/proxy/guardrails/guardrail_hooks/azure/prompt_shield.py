@@ -40,9 +40,9 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.guardrails import LitellmParams
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
+        AzurePromptShieldGuardrailConfigModel,
         AzurePromptShieldGuardrailResponse,
     )
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 # Per-invocation billing counters. A ContextVar rather than request metadata: the
@@ -389,7 +389,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         raise e
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[AzurePromptShieldGuardrailConfigModel]":
         """
         Get the config model for the Azure Prompt Shield guardrail.
         """

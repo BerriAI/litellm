@@ -46,7 +46,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
     from litellm.types.utils import GuardrailStatus
 
 TOKEN_ENDPOINT_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
@@ -207,7 +206,7 @@ class Agent365Guardrail(CustomGuardrail):
         verbose_proxy_logger.info("Initialized Microsoft Agent 365 guardrail: %s", guardrail_name)
 
     @staticmethod
-    def get_config_model() -> "type[GuardrailConfigModel] | None":
+    def get_config_model() -> "type[Agent365GuardrailConfigModel]":
         return Agent365GuardrailConfigModel
 
     @classmethod

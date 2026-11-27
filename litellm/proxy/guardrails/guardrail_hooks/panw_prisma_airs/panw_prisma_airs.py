@@ -173,7 +173,7 @@ def _mcp_tool_input(mcp_arguments: object) -> str | None:
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.panw_prisma_airs import PanwPrismaAirsGuardrailConfigModel
 
 
 def _parse_bool_setting(name: str, value: object) -> bool:
@@ -2098,7 +2098,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[PanwPrismaAirsGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
             PanwPrismaAirsGuardrailConfigModel,
         )

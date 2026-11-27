@@ -24,7 +24,9 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import ChatCompletionToolParam
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.mcp_end_user_permission import (
+        MCPEndUserPermissionGuardrailConfigModel,
+    )
 
 GUARDRAIL_NAME: Final = "mcp_end_user_permission"
 
@@ -203,7 +205,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[MCPEndUserPermissionGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.mcp_end_user_permission import (
             MCPEndUserPermissionGuardrailConfigModel,
         )
