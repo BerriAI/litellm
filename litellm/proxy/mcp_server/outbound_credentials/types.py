@@ -18,9 +18,8 @@ Design invariants encoded here:
 - **No v1 imports.** This vocabulary stays free of `MCPServer` and the rest of v1; the
   v1 -> v2 adapter maps onto these types in a later PR.
 
-Sum types are Expression `@tagged_union`s discriminated on a `Literal` `tag`, matched via
-`self.tag` with an `assert_never` tail; `Result` is this package's vendored `Ok | Error`
-union (see `result.py`), not `expression.Result`.
+Credential errors are frozen dataclasses discriminated on a `Literal` `tag`;
+`Result` is this package's `Ok | Error` union (see `result.py`).
 """
 
 from __future__ import annotations
@@ -28,10 +27,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Annotated, Final, Literal
+from typing import Annotated, ClassVar, Final, Literal, TypeAlias, final
 
 import httpx2
-from expression import case, tag, tagged_union
 from pydantic import ConfigDict, Field, SecretStr, field_validator
 from typing_extensions import assert_never
 
@@ -109,7 +107,17 @@ class Unauthorized:
     claims: str | None = None
 
 
-@tagged_union(frozen=True)
+_CredErrorTag: TypeAlias = Literal[
+    "unauthorized",
+    "misconfigured",
+    "url_credentials_not_allowed",
+    "upstream_unavailable",
+    "unsupported_mode",
+    "precondition_required",
+    "not_implemented",
+]
+
+
 class CredError:
     """Why a credential could not be produced. Fail-closed: an arm yields this or an `httpx2.Auth`.
 
@@ -117,23 +125,16 @@ class CredError:
     type checker can prove exhaustiveness. Construct via the `of_*` factories.
     """
 
-    tag: Literal[
-        "unauthorized",
-        "misconfigured",
-        "url_credentials_not_allowed",
-        "upstream_unavailable",
-        "unsupported_mode",
-        "precondition_required",
-        "not_implemented",
-    ] = tag()
+    __slots__ = ()
 
-    unauthorized: Unauthorized = case()  # no usable credential for this (subject, server) -> 401 challenge
-    misconfigured: str = case()  # the declared mode is missing required config -> 5xx (operator)
-    url_credentials_not_allowed: None = case()
-    upstream_unavailable: str = case()  # the IdP / token endpoint could not be reached -> 503
-    unsupported_mode: str = case()  # a raw mode string did not parse into AuthSpecKind (boundary)
-    precondition_required: str = case()  # a required per-user value (e.g. an env var) has not been provided -> 412
-    not_implemented: str = case()  # the declared mode's resolver arm is not built yet -> 501 (not operator error)
+    tag: ClassVar[_CredErrorTag]
+    unauthorized: Unauthorized
+    misconfigured: str
+    url_credentials_not_allowed: None
+    upstream_unavailable: str
+    unsupported_mode: str
+    precondition_required: str
+    not_implemented: str
 
     @staticmethod
     def of_unauthorized(
@@ -143,8 +144,8 @@ class CredError:
         body: Mapping[str, str] | None = None,
         claims: str | None = None,
     ) -> CredError:
-        return CredError(
-            unauthorized=Unauthorized(
+        return _UnauthorizedError(
+            Unauthorized(
                 detail=detail,
                 www_authenticate=www_authenticate,
                 body=body,
@@ -154,27 +155,27 @@ class CredError:
 
     @staticmethod
     def of_misconfigured(detail: str) -> CredError:
-        return CredError(misconfigured=detail)
+        return _MisconfiguredError(detail)
 
     @staticmethod
     def of_url_credentials_not_allowed() -> CredError:
-        return CredError(url_credentials_not_allowed=None)
+        return _UrlCredentialsNotAllowedError(None)
 
     @staticmethod
     def of_upstream_unavailable(detail: str) -> CredError:
-        return CredError(upstream_unavailable=detail)
+        return _UpstreamUnavailableError(detail)
 
     @staticmethod
     def of_unsupported_mode(detail: str) -> CredError:
-        return CredError(unsupported_mode=detail)
+        return _UnsupportedModeError(detail)
 
     @staticmethod
     def of_precondition_required(detail: str) -> CredError:
-        return CredError(precondition_required=detail)
+        return _PreconditionRequiredError(detail)
 
     @staticmethod
     def of_not_implemented(detail: str) -> CredError:
-        return CredError(not_implemented=detail)
+        return _NotImplementedError(detail)
 
     @property
     def summary(self) -> str:
@@ -200,6 +201,55 @@ class CredError:
             case "not_implemented":
                 return f"not implemented: {self.not_implemented}"
         assert_never(self.tag)
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _UnauthorizedError(CredError):
+    tag: ClassVar[_CredErrorTag] = "unauthorized"
+    unauthorized: Unauthorized
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _MisconfiguredError(CredError):
+    tag: ClassVar[_CredErrorTag] = "misconfigured"
+    misconfigured: str
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _UrlCredentialsNotAllowedError(CredError):
+    tag: ClassVar[_CredErrorTag] = "url_credentials_not_allowed"
+    url_credentials_not_allowed: None
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _UpstreamUnavailableError(CredError):
+    tag: ClassVar[_CredErrorTag] = "upstream_unavailable"
+    upstream_unavailable: str
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _UnsupportedModeError(CredError):
+    tag: ClassVar[_CredErrorTag] = "unsupported_mode"
+    unsupported_mode: str
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _PreconditionRequiredError(CredError):
+    tag: ClassVar[_CredErrorTag] = "precondition_required"
+    precondition_required: str
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class _NotImplementedError(CredError):
+    tag: ClassVar[_CredErrorTag] = "not_implemented"
+    not_implemented: str
 
 
 def validate_header_name(raw: str) -> Result[str, CredError]:

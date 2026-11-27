@@ -7,9 +7,12 @@ CredError tag/summary surface and the derived auth_spec_kind. Each assertion fai
 corresponding guarantee is mutated away.
 """
 
+import sys
+
 import pytest
 from pydantic import SecretStr, TypeAdapter, ValidationError
 
+from litellm.proxy.mcp_server import outbound_credentials
 from litellm.proxy.mcp_server.outbound_credentials import (
     Ambient,
     ApiKeyConfig,
@@ -48,6 +51,16 @@ _ID_JAG_MINIMAL = {
         "client_auth": {"source": "client_secret", "client_secret": "s"},
     },
 }
+
+
+def test_crederror_imports_without_expression(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "expression", None)
+    monkeypatch.delitem(sys.modules, CredError.__module__)
+    monkeypatch.delattr(outbound_credentials, "types")
+
+    from litellm.proxy.mcp_server.outbound_credentials.types import CredError as FreshCredError
+
+    assert FreshCredError.of_misconfigured("missing configuration").summary == "misconfigured: missing configuration"
 
 
 def test_parse_auth_spec_kind_accepts_known_mode():

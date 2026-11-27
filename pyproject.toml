@@ -106,7 +106,6 @@ proxy = [
     "polars>=1.38.1,<2.0",
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
-    "expression>=5.6.0,<6.0",
     "backports-zstd>=1.0.0,<2.0; python_version < '3.14'",
     "semver>=3.0.4,<4",
 ]
