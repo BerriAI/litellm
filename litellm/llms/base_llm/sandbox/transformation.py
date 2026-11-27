@@ -187,7 +187,7 @@ class BaseSandboxConfig:
         return estimate_sandbox_cost(container)
 
     @staticmethod
-    def _shell_result(stdout: str, stderr: str, exit_code: int | None) -> CodeExecutionResult:
+    def _shell_result(stdout: str, stderr: str, exit_code: int | None, status: str = "ExitCode") -> CodeExecutionResult:
         if max(len(stdout.encode("utf-8")), len(stderr.encode("utf-8"))) > SANDBOX_MAX_OUTPUT_BYTES:
             raise ValueError(
                 f"Sandbox output exceeded {SANDBOX_MAX_OUTPUT_BYTES} bytes; aborting to avoid unbounded memory use."
@@ -197,7 +197,13 @@ class BaseSandboxConfig:
                 "stdout": stdout,
                 "stderr": stderr,
                 "exit_code": exit_code,
-                "error": None if exit_code == 0 else {"name": "ExitCode", "value": str(exit_code), "traceback": stderr},
+                "error": None
+                if exit_code == 0
+                else {
+                    "name": "ExitCode" if exit_code is not None else status,
+                    "value": str(exit_code) if exit_code is not None else status,
+                    "traceback": stderr,
+                },
             }
         )
 

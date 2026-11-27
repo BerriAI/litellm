@@ -2,13 +2,16 @@
 Modal sandbox provider. Modal has no public REST API, so this goes through the `modal` SDK (`pip install 'litellm[modal]'`).
 """
 
+import asyncio
 import importlib
 import time
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
+from contextlib import asynccontextmanager
 from types import ModuleType
 from typing import Final, Protocol, TypeVar
 
 from litellm.llms.base_llm.sandbox.transformation import (
+    SANDBOX_MAX_OUTPUT_BYTES,
     BaseSandboxConfig,
     CodeExecutionResult,
     ContainerHandle,
@@ -30,7 +33,7 @@ class _Call(Protocol[_T_co]):
 
 
 class _Stream(Protocol):
-    read: _Call[bytes]
+    def __aiter__(self) -> AsyncIterator[bytes]: ...
 
 
 class _Process(Protocol):
@@ -60,7 +63,8 @@ class ModalSandboxConfig(BaseSandboxConfig):
             )
         return key
 
-    async def _client(self, api_key: str | None) -> tuple[ModuleType, object]:
+    @asynccontextmanager
+    async def _client(self, api_key: str | None) -> AsyncIterator[tuple[ModuleType, object]]:
         token_id, token_secret = self.validate_environment(api_key=api_key).split(":", 1)
         try:
             modal: Final = importlib.import_module("modal")
@@ -68,13 +72,29 @@ class ModalSandboxConfig(BaseSandboxConfig):
             raise ImportError(
                 "The Modal sandbox provider needs the modal SDK. Run `pip install 'litellm[modal]'`."
             ) from e
-        return modal, await modal.Client.from_credentials.aio(token_id, token_secret)
+        client: Final = await modal.Client.from_credentials.aio(token_id, token_secret)
+        try:
+            yield modal, client
+        finally:
+            await client.close.aio()
 
-    async def _sandbox(self, container: ContainerHandle | str, api_key: str | None) -> _ModalSandbox:
+    @asynccontextmanager
+    async def _sandbox(self, container: ContainerHandle | str, api_key: str | None) -> AsyncIterator[_ModalSandbox]:
         stored_key: Final = container.hidden_params.get("api_key") if isinstance(container, ContainerHandle) else None
-        modal, client = await self._client(api_key or (str(stored_key) if stored_key else None))
         sandbox_id: Final = container.id if isinstance(container, ContainerHandle) else container
-        return await modal.Sandbox.from_id.aio(sandbox_id, client=client)
+        async with self._client(api_key or (str(stored_key) if stored_key else None)) as (modal, client):
+            yield await modal.Sandbox.from_id.aio(sandbox_id, client=client)
+
+    @staticmethod
+    async def _read_capped(stream: _Stream) -> bytes:
+        buffer: Final = bytearray()
+        async for chunk in stream:
+            buffer.extend(chunk)
+            if len(buffer) > SANDBOX_MAX_OUTPUT_BYTES:
+                raise ValueError(
+                    f"Sandbox output exceeded {SANDBOX_MAX_OUTPUT_BYTES} bytes; aborting to avoid unbounded memory use."
+                )
+        return bytes(buffer)
 
     async def acreate_sandbox(
         self,
@@ -88,21 +108,21 @@ class ModalSandboxConfig(BaseSandboxConfig):
         app_name: str | None = None,
         **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> ContainerHandle:
-        modal, client = await self._client(api_key)
-        app: Final = await modal.App.lookup.aio(
-            app_name or get_secret_str("MODAL_APP_NAME") or MODAL_APP_NAME, create_if_missing=True, client=client
-        )
-        created_at: Final = time.time()
-        ttl: Final = timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT
-        sandbox: Final = await modal.Sandbox.create.aio(
-            app=app,
-            image=modal.Image.from_registry(template) if template else modal.Image.debian_slim(),
-            timeout=ttl,
-            cpu=(cpus, cpus),
-            memory=(memory_mb, memory_mb),
-            block_network=allow_internet_access is False,
-            client=client,
-        )
+        async with self._client(api_key) as (modal, client):
+            app: Final = await modal.App.lookup.aio(
+                app_name or get_secret_str("MODAL_APP_NAME") or MODAL_APP_NAME, create_if_missing=True, client=client
+            )
+            created_at: Final = time.time()
+            ttl: Final = timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT
+            sandbox: Final = await modal.Sandbox.create.aio(
+                app=app,
+                image=modal.Image.from_registry(template) if template else modal.Image.debian_slim(),
+                timeout=ttl,
+                cpu=(cpus, cpus),
+                memory=(memory_mb, memory_mb),
+                block_network=allow_internet_access is False,
+                client=client,
+            )
         handle: Final = ContainerHandle(
             id=sandbox.object_id,
             provider="modal",
@@ -123,13 +143,14 @@ class ModalSandboxConfig(BaseSandboxConfig):
         language: str = "python",
         **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> CodeExecutionResult:
-        sandbox: Final = await self._sandbox(container, api_key)
-        process: Final = await sandbox.exec.aio("bash", "-c", shell_command(code, language), text=False)
-        stdout: Final = await process.stdout.read.aio()
-        stderr: Final = await process.stderr.read.aio()
-        return self._shell_result(
-            stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace"), await process.wait.aio()
-        )
+        async with self._sandbox(container, api_key) as sandbox:
+            process: Final = await sandbox.exec.aio("bash", "-c", shell_command(code, language), text=False)
+            stdout, stderr = await asyncio.gather(self._read_capped(process.stdout), self._read_capped(process.stderr))
+            return self._shell_result(
+                stdout.decode("utf-8", errors="replace"),
+                stderr.decode("utf-8", errors="replace"),
+                await process.wait.aio(),
+            )
 
     async def adelete_sandbox(
         self,
@@ -138,6 +159,6 @@ class ModalSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> bool:
-        sandbox: Final = await self._sandbox(container, api_key)
-        await sandbox.terminate.aio()
+        async with self._sandbox(container, api_key) as sandbox:
+            await sandbox.terminate.aio()
         return True

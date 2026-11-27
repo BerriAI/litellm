@@ -309,6 +309,11 @@ class _FakeAio:
         return self.fn(*args, **kwargs)
 
 
+async def _chunks(chunks):
+    for chunk in chunks:
+        yield chunk
+
+
 class _FakeModalSandbox:
     object_id = "sb-1"
 
@@ -319,21 +324,22 @@ class _FakeModalSandbox:
 
     def _exec(self, *args: str, text: bool = True):
         self.record["exec"] = args
-        encoded = lambda raw: raw.decode() if text else raw  # noqa: E731  # tiny local factory
-        stream = lambda raw: types.SimpleNamespace(read=_FakeAio(lambda: encoded(raw)))  # noqa: E731  # tiny local factory
-        return types.SimpleNamespace(stdout=stream(b"out\xff\n"), stderr=stream(b"err\n"), wait=_FakeAio(lambda: 3))
+        stdout = self.record.get("stdout", [b"out", b"\xff\n"])
+        return types.SimpleNamespace(stdout=_chunks(stdout), stderr=_chunks([b"err\n"]), wait=_FakeAio(lambda: 3))
 
 
-@pytest.mark.asyncio
-async def test_modal_lifecycle_goes_through_the_sdk(monkeypatch):
-    record: dict = {}
-
+def _fake_modal(monkeypatch, record: dict) -> None:
     def create(**kwargs):
         record["create"] = kwargs
         return _FakeModalSandbox(record)
 
+    def connect(token_id, secret):
+        record["open_clients"] = record.get("open_clients", 0) + 1
+        close = lambda: record.__setitem__("open_clients", record["open_clients"] - 1)  # noqa: E731  # tiny local factory
+        return types.SimpleNamespace(credentials=(token_id, secret), close=_FakeAio(close))
+
     fake_modal = types.SimpleNamespace(
-        Client=types.SimpleNamespace(from_credentials=_FakeAio(lambda token_id, secret: (token_id, secret))),
+        Client=types.SimpleNamespace(from_credentials=_FakeAio(connect)),
         App=types.SimpleNamespace(lookup=_FakeAio(lambda name, **kwargs: name)),
         Image=types.SimpleNamespace(debian_slim=lambda: "slim", from_registry=lambda tag: tag),
         Sandbox=types.SimpleNamespace(
@@ -342,6 +348,12 @@ async def test_modal_lifecycle_goes_through_the_sdk(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "modal", fake_modal)
 
+
+@pytest.mark.asyncio
+async def test_modal_lifecycle_goes_through_the_sdk(monkeypatch):
+    record: dict = {}
+    _fake_modal(monkeypatch, record)
+
     handle = await litellm.acreate_sandbox(
         provider="modal", api_key="id:secret", timeout=60, allow_internet_access=False, app_name="my-app"
     )
@@ -349,7 +361,7 @@ async def test_modal_lifecycle_goes_through_the_sdk(monkeypatch):
     deleted = await litellm.adelete_sandbox(provider="modal", container=handle)
 
     assert handle.id == "sb-1"
-    assert record["create"]["client"] == ("id", "secret")
+    assert record["create"]["client"].credentials == ("id", "secret")
     assert record["create"]["app"] == "my-app"
     assert record["create"]["timeout"] == 60
     assert record["create"]["block_network"] is True
@@ -359,6 +371,55 @@ async def test_modal_lifecycle_goes_through_the_sdk(monkeypatch):
     assert "exit 3" in record["exec"][-1]
     assert (result.stdout, result.stderr, result.exit_code) == ("out\ufffd\n", "err\n", 3)
     assert deleted is True and record["terminated"] is True
+    assert record["open_clients"] == 0
+
+
+@pytest.mark.asyncio
+async def test_modal_stops_reading_output_past_the_cap_and_closes_its_client(monkeypatch):
+    read: list[int] = []
+
+    def endless():
+        while True:
+            read.append(1)
+            yield b"x" * (1024 * 1024)
+
+    record: dict = {"stdout": endless()}
+    _fake_modal(monkeypatch, record)
+
+    with pytest.raises(ValueError, match="exceeded"):
+        await litellm.arun_code(provider="modal", container="sb-1", code="1", api_key="id:secret")
+    assert len(read) == SANDBOX_MAX_OUTPUT_BYTES // (1024 * 1024) + 1
+    assert record["open_clients"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["signaled", "oom_killed"])
+async def test_tensorlake_reports_a_killed_process_by_its_status(status):
+    def route(method: str, url: str, json: object) -> object:
+        if method == "POST":
+            return {"pid": 7, "status": status, "exit_code": None}
+        return {"lines": []}
+
+    result = await litellm.arun_code(
+        provider="tensorlake", container="tl_1", code="1", api_key="k", client=FakeHTTPClient(route)
+    )
+
+    assert (result.exit_code, result.error["name"], result.error["value"]) == (None, status, status)
+
+
+@pytest.mark.asyncio
+async def test_tensorlake_stops_polling_a_process_that_outlives_its_sandbox():
+    def route(method: str, url: str, json: object) -> object:
+        if method == "POST" and url.endswith("/sandboxes"):
+            return {"sandbox_id": "tl_1", "sandbox_url": "https://tl_1.sandbox.example"}
+        return {"pid": 7, "status": "running"}
+
+    client = FakeHTTPClient(route)
+    handle = await litellm.acreate_sandbox(provider="tensorlake", api_key="k", client=client)
+    handle.expires_at = 0.0
+
+    with pytest.raises(TimeoutError, match="still running"):
+        await litellm.arun_code(provider="tensorlake", container=handle, code="1", client=client)
     assert (await litellm.asandbox_cost(provider="modal", container=handle)).source == "estimate"
 
 

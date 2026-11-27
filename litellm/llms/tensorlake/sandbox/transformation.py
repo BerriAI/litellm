@@ -132,7 +132,11 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
             url=processes, headers=headers, json={"command": "bash", "args": ["-c", shell_command(code, language)]}
         )
         process = _Process.model_validate(started.json())  # rebind-ok: polled until the process exits
+        expires_at: Final = container.expires_at if isinstance(container, ContainerHandle) else None
+        deadline: Final = expires_at if expires_at is not None else time.time() + DEFAULT_SANDBOX_TIMEOUT
         while process.status == "running":
+            if time.time() > deadline:
+                raise TimeoutError(f"Tensorlake process {process.pid} was still running when its sandbox timed out.")
             await asyncio.sleep(PROCESS_POLL_SECONDS)
             process = _Process.model_validate(
                 (await http.get(url=f"{processes}/{process.pid}", headers=headers)).json()
@@ -144,7 +148,7 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
         stderr: Final = _Output.model_validate(
             (await http.get(url=f"{processes}/{process.pid}/stderr", headers=headers)).json()
         )
-        return self._shell_result(_joined(stdout), _joined(stderr), process.exit_code)
+        return self._shell_result(_joined(stdout), _joined(stderr), process.exit_code, process.status)
 
     async def adelete_sandbox(
         self,
