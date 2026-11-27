@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import LoginPage from "./LoginPage";
+import { setServerRootPath } from "@/lib/serverRootPath";
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
@@ -138,8 +139,38 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href);
+      expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui/", window.location.origin).href);
     });
+  });
+
+  it("keeps the server root path when an already logged-in visitor is sent to the dashboard", async () => {
+    setServerRootPath("/9000");
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/9000",
+        proxy_base_url: null,
+        sso_configured: false,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue("valid-token");
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    try {
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <LoginPage />
+        </QueryClientProvider>,
+      );
+
+      await waitFor(() => {
+        expect(mockReplaceDocument).toHaveBeenCalled();
+      });
+      expect(new URL(mockReplaceDocument.mock.calls[0][0], window.location.origin).pathname).toBe("/9000/ui/");
+    } finally {
+      setServerRootPath("/");
+    }
   });
 
   it.each([null, "/ui/?page=usage"])(
@@ -228,7 +259,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href);
+      expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui/", window.location.origin).href);
     });
 
     expect(mockPush).not.toHaveBeenCalled();
@@ -383,7 +414,7 @@ describe("LoginPage", () => {
         fireEvent.change(screen.getByLabelText("Password"), { target: { value: "test-password" } });
         fireEvent.click(screen.getByRole("button", { name: "Login", exact: true }));
 
-        await waitFor(() => expect(mockAssignDocument).toHaveBeenCalledWith("/ui"));
+        await waitFor(() => expect(mockAssignDocument).toHaveBeenCalledWith("/ui/"));
       },
     );
 
@@ -408,7 +439,7 @@ describe("LoginPage", () => {
         renderLogin();
 
         await waitFor(() =>
-          expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href),
+          expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui/", window.location.origin).href),
         );
       },
     );
@@ -486,7 +517,7 @@ describe("LoginPage", () => {
       );
 
       await waitFor(() => {
-        expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href);
+        expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui/", window.location.origin).href);
       });
 
       expect(document.cookie).not.toContain("token=attacker.jwt.value");

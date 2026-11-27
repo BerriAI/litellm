@@ -12,6 +12,7 @@ const { mockReplace, mockUseKeys, mockUiHref, state } = vi.hoisted(() => {
     userRole: "Internal User",
     keys: [] as KeyRow[],
     returnUrl: null as string | null,
+    token: "tok" as string | null,
   };
   return {
     state,
@@ -31,7 +32,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/contexts/AuthContext", () => ({
   useAuth: () => ({
     authLoading: false,
-    token: "tok",
+    token: state.token,
     userRole: state.userRole,
     userID: "user-1",
   }),
@@ -46,11 +47,13 @@ vi.mock("@/components/common_components/LoadingScreen", () => ({
 vi.mock("@/components/networking", async () => {
   const { normalizeBackendPageUrlToUiOrigin } =
     await vi.importActual<typeof import("@/utils/returnUrlUtils")>("@/utils/returnUrlUtils");
+  const { uiMountRootPath } =
+    await vi.importActual<typeof import("@/lib/http/resolveApiBase")>("@/lib/http/resolveApiBase");
   return {
     getRuntimeBackendBaseUrl: () => "https://backend.example",
     getUiPageUrl: (url: string) =>
       normalizeBackendPageUrlToUiOrigin(url, "https://backend.example", "http://localhost:3000"),
-    proxyBaseUrl: "",
+    getProxyBaseUrl: () => `${window.location.origin}${uiMountRootPath(window.location.pathname)}`,
   };
 });
 vi.mock("@/utils/uiHref", () => ({ uiHref: mockUiHref }));
@@ -58,7 +61,6 @@ vi.mock("@/utils/returnUrlUtils", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/utils/returnUrlUtils")>()),
   buildLoginUrlWithReturn: (u: string) => u,
   consumeReturnUrl: () => state.returnUrl,
-  getLoginUrl: () => "/login",
   storeReturnUrl: () => undefined,
 }));
 
@@ -83,6 +85,7 @@ describe("dashboard landing", () => {
     state.userRole = "Internal User";
     state.keys = [];
     state.returnUrl = null;
+    state.token = "tok";
     mockReplace.mockClear();
     mockUseKeys.mockClear();
     mockUiHref.mockClear();
@@ -141,5 +144,23 @@ describe("dashboard landing", () => {
     state.returnUrl = returnUrl;
     render(<CreateKeyPage />);
     expect(mockLocationReplace).not.toHaveBeenCalled();
+  });
+
+  it("keeps the server root path in the login redirect when the UI config has not loaded", () => {
+    state.token = null;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        origin: "http://proxy.example",
+        pathname: "/9000/ui/",
+        href: "http://proxy.example/9000/ui/",
+        replace: mockLocationReplace,
+      },
+    });
+    render(<CreateKeyPage />);
+    expect(mockLocationReplace).toHaveBeenCalledTimes(1);
+    expect(new URL(mockLocationReplace.mock.calls[0][0] as string, "http://proxy.example").pathname).toBe(
+      "/9000/ui/login/",
+    );
   });
 });

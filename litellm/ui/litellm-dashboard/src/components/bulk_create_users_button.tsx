@@ -13,7 +13,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Download, FileText, FileWarning, Trash2, TriangleAlert, Upload } from "lucide-react";
-import { userCreateCall, invitationCreateCall, getProxyUISettings, getUiPageUrl } from "./networking";
+import { userCreateCall, invitationCreateCall, getProxyUISettings, getUiPageUrl, getProxyBaseUrl } from "./networking";
+import { buildOnboardingUrl } from "./onboarding_link";
 import Papa from "papaparse";
 import { CheckCircleIcon, XCircleIcon, ExclamationIcon } from "@heroicons/react/outline";
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -65,7 +66,6 @@ const BulkCreateUsersButton = ({ accessToken, teams, possibleUIRoles, onUsersCre
   const [fileError, setFileError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
-  const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
   const csvInputId = React.useId();
@@ -82,10 +82,6 @@ const BulkCreateUsersButton = ({ accessToken, teams, possibleUIRoles, onUsersCre
     };
 
     fetchUISettings();
-
-    // Set base URL
-    const base = new URL("/", window.location.href);
-    setBaseUrl(base.toString());
   }, [accessToken]);
 
   const downloadTemplate = () => {
@@ -320,6 +316,7 @@ const BulkCreateUsersButton = ({ accessToken, teams, possibleUIRoles, onUsersCre
     setParsedData(updatedData);
 
     let anySuccessful = false;
+    const linkBase = { baseUrl: getProxyBaseUrl(), resetPassword: false };
 
     for (let index = 0; index < updatedData.length; index++) {
       const user = updatedData[index];
@@ -385,7 +382,7 @@ const BulkCreateUsersButton = ({ accessToken, teams, possibleUIRoles, onUsersCre
               // Regular invitation flow
               const invitationData = await invitationCreateCall(accessToken, user_id);
               const invitationUrl = getUiPageUrl(
-                new URL(`/ui/onboarding?invitation_id=${invitationData.id}`, baseUrl).toString(),
+                buildOnboardingUrl({ ...linkBase, invitationId: invitationData.id, hasUserSetupSso: false }),
               );
 
               setParsedData((current) =>
@@ -402,7 +399,7 @@ const BulkCreateUsersButton = ({ accessToken, teams, possibleUIRoles, onUsersCre
               );
             } else {
               // SSO flow - just use the base URL
-              const invitationUrl = new URL("/ui", baseUrl).toString();
+              const invitationUrl = buildOnboardingUrl({ ...linkBase, invitationId: undefined, hasUserSetupSso: true });
 
               setParsedData((current) =>
                 current.map((u, i) =>

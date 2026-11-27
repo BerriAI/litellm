@@ -1407,9 +1407,6 @@
   "src/components/bulk_create_users_button.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/components/callback_info_helpers.tsx": {

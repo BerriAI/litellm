@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveApiBase, resolveRequestUrl } from "./resolveApiBase";
+import { resolveApiBase, resolveRequestUrl, runtimeConfigUrl, uiMountRootPath } from "./resolveApiBase";
 
 describe("resolveRequestUrl", () => {
   it("targets the registered base when one is registered", () => {
@@ -116,5 +116,40 @@ describe("resolveApiBase", () => {
         resolveApiBase({ explicitBase: "http://localhost:4000/team/litellm", serverRootPath: "/team/litellm" }),
       ).toBe("http://localhost:4000/team/litellm");
     });
+  });
+});
+
+describe("uiMountRootPath", () => {
+  it.each([
+    ["/9000/ui/", "/9000"],
+    ["/9000/ui", "/9000"],
+    ["/a/b/ui/login/", "/a/b"],
+    ["/9000/ui/teams/ui/", "/9000"],
+    ["/ui/login/", ""],
+    ["/ui", ""],
+    ["/login", ""],
+    ["", ""],
+    ["/9000/uix/", ""],
+    ["/9000/ui-config/", ""],
+    ["//evil.example/ui/", "/evil.example"],
+    ["/9000//ui/", "/9000"],
+  ])("derives the mount root from %j as %j", (pathname, expected) => {
+    expect(uiMountRootPath(pathname)).toBe(expected);
+  });
+});
+
+describe("runtimeConfigUrl", () => {
+  it("keeps the server root path in front of the runtime config file", () => {
+    expect(runtimeConfigUrl("/9000/ui/")).toBe("/9000/ui/litellm-runtime-config.json");
+    expect(runtimeConfigUrl("/a/b/ui/login/")).toBe("/a/b/ui/litellm-runtime-config.json");
+  });
+
+  it("never produces a protocol-relative URL from a page path that starts with two slashes", () => {
+    expect(runtimeConfigUrl("//evil.example/ui/")).toMatch(/^\/[^/]/);
+  });
+
+  it("stays at the origin root when the dashboard is not under a server root path", () => {
+    expect(runtimeConfigUrl("/ui/")).toBe("/ui/litellm-runtime-config.json");
+    expect(runtimeConfigUrl("/9000/uix/")).toBe("/ui/litellm-runtime-config.json");
   });
 });

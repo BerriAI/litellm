@@ -2,10 +2,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import BulkCreateUsersButton from "./bulk_create_users_button";
+import { getProxyBaseUrl, invitationCreateCall, userCreateCall } from "./networking";
 
 vi.mock("./networking", () => ({
   userCreateCall: vi.fn(),
   invitationCreateCall: vi.fn(),
+  getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
+  getUiPageUrl: vi.fn((url: string) => url),
   getProxyUISettings: vi.fn().mockResolvedValue({
     PROXY_BASE_URL: null,
     PROXY_LOGOUT_URL: null,
@@ -95,5 +98,21 @@ describe("BulkCreateUsersButton", () => {
       (label) => document.getElementById(label.getAttribute("for") as string) === null,
     );
     expect(danglingLabels).toEqual([]);
+  });
+
+  it("builds invitation links under the server root path", async () => {
+    vi.mocked(getProxyBaseUrl).mockReturnValue("https://proxy.example.com/9000");
+    vi.mocked(userCreateCall).mockResolvedValue({ user_id: "user-1", key: "sk-1" });
+    vi.mocked(invitationCreateCall).mockResolvedValue({ id: "invite-123" });
+
+    const user = await openUploadStep();
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [csvFile()] } });
+    await screen.findByText("new.hire@example.com");
+    await user.click(screen.getAllByRole("button", { name: /create 1 user/i })[0]);
+
+    expect(
+      await screen.findByText("https://proxy.example.com/9000/ui/onboarding?invitation_id=invite-123"),
+    ).toBeInTheDocument();
   });
 });

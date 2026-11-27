@@ -2,7 +2,7 @@
 
 import HomePage from "@/app/(dashboard)/home/_components/HomePage";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
-import { getRuntimeBackendBaseUrl, getUiPageUrl, proxyBaseUrl } from "@/components/networking";
+import { getRuntimeBackendBaseUrl, getProxyBaseUrl, getUiPageUrl } from "@/components/networking";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   buildLoginUrlWithReturn,
@@ -32,7 +32,7 @@ function CreateKeyPageContent() {
       // Store the current URL so we can redirect back after login
       storeReturnUrl();
       // Build login URL with return URL parameter
-      const baseLoginUrl = getUiPageUrl(getLoginUrl(proxyBaseUrl || ""));
+      const baseLoginUrl = getUiPageUrl(getLoginUrl(getProxyBaseUrl()));
       const dest = buildLoginUrlWithReturn(baseLoginUrl);
       // Replace instead of assigning to avoid back-button loops
       window.location.replace(dest);
