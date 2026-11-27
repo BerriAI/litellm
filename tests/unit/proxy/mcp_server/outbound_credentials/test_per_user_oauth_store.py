@@ -471,3 +471,25 @@ async def test_token_endpoint_transport_failure_is_typed_unreachable(monkeypatch
     outcome = await _post_token_endpoint("https://idp.example/token", {}, {})
     assert isinstance(outcome, AuthorizationCodeTokenUnreachable)
     assert outcome.detail == "TimeoutError"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_body", [b"<html>error</html>", b'["not-an-object"]'])
+async def test_token_endpoint_malformed_200_body_is_typed_denied(monkeypatch, raw_body: bytes):
+    import httpx
+
+    from litellm.llms.custom_httpx import http_handler
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeTokenDenied
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _post_token_endpoint
+
+    class Client:
+        async def post(self, url, headers, data):
+            request = httpx.Request("POST", url)
+            return httpx.Response(200, content=raw_body, request=request)
+
+    monkeypatch.setattr(http_handler, "get_async_httpx_client", lambda llm_provider: Client())
+    outcome = await _post_token_endpoint("https://idp.example/token", {}, {})
+    assert isinstance(outcome, AuthorizationCodeTokenDenied)
+    assert outcome.status_code == 200
+    assert outcome.body == {}
+    assert outcome.detail == "token endpoint returned a non-JSON-object body"

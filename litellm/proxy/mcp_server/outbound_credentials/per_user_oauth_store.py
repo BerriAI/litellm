@@ -118,7 +118,6 @@ async def _post_token_endpoint(
         client: Final = get_async_httpx_client(llm_provider=provider)  # pyright: ignore
         response: Final = await client.post(url, headers=request_headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
-        body: Final = _TOKEN_BODY_ADAPTER.validate_json(response.content)
     except httpx.HTTPStatusError as exc:
         verbose_logger.warning("MCP OAuth refresh token endpoint returned HTTP %s", exc.response.status_code)
         try:
@@ -137,6 +136,18 @@ async def _post_token_endpoint(
     except Exception as exc:  # noqa: BLE001
         verbose_logger.warning("MCP OAuth refresh request failed: %s", type(exc).__name__)
         return AuthorizationCodeTokenUnreachable(detail=type(exc).__name__)
+    try:
+        body: Final = _TOKEN_BODY_ADAPTER.validate_json(response.content)
+    except (ValidationError, json.JSONDecodeError, UnicodeDecodeError):
+        verbose_logger.warning(
+            "MCP OAuth refresh token endpoint returned HTTP %s with non-JSON-object body",
+            response.status_code,
+        )
+        return AuthorizationCodeTokenDenied(
+            status_code=response.status_code,
+            body={},
+            detail="token endpoint returned a non-JSON-object body",
+        )
     return AuthorizationCodeTokenSuccess(body=body)
 
 
