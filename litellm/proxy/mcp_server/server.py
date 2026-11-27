@@ -1751,14 +1751,22 @@ if MCP_AVAILABLE:
                 return self._consumed_messages.pop(0)
             return await self._receive()
 
-    async def _initialize_without_request_id(peek: _LazyPeekedBody, request: StarletteRequest) -> bool:
+    def _uses_handshake_protocol(scope: Scope) -> bool:
+        version: Final = StarletteRequest(scope).headers.get("mcp-protocol-version")
+        return version is None or version in HANDSHAKE_PROTOCOL_VERSIONS
+
+    async def _initialize_without_request_id(
+        peek: _LazyPeekedBody, request: StarletteRequest, is_initialize: bool
+    ) -> bool:
+        body: Final = await peek.body()
+        may_be_truncated: Final = len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+        if not is_initialize and not may_be_truncated:
+            return False
         if not all(check_accept_headers(request)):
             return False
         content_types: Final = request.headers.get("content-type", "").split(";", 1)[0].split(",")
         if not any(content_type.strip() == "application/json" for content_type in content_types):
             return False
-        body: Final = await peek.body()
-        may_be_truncated: Final = len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
         if may_be_truncated:
             method: Final = _jsonrpc_text_method(body.decode("utf-8", errors="replace"))
             if method is not None and method != "initialize":
@@ -1778,7 +1786,10 @@ if MCP_AVAILABLE:
             {"jsonrpc": "2.0", "id": None, "error": {"code": INVALID_REQUEST, "message": message}}, status_code=400
         )
 
-    def _normalize_sdk_invalid_request(send: Send) -> Send:
+    def _normalize_sdk_invalid_request(scope: Scope, send: Send) -> Send:
+        if scope.get("method") != "POST" or not _uses_handshake_protocol(scope):
+            return send
+
         pending_start: Message | None = None  # rebind-ok: hold a candidate SDK error's headers until its body arrives
 
         async def normalize(message: Message) -> None:
@@ -2542,8 +2553,9 @@ if MCP_AVAILABLE:
             return False
         return _jsonrpc_request_method(await peek.full_body()) in disabled_ops
 
-    async def _preflight_streamable_http_modern_interaction(
+    async def _preflight_streamable_http_request(
         peek: _LazyPeekedBody | None,
+        is_initialize: bool,
         defer_upstream_probes: bool,
         targets_disabled_capability: bool,
         scope: Scope,
@@ -2555,7 +2567,13 @@ if MCP_AVAILABLE:
         raw_headers: Mapping[str, str] | None,
         client_ip: str | None,
     ) -> JSONResponse | None:
-        if peek is None or not defer_upstream_probes or targets_disabled_capability:
+        if peek is None:
+            return None
+        if _uses_handshake_protocol(scope) and await _initialize_without_request_id(
+            peek, StarletteRequest(scope), is_initialize
+        ):
+            return _invalid_mcp_request("Initialize requires a request ID")
+        if not defer_upstream_probes or targets_disabled_capability:
             return None
         return await _preflight_modern_interaction(
             scope,
@@ -2753,20 +2771,9 @@ if MCP_AVAILABLE:
                     return
                 session_id = _get_session_id_from_scope(scope)
 
-            protocol_version: Final = request_headers.get("mcp-protocol-version")
-            legacy_post: Final = (
-                peek if protocol_version is None or protocol_version in HANDSHAKE_PROTOCOL_VERSIONS else None
-            )
-            if (
-                legacy_post is not None
-                and (is_initialize or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES)
-                and await _initialize_without_request_id(legacy_post, StarletteRequest(scope))
-            ):
-                await _invalid_mcp_request("Initialize requires a request ID")(scope, receive, send)
-                return
-
-            rejection: Final = await _preflight_streamable_http_modern_interaction(
+            rejection: Final = await _preflight_streamable_http_request(
                 peek=peek,
+                is_initialize=is_initialize,
                 defer_upstream_probes=defer_upstream_probes,
                 targets_disabled_capability=targets_disabled_capability,
                 scope=scope,
@@ -2936,9 +2943,7 @@ if MCP_AVAILABLE:
                     )
                 ):
                     await target_manager.handle_request(
-                        scope,
-                        receive,
-                        _normalize_sdk_invalid_request(local_send) if legacy_post is not None else local_send,
+                        scope, receive, _normalize_sdk_invalid_request(scope, local_send)
                     )
                     if use_stateful and session_id and scope.get("method") == "DELETE":
                         _remove_stateful_session_tracking(session_id)
