@@ -24,7 +24,30 @@ PAYLOAD: Final = {
     "total_tokens": 5,
     "response_cost": 0.01,
     "messages": [{"role": "user", "content": "private prompt"}],
-    "response": "private response",
+    "response": {
+        "choices": [
+            {
+                "message": {"content": "private response"},
+                "logprobs": {"content": [{"token": "private response", "bytes": [112, 114, 105, 118, 97, 116, 101]}]},
+            }
+        ]
+    },
+    "error_str": "provider rejected input_value='private prompt'",
+    "model_parameters": {
+        "query": "private prompt",
+        "documents": ["private response"],
+        "prediction": {"content": "private response"},
+    },
+    "error_information": {
+        "error_code": "429",
+        "error_message": "invalid messages: private prompt",
+        "traceback": "provider exception: private response",
+    },
+    "metadata": {
+        "prompt_management_metadata": {"prompt_variables": {"question": "private prompt"}},
+        "mcp_tool_call_metadata": {"arguments": {"input": "private prompt"}},
+        "vector_store_request_metadata": {"query": "private prompt", "results": ["private response"]},
+    },
 }
 
 
@@ -63,7 +86,10 @@ def test_callbacks_deliver_redacted_log_without_mutating_input(method: str) -> N
         assert row[1:10] == ("request-1", status, "example", NOW, NOW, 3, 2, 5, 0.01)
         assert "private prompt" not in str(row[-1])
         assert "private response" not in str(row[-1])
-        assert PAYLOAD["response"] == "private response"
+        assert json.loads(str(row[-1]))["error_information"] == {"error_code": "429"}
+        assert "metadata" not in json.loads(str(row[-1]))
+        assert "private response" in json.dumps(PAYLOAD["response"])
+        assert PAYLOAD["error_information"]["error_message"] == "invalid messages: private prompt"
         assert logger.statistics == {"accepted": 1, "delivered": 1, "dropped": 0, "pending": 0}
     finally:
         logger.close()

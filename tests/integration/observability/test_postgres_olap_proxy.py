@@ -7,6 +7,7 @@ from uuid import uuid4
 import psycopg
 import yaml
 from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
 from tests.integration._support.client import gateway_from_environment
 from tests.integration._support.process import owned_proxy
@@ -17,7 +18,10 @@ from tests.integration._support.wire import Reply, Request, wire_server
 def _provider(request: Request) -> Reply:
     body: Final = json.loads(request.body)
     if body["messages"][0]["content"] == "failure":
-        return Reply(status=429, body=b'{"error":{"message":"synthetic limit","type":"rate_limit_error"}}')
+        return Reply(
+            status=429,
+            body=b'{"error":{"message":"invalid input_value: private prompt; private response","type":"rate_limit_error"}}',
+        )
     usage: Final = {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
     common: Final = {"id": "chatcmpl-" + uuid4().hex, "created": 1, "model": body["model"]}
     if body.get("stream"):
@@ -71,7 +75,7 @@ def _provider(request: Request) -> Reply:
 
 def test_proxy_drains_success_failure_and_stream_logs_on_shutdown(tmp_path: Path) -> None:
     table: Final = "olap_proxy_" + uuid4().hex
-    dsn: Final = os.environ["DATABASE_URL"]
+    dsn: Final = make_conninfo(os.environ["DATABASE_URL"], sslmode="disable")
     with psycopg.connect(dsn, autocommit=True) as connection:
         connection.execute(
             sql.SQL("""CREATE TABLE {} (
@@ -133,6 +137,9 @@ def test_proxy_drains_success_failure_and_stream_logs_on_shutdown(tmp_path: Path
                         {
                             "model": "analytics",
                             "messages": [{"role": "user", "content": "private prompt"}],
+                            "metadata": {
+                                "prompt_management_metadata": {"prompt_variables": {"secret": "private metadata"}}
+                            },
                         },
                     )
                     assert success.status_code == 200, success.text
@@ -166,6 +173,9 @@ def test_proxy_drains_success_failure_and_stream_logs_on_shutdown(tmp_path: Path
                 assert len({row[0] for row in rows}) == 3
                 assert sorted(row[1] for row in rows) == ["failure", "success", "success"]
                 assert [row[2] for row in rows if row[1] == "success"] == [7, 7]
-                assert all("private prompt" not in row[3] and "private response" not in row[3] for row in rows)
+                assert all(
+                    all(secret not in row[3] for secret in ("private prompt", "private response", "private metadata"))
+                    for row in rows
+                )
         finally:
             connection.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(table)))

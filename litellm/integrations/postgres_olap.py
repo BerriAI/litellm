@@ -38,6 +38,28 @@ _FLOAT: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 Row: TypeAlias = tuple[str | datetime | int | float | None, ...]
 
 
+def _without_sensitive_fields(payload: Mapping[str, object]) -> Mapping[str, object]:
+    details: Final = payload.get("error_information")
+    return {
+        **{
+            key: value
+            for key, value in payload.items()
+            if key not in ("error_str", "metadata", "model_parameters", "response")
+        },
+        **(
+            {
+                "error_information": {
+                    key: value
+                    for key, value in _MAPPING.validate_python(details).items()
+                    if key not in ("error_message", "traceback")
+                }
+            }
+            if details is not None
+            else {}
+        ),
+    }
+
+
 class PostgresOlapConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -58,6 +80,7 @@ class PostgresOlapConfig(BaseModel):
 def write_batch(config: PostgresOlapConfig, rows: Sequence[Row]) -> None:
     import psycopg
     from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict
 
     if not rows:
         return
@@ -70,9 +93,12 @@ def write_batch(config: PostgresOlapConfig, rows: Sequence[Row]) -> None:
         values,
     )
     parameters: Final = tuple(value for row in rows for value in row)  # comprehension-ok: flatten SQL rows
+    dsn: Final = config.dsn.get_secret_value()
+    sslmode: Final = conninfo_to_dict(dsn).get("sslmode") or os.environ.get("PGSSLMODE") or "verify-full"
     with (
         psycopg.connect(
-            config.dsn.get_secret_value(),
+            dsn,
+            sslmode=sslmode,
             autocommit=True,
             connect_timeout=config.connect_timeout,
             cursor_factory=psycopg.ClientCursor,
@@ -122,7 +148,9 @@ class PostgresOlapLogger(CustomLogger):
             details: Final = self.redact_standard_logging_payload_from_model_call_details(dict(kwargs))  # pyright: ignore[reportUnknownMemberType]  # legacy base accepts an untyped dict; the result is validated below
             payload: Final = _MAPPING.validate_python(details.get("standard_logging_object"))
             redacted: Final = (
-                redacted_standard_logging_payload(payload) if should_redact_message_logging(dict(kwargs)) else payload
+                _without_sensitive_fields(redacted_standard_logging_payload(payload))
+                if self.turn_off_message_logging or should_redact_message_logging(dict(kwargs))
+                else payload
             )
             serialized: Final = json.dumps(redacted, ensure_ascii=False, allow_nan=False, default=str)
             row: Final[Row] = (
