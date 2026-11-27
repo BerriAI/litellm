@@ -377,6 +377,14 @@
     "api_key_env": "HUAWEI_MAAS_API_KEY",
     "api_base_env": "HUAWEI_MAAS_API_BASE"
   },
+  "levanto": {
+    "base_url": "https://api.levanto.ai/v1",
+    "api_key_env": "LEVANTO_API_KEY",
+    "api_base_env": "LEVANTO_BASE_URL",
+    "provider_info": {
+      "supports_function_calling": true
+    }
+  },
   "wally": {
     "base_url": "https://inference.runanywhere.ai/v1",
     "api_key_env": "WALLY_API_KEY",
