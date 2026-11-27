@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react";
-import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { getAutoRouterAssembledPromptCall } from "@/components/networking";
@@ -14,6 +13,7 @@ import {
   ComplexityTierLabels,
 } from "./ComplexityRouterConfig";
 import { codeSamples } from "@/i18n/untranslated/codeSamples";
+import { modelPrompts } from "@/i18n/untranslated/modelText";
 
 export type OpeningPromptTierSource =
   | { kind: "custom"; tierRows: readonly TierRow[] }
@@ -43,22 +43,16 @@ interface OpeningPromptEditorProps {
   contextWindowSize: number;
 }
 
-const CUSTOM_PLACEHOLDER: ParseKeys = "addModel.openingPromptEditor.placeholders.custom";
-
-const BUILT_IN_PLACEHOLDER: ParseKeys = "addModel.openingPromptEditor.placeholders.builtIn";
-
 const COPY = {
   custom: {
     overridden: "addModel.openingPromptEditor.copy.custom.overridden",
     default: "addModel.openingPromptEditor.copy.custom.default",
     explainer: "addModel.openingPromptEditor.copy.custom.explainer",
-    placeholder: CUSTOM_PLACEHOLDER,
   },
   builtIn: {
     overridden: "addModel.openingPromptEditor.copy.builtIn.overridden",
     default: "addModel.openingPromptEditor.copy.builtIn.default",
     explainer: "addModel.openingPromptEditor.copy.builtIn.explainer",
-    placeholder: BUILT_IN_PLACEHOLDER,
   },
 } as const;
 
@@ -237,7 +231,7 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
                 value={instructionDraft}
                 onChange={(e) => setInstructionDraft(e.target.value)}
                 rows={5}
-                placeholder={t(copy.placeholder)}
+                placeholder={modelPrompts.classifier[tierSource.kind]}
                 aria-label={t("addModel.openingPromptEditor.instructions.label")}
                 className="mt-2 font-mono text-xs"
               />

@@ -1,5 +1,6 @@
 "use client";
 
+import { productNames } from "@/i18n/untranslated/productNames";
 import { useState, type ReactNode } from "react";
 import {
   ArrowDownToLine,
@@ -294,13 +295,13 @@ function CodeTab({ code }: { code: (sdk: CodeSdk) => string }) {
           variant="outline"
           size="sm"
           spacing={0}
-          aria-label={t("playground.chat.inspector.code.sdk")}
+          aria-label="SDK"
         >
           <ToggleGroupItem value="openai" className="h-7 px-2 text-xs">
-            {t("playground.chat.inspector.code.openai")}
+            {productNames.openAISdk}
           </ToggleGroupItem>
           <ToggleGroupItem value="azure" className="h-7 px-2 text-xs">
-            {t("playground.chat.inspector.code.azure")}
+            {productNames.azureSdk}
           </ToggleGroupItem>
         </ToggleGroup>
         <span className="ml-auto">

@@ -692,7 +692,7 @@ function RequestResponseSection({
             </CollapsibleTrigger>
             <TabsList className="mr-4">
               <TabsTrigger value="pretty">{t("logs.detail.requestResponse.pretty")}</TabsTrigger>
-              <TabsTrigger value="json">{t("logs.detail.requestResponse.json")}</TabsTrigger>
+              <TabsTrigger value="json">JSON</TabsTrigger>
             </TabsList>
           </div>
           <CollapsibleContent>

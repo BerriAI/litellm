@@ -1,5 +1,6 @@
 "use client";
 
+import { productNames } from "@/i18n/untranslated/productNames";
 import { useState, useEffect } from "react";
 import { PlayCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -55,7 +56,7 @@ export default function PlaygroundPage() {
       <PageHeader>
         <PageHeaderTitle>
           <PlayCircle />
-          {t("playground.page.title")}
+          {productNames.playground}
         </PageHeaderTitle>
         <PageHeaderDescription>{t("playground.page.description")}</PageHeaderDescription>
       </PageHeader>

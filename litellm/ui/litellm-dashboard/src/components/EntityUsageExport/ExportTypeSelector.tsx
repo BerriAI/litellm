@@ -11,26 +11,27 @@ interface ExportTypeSelectorProps {
 
 const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange, entityType }) => {
   const { t } = useTranslation();
+  const entityLabel = t(`usage.entityLabels.inline.${entityType}`);
   const allScopes: { value: ExportType; title: string; description: string }[] = [
     {
       value: "daily",
-      title: t("usage.export.type.daily.title", { entityType }),
-      description: t("usage.export.type.daily.description", { entityType }),
+      title: t("usage.export.type.daily.title", { entityType: entityLabel }),
+      description: t("usage.export.type.daily.description", { entityType: entityLabel }),
     },
     {
       value: "daily_with_keys",
-      title: t("usage.export.type.dailyWithKeys.title", { entityType }),
-      description: t("usage.export.type.dailyWithKeys.description", { entityType }),
+      title: t("usage.export.type.dailyWithKeys.title", { entityType: entityLabel }),
+      description: t("usage.export.type.dailyWithKeys.description", { entityType: entityLabel }),
     },
     {
       value: "daily_with_models",
-      title: t("usage.export.type.dailyWithModels.title", { entityType }),
+      title: t("usage.export.type.dailyWithModels.title", { entityType: entityLabel }),
       description: t("usage.export.type.dailyWithModels.description"),
     },
     {
       value: "daily_with_users",
-      title: t("usage.export.type.dailyWithUsers.title", { entityType }),
-      description: t("usage.export.type.dailyWithUsers.description", { entityType }),
+      title: t("usage.export.type.dailyWithUsers.title", { entityType: entityLabel }),
+      description: t("usage.export.type.dailyWithUsers.description", { entityType: entityLabel }),
     },
   ];
   const scopes = allScopes.filter((scope) => scope.value !== "daily_with_users" || entityType !== "user");

@@ -33,7 +33,7 @@ export function ToolExpandedContent({ tool }: ToolExpandedContentProps) {
         <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as ViewMode)}>
           <TabsList>
             <TabsTrigger value="formatted">{t("logs.detail.tools.formatted")}</TabsTrigger>
-            <TabsTrigger value="json">{t("logs.detail.tools.json")}</TabsTrigger>
+            <TabsTrigger value="json">JSON</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
