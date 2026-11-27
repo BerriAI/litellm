@@ -175,7 +175,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_query_params,
     safe_set_request_parsed_body,
 )
-from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
+from litellm.proxy.common_utils.model_listing_utils import (
+    CLAUDE_MODEL_NORMALIZED,
+    CLAUDE_MODEL_ROUTES,
+    claude_code_requested_group,
+)
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
@@ -296,11 +300,9 @@ def get_model_from_request_context(
     )
 
 
-_CLAUDE_MODEL_ROUTES: Final = frozenset(
-    f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
-)
+_CLAUDE_MODEL_ROUTES: Final = CLAUDE_MODEL_ROUTES
 _FetchedT = TypeVar("_FetchedT")
-_CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
+_CLAUDE_MODEL_NORMALIZED: Final = CLAUDE_MODEL_NORMALIZED
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -313,7 +315,11 @@ async def _normalize_claude_model(
 
     if route not in _CLAUDE_MODEL_ROUTES or llm_router is None:
         return
-    if request is not None and request.scope.get(_CLAUDE_MODEL_NORMALIZED) is True:
+    if request is not None and (
+        request.scope.get(_CLAUDE_MODEL_NORMALIZED) is True
+        or request_dispatched_to_pass_through_endpoint(request)
+        or request_dispatched_to_provider_pass_through(request)
+    ):
         return
     requested: Final = get_model_from_request_context(request_data, route, request, llm_router, valid_token.team_id)
     if not isinstance(requested, str) or requested != request_data.get("model"):

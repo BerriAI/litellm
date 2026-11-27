@@ -413,6 +413,12 @@ def label_entries(listed: Sequence[tuple[str, str]], entries: Sequence[tuple[str
     return tuple((response_id, own.get(response_id, lookup_id)) for response_id, lookup_id in entries)
 
 
+CLAUDE_MODEL_ROUTES: Final = frozenset(
+    f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
+)
+CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
+
+
 def alias_target(
     model_id: str,
     aliases: CallerAliases,
@@ -441,6 +447,23 @@ def claude_code_requested_group(
     alias_maps: tuple[object, ...] = (),
 ) -> str | None:
     return claude_code_group_name(requested, ClaudeCodeRoutingNames(llm_router, team_id, alias_maps))
+
+
+def resolve_claude_picker_model(
+    requested: str,
+    *,
+    route: str,
+    team_id: str | None,
+    llm_router: Router | None,
+    alias_maps: tuple[object, ...] = (),
+) -> str:
+    """Resolve a Claude Code compatibility picker ID against the caller's model namespace."""
+    if route not in CLAUDE_MODEL_ROUTES or llm_router is None:
+        return requested
+    if not requested.startswith(_CLAUDE_CODE_ALIAS_PREFIX) and not requested.lower().endswith(_ONE_MILLION_SUFFIX):
+        return requested
+    resolved: Final = claude_code_requested_group(requested, llm_router, team_id, alias_maps)
+    return resolved if resolved is not None else requested
 
 
 class TeamModelNameTranslator:

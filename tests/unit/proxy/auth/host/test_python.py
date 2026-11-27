@@ -641,3 +641,95 @@ async def test_the_auth_prefetch_reads_from_the_proxy_router_current_when_it_rea
     await _run(prefetch, replace(_host(request_data={"model": "claude"}, cache=cache), llm_router=captured))
 
     assert (_declared(captured_handle), _declared(current_handle)) == ([], [frozenset({"dep-a"})])
+
+
+@pytest.mark.asyncio
+async def test_team_model_access_normalizes_claude_picker_hex_id_on_messages_route() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+            }
+        ]
+    )
+    team: Final = LiteLLM_TeamTable(team_id="team-1", models=["gpt-4o"])
+    picker_id: Final = f"claude-router-{b'gpt-4o'.hex()}"
+    host: Final = replace(_host(route="/v1/messages"), llm_router=router)
+
+    assert await host.team_model_access(team, picker_id) is True
+
+
+@pytest.mark.asyncio
+async def test_team_model_access_normalizes_claude_1m_suffix_with_team_alias() -> None:
+    from litellm.proxy._types import LiteLLM_ModelTable
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4-6",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-test"},
+                "model_info": {"max_input_tokens": 1_000_000},
+            }
+        ]
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="team-1",
+        models=["claude-sonnet-4-6"],
+        litellm_model_table=LiteLLM_ModelTable(
+            model_aliases={"sonnet": "claude-sonnet-4-6"},
+            created_by="test",
+            updated_by="test",
+        ),
+    )
+    host: Final = replace(_host(route="/v1/messages"), llm_router=router)
+
+    assert await host.team_model_access(team, "sonnet[1m]") is True
+
+
+@pytest.mark.asyncio
+async def test_team_model_access_and_normalize_skip_provider_passthrough(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _normalize_claude_model
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    team: Final = LiteLLM_TeamTable(team_id="team-1", models=["gpt-4o"])
+    picker_id: Final = f"claude-router-{b'gpt-4o'.hex()}"
+    passthrough_req: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/messages",
+            "headers": [],
+            "query_string": b"",
+            "path_params": {"endpoint": "v1/messages"},
+        }
+    )
+    request_data: dict[str, object] = {"model": picker_id}
+    host: Final = replace(
+        _host(route="/v1/messages"),
+        llm_router=router,
+        http=HttpCall(
+            request=passthrough_req,
+            request_data=request_data,
+            start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+
+    assert await host.team_model_access(team, picker_id) is False
+    await _normalize_claude_model(
+        request_data,
+        UserAPIKeyAuth(token="t", team_id="team-1"),
+        passthrough_req,
+        "/v1/messages",
+    )
+    assert request_data["model"] == picker_id
