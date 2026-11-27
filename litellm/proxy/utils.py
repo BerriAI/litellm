@@ -77,6 +77,7 @@ from litellm.constants import (
     VLLM_CHOICE_FIELDS,
 )
 from litellm.cost_calculator import BaseTokenUsageProcessor, base_model_for_pricing
+from litellm.decisions.call import log_caller_request
 from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
@@ -219,6 +220,7 @@ from litellm.litellm_core_utils.redact_messages import (
     MESSAGE_REDACTION_ENABLE_HEADERS,
     TokenDataCheckedFields,
     drop_token_ids,
+    should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # takes an untyped dict
     without_hidden_token_data,
 )
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
@@ -1946,6 +1948,22 @@ _PROMPT_FIELD_BY_SETUP_CALL_TYPE: Final[Mapping[str | None, str]] = {
     CallTypes.atext_completion.value: "prompt",
     CallTypes.aembedding.value: "input",
 }
+_CALLER_REQUEST_FIELDS_BY_CALL_TYPE: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        CallTypes.adecisions.value: (
+            "input",
+            "questions",
+            "audio",
+            "videos",
+            "prompt_cache_key",
+            "prompt_cache_options",
+            "state",
+            "images",
+            "assets",
+        ),
+        CallTypes.asystemone.value: ("state", "questions", "images", "assets", "audio", "videos"),
+    }
+)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
@@ -1979,6 +1997,39 @@ def _asks_for_message_redaction(request_data: Mapping[str, object]) -> bool:
     return any(
         _has_redaction_header(request_data.get(key)) for key in ("metadata", "litellm_metadata", "proxy_server_request")
     )
+
+
+def _metadata_turns_off_message_logging(request_fields: Mapping[str, object]) -> bool:
+    flags: Final = tuple(
+        cast(Mapping[str, object], holder).get("turn_off_message_logging")  # cast-ok: request bodies are str-keyed JSON
+        for holder in (request_fields.get("metadata"), request_fields.get("litellm_metadata"))
+        if isinstance(holder, Mapping)
+    )
+    return any(flag is True or (isinstance(flag, str) and str_to_bool(flag) is True) for flag in flags)
+
+
+def _log_rejected_caller_input(logging_obj: Logging, request_fields: Mapping[str, object]) -> str | None:
+    """Logs a rejected decisions or systemone request as the messages an accepted one logs, and returns the text
+    input of a rejected responses request for the input callbacks. Does neither when message logging is off."""
+    if (
+        _asks_for_message_redaction(request_fields)
+        or _metadata_turns_off_message_logging(request_fields)
+        or should_redact_message_logging(logging_obj.model_call_details)
+    ):
+        return None
+    caller_request_fields: Final = _CALLER_REQUEST_FIELDS_BY_CALL_TYPE.get(logging_obj.call_type, ())
+    if caller_request_fields:
+        try:
+            log_caller_request(
+                request_fields,
+                dict((field, request_fields[field]) for field in caller_request_fields if field in request_fields),
+            )
+        except ValueError:
+            verbose_proxy_logger.debug("the rejected request cannot be logged as messages")
+    responses_text: Final = request_fields.get("input")
+    if logging_obj.call_type == CallTypes.aresponses.value and isinstance(responses_text, str) and responses_text:
+        return responses_text
+    return None
 
 
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
@@ -4926,8 +4977,13 @@ class ProxyLogging:
             # this runs inside the live ``auth`` phase span, would otherwise nest it
             # under auth). The marker tells them to skip span creation.
             litellm_logging_obj.model_call_details[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
+            responses_text: Final = (
+                _log_rejected_caller_input(litellm_logging_obj, request_fields)
+                if isinstance(litellm_logging_obj, Logging)
+                else None
+            )
             litellm_logging_obj.pre_call(
-                input=input,
+                input=input if responses_text is None else responses_text,
                 api_key="",
             )
             if isinstance(litellm_logging_obj, Logging) and _is_refused_stream(litellm_logging_obj):
