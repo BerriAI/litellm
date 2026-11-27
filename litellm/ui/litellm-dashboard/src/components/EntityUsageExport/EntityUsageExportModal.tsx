@@ -23,7 +23,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   customTitle,
   canIncludeMetadata,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [exportFormat, setExportFormat] = useState<UsageExportFormat>("csv");
   const [exportType, setExportType] = useState<ExportType>("daily");
   const [includeMetadata, setIncludeMetadata] = useState(false);
@@ -46,6 +46,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
           dateRange,
           selectedFilters,
           generatedAt: new Date(),
+          language: i18n.language,
           t,
         };
         printUsageReport(buildUsageReportHtml(report), t("usage.export.report.frameTitle"), report.title);

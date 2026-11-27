@@ -1,12 +1,15 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders } from "../../../tests/test-utils";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { apiClient, keyDeleteCall, keyUpdateCall, regenerateKeyCall, teamInfoCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
+import { I18nextProvider } from "react-i18next";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
@@ -273,22 +276,24 @@ describe("KeyInfoView", () => {
   });
 
   describe("last updated", () => {
-    const renderWithTimestamps = (overrides: Partial<KeyResponse>) => {
+    const renderWithTimestamps = (overrides: Partial<KeyResponse>, locale = i18n) => {
       vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 
       return renderWithProviders(
-        <KeyInfoView
-          keyData={{
-            ...MOCK_KEY_DATA,
-            created_at: "2021-06-15T12:00:00Z",
-            updated_at: "2023-06-15T12:00:00Z",
-            ...overrides,
-          }}
-          onClose={() => {}}
-          keyId={"test-key-id"}
-          onKeyDataUpdate={() => {}}
-          teams={[]}
-        />,
+        <I18nextProvider i18n={locale}>
+          <KeyInfoView
+            keyData={{
+              ...MOCK_KEY_DATA,
+              created_at: "2021-06-15T12:00:00Z",
+              updated_at: "2023-06-15T12:00:00Z",
+              ...overrides,
+            }}
+            onClose={() => {}}
+            keyId={"test-key-id"}
+            onKeyDataUpdate={() => {}}
+            teams={[]}
+          />
+        </I18nextProvider>,
       );
     };
 
@@ -296,6 +301,26 @@ describe("KeyInfoView", () => {
       const lifecycle = await screen.findByTestId("key-lifecycle-card");
       return within(lifecycle).queryByText(label)?.closest("li") ?? null;
     };
+
+    it("updates key overview labels and dates when switching languages", async () => {
+      const locale = i18n.cloneInstance({ forkResourceStore: true });
+      locale.addResourceBundle("zh-CN", "translation", zh);
+      await locale.changeLanguage("en");
+      renderWithTimestamps({ expires: "2053-11-29T12:00:00Z" }, locale);
+
+      expect(await screen.findByRole("button", { name: "Open activity" })).toBeInTheDocument();
+      expect(await lifecycleStep("Created")).toHaveTextContent(/Jun \d+, 2021/);
+
+      await act(() => locale.changeLanguage("zh-CN"));
+      expect(screen.getByRole("button", { name: "查看活动" })).toBeInTheDocument();
+      expect(screen.getByText("剩余可用费用")).toBeInTheDocument();
+      expect(await lifecycleStep("创建时间")).toHaveTextContent(/2021年6月\d+日/);
+      expect(await lifecycleStep("到期时间")).toHaveTextContent(/2053年11月\d+日/);
+
+      await act(() => locale.changeLanguage("en"));
+      expect(screen.getByRole("button", { name: "Open activity" })).toBeInTheDocument();
+      expect(await lifecycleStep("Expires")).toHaveTextContent(/Nov \d+, 2053/);
+    });
 
     it("should show when the key was last configured, not when it last recorded spend", async () => {
       renderWithTimestamps({ settings_updated_at: "2022-06-15T12:00:00Z" });
