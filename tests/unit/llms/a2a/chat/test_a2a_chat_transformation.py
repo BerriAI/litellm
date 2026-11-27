@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from litellm.llms.a2a.chat.streaming_iterator import A2AModelResponseIterator
 from litellm.llms.a2a.chat.transformation import A2AConfig
 from litellm.llms.a2a.common_utils import A2AError
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.utils import ModelResponse
 
 
@@ -75,6 +76,29 @@ def test_transform_request_streams_without_a_send_configuration():
 
     assert request["method"] == "message/stream"
     assert "configuration" not in request["params"]
+
+
+def test_stream_param_never_reaches_the_jsonrpc_body():
+    """A2A servers reject a top-level `stream` member with -32600 "Invalid Request. Extra
+    fields: {'stream'}" and answer application/json instead of SSE, so a streaming caller
+    gets an empty stream and no error. The message/stream method alone carries streaming."""
+    config = A2AConfig()
+    request = config.transform_request(
+        model="a2a/test-agent",
+        messages=[{"role": "user", "content": "hi there agent"}],
+        optional_params={"stream": True},
+        litellm_params={},
+        headers={},
+    )
+
+    body = BaseLLMHTTPHandler()._add_stream_param_to_request_body(
+        data=request,
+        provider_config=config,
+        fake_stream=False,
+    )
+
+    assert body["method"] == "message/stream"
+    assert "stream" not in body
 
 
 @pytest.mark.parametrize("optional_params", [{}, {"stream": True}])
