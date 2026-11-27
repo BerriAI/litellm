@@ -55,7 +55,8 @@ import json
 import httpx
 import respx
 from fastapi.testclient import TestClient
-from litellm._internal_context import current_service_target, in_post_response_phase
+from contextlib import nullcontext
+from litellm._internal_context import current_service_target, in_post_response_phase, internal_sub_call
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -3204,3 +3205,87 @@ async def test_async_get_cache_answers_400_for_a_single_object_embedding_input()
             call_type=CallTypes.aembedding.value,
             kwargs={"model": model, "custom_llm_provider": "gemini", "input": clip_block, "caching": True},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sub_call", ["none", "rag_sub_call", "internal_sub_call"])
+async def test_a_cache_hit_fires_no_callbacks_of_its_own_only_inside_an_internal_sub_call(
+    monkeypatch: pytest.MonkeyPatch, sub_call: str
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.rag.main import _suppressed_sub_call_billing
+
+    logged: Final[list[tuple[str, object]]] = []
+
+    class Recorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged.append(("sync", kwargs.get("litellm_call_id")))
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged.append(("async", kwargs.get("litellm_call_id")))
+
+    recorder: Final = Recorder()
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    kwargs: Final = {"model": "gpt-5.4", "messages": [{"role": "user", "content": "hello"}], "caching": True}
+    cache.add_cache(
+        result=litellm.ModelResponse(
+            model="gpt-5.4",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hi"))],
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        ),
+        **kwargs,
+    )
+    async_logging: Final = _build_logging_obj(CallTypes.acompletion.value, stream=False)
+    sync_logging: Final = _build_logging_obj(CallTypes.completion.value, stream=False)
+
+    scope: Final = {
+        "none": nullcontext,
+        "rag_sub_call": _suppressed_sub_call_billing,
+        "internal_sub_call": internal_sub_call,
+    }[sub_call]
+    with scope():
+        async_hit: Final = await LLMCachingHandler(
+            original_function=litellm.acompletion, request_kwargs=kwargs, start_time=_FIXED_START
+        ).async_get_cache(
+            model="gpt-5.4",
+            original_function=litellm.acompletion,
+            logging_obj=async_logging,
+            start_time=_FIXED_START,
+            call_type=CallTypes.acompletion.value,
+            kwargs=kwargs,
+            args=(),
+        )
+        sync_hit: Final = LLMCachingHandler(
+            original_function=completion, request_kwargs=kwargs, start_time=_FIXED_START
+        ).sync_get_cache(
+            model="gpt-5.4",
+            original_function=completion,
+            logging_obj=sync_logging,
+            start_time=_FIXED_START,
+            call_type=CallTypes.completion.value,
+            kwargs=kwargs,
+        )
+
+    expected: Final = (
+        Counter()
+        if sub_call == "internal_sub_call"
+        else Counter({("async", async_logging.litellm_call_id): 1, ("sync", sync_logging.litellm_call_id): 1})
+    )
+    for _ in range(100):
+        if len(logged) >= expected.total():
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.5)
+
+    assert async_hit is not None and async_hit.cached_result is not None
+    assert sync_hit.cached_result is not None
+    assert Counter(logged) == expected, logged

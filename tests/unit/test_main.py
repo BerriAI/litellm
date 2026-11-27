@@ -38,6 +38,7 @@ from litellm import (
 from litellm import main as litellm_main
 from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import Cache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -5194,6 +5195,145 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
     assert speech_event.logged_response_cost == pytest.approx(expected_cost)
 
 
+@dataclass(frozen=True, slots=True)
+class _RecordedLoggedCall:
+    hook: str
+    response: object
+    logged_id: str | None
+    litellm_call_id: str | None
+
+
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _record_logged_call(hook: str, kwargs: dict[str, object], response_obj: object) -> _RecordedLoggedCall:
+    logging_payload: Final = kwargs.get("standard_logging_object")
+    return _RecordedLoggedCall(
+        hook=hook,
+        response=response_obj,
+        logged_id=_text_or_none(logging_payload.get("id")) if isinstance(logging_payload, dict) else None,
+        litellm_call_id=_text_or_none(kwargs.get("litellm_call_id")),
+    )
+
+
+class _LoggedCallRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[_RecordedLoggedCall] = []  # mutable-ok: test recorder of success-callback events
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(_record_logged_call("sync", kwargs, response_obj))
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(_record_logged_call("async", kwargs, response_obj))
+
+
+async def _logged_calls_of_next_request(
+    recorder: _LoggedCallRecorder, request: Awaitable[object]
+) -> tuple[_RecordedLoggedCall, ...]:
+    already_logged: Final = len(recorder.events)
+    await request
+    for _ in range(100):
+        if any(event.hook == "async" for event in recorder.events[already_logged:]):
+            await asyncio.sleep(0.2)
+            return tuple(recorder.events[already_logged:])
+        await asyncio.sleep(0.05)
+    pytest.fail(f"no async success event; got {recorder.events[already_logged:]}")
+
+
+def _assert_logged_once_as_speech(events: tuple[_RecordedLoggedCall, ...]) -> None:
+    assert [(event.hook, type(event.response)) for event in events] == [("async", HttpxBinaryResponseContent)]
+    assert isinstance(events[0].litellm_call_id, str)
+    assert events[0].logged_id == events[0].litellm_call_id
+
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_logs_only_the_speech_call_under_its_call_id(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    recorder: Final = _LoggedCallRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json={**_gemini_tts_generate_content_response(), "responseId": "gemini-id"}))
+
+    events: Final = await _logged_calls_of_next_request(
+        recorder,
+        litellm.aspeech(
+            model="gemini/gemini-2.5-flash-preview-tts", input="logged once", voice="Kore", api_key="fake-gemini-key"
+        ),
+    )
+
+    _assert_logged_once_as_speech(events)
+
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_runs_sync_function_callbacks_once_with_the_speech_response(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    logged: Final[list[tuple[type, object]]] = []  # mutable-ok: records what the sync callback receives
+
+    def sync_callback(kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
+        logged.append((type(response_obj), kwargs.get("litellm_call_id")))
+
+    monkeypatch.setattr(litellm.utils, "callback_list", [])
+    monkeypatch.setattr(litellm, "success_callback", [sync_callback])
+    respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+
+    await litellm.aspeech(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        input="sync callback check",
+        voice="Kore",
+        api_key="fake-gemini-key",
+        litellm_call_id="speech-call-id",
+    )
+    for _ in range(100):
+        if logged:
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.3)
+
+    assert logged == [(HttpxBinaryResponseContent, "speech-call-id")]
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_logs_a_cached_reply_only_as_the_speech_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    recorder: Final = _LoggedCallRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    mock_route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json={**_gemini_tts_generate_content_response(), "responseId": "gemini-id"}))
+
+    def same_speech_request() -> Awaitable[object]:
+        return litellm.aspeech(
+            model="gemini/gemini-2.5-flash-preview-tts", input="logged once from the cache", voice="Kore", api_key="k"
+        )
+
+    await _logged_calls_of_next_request(recorder, same_speech_request())
+    cached_events: Final = await _logged_calls_of_next_request(recorder, same_speech_request())
+
+    assert mock_route.call_count == 1
+    _assert_logged_once_as_speech(cached_events)
+
+
 def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | None = None) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-cost",
@@ -5503,6 +5643,238 @@ def test_speech_mistral_routes_to_configured_api_base(respx_mock: respx.MockRout
 
     assert gateway_route.called
     assert response.content == audio_bytes
+
+
+GEMINI_TTS_MODEL: Final = "gemini-3.8-flash-tts"
+GEMINI_GATEWAY_BASE: Final = "https://gemini.gateway.internal/v1beta"
+GEMINI_DEFAULT_GENERATE_CONTENT_URL: Final = (
+    rf"https://generativelanguage\.googleapis\.com/[^/]+/models/{GEMINI_TTS_MODEL}:generateContent"
+)
+
+
+@pytest.mark.parametrize("endpoint_param", ["api_base", "base_url"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_speech_gemini_tts_routes_to_configured_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, endpoint_param: str, sync_mode: bool
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    gateway_route: Final = respx_mock.post(f"{GEMINI_GATEWAY_BASE}/models/{GEMINI_TTS_MODEL}:generateContent").mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+    speech_kwargs: Final = {
+        "model": f"gemini/{GEMINI_TTS_MODEL}",
+        "input": "hello from litellm",
+        "voice": "Kore",
+        "api_key": "fake-gemini-key",
+        "extra_headers": {"x-gateway-key": "gateway-secret"},
+        endpoint_param: GEMINI_GATEWAY_BASE,
+    }
+
+    response: Final = litellm.speech(**speech_kwargs) if sync_mode else await litellm.aspeech(**speech_kwargs)
+
+    assert gateway_route.call_count == 1
+    assert gateway_route.calls.last.request.headers["x-goog-api-key"] == "fake-gemini-key"
+    assert gateway_route.calls.last.request.headers["x-gateway-key"] == "gateway-secret"
+    assert b"pcm-audio-bytes" in response.content
+
+
+def test_speech_gemini_tts_applies_the_caller_timeout(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+
+    litellm.speech(
+        model=f"gemini/{GEMINI_TTS_MODEL}", input="hello", voice="Kore", api_key="fake-gemini-key", timeout=7.5
+    )
+
+    assert route.calls.last.request.extensions["timeout"] == httpx.Timeout(7.5).as_dict()
+
+
+def test_speech_gemini_tts_without_a_timeout_waits_as_long_as_the_same_chat_completion(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+
+    litellm.speech(model=f"gemini/{GEMINI_TTS_MODEL}", input="hello", voice="Kore", api_key="fake-gemini-key")
+    litellm.completion(
+        model=f"gemini/{GEMINI_TTS_MODEL}",
+        messages=[{"role": "user", "content": "hello"}],
+        modalities=["audio"],
+        audio={"voice": "Kore", "format": "pcm16"},
+        api_key="fake-gemini-key",
+    )
+
+    speech_call, chat_call = route.calls
+    assert speech_call.request.extensions["timeout"] == chat_call.request.extensions["timeout"]
+
+
+async def test_speech_gemini_tts_behind_the_router_waits_as_long_as_the_same_chat_completion(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-tts",
+                "litellm_params": {"model": f"gemini/{GEMINI_TTS_MODEL}", "api_key": "fake-gemini-key"},
+            }
+        ]
+    )
+
+    await router.aspeech(model="gemini-tts", input="hello", voice="Kore")
+    await router.acompletion(
+        model="gemini-tts",
+        messages=[{"role": "user", "content": "hello"}],
+        modalities=["audio"],
+        audio={"voice": "Kore", "format": "pcm16"},
+    )
+
+    speech_call, chat_call = route.calls
+    assert speech_call.request.extensions["timeout"] == chat_call.request.extensions["timeout"]
+
+
+@pytest.mark.parametrize(
+    ("first_controls", "second_controls", "expected_upstream_calls"),
+    [
+        ({}, {}, 1),
+        ({}, {"cache": {"no-cache": True}}, 2),
+        ({"cache": {"no-store": True}}, {}, 2),
+        ({}, {"caching": False}, 2),
+        ({}, {"caching": "yes"}, 2),
+        ({}, {"caching": 0}, 2),
+    ],
+)
+def test_speech_gemini_tts_honors_the_request_cache_controls(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    first_controls: Mapping[str, object],
+    second_controls: Mapping[str, object],
+    expected_upstream_calls: int,
+):
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+    speech_kwargs: Final = {
+        "model": f"gemini/{GEMINI_TTS_MODEL}",
+        "input": "hello",
+        "voice": "Kore",
+        "api_key": "fake-gemini-key",
+    }
+
+    litellm.speech(**speech_kwargs, **first_controls)
+    litellm.speech(**speech_kwargs, **second_controls)
+
+    assert route.call_count == expected_upstream_calls
+
+
+@pytest.mark.parametrize(
+    "malformed_controls",
+    [{"caching": "yes"}, {"caching": 1}, {"cache": {1: True}}],
+)
+def test_speech_gemini_tts_without_a_cache_ignores_malformed_controls(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    malformed_controls: Mapping[str, object],
+):
+    monkeypatch.setattr(litellm, "cache", None)
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+
+    response: Final = litellm.speech(
+        model=f"gemini/{GEMINI_TTS_MODEL}",
+        input="hello",
+        voice="Kore",
+        api_key="fake-gemini-key",
+        **malformed_controls,
+    )
+
+    assert route.call_count == 1
+    assert response.content.startswith(b"RIFF")
+
+
+@pytest.mark.parametrize("ttl", [60, "60"])
+def test_speech_gemini_tts_keeps_cached_audio_only_for_the_request_ttl(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, ttl: int | str
+):
+    now: Final = [0.0]
+    cache: Final = Cache(type="local")
+    cache.cache = InMemoryCache(clock=lambda: now[0])
+    monkeypatch.setattr(litellm, "cache", cache)
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+
+    def speak() -> None:
+        litellm.speech(
+            model=f"gemini/{GEMINI_TTS_MODEL}", input="hello", voice="Kore", api_key="fake-gemini-key", ttl=ttl
+        )
+
+    speak()
+    now[0] = 30.0
+    speak()
+    assert route.call_count == 1
+    now[0] = 61.0
+    speak()
+    assert route.call_count == 2
+
+
+async def test_aspeech_gemini_tts_waits_for_a_stalled_upstream_without_holding_a_worker_thread(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream_reached: Final = asyncio.Event()
+    release_upstream: Final = asyncio.Event()
+
+    async def stalled_upstream(request: httpx.Request) -> httpx.Response:
+        upstream_reached.set()
+        await release_upstream.wait()
+        return httpx.Response(200, json=_gemini_tts_generate_content_response())
+
+    respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(side_effect=stalled_upstream)
+    loop: Final = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1) as single_worker:
+        loop.set_default_executor(single_worker)
+        speech_task: Final = asyncio.create_task(
+            litellm.aspeech(model=f"gemini/{GEMINI_TTS_MODEL}", input="hello", voice="Kore", api_key="fake-gemini-key")
+        )
+        await asyncio.wait_for(upstream_reached.wait(), timeout=10)
+
+        worker_answer: Final = await asyncio.wait_for(loop.run_in_executor(None, lambda: "free"), timeout=10)
+
+        release_upstream.set()
+        response: Final = await asyncio.wait_for(speech_task, timeout=10)
+
+    assert worker_answer == "free"
+    assert b"pcm-audio-bytes" in response.content
+
+
+def test_speech_gemini_tts_sends_number_and_boolean_deployment_headers_as_their_config_text(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+
+    litellm.speech(
+        model=f"gemini/{GEMINI_TTS_MODEL}",
+        input="hello",
+        voice="Kore",
+        api_key="fake-gemini-key",
+        extra_headers={"x-gateway-key": "gateway-secret", "x-org-id": 12345, "x-ratio": 1.5, "x-audit": True},
+    )
+
+    sent: Final = route.calls.last.request.headers
+    assert (sent["x-gateway-key"], sent["x-org-id"], sent["x-ratio"], sent["x-audit"]) == (
+        "gateway-secret",
+        "12345",
+        "1.5",
+        "true",
+    )
 
 
 FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"

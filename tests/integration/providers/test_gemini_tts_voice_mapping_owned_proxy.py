@@ -1,7 +1,6 @@
 """The speech route, the audio_speech health check and deferred Vertex Live setups map OpenAI voices.
 
-The speech bridge calls the Gemini chat path without the deployment's ``api_base`` (tracked separately),
-so these rows boot their own proxy with ``GEMINI_API_BASE`` pointed at the scripted peer, and with
+These rows boot their own proxy with ``GEMINI_API_BASE`` pointed at the scripted peer, and with
 ``LITELLM_GEMINI_LIVE_DEFER_SETUP`` so a client ``session.update`` voice builds the Vertex Live setup.
 """
 

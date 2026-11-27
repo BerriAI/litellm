@@ -40,6 +40,7 @@ from pydantic import (
     Field,
     FieldSerializationInfo,
     JsonValue,
+    OnErrorOmit,
     PrivateAttr,
     SkipValidation,
     TypeAdapter,
@@ -4903,3 +4904,13 @@ class ProviderRoutingHints(TypedDict, total=False):
 
 class BaseUrlRoutingHint(TypedDict, total=False):
     base_url: ReadOnly[str | None]
+
+
+class CacheControlsHint(TypedDict, total=False):
+    cache: ReadOnly[OnErrorOmit[Mapping[str, object] | None]]
+    caching: ReadOnly[OnErrorOmit[JsonValue]]
+    ttl: ReadOnly[OnErrorOmit[JsonValue]]
+
+
+class DeploymentHeadersHint(TypedDict, total=False):
+    extra_headers: ReadOnly[OnErrorOmit[Mapping[str, object] | None]]

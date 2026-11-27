@@ -164,7 +164,9 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     BaseUrlRoutingHint,
+    CacheControlsHint,
     CustomPricingLiteLLMParams,
+    DeploymentHeadersHint,
     DynamicPromptManagementParamLiteral,
     ModelResponseStream,
     ProviderRoutingHints,
@@ -4278,6 +4280,8 @@ _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _FORWARDED_HEADERS_ADAPTER: Final = TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None)
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
+_CACHE_CONTROLS_HINT: Final = TypeAdapter(CacheControlsHint)
+_DEPLOYMENT_HEADERS_HINT: Final = TypeAdapter(DeploymentHeadersHint)
 
 
 _AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS: Final = (
@@ -8714,14 +8718,8 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
             api_base=api_base_hint,
         )
 
-        # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
-        if asyncio.iscoroutine(init_response):
-            response = await init_response
-        else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
-        return response
+        return await init_response if asyncio.iscoroutine(init_response) else init_response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
@@ -9067,6 +9065,11 @@ def speech(
                 headers=headers or {},
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                extra_headers=_DEPLOYMENT_HEADERS_HINT.validate_python(kwargs).get("extra_headers"),
+                timeout=timeout,
+                cache_controls=_CACHE_CONTROLS_HINT.validate_python(kwargs),
+                aspeech=aspeech or False,
             )
 
         # Vertex AI Text-to-Speech (Google Cloud TTS)
@@ -9118,6 +9121,11 @@ def speech(
             headers=headers or {},
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            extra_headers=_DEPLOYMENT_HEADERS_HINT.validate_python(kwargs).get("extra_headers"),
+            timeout=timeout,
+            cache_controls=_CACHE_CONTROLS_HINT.validate_python(kwargs),
+            aspeech=aspeech or False,
         )
     elif custom_llm_provider == "runwayml":
         from litellm.llms.runwayml.text_to_speech.transformation import (

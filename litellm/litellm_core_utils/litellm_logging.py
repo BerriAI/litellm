@@ -77,6 +77,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_provider_response_headers_from_hidden_params,
     get_recorded_rate_limit_headers,
     is_expected_client_error,
@@ -1174,6 +1175,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    @contextmanager
+    def preserve_entrypoint_acompletion(self) -> Generator[None]:
+        acompletion: Final = (as_str_mapping(self._model_call_details_view.get("litellm_params")) or {}).get(
+            CallTypes.acompletion.value
+        )
+        try:
+            yield
+        finally:
+            logged_params: Final[object] = self.model_call_details.get("litellm_params")
+            if is_str_keyed_dict(logged_params):
+                logged_params[CallTypes.acompletion.value] = acompletion
 
     def update_from_kwargs(
         self,
