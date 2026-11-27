@@ -397,5 +397,21 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "byesu": {
+    "base_url": "https://byesu.com/v1",
+    "api_key_env": "BYESU_API_KEY",
+    "api_base_env": "BYESU_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "special_handling": {
+      "preserve_cache_control": true
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   }
 }
