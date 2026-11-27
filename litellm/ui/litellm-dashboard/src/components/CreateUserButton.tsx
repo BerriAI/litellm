@@ -15,7 +15,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { ChevronRight, CircleHelp, Info, UserPlus } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import { useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
@@ -28,6 +28,9 @@ import {
   userCreateCall,
 } from "./networking";
 import OnboardingModal, { InvitationLink } from "./onboarding_link";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { buildCreateUserPayload } from "./user-create/mapper";
+import { createUserSchema, type CreateUserFormValues } from "./user-create/schema";
 
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {
@@ -58,18 +61,6 @@ interface UISettings {
   SSO_ENABLED: boolean;
 }
 
-interface CreateUserFormValues {
-  supply_user_id: boolean;
-  user_id?: string;
-  user_email?: string;
-  user_role: string;
-  team_id?: string | null;
-  organization_ids?: string[];
-  metadata?: string;
-  send_invite_email: boolean;
-  models?: string[];
-}
-
 const EMBEDDED_DEFAULTS: CreateUserFormValues = {
   supply_user_id: false,
   user_id: "",
@@ -89,31 +80,6 @@ const STANDALONE_DEFAULTS: CreateUserFormValues = {
   organization_ids: undefined,
   metadata: undefined,
   send_invite_email: true,
-};
-
-// antd reported only mounted fields, so a collapsed Personal Key Creation
-// section left `models` out of the request entirely even after the admin had
-// picked some and closed it again.
-const withoutCollapsedModels = (values: CreateUserFormValues, isPersonalKeyOpen: boolean): CreateUserFormValues => {
-  if (isPersonalKeyOpen) {
-    return values;
-  }
-  const { models, ...rest } = values;
-  return rest;
-};
-
-const buildCreatePayload = (values: CreateUserFormValues) => {
-  const { supply_user_id, user_id, ...fields } = values;
-  const apiValues = supply_user_id ? { ...fields, user_id: user_id?.trim() } : fields;
-  const withModels =
-    (!values.models || values.models.length === 0) && values.user_role !== "proxy_admin"
-      ? { ...apiValues, models: ["no-default-models"] }
-      : apiValues;
-  if (!withModels.organization_ids) {
-    return withModels;
-  }
-  const { organization_ids, ...rest } = withModels;
-  return { ...rest, organizations: organization_ids };
 };
 
 const SSO_INVITE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
@@ -171,7 +137,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const defaultValues = isEmbedded ? EMBEDDED_DEFAULTS : STANDALONE_DEFAULTS;
-  const form = useForm<CreateUserFormValues>({ defaultValues });
+  const form = useZodForm(createUserSchema, { defaultValues });
   const supplyUserId = useWatch({ control: form.control, name: "supply_user_id" });
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<boolean>(false);
@@ -228,7 +194,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
-      const payload = buildCreatePayload(withoutCollapsedModels(formValues, isPersonalKeyOpen));
+      const payload = buildCreateUserPayload(formValues, isPersonalKeyOpen);
       const response = await userCreateCall(accessToken, null, payload);
       await queryClient.invalidateQueries({ queryKey: ["userList"] });
       setApiuser(true);

@@ -1,5 +1,6 @@
 import { availableRoleDisplayLabel } from "@/utils/roles";
 import React, { useId, useState } from "react";
+import { useController } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
 import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "@/components/networking";
 import { UserEditView } from "./user_edit_view";
@@ -22,6 +23,9 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/cva.config";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { mapBulkUserEdit } from "./bulk-edit-form/mapper";
+import { bulkUserTeamDefaults, bulkUserTeamSchema } from "./bulk-edit-form/schema";
 
 interface BulkEditUserModalProps {
   open: boolean;
@@ -51,10 +55,11 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
   const { t } = useTranslation();
   const { premiumUser } = useAuthorized();
   const [loading, setLoading] = useState(false);
-  const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
-  const [teamBudget, setTeamBudget] = useState<number | null>(null);
-  const [addToTeams, setAddToTeams] = useState(false);
-  const [updateAllUsers, setUpdateAllUsers] = useState(false);
+  const { control, getValues, reset } = useZodForm(bulkUserTeamSchema, { defaultValues: bulkUserTeamDefaults });
+  const { field: selectedTeamsField } = useController({ control, name: "selectedTeams" });
+  const { field: teamBudgetField } = useController({ control, name: "teamBudget" });
+  const { field: addToTeamsField } = useController({ control, name: "addToTeams" });
+  const { field: updateAllUsersField } = useController({ control, name: "updateAllUsers" });
   const updateAllUsersId = useId();
   const addToTeamsId = useId();
   const selectedTeamsId = useId();
@@ -62,10 +67,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
 
   const handleCancel = () => {
     // Reset team management state
-    setSelectedTeams([]);
-    setTeamBudget(null);
-    setAddToTeams(false);
-    setUpdateAllUsers(false);
+    reset();
     onCancel();
   };
 
@@ -90,7 +92,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
     [teams, open],
   );
 
-  const handleSubmit = async (formValues: any) => {
+  const handleSubmit = async (formValues: Parameters<typeof mapBulkUserEdit>[0]) => {
     if (!accessToken) {
       toast.fromError(t("users.bulkEdit.toasts.noAccessToken"));
       return;
@@ -100,28 +102,8 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
     try {
       const userIds = selectedUsers.map((user) => user.user_id);
 
-      // Build the update payload - only include fields that have been changed from default/empty values
-      const updatePayload: any = {};
-
-      if (formValues.user_role && formValues.user_role !== "") {
-        updatePayload.user_role = formValues.user_role;
-      }
-
-      if (formValues.max_budget !== null && formValues.max_budget !== undefined) {
-        updatePayload.max_budget = formValues.max_budget;
-      }
-
-      if (formValues.models && formValues.models.length > 0) {
-        updatePayload.models = formValues.models;
-      }
-
-      if (formValues.budget_duration && formValues.budget_duration !== "") {
-        updatePayload.budget_duration = formValues.budget_duration;
-      }
-
-      if (formValues.metadata && Object.keys(formValues.metadata).length > 0) {
-        updatePayload.metadata = formValues.metadata;
-      }
+      const updatePayload = mapBulkUserEdit(formValues);
+      const { selectedTeams, teamBudget, addToTeams, updateAllUsers } = getValues();
 
       // Check if any operations were requested
       const hasUserUpdates = Object.keys(updatePayload).length > 0;
@@ -208,10 +190,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       }
 
       // Reset team management state
-      setSelectedTeams([]);
-      setTeamBudget(null);
-      setAddToTeams(false);
-      setUpdateAllUsers(false);
+      reset();
 
       onSuccess();
       onCancel();
@@ -228,7 +207,9 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
         <DialogHeader>
           <DialogTitle>
-            {updateAllUsers ? t("users.bulkEdit.titleAll") : t("users.bulkEdit.title", { count: selectedUsers.length })}
+            {updateAllUsersField.value
+              ? t("users.bulkEdit.titleAll")
+              : t("users.bulkEdit.title", { count: selectedUsers.length })}
           </DialogTitle>
         </DialogHeader>
         {allowAllUsers && (
@@ -236,15 +217,15 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
             <div className="flex items-center gap-2">
               <Checkbox
                 id={updateAllUsersId}
-                checked={updateAllUsers}
-                onCheckedChange={(checked) => setUpdateAllUsers(checked === true)}
+                checked={updateAllUsersField.value}
+                onCheckedChange={(checked) => updateAllUsersField.onChange(checked === true)}
                 aria-label={t("users.bulkEdit.updateAll")}
               />
               <label htmlFor={updateAllUsersId} className="cursor-pointer text-sm font-medium text-foreground">
                 {t("users.bulkEdit.updateAll")}
               </label>
             </div>
-            {updateAllUsers && (
+            {updateAllUsersField.value && (
               <div className="mt-2">
                 <span className="text-xs text-warning">{t("users.bulkEdit.updateAllWarning")}</span>
               </div>
@@ -252,7 +233,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
           </div>
         )}
 
-        {!updateAllUsers && (
+        {!updateAllUsersField.value && (
           <div className="mb-4">
             <h5 className="mb-2 text-sm font-semibold text-foreground">
               {t("users.bulkEdit.selectedUsers", { count: selectedUsers.length })}
@@ -315,8 +296,8 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
               <div className="flex items-center gap-2">
                 <Checkbox
                   id={addToTeamsId}
-                  checked={addToTeams}
-                  onCheckedChange={(checked) => setAddToTeams(checked === true)}
+                  checked={addToTeamsField.value}
+                  onCheckedChange={(checked) => addToTeamsField.onChange(checked === true)}
                   aria-label={t("users.bulkEdit.teamManagement.addToTeams")}
                 />
                 <label htmlFor={addToTeamsId} className="cursor-pointer text-sm text-foreground">
@@ -324,7 +305,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
                 </label>
               </div>
 
-              {addToTeams && (
+              {addToTeamsField.value && (
                 <>
                   <div>
                     <label htmlFor={selectedTeamsId} className="block text-sm font-medium text-foreground">
@@ -334,8 +315,8 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
                       id={selectedTeamsId}
                       className="mt-2"
                       placeholder={t("users.bulkEdit.teamManagement.selectTeamsPlaceholder")}
-                      value={selectedTeams}
-                      onValueChange={setSelectedTeams}
+                      value={selectedTeamsField.value}
+                      onValueChange={selectedTeamsField.onChange}
                       options={
                         teams?.map((team) => ({
                           label: team.team_alias || team.team_id,
@@ -353,9 +334,9 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
                       id={teamBudgetId}
                       className="mt-2"
                       placeholder={t("users.bulkEdit.teamManagement.teamBudgetPlaceholder")}
-                      value={teamBudget ?? ""}
+                      value={teamBudgetField.value ?? ""}
                       onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                        setTeamBudget(event.target.value === "" ? null : Number(event.target.value))
+                        teamBudgetField.onChange(event.target.value === "" ? null : Number(event.target.value))
                       }
                       min={0}
                       step={0.01}
@@ -391,7 +372,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         {loading && (
           <div className="mt-2.5 text-center">
             <span className="text-sm text-foreground">
-              {updateAllUsers
+              {updateAllUsersField.value
                 ? t("users.bulkEdit.updatingAll")
                 : t("users.bulkEdit.updating", { count: selectedUsers.length })}
             </span>

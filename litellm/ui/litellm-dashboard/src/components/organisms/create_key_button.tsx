@@ -10,7 +10,6 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { parseTeamAdminEditableFields } from "@/components/team/teamAdminEditAccess";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ParseKeys } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
@@ -30,7 +29,8 @@ import { SearchSelect, type SearchSelectOption } from "@/components/shared/Searc
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { ChevronDown, Info } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type Control, useForm, useWatch, type UseFormSetValue } from "react-hook-form";
+import { type Control, useWatch, type UseFormSetValue } from "react-hook-form";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import SkillSelector from "../skills/SkillSelector";
@@ -106,6 +106,8 @@ import {
   teamMemberOwnerPlaceholder,
 } from "./createKeyOwnerAccess";
 import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
+import { keyCreateDefaults } from "./key-create-form/mapper";
+import { createKeySchema } from "./key-create-form/schema";
 import { simplifyKeyGenerateError } from "./utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -152,17 +154,6 @@ const MountedBudgetAlertEmailsEditor = (props: {
   useMountedName(KEY_MAX_BUDGET_ALERT_EMAILS_KEY);
   return <BudgetAlertEmailsEditor {...props} name={KEY_MAX_BUDGET_ALERT_EMAILS_KEY} />;
 };
-
-const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
-
-const requiredRule = (required: boolean, message: string) => ({
-  validate: (value: unknown) => (required && isBlank(value) ? message : true),
-});
-
-const ceilingRule = (ceiling: number | null | undefined, message: (limit: number) => string) => ({
-  validate: (value: unknown) =>
-    value && ceiling !== null && ceiling !== undefined && (value as number) > ceiling ? message(ceiling) : true,
-});
 
 interface McpToolPermissionsFieldProps {
   readonly accessToken: string;
@@ -281,26 +272,29 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const tagOptions = tagsData ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name })) : [];
   const queryClient = useQueryClient();
   const initialTeam = team && canCreateKeyInTeam(team, { userRole, userId: userID }) ? team : null;
-  const [formDefaults] = useState<MountedFormValues>(() => ({
-    team_id: initialTeam?.team_id ?? null,
-    key_type: "llm_api",
-    tpm_limit_type: null,
-    rpm_limit_type: null,
-    mcp_tool_permissions: {},
-    duration: "",
-  }));
-  const form = useForm<MountedFormValues>({
+  const [formDefaults] = useState(() => keyCreateDefaults(initialTeam?.team_id ?? null));
+  const [requestedKeyOwner, setKeyOwner] = useState("you");
+  const teamAdminEditableFields = parseTeamAdminEditableFields(uiSettingsData?.values);
+  const keyOwnerViewer = { userRole, userId: userID, teamAdminEditableFields, teams };
+  const ownerScope = anotherUserScope(keyOwnerViewer);
+  const keyOwner = effectiveKeyOwner(requestedKeyOwner, ownerScope);
+  const ownerLimitedToTeamMembers = keyOwner === "another_user" && ownerScope === "team_members";
+  const ownerRequiresTeam = keyOwner === "service_account" || ownerLimitedToTeamMembers;
+  const registry = useMountRegistry();
+  const schema = useMemo(
+    () => createKeySchema(registry, { keyOwner, ownerRequiresTeam, ownerLimitedToTeamMembers, team }, t),
+    [registry, keyOwner, ownerRequiresTeam, ownerLimitedToTeamMembers, team, t],
+  );
+  const form = useZodForm(schema, {
     mode: "onChange",
     shouldUnregister: false,
     defaultValues: formDefaults,
   });
-  const registry = useMountRegistry();
   const mountedForm = useMemo(() => ({ control: form.control, registry }), [form.control, registry]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
-  const [requestedKeyOwner, setKeyOwner] = useState("you");
   const [hasPrefilled, setHasPrefilled] = useState(false);
   const [pendingPrefillModels, setPendingPrefillModels] = useState<string[] | null>(null);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
@@ -332,11 +326,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const selectedModels: string[] = (useWatch({ control: form.control, name: "models" }) as string[] | undefined) ?? [];
-  const teamAdminEditableFields = parseTeamAdminEditableFields(uiSettingsData?.values);
-  const keyOwnerViewer = { userRole, userId: userID, teamAdminEditableFields, teams };
-  const ownerScope = anotherUserScope(keyOwnerViewer);
-  const keyOwner = effectiveKeyOwner(requestedKeyOwner, ownerScope);
-  const ownerLimitedToTeamMembers = keyOwner === "another_user" && ownerScope === "team_members";
   const canCreateInAnyTeam = isProxyAdminRole(userRole ?? "") && !ownerLimitedToTeamMembers;
   const filterTeam = useCallback(
     (candidate: Team, owner: string = keyOwner) =>
@@ -362,7 +351,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     form.setValue("allowed_mcp_servers_and_groups", { servers: [], accessGroups: [] });
     form.setValue("mcp_tool_permissions", {});
   }, [createKeyOwner, form]);
-  const ownerRequiresTeam = keyOwner === "service_account" || ownerLimitedToTeamMembers;
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiKey(null);
@@ -463,6 +451,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   useEffect(() => {
     if (autoOpenCreate && !hasPrefilled && teams && userRole && rolesWithWriteAccess.includes(userRole)) {
       // Open the modal
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Apply URL prefills when authorization and teams load.
       setIsModalVisible(true);
       setHasPrefilled(true);
 
@@ -594,6 +583,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       // When a project is selected, use the project's models
       const project = projects?.find((p) => p.project_id === selectedProjectId);
       const projectModels = project?.models ?? [];
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Sync project model options when the project query resolves.
       setModelsToPick(projectModels);
       form.setValue("models", []);
       return;
@@ -629,6 +619,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     if (validModels.length > 0) {
       form.setValue("models", validModels);
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Consume pending prefills after model options load.
     setPendingPrefillModels(null);
   }, [pendingPrefillModels, modelsToPick, form]);
 
@@ -637,6 +628,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     if (!selectedProjectId || !teams || !eligibleProjects) return;
     const project = eligibleProjects.find((p) => p.project_id === selectedProjectId);
     if (!project) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Clear stale selections after available projects change.
       setSelectedProjectId(null);
       form.setValue("project_id", null);
       return;
@@ -787,7 +779,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       name="user_id"
       className="mt-4"
       required
-      rules={requiredRule(keyOwner === "another_user", t("createKey.userId.required"))}
     >
       {(control) =>
         ownerLimitedToTeamMembers ? (
@@ -942,12 +933,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   name="team_id"
                   className="mt-4"
                   required={ownerRequiresTeam}
-                  rules={requiredRule(
-                    ownerRequiresTeam,
-                    ownerLimitedToTeamMembers
-                      ? t("createKey.team.requiredMemberTeam")
-                      : t("createKey.team.requiredServiceAccount"),
-                  )}
                   help={teamFieldHelp}
                 >
                   {(control) => (
@@ -1018,15 +1003,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     }
                     name="key_alias"
                     required
-                    rules={requiredRule(
-                      true,
-                      t("createKey.keyName.required", {
-                        name:
-                          keyOwner === "you"
-                            ? t("createKey.keyName.requiredNames.keyName")
-                            : t("createKey.keyName.requiredNames.serviceAccountId"),
-                      }),
-                    )}
                     help={t("createKey.keyName.help")}
                   >
                     {(control) => <Input {...control} value={(control.value as string | undefined) ?? ""} />}
@@ -1140,9 +1116,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               ? team?.max_budget
                               : t("createKey.limits.unlimited"),
                         })}
-                        rules={ceilingRule(team?.max_budget, (limit) =>
-                          t("createKey.maxBudget.ceiling", { limit: formatNumberWithCommas(limit, 4) }),
-                        )}
                       >
                         {(control) => (
                           <NumericalInput
@@ -1285,7 +1258,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               ? team?.tpm_limit
                               : t("createKey.limits.unlimited"),
                         })}
-                        rules={ceilingRule(team?.tpm_limit, (limit) => t("createKey.tpm.ceiling", { limit }))}
                       >
                         {(control) => (
                           <NumericalInput
@@ -1328,7 +1300,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               ? team?.rpm_limit
                               : t("createKey.limits.unlimited"),
                         })}
-                        rules={ceilingRule(team?.rpm_limit, (limit) => t("createKey.rpm.ceiling", { limit }))}
                       >
                         {(control) => (
                           <NumericalInput
@@ -1371,7 +1342,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               ? team?.tpd_limit
                               : t("createKey.limits.unlimited"),
                         })}
-                        rules={ceilingRule(team?.tpd_limit, (limit) => t("createKey.tpd.ceiling", { limit }))}
                       >
                         {(control) => (
                           <NumericalInput

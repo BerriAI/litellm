@@ -1,6 +1,7 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useId, type FormEvent } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
@@ -17,6 +18,9 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldError, FieldLabel, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { mapBulkKeyEdit } from "./bulk-edit-form/mapper";
+import { bulkKeyBudgetSchema, bulkKeyEditSchema } from "./bulk-edit-form/schema";
 
 export type BulkKeyEditAction = "team" | "user" | "budget";
 export type BulkKeyEditValues =
@@ -35,12 +39,6 @@ interface VirtualKeysBulkEditDialogProps {
   onConfirm: (values: BulkKeyEditValues) => void;
 }
 
-const parseBudget = (input: string): number | null => {
-  if (input.trim() === "") return null;
-  const amount = Number(input);
-  return Number.isFinite(amount) && amount >= 0 ? amount : null;
-};
-
 export function VirtualKeysBulkEditDialog({
   action,
   targets,
@@ -53,19 +51,18 @@ export function VirtualKeysBulkEditDialog({
 }: VirtualKeysBulkEditDialogProps) {
   const { t } = useTranslation();
   const fieldId = useId();
-  const [teamId, setTeamId] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [budgetInput, setBudgetInput] = useState("");
-  const [duration, setDuration] = useState<string | null>("30d");
+  const { control } = useZodForm(bulkKeyEditSchema, {
+    defaultValues: { teamId: null, userId: null, budgetInput: "", duration: "30d" },
+  });
+  const { field: team } = useController({ control, name: "teamId" });
+  const { field: user } = useController({ control, name: "userId" });
+  const { field: budgetField } = useController({ control, name: "budgetInput" });
+  const { field: duration } = useController({ control, name: "duration" });
   const locked = pending || disabled;
-  const budget = parseBudget(budgetInput);
-  const invalidBudget = budgetInput !== "" && budget === null;
-  const valuesByAction: Record<BulkKeyEditAction, BulkKeyEditValues | null> = {
-    team: teamId ? { team_id: teamId } : null,
-    user: userId ? { user_id: userId } : null,
-    budget: budget !== null && duration ? { max_budget: budget, budget_duration: duration } : null,
-  };
-  const values = valuesByAction[action];
+  const parsedBudget = bulkKeyBudgetSchema.safeParse(budgetField.value);
+  const budget = parsedBudget.success ? parsedBudget.data : null;
+  const invalidBudget = budgetField.value !== "" && budget === null;
+  const values = mapBulkKeyEdit(action, { teamId: team.value, userId: user.value, duration: duration.value }, budget);
   const canApply = !locked && values !== null && targets.length > 0;
 
   const cancel = () => {
@@ -104,8 +101,8 @@ export function VirtualKeysBulkEditDialog({
                 </FieldLabel>
                 <TeamDropdown
                   id={`${fieldId}-team`}
-                  value={teamId}
-                  onChange={(value) => !locked && setTeamId(value)}
+                  value={team.value}
+                  onChange={(value) => !locked && team.onChange(value)}
                   disabled={locked}
                 />
               </Field>
@@ -117,8 +114,8 @@ export function VirtualKeysBulkEditDialog({
                 </FieldLabel>
                 <UserDropdown
                   id={`${fieldId}-user`}
-                  value={userId}
-                  onChange={(value) => !locked && setUserId(value)}
+                  value={user.value}
+                  onChange={(value) => !locked && user.onChange(value)}
                   disabled={locked}
                 />
               </Field>
@@ -135,8 +132,8 @@ export function VirtualKeysBulkEditDialog({
                     min={0}
                     step="any"
                     required
-                    value={budgetInput}
-                    onChange={(event) => !locked && setBudgetInput(event.target.value)}
+                    value={budgetField.value}
+                    onChange={(event) => !locked && budgetField.onChange(event.target.value)}
                     disabled={locked}
                     aria-invalid={invalidBudget}
                     aria-describedby={invalidBudget ? `${fieldId}-budget-error` : undefined}
@@ -147,18 +144,18 @@ export function VirtualKeysBulkEditDialog({
                     </FieldError>
                   )}
                 </Field>
-                <Field data-invalid={duration === null}>
+                <Field data-invalid={duration.value === null}>
                   <FieldLabel htmlFor={`${fieldId}-duration`}>
                     {t("apiKeys.virtualKeysTable.bulkEdit.fields.resetPeriod")}
                   </FieldLabel>
                   <BudgetDurationDropdown
                     key={locked ? "locked" : "editable"}
                     id={`${fieldId}-duration`}
-                    value={duration}
-                    onChange={(value) => !locked && setDuration(value)}
+                    value={duration.value}
+                    onChange={(value) => !locked && duration.onChange(value)}
                     placeholder={t("apiKeys.virtualKeysTable.bulkEdit.resetPeriodPlaceholder")}
                   />
-                  {duration === null && (
+                  {duration.value === null && (
                     <FieldError>{t("apiKeys.virtualKeysTable.bulkEdit.resetPeriodRequired")}</FieldError>
                   )}
                 </Field>
