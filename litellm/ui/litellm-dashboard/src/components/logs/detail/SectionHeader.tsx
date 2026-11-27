@@ -18,8 +18,6 @@ interface SectionHeaderProps {
   turnCount?: number;
 }
 
-const SUMMARY_CLASSES = "flex flex-1 items-center gap-4";
-
 export function SectionHeader({
   type,
   tokens,
@@ -82,12 +80,12 @@ export function SectionHeader({
           type="button"
           onClick={onToggleCollapse}
           aria-expanded={!isCollapsed}
-          className={cn(SUMMARY_CLASSES, "-mx-2 cursor-pointer rounded-md px-2 py-1 text-left hover:bg-accent")}
+          className="flex flex-1 items-center gap-4 -mx-2 cursor-pointer rounded-md px-2 py-1 text-left hover:bg-accent"
         >
           {summary}
         </button>
       ) : (
-        <div className={SUMMARY_CLASSES}>{summary}</div>
+        <div className="flex flex-1 items-center gap-4">{summary}</div>
       )}
 
       <Tooltip>

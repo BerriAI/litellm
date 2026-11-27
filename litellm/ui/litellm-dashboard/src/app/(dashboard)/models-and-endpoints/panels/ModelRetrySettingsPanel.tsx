@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
 import { getCallbacksCall } from "@/components/networking";
@@ -8,20 +9,11 @@ import { useUpdateRetryPolicy } from "@/app/(dashboard)/hooks/routerSettings/use
 import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/useModelDashboardData";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toRetryPolicyPayload, toRetrySettings, type RouterRetrySettings } from "./model-retry-settings/mapper";
+import { RetryPolicyDraft, retrySettingsSchema } from "./model-retry-settings/schema";
 
-interface RetryPolicyObject {
-  [key: string]: { [retryPolicyKey: string]: number } | undefined;
-}
-
-interface GlobalRetryPolicyObject {
-  [retryPolicyKey: string]: number;
-}
-
-interface RouterSettings {
-  model_group_retry_policy?: RetryPolicyObject | null;
-  retry_policy?: GlobalRetryPolicyObject | null;
-  num_retries?: number | null;
-}
+const initialDraft = toRetrySettings({}).draft;
 
 export default function ModelRetrySettingsPanel() {
   const { t } = useTranslation();
@@ -29,10 +21,31 @@ export default function ModelRetrySettingsPanel() {
   const { availableModelGroups } = useModelDashboardData();
   const updateRetryPolicy = useUpdateRetryPolicy(accessToken);
 
-  const [retryScope, setRetryScope] = useState<string | null>("global");
-  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
-  const [globalRetryPolicy, setGlobalRetryPolicy] = useState<GlobalRetryPolicyObject | null>(null);
+  const { control, getValues, setValue } = useZodForm(retrySettingsSchema, {
+    defaultValues: { scope: "global", draft: initialDraft },
+  });
+  const { field: scope } = useController({ control, name: "scope" });
+  const {
+    field: {
+      value: { policies },
+    },
+  } = useController({ control, name: "draft" });
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
+
+  const setPolicy = <Key extends keyof typeof policies>(key: Key, update: SetStateAction<(typeof policies)[Key]>) => {
+    const current = getValues("draft").policies;
+    setValue(
+      "draft",
+      new RetryPolicyDraft({
+        ...current,
+        [key]: typeof update === "function" ? update(current[key]) : update,
+      }),
+    );
+  };
+  const setGlobalRetryPolicy: Dispatch<SetStateAction<typeof policies.retry_policy>> = (update) =>
+    setPolicy("retry_policy", update);
+  const setModelGroupRetryPolicy: Dispatch<SetStateAction<typeof policies.model_group_retry_policy>> = (update) =>
+    setPolicy("model_group_retry_policy", update);
 
   const fetchRetrySettings = useCallback(async () => {
     if (!accessToken || !userID || !userRole) {
@@ -47,11 +60,14 @@ export default function ModelRetrySettingsPanel() {
     }
   }, [accessToken, userID, userRole]);
 
-  const applyRetrySettings = useCallback((routerSettings: RouterSettings) => {
-    setModelGroupRetryPolicy(routerSettings.model_group_retry_policy ?? null);
-    setGlobalRetryPolicy(routerSettings.retry_policy ?? null);
-    setDefaultRetry(routerSettings.num_retries ?? 2);
-  }, []);
+  const applyRetrySettings = useCallback(
+    (routerSettings: RouterRetrySettings) => {
+      const { draft, defaultRetry } = toRetrySettings(routerSettings);
+      setValue("draft", draft);
+      setDefaultRetry(defaultRetry);
+    },
+    [setValue],
+  );
 
   useEffect(() => {
     let active = true;
@@ -67,33 +83,31 @@ export default function ModelRetrySettingsPanel() {
   }, [fetchRetrySettings, applyRetrySettings]);
 
   const handleSaveRetrySettings = () => {
-    updateRetryPolicy.mutate(
-      { retry_policy: globalRetryPolicy, model_group_retry_policy: modelGroupRetryPolicy },
-      {
-        onSuccess: () => {
-          toast.success(t("modelsAndEndpoints.modelRetrySettingsPanel.toasts.saved"));
-          void fetchRetrySettings().then((routerSettings) => {
-            if (routerSettings) {
-              applyRetrySettings(routerSettings);
-            }
-          });
-        },
-        onError: () => {
-          toast.fromError(t("modelsAndEndpoints.modelRetrySettingsPanel.toasts.saveFailed"));
-        },
+    const values = retrySettingsSchema.parse(getValues());
+    updateRetryPolicy.mutate(toRetryPolicyPayload(values.draft), {
+      onSuccess: () => {
+        toast.success(t("modelsAndEndpoints.modelRetrySettingsPanel.toasts.saved"));
+        void fetchRetrySettings().then((routerSettings) => {
+          if (routerSettings) {
+            applyRetrySettings(routerSettings);
+          }
+        });
       },
-    );
+      onError: () => {
+        toast.fromError(t("modelsAndEndpoints.modelRetrySettingsPanel.toasts.saveFailed"));
+      },
+    });
   };
 
   return (
     <ModelRetrySettingsTab
-      selectedModelGroup={retryScope}
-      setSelectedModelGroup={setRetryScope}
+      selectedModelGroup={scope.value}
+      setSelectedModelGroup={scope.onChange}
       availableModelGroups={availableModelGroups}
-      globalRetryPolicy={globalRetryPolicy}
+      globalRetryPolicy={policies.retry_policy}
       setGlobalRetryPolicy={setGlobalRetryPolicy}
       defaultRetry={defaultRetry}
-      modelGroupRetryPolicy={modelGroupRetryPolicy}
+      modelGroupRetryPolicy={policies.model_group_retry_policy}
       setModelGroupRetryPolicy={setModelGroupRetryPolicy}
       handleSaveRetrySettings={handleSaveRetrySettings}
       isSaving={updateRetryPolicy.isPending}

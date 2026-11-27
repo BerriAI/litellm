@@ -1,10 +1,14 @@
 import React, { useEffect, useState } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "./RouterSettingsForm";
-import { RouterSettingsSource, SOURCE_UNKNOWN_HINT, isOwnedByConfig } from "./ConfigOwned";
+import { RouterSettingsSource, SOURCE_UNKNOWN_HINT } from "./ConfigOwned";
+import { toRouterSettingsPayload } from "./mapper";
+import { routerSettingsSchema } from "./schema";
 
 interface RouterSettingsProps {
   accessToken: string | null;
@@ -12,18 +16,14 @@ interface RouterSettingsProps {
   userID: string | null;
 }
 
-interface routingStrategyArgs {
-  ttl?: number;
-  lowest_latency_buffer?: number;
-}
-
 const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, userID }) => {
   const { t } = useTranslation();
-  const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
-    routerSettings: {},
-    selectedStrategy: null,
-    enableTagFiltering: false,
+  const { control, getValues, setValue } = useZodForm(routerSettingsSchema, {
+    defaultValues: { selectedStrategy: null, enableTagFiltering: false },
   });
+  const { field: strategy } = useController({ control, name: "selectedStrategy" });
+  const { field: tagFiltering } = useController({ control, name: "enableTagFiltering" });
+  const [routerSettings, setRouterSettings] = useState<RouterSettingsFormValue["routerSettings"]>({});
   const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
   const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
   const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
@@ -40,11 +40,8 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       }
       // Set initial selected strategy
       const initialStrategy = router_settings.routing_strategy || null;
-      setFormValue((prev) => ({
-        ...prev,
-        routerSettings: router_settings,
-        selectedStrategy: initialStrategy,
-      }));
+      setRouterSettings(router_settings);
+      setValue("selectedStrategy", initialStrategy);
     });
     getRouterSettingsCall(accessToken)
       .catch(() => {
@@ -83,101 +80,23 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
           // Set enable_tag_filtering value
           const tagFilteringField = data.fields.find((field: any) => field.field_name === "enable_tag_filtering");
           if (tagFilteringField?.field_value !== null && tagFilteringField?.field_value !== undefined) {
-            setFormValue((prev) => ({
-              ...prev,
-              enableTagFiltering: tagFilteringField.field_value,
-            }));
+            setValue("enableTagFiltering", tagFilteringField.field_value);
           }
         }
       });
-  }, [accessToken, userRole, userID]);
+  }, [accessToken, userRole, userID, setValue]);
 
   const handleSaveChanges = async () => {
     if (!accessToken || routerSettingsSource === null) {
       return;
     }
 
-    const router_settings = formValue.routerSettings;
-
-    const numberKeys = new Set(["allowed_fails", "cooldown_time", "num_retries", "timeout", "retry_after"]);
-    const jsonKeys = new Set(["model_group_alias"]);
-    // retry_policy and model_group_retry_policy are owned by the Model Retry Settings tab;
-    // routing_groups is owned by the Routing Groups tab. This page must not read or write them.
-    const tabOwnedKeys = new Set(["retry_policy", "model_group_retry_policy", "routing_groups"]);
-
-    const parseInputValue = (key: string, raw: string | undefined, fallback: unknown) => {
-      if (raw === undefined) return fallback;
-
-      const v = raw.trim();
-
-      if (v.toLowerCase() === "null") return null;
-
-      if (numberKeys.has(key)) {
-        const n = Number(v);
-        return Number.isNaN(n) ? fallback : n;
-      }
-
-      if (jsonKeys.has(key)) {
-        if (v === "") return null;
-        try {
-          return JSON.parse(v);
-        } catch {
-          return fallback;
-        }
-      }
-
-      if (v.toLowerCase() === "true") return true;
-      if (v.toLowerCase() === "false") return false;
-
-      return v;
-    };
-
-    // Add enable_tag_filtering to router_settings before processing
-    const settingsToUpdate = {
-      ...router_settings,
-      enable_tag_filtering: formValue.enableTagFiltering,
-    };
-
-    const updatedVariables = Object.fromEntries(
-      Object.entries(settingsToUpdate)
-        .map(([key, value]) => {
-          if (tabOwnedKeys.has(key) || isOwnedByConfig(routerSettingsSource, key)) {
-            return null;
-          }
-          if (key !== "routing_strategy_args" && key !== "routing_strategy" && key !== "enable_tag_filtering") {
-            const inputEl = document.querySelector(`input[name="${key}"]`) as HTMLInputElement | null;
-            const parsed = parseInputValue(key, inputEl?.value, value);
-            return [key, parsed];
-          } else if (key === "routing_strategy") {
-            return [key, formValue.selectedStrategy];
-          } else if (key === "enable_tag_filtering") {
-            return [key, formValue.enableTagFiltering];
-          } else if (key === "routing_strategy_args" && formValue.selectedStrategy === "latency-based-routing") {
-            let setRoutingStrategyArgs: routingStrategyArgs = {};
-
-            const lowestLatencyBufferElement = document.querySelector(
-              `input[name="lowest_latency_buffer"]`,
-            ) as HTMLInputElement;
-            const ttlElement = document.querySelector(`input[name="ttl"]`) as HTMLInputElement;
-
-            if (lowestLatencyBufferElement?.value) {
-              setRoutingStrategyArgs["lowest_latency_buffer"] = Number(lowestLatencyBufferElement.value);
-            }
-
-            if (ttlElement?.value) {
-              setRoutingStrategyArgs["ttl"] = Number(ttlElement.value);
-            }
-
-            return ["routing_strategy_args", setRoutingStrategyArgs];
-          }
-          return null;
-        })
-        .filter((entry) => entry !== null && entry !== undefined) as Iterable<[string, unknown]>,
+    const values = routerSettingsSchema.parse(getValues());
+    const payload = toRouterSettingsPayload(
+      { ...values, routerSettings },
+      routerSettingsSource,
+      (name) => document.querySelector<HTMLInputElement>(`input[name="${name}"]`)?.value,
     );
-
-    const payload = {
-      router_settings: updatedVariables,
-    };
 
     try {
       await setCallbacksCall(accessToken, payload);
@@ -194,8 +113,11 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
   return (
     <div className="w-full">
       <RouterSettingsForm
-        value={formValue}
-        onChange={setFormValue}
+        value={{ routerSettings, selectedStrategy: strategy.value, enableTagFiltering: tagFiltering.value }}
+        onChange={({ selectedStrategy, enableTagFiltering }) => {
+          setValue(strategy.name, selectedStrategy);
+          setValue(tagFiltering.name, enableTagFiltering);
+        }}
         routerFieldsMetadata={routerFieldsMetadata}
         availableRoutingStrategies={availableRoutingStrategies}
         routingStrategyDescriptions={routingStrategyDescriptions}

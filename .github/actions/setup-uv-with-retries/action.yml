@@ -7,11 +7,18 @@ inputs:
   version:
     description: "uv version to install"
     required: true
+  rust-toolchain:
+    description: >-
+      Install the pinned Rust toolchain. Pass "false" in jobs that install the
+      prebuilt Rust bridge and never compile Rust.
+    required: false
+    default: "true"
 
 runs:
   using: composite
   steps:
     - name: Configure the Rust build environment
+      if: inputs.rust-toolchain == 'true'
       shell: bash
       working-directory: ${{ github.workspace }}
       run: bash .github/scripts/setup_rust_environment.sh

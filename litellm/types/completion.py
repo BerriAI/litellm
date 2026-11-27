@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm import BaseConfig
+    from litellm.types.llms.openai import AllMessageValues
     from litellm.utils import CustomStreamWrapper, ModelResponse
 
 
@@ -214,21 +215,21 @@ class CompletionDispatchContext:
     api_version: str | None
     client: Any
     custom_llm_provider: str
-    custom_prompt_dict: dict
-    extra_headers: dict | None
+    custom_prompt_dict: dict[str, dict[str, object]]
+    extra_headers: dict[str, object] | None
     headers: dict[str, object]
     hf_model_name: str | None
     kwargs: dict
     litellm_params: dict[str, object]
-    logger_fn: Callable | None
+    logger_fn: Callable[..., object] | None
     logging: LiteLLMLoggingObj
     max_retries: int | None
     max_tokens: int | None
-    messages: list
+    messages: list[AllMessageValues]
     metadata: dict | None
     model: str
     model_response: ModelResponse
-    optional_params: dict
+    optional_params: dict[str, object]
     optional_params_for_model_info: Callable[[Mapping[str, object] | None], dict[str, object]]
     organization: str | None
     provider_config: BaseConfig | None
@@ -240,6 +241,7 @@ class CompletionDispatchContext:
     timeout: float | httpx.Timeout | None
     timeout_for_optional_params: Callable[[Mapping[str, object]], float | httpx.Timeout]
     top_p: float | None
+    unnarrowed_optional_params: dict  # mutable-ok: provider paths pop credential keys from it before forwarding
 
 
 _CompletionDispatchContext = CompletionDispatchContext

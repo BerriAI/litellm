@@ -190,7 +190,7 @@ class HeliconeLogger:
             end_time_milliseconds: Final = int((end_time.timestamp() - end_time_seconds) * 1000)
             meta: Final = {"Helicone-Auth": f"Bearer {self.key}"}
             meta.update(metadata)
-            data: Final = {
+            data: Final[dict[str, object]] = {  # mutable-ok: built here, sent as is
                 "providerRequest": {
                     "url": provider_url,
                     "json": provider_request,

@@ -57,7 +57,7 @@ impl Moment {
 pub(crate) fn parse_reset(text: &str) -> Result<Option<Moment>, ReservationError> {
     match fromisoformat(&text.replace('Z', "+00:00")) {
         None => Ok(None),
-        Some(IsoDateTime::Aware(micros)) => Ok(Some(Moment(i128::from(micros)))),
+        Some(IsoDateTime::Aware { utc: micros, .. }) => Ok(Some(Moment(i128::from(micros)))),
         Some(IsoDateTime::Naive(_)) => Err(ReservationError::type_error(
             "can't compare offset-naive and offset-aware datetimes",
         )),
