@@ -236,7 +236,7 @@ async def test_authorization_code_without_token_is_semantically_unauthorized():
 
 
 @pytest.mark.asyncio
-async def test_authorization_code_store_unavailable_is_unauthorized():
+async def test_authorization_code_store_unavailable_is_retryable_upstream_unavailable():
     class _Unavailable:
         async def fetch(self, user_id: str, server_id: str):
             raise TokenStoreUnavailable("down")
@@ -245,7 +245,7 @@ async def test_authorization_code_store_unavailable_is_unauthorized():
         Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
     )
     assert isinstance(result, Error)
-    assert result.error.tag == "unauthorized"
+    assert result.error.tag == "upstream_unavailable"
 
 
 @pytest.mark.asyncio
@@ -1567,3 +1567,31 @@ async def test_id_jag_refresh_token_source_is_a_precondition_without_a_live_refr
     assert expected in result.error.summary
     assert "Sign in through LiteLLM SSO" in result.error.summary
     assert endpoint.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (Error(CredError.of_unauthorized("expired")), False),
+        (Error(CredError.of_upstream_unavailable("idp down")), True),
+        (Error(CredError.of_misconfigured("bad client")), True),
+        (Error(CredError.of_precondition_required("identity mismatch")), True),
+    ],
+)
+async def test_has_user_token_preserves_outage_and_misconfigured_errors_for_egress(
+    outcome: Error[CredError],
+    expected: bool,
+) -> None:
+    from litellm.proxy.mcp_server.outbound_credentials.types import AuthorizationCodeConfig
+
+    class Store:
+        async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
+            return None
+
+        async def fetch_result(self, user_id: str, server_id: str) -> Error[CredError]:
+            return outcome
+
+    provider: Final = UpstreamCredentialProvider(oauth_token_store=Store())
+    spec: Final = _spec(AuthorizationCodeConfig(authorization_endpoint="https://idp.example/auth"))
+    assert await provider.has_user_token(Subject(tenant_id="", subject_id="alice"), spec) is expected

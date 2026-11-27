@@ -38,13 +38,16 @@ from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     RefreshingTokenStore,
     TokenCacheBackend,
     TokenStoreUnavailable,
+    fetch_token_result,
 )
+from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy.mcp_server.outbound_credentials.runtime_refresh_coordinator import (
     runtime_refresh_coordinator,
 )
 from litellm.proxy.mcp_server.outbound_credentials.token_cache_codec import (
     OAuthTokenCacheCodec,
 )
+from litellm.proxy.mcp_server.outbound_credentials.types import CredError
 from litellm.proxy.mcp_server.outbound_credentials.v2_token_store import (
     V2PerUserTokenStore,
 )
@@ -157,8 +160,53 @@ def _redis_cache_is_available() -> bool:
     return redis_usage_cache is not None
 
 
+def _cred_error_detail(err: CredError) -> str:
+    match err.tag:
+        case "unauthorized":
+            return err.unauthorized.detail
+        case "misconfigured":
+            return err.misconfigured
+        case "precondition_required":
+            return err.precondition_required
+        case "upstream_unavailable":
+            return err.upstream_unavailable
+        case _:
+            return err.summary
+
+
+def _encode_refresh_error(outcome: Result[OAuthToken, CredError]) -> str | None:
+    if not isinstance(outcome, Error):
+        return None
+    err: Final = outcome.error
+    return json.dumps({"tag": err.tag, "detail": _cred_error_detail(err)})
+
+
+def _decode_refresh_error(payload: str) -> Result[OAuthToken, CredError] | None:
+    try:
+        payload_map: Final = _TOKEN_BODY_ADAPTER.validate_json(payload)
+    except ValidationError:
+        return None
+    tag: Final = payload_map.get("tag")
+    detail: Final = payload_map.get("detail")
+    if not isinstance(tag, str) or not isinstance(detail, str):
+        return None
+    match tag:
+        case "unauthorized":
+            return Error(CredError.of_unauthorized(detail))
+        case "misconfigured":
+            return Error(CredError.of_misconfigured(detail))
+        case "precondition_required":
+            return Error(CredError.of_precondition_required(detail))
+        case _:
+            return Error(CredError.of_upstream_unavailable(detail))
+
+
+def _runtime_result_coordinator() -> RefreshCoordinator[Result[OAuthToken, CredError]] | None:
+    return runtime_refresh_coordinator(encode_error=_encode_refresh_error, decode_error=_decode_refresh_error)
+
+
 def _runtime_backend_and_coordinator() -> tuple[
-    TokenCacheBackend | None, RefreshCoordinator[OAuthToken | None] | None, bool
+    TokenCacheBackend | None, RefreshCoordinator[Result[OAuthToken, CredError]] | None, bool
 ]:
     """The cross-replica cache + coordinator when Redis is wired, else ``(None, None, False)`` so the
     foundation's in-process defaults are used (a single replica needs no shared cache or lock).
@@ -169,7 +217,7 @@ def _runtime_backend_and_coordinator() -> tuple[
     )
     from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # runtime global
 
-    coordinator: Final[RefreshCoordinator[OAuthToken | None] | None] = runtime_refresh_coordinator()
+    coordinator: Final = _runtime_result_coordinator()
     if coordinator is None or redis_usage_cache is None:
         return None, None, False
     codec: Final = OAuthTokenCacheCodec(
@@ -234,31 +282,40 @@ class LazyPerUserOAuthTokenStore:
         self._local_fetches = 0
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
-        token: Final = await self._fetch_token(user_id, server_id)
+        outcome: Final = await self.fetch_result(user_id, server_id)
+        return outcome.ok if isinstance(outcome, Ok) else None
+
+    async def fetch_result(self, user_id: str, server_id: str) -> Result[OAuthToken, CredError]:
+        outcome: Final = await self._fetch_token_result(user_id, server_id)
+        if isinstance(outcome, Error):
+            return outcome
+        token: Final = outcome.ok
         server: Final = self._server_lookup(server_id)
         binding: Final = server.oauth_identity_binding if server else None
-        if token is not None and binding is not None and binding.mode == "enforce":
+        if binding is not None and binding.mode == "enforce":
             if not await credential_binding_matches(
                 binding, user_id, server_id, {"identity_binding_proof": token.identity_binding_proof}
             ):
                 await self.invalidate(user_id, server_id)
-                return None
-        return token
+                return Error(
+                    CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server.")
+                )
+        return outcome
 
-    async def _fetch_token(self, user_id: str, server_id: str) -> OAuthToken | None:
+    async def _fetch_token_result(self, user_id: str, server_id: str) -> Result[OAuthToken, CredError]:
         if self._uses_redis:
             store = self._store
             if store is not None:
-                return await store.fetch(user_id, server_id)
+                return await fetch_token_result(store, user_id, server_id)
 
         store, uses_redis = await self._store_for_fetch()
         return await asyncio.shield(self._fetch_then_finish(store, uses_redis, user_id, server_id))
 
     async def _fetch_then_finish(
         self, store: InvalidatableOAuthTokenStore, uses_redis: bool, user_id: str, server_id: str
-    ) -> OAuthToken | None:
+    ) -> Result[OAuthToken, CredError]:
         try:
-            return await store.fetch(user_id, server_id)
+            return await fetch_token_result(store, user_id, server_id)
         finally:
             if not uses_redis:
                 await self._finish_local_fetch()

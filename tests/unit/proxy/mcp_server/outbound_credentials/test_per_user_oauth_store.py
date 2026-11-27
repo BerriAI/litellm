@@ -11,7 +11,11 @@ from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
 from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
     ServerLookup,
+    _decode_refresh_error,
+    _encode_refresh_error,
 )
+from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
+from litellm.proxy.mcp_server.outbound_credentials.types import CredError
 
 
 class _RecordingStore:
@@ -98,7 +102,8 @@ async def test_native_refresh_persists_actual_grant_through_storage_adapter(
     await record_oauth_scope_refusal(credentials_prisma, "alice", "srv", "gist")
     refresher = AuthorizationCodeRefresher(lambda _: server, token_endpoint, _persist_credential)
     refreshed = await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="refresh", scopes=prior_scopes))
-    assert refreshed is not None and refreshed.scopes == tuple(expected)
+    assert isinstance(refreshed, Ok)
+    assert refreshed.ok.scopes == tuple(expected)
     payload = await get_user_oauth_credential(credentials_prisma, "alice", "srv")
     assert payload is not None and payload.get("scopes") == expected
     assert payload["access_token"] == "rotated"
@@ -594,3 +599,18 @@ async def test_assembled_store_shares_cached_tokens_through_redis_usage_cache(
     assert second is not None and second.access_token == "shared-tok"
     assert db_reads == [("user-1", "srv-1")]
     assert len(redis_cache.data) == 1
+
+
+def test_refresh_error_publication_roundtrips_the_exact_failure_class():
+    for original in (
+        Error(CredError.of_misconfigured("OAuth client authentication failed; check the server client configuration.")),
+        Error(CredError.of_precondition_required("OAuth identity binding did not match.")),
+    ):
+        encoded: Final = _encode_refresh_error(original)
+        assert encoded is not None
+        decoded: Final = _decode_refresh_error(encoded)
+        assert decoded == original
+
+
+def test_refresh_error_publication_never_encodes_a_token():
+    assert _encode_refresh_error(Ok(OAuthToken(access_token="secret-access-token"))) is None

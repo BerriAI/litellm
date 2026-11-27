@@ -2,7 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from typing import Dict, Final, List, Optional, Tuple
+from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,16 +13,18 @@ from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     RefreshingTokenStore,
     TokenStoreUnavailable,
 )
+from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
+from litellm.proxy.mcp_server.outbound_credentials.types import CredError
 
 
 class _FakeStore:
     """An OAuthTokenStore that records calls and returns canned tokens."""
 
-    def __init__(self, values: Dict[Tuple[str, str], Optional[OAuthToken]]) -> None:
+    def __init__(self, values: dict[tuple[str, str], OAuthToken | None]) -> None:
         self._values = values
-        self.calls: List[Tuple[str, str]] = []
+        self.calls: list[tuple[str, str]] = []
 
-    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         self.calls.append((user_id, server_id))
         return self._values.get((user_id, server_id))
 
@@ -115,7 +117,7 @@ async def test_store_unavailable_is_not_cached():
         def __init__(self) -> None:
             self.calls = 0
 
-        async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+        async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
             self.calls += 1
             raise TokenStoreUnavailable("down")
 
@@ -164,22 +166,22 @@ class _RefreshablePair:
     """A store + refresher pair that simulates persistence: refresh() updates what fetch returns,
     and yields once so concurrent callers actually contend on the single-flight lock."""
 
-    def __init__(self, initial: Optional[OAuthToken]) -> None:
+    def __init__(self, initial: OAuthToken | None) -> None:
         self._current = initial
         self.fetch_calls = 0
         self.refresh_calls = 0
-        self.refresh_args: List[Tuple[str, str]] = []
+        self.refresh_args: list[tuple[str, str]] = []
 
-    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         self.fetch_calls += 1
         return self._current
 
-    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Optional[OAuthToken]:
+    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
         self.refresh_calls += 1
         self.refresh_args.append((user_id, server_id))
         await asyncio.sleep(0)  # yield so other concurrent callers reach the lock and wait
         self._current = OAuthToken(access_token="refreshed", expires_at=9999.0)
-        return self._current
+        return Ok(self._current)
 
 
 async def test_refreshing_passes_through_a_fresh_token():
@@ -203,11 +205,11 @@ async def test_refreshing_mints_a_fresh_token_when_expired():
 
 async def test_refreshing_returns_none_when_it_cannot_refresh():
     class _NoRefresh:
-        async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+        async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
             return OAuthToken(access_token="old", expires_at=900.0)
 
-        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Optional[OAuthToken]:
-            return None  # e.g. no refresh_token
+        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
+            return Error(CredError.of_unauthorized("no refresh token"))
 
     src = _NoRefresh()
     store = RefreshingTokenStore(src, src, expiry_skew_seconds=30, clock=_Clock(1000.0))
@@ -219,7 +221,7 @@ async def test_refreshing_returns_none_when_it_cannot_refresh():
 async def test_rejected_refresh_returns_only_a_fresh_replacement(replacement: OAuthToken | None) -> None:
     expired: Final = OAuthToken(access_token="old", expires_at=900.0)
     inner: Final = SimpleNamespace(fetch=AsyncMock(side_effect=[expired, expired, replacement]))
-    refresher: Final = SimpleNamespace(refresh=AsyncMock(return_value=None))
+    refresher: Final = SimpleNamespace(refresh=AsyncMock(return_value=Error(CredError.of_unauthorized("rejected"))))
     store: Final = RefreshingTokenStore(inner, refresher, clock=_Clock(1000.0))
     assert await store.fetch("u", "s") == replacement
 
@@ -244,7 +246,7 @@ class _StaleReadRacePair:
         self.stale_read_started = asyncio.Event()
         self.finish_stale_read = asyncio.Event()
 
-    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         self.fetch_calls += 1
         if self.fetch_calls == 3:
             self.stale_read_started.set()
@@ -252,12 +254,12 @@ class _StaleReadRacePair:
             return self._old_token
         return self._current
 
-    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Optional[OAuthToken]:
+    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
         self.refresh_calls += 1
         self.refresh_started.set()
         await self.finish_refresh.wait()
         self._current = OAuthToken(access_token="refreshed", expires_at=9999.0)
-        return self._current
+        return Ok(self._current)
 
 
 async def test_stale_read_after_refresh_rereads_before_starting_new_refresh():
@@ -284,10 +286,10 @@ async def test_refresh_failure_is_shared_by_joiners_not_re_run():
         def __init__(self) -> None:
             self.calls = 0
 
-        async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+        async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
             return OAuthToken(access_token="old", expires_at=900.0)
 
-        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Optional[OAuthToken]:
+        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
             self.calls += 1
             await asyncio.sleep(0)  # let the concurrent callers join the same task
             raise RuntimeError("refresh boom")
@@ -349,11 +351,11 @@ class _RecordingBackend:
     """A TokenCacheBackend that records calls, proving CachedOAuthTokenStore delegates storage."""
 
     def __init__(self) -> None:
-        self.sets: List[Tuple[str, str, OAuthToken, float]] = []
-        self.deletes: List[Tuple[str, str]] = []
-        self._store: Dict[Tuple[str, str], OAuthToken] = {}
+        self.sets: list[tuple[str, str, OAuthToken, float]] = []
+        self.deletes: list[tuple[str, str]] = []
+        self._store: dict[tuple[str, str], OAuthToken] = {}
 
-    async def get(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+    async def get(self, user_id: str, server_id: str) -> OAuthToken | None:
         return self._store.get((user_id, server_id))
 
     async def set(self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float) -> None:
@@ -453,13 +455,13 @@ async def test_loser_rereads_the_fresh_token_a_successful_winner_persisted():
             self._reads = 0
             self.refresh_calls = 0
 
-        async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+        async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
             self._reads += 1
             if self._reads == 1:
                 return OAuthToken(access_token="expired", expires_at=900.0)
             return OAuthToken(access_token="winner-fresh", expires_at=9999.0)
 
-        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Optional[OAuthToken]:
+        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
             self.refresh_calls += 1
             raise AssertionError("a loser must not refresh")
 
