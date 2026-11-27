@@ -1,7 +1,8 @@
 import type { ParseKeys } from "i18next";
 import React, { useEffect, useMemo, useState } from "react";
-import { useForm, useWatch, type UseFormReturn } from "react-hook-form";
+import { useWatch, type UseFormReturn } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import {
   createGuardrailCall,
@@ -13,29 +14,22 @@ import {
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import { type CompetitorIntentConfig } from "./content_filter/CompetitorIntentConfiguration";
 import {
-  choiceToLoggingOnlyScope,
-  choiceToSkipSystemForCreate,
-  choiceToSkipToolForCreate,
   getGuardrailLogo,
   getGuardrailProviders,
   getSupportedModesForProvider,
   guardrail_provider_map,
   guardrail_provider_search_aliases,
-  effectiveLoggingOnlyContinue,
-  modeIncludesLoggingOnly,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
   shouldRenderContentFilterConfigSettings,
   shouldRenderDecisionModelFields,
   shouldRenderLLMJudgeFields,
   shouldRenderPIIConfigSettings,
-  streamScopePayload,
   toModeArray,
-  type GuardrailStreamScope,
   supportsDirectionalLoggingOnlyScope,
-  type LoggingOnlyScope,
-  type LoggingOnlyScopeChoice,
 } from "./guardrail_info_helpers";
+import { buildAddGuardrailPayload } from "./addGuardrailMapper";
+import { createAddGuardrailSchema } from "./addGuardrailSchema";
 import { StreamScopeFormField } from "./StreamScopeFields";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -60,9 +54,6 @@ import {
   asText,
   GuardrailField,
   labelWithHint,
-  readRecord,
-  requiredRule,
-  type GuardrailCriterion,
   type GuardrailFormValues,
   LoggingOnlyScopeField,
   SkipMessageSelect,
@@ -71,11 +62,7 @@ import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
 import DecisionModelFields from "./decision_model/DecisionModelFields";
-import {
-  buildDecisionModelParams,
-  decisionChecksProblem,
-  type DecisionModelCheckDraft,
-} from "./decision_model/buildDecisionModelParams";
+import { decisionChecksProblem, type DecisionModelCheckDraft } from "./decision_model/buildDecisionModelParams";
 import {
   decisionModelOptions,
   parseDecisionModelGroups,
@@ -187,8 +174,6 @@ const getStepTitleClass = (isDone: boolean, isCurrent: boolean): string => {
   return "font-medium text-muted-foreground";
 };
 
-type SkipMessageChoice = "inherit" | "yes" | "no";
-
 const INITIAL_VALUES: GuardrailFormValues = {
   mode: "pre_call",
   default_on: false,
@@ -213,9 +198,6 @@ const applyValues = (form: UseFormReturn<GuardrailFormValues>, values: Record<st
   Object.entries(values).forEach(([name, value]) => form.setValue(name, value));
 };
 
-const asSkipChoice = (value: unknown): SkipMessageChoice | undefined =>
-  value === "inherit" || value === "yes" || value === "no" ? value : undefined;
-
 // Mapping of provider -> list of param descriptors
 interface ProviderParam {
   param: string;
@@ -235,8 +217,6 @@ interface ProviderParamsResponse {
 
 const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess, preset }) => {
   const { t } = useTranslation();
-  const form = useForm<GuardrailFormValues>({ defaultValues: INITIAL_VALUES });
-  const watchedMode = useWatch({ control: form.control, name: "mode" });
   const [loading, setLoading] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const providerFilter = useComboboxFilter();
@@ -245,6 +225,30 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [selectedActions, setSelectedActions] = useState<{ [key: string]: string }>({});
   const [currentStep, setCurrentStep] = useState(0);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(null);
+
+  const isToolPermissionProvider = useMemo(() => {
+    if (!selectedProvider) {
+      return false;
+    }
+    const providerValue = guardrail_provider_map[selectedProvider];
+    return (providerValue || "").toLowerCase() === "tool_permission";
+  }, [selectedProvider]);
+  const isDecisionModelProvider = useMemo(() => shouldRenderDecisionModelFields(selectedProvider), [selectedProvider]);
+
+  const schema = useMemo(
+    () =>
+      createAddGuardrailSchema({
+        selectedProvider,
+        providerParams,
+        currentStep,
+        isDecisionModelProvider,
+        isToolPermissionProvider,
+        t,
+      }),
+    [selectedProvider, providerParams, currentStep, isDecisionModelProvider, isToolPermissionProvider, t],
+  );
+  const form = useZodForm(schema, { defaultValues: INITIAL_VALUES });
+  const watchedMode = useWatch({ control: form.control, name: "mode" });
 
   // Content Filter state
   const [selectedPatterns, setSelectedPatterns] = useState<ContentFilterPattern[]>([]);
@@ -269,15 +273,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [decisionModelGroups, setDecisionModelGroups] = useState<DecisionModelGroup[]>([]);
   const [decisionProvider, setDecisionProvider] = useState<string | null>(null);
   const [decisionChecks, setDecisionChecks] = useState<DecisionModelCheckDraft[]>([]);
-
-  const isToolPermissionProvider = useMemo(() => {
-    if (!selectedProvider) {
-      return false;
-    }
-    const providerValue = guardrail_provider_map[selectedProvider];
-    return (providerValue || "").toLowerCase() === "tool_permission";
-  }, [selectedProvider]);
-  const isDecisionModelProvider = useMemo(() => shouldRenderDecisionModelFields(selectedProvider), [selectedProvider]);
   const decisionModels = useMemo(
     () =>
       decisionModelOptions(guardrailSettings?.decision_model_providers ?? [], decisionModelGroups, decisionProvider),
@@ -328,7 +323,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   useEffect(() => {
     if (!preset || !visible || !guardrailSettings) return;
 
-    // Set provider
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate form state when opened with a garden preset
     setSelectedProvider(preset.provider);
     setDecisionProvider(preset.decisionProvider ?? null);
     const baseValues: Record<string, unknown> = {
@@ -502,274 +497,46 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const handleSubmit = async () => {
     try {
       setLoading(true);
-      // First validate currently visible fields
       if (!(await form.trigger())) {
         toast.fromError(t("guardrails.addForm.toasts.fixHighlightedFields"));
         return;
       }
 
-      // After validation, fetch *all* form values (including those from previous steps)
       const values = form.getValues();
-      const providerKey = asText(values.provider);
+      const built = buildAddGuardrailPayload({
+        values,
+        selectedProvider,
+        providerParams,
+        selectedEntities,
+        selectedActions,
+        selectedPatterns,
+        blockedWords,
+        selectedContentCategories,
+        competitorIntentEnabled,
+        competitorIntentConfig,
+        decisionChecks,
+        toolPermissionConfig,
+        selectedEndpointType,
+        endSessionAfterNFails,
+        onViolation,
+        realtimeViolationMessage,
+        t,
+      });
 
-      // Get the guardrail provider value from the map
-      const guardrailProvider = guardrail_provider_map[providerKey];
-
-      // Prepare the guardrail data with proper typings
-      const guardrailData: {
-        guardrail_name: string;
-        litellm_params: {
-          guardrail: string;
-          logging_only_scope?: LoggingOnlyScope | null;
-          [key: string]: unknown; // Allow dynamic properties
-        };
-        guardrail_info: Record<string, unknown>;
-      } = {
-        guardrail_name: asText(values.guardrail_name),
-        litellm_params: {
-          guardrail: guardrailProvider,
-          mode: values.mode,
-          default_on: values.default_on,
-        },
-        guardrail_info: {},
-      };
-
-      const streamScope = streamScopePayload(
-        toModeArray(values.mode),
-        (values.stream_scope_by_mode as Record<string, GuardrailStreamScope> | undefined) ?? {},
-      );
-      if (streamScope !== undefined) {
-        guardrailData.litellm_params.stream_scope = streamScope;
-      }
-
-      const skipForCreate = choiceToSkipSystemForCreate(asSkipChoice(values.skip_system_message_choice));
-      if (skipForCreate !== undefined) {
-        guardrailData.litellm_params.skip_system_message_in_guardrail = skipForCreate;
-      }
-
-      const skipToolForCreate = choiceToSkipToolForCreate(asSkipChoice(values.skip_tool_message_choice));
-      if (skipToolForCreate !== undefined) {
-        guardrailData.litellm_params.skip_tool_message_in_guardrail = skipToolForCreate;
-      }
-
-      const loggingOnlyScope = choiceToLoggingOnlyScope(
-        values.logging_only_scope_choice as LoggingOnlyScopeChoice | undefined,
-      );
-      if (modeIncludesLoggingOnly(values.mode) && loggingOnlyScope !== null) {
-        guardrailData.litellm_params.logging_only_scope = loggingOnlyScope;
-      }
-      if (
-        modeIncludesLoggingOnly(values.mode) &&
-        effectiveLoggingOnlyContinue(
-          values.logging_only_scope_choice as LoggingOnlyScopeChoice | undefined,
-          values.logging_only_continue_on_input_failure,
-        )
-      ) {
-        guardrailData.litellm_params.logging_only_continue_on_input_failure = true;
-      }
-
-      // For Presidio PII, add the entity and action configurations
-      if (providerKey === "PresidioPII" && selectedEntities.length > 0) {
-        const piiEntitiesConfig: { [key: string]: string } = {};
-        selectedEntities.forEach((entity) => {
-          piiEntitiesConfig[entity] = selectedActions[entity] || "MASK"; // Default to MASK if no action selected
-        });
-
-        guardrailData.litellm_params.pii_entities_config = piiEntitiesConfig;
-
-        // Add Presidio API bases if provided
-        if (values.presidio_analyzer_api_base) {
-          guardrailData.litellm_params.presidio_analyzer_api_base = values.presidio_analyzer_api_base;
-        }
-        if (values.presidio_anonymizer_api_base) {
-          guardrailData.litellm_params.presidio_anonymizer_api_base = values.presidio_anonymizer_api_base;
-        }
-      }
-
-      // For Content Filter, add patterns, blocked words, categories, and optionally competitor intent
-      if (shouldRenderContentFilterConfigSettings(providerKey)) {
-        // Validate that at least one content filter setting is configured
-        const hasCompetitorIntent = competitorIntentEnabled && (competitorIntentConfig?.brand_self?.length ?? 0) > 0;
-        const hasContentFilterSelections =
-          selectedPatterns.length > 0 || blockedWords.length > 0 || selectedContentCategories.length > 0;
-        if (!hasContentFilterSelections && !hasCompetitorIntent) {
-          toast.fromError(t("guardrails.addForm.toasts.contentFilterRequired"));
-          setLoading(false);
-          return;
-        }
-
-        if (selectedPatterns.length > 0) {
-          guardrailData.litellm_params.patterns = selectedPatterns.map((p) => ({
-            pattern_type: p.type === "prebuilt" ? "prebuilt" : "regex",
-            pattern_name: p.type === "prebuilt" ? p.name : undefined,
-            pattern: p.type === "custom" ? p.pattern : undefined,
-            name: p.name,
-            action: p.action,
-          }));
-        }
-        if (blockedWords.length > 0) {
-          guardrailData.litellm_params.blocked_words = blockedWords.map((w) => ({
-            keyword: w.keyword,
-            action: w.action,
-            description: w.description,
-          }));
-        }
-        if (selectedContentCategories.length > 0) {
-          guardrailData.litellm_params.categories = selectedContentCategories.map((c) => ({
-            category: c.category,
-            enabled: true,
-            action: c.action,
-            severity_threshold: c.severity_threshold || "medium",
-          }));
-        }
-        if (hasCompetitorIntent && competitorIntentConfig) {
-          guardrailData.litellm_params.competitor_intent_config = {
-            competitor_intent_type: competitorIntentConfig.competitor_intent_type ?? "airline",
-            brand_self: competitorIntentConfig.brand_self,
-            locations:
-              (competitorIntentConfig.locations?.length ?? 0) > 0 ? competitorIntentConfig.locations : undefined,
-            competitors:
-              competitorIntentConfig.competitor_intent_type === "generic" &&
-              (competitorIntentConfig.competitors?.length ?? 0) > 0
-                ? competitorIntentConfig.competitors
-                : undefined,
-            policy: competitorIntentConfig.policy,
-            threshold_high: competitorIntentConfig.threshold_high,
-            threshold_medium: competitorIntentConfig.threshold_medium,
-            threshold_low: competitorIntentConfig.threshold_low,
-          };
-        }
-      }
-      // Add config values to the guardrail_info if provided
-      else if (values.config) {
-        try {
-          const configObj = JSON.parse(asText(values.config));
-          // For some guardrails, the config values need to be in litellm_params
-          guardrailData.guardrail_info = configObj;
-        } catch (error) {
-          toast.fromError(t("guardrails.addForm.toasts.invalidJson"));
-          setLoading(false);
-          return;
-        }
-      }
-
-      if (guardrailProvider === "llm_as_a_judge") {
-        const criteria: GuardrailCriterion[] = values.criteria ?? [];
-        if (criteria.length === 0) {
-          toast.fromError(t("guardrails.addForm.toasts.criterionRequired"));
-          setLoading(false);
-          return;
-        }
-        const weightTotal = criteria.reduce((sum, c) => sum + (Number(c?.weight) || 0), 0);
-        if (weightTotal !== 100) {
-          toast.fromError(t("guardrails.addForm.toasts.criterionWeights", { total: weightTotal }));
-          setLoading(false);
-          return;
-        }
-        guardrailData.litellm_params.judge_model = values.judge_model;
-        guardrailData.litellm_params.overall_threshold = values.overall_threshold ?? 80;
-        guardrailData.litellm_params.on_failure = values.on_failure ?? "block";
-        guardrailData.litellm_params.criteria = criteria.map((c) => ({
-          name: c.name,
-          weight: Number(c.weight),
-          description: c.description || "",
-        }));
-      }
-
-      if (guardrailProvider === "decision_model") {
-        const questionsProblem = decisionChecksProblem(decisionChecks, t);
-        if (questionsProblem) {
-          toast.fromError(questionsProblem);
-          setLoading(false);
-          return;
-        }
-        const decisionParams = buildDecisionModelParams(asText(values.decision_model), decisionChecks);
-        guardrailData.litellm_params.decision_model = decisionParams.decision_model;
-        guardrailData.litellm_params.checks = decisionParams.checks;
-      }
-
-      if (guardrailProvider === "tool_permission") {
-        if (toolPermissionConfig.rules.length === 0) {
-          toast.fromError(t("guardrails.addForm.toasts.toolRuleRequired"));
-          setLoading(false);
-          return;
-        }
-        guardrailData.litellm_params.rules = toolPermissionConfig.rules;
-        guardrailData.litellm_params.default_action = toolPermissionConfig.default_action;
-        guardrailData.litellm_params.on_disallowed_action = toolPermissionConfig.on_disallowed_action;
-        if (toolPermissionConfig.violation_message_template) {
-          guardrailData.litellm_params.violation_message_template = toolPermissionConfig.violation_message_template;
-        }
-      }
-
-      // Endpoint Settings (realtime) — content filter only
-      if (shouldRenderContentFilterConfigSettings(providerKey)) {
-        if (endSessionAfterNFails !== undefined && endSessionAfterNFails > 0) {
-          guardrailData.litellm_params.end_session_after_n_fails = endSessionAfterNFails;
-        }
-        if (onViolation && selectedEndpointType === "realtime") {
-          guardrailData.litellm_params.on_violation = onViolation;
-        }
-        if (realtimeViolationMessage.trim()) {
-          guardrailData.litellm_params.realtime_violation_message = realtimeViolationMessage.trim();
-        }
-      }
-
-      /******************************
-       * Add provider-specific params
-       * ----------------------------------
-       * The backend exposes exactly which extra parameters a provider
-       * accepts via `/guardrails/ui/provider_specific_params`.
-       * Instead of copying every unknown form field, we fetch the list for
-       * the selected provider and ONLY pass those recognised params.
-       ******************************/
-
-      // Use pre-fetched provider params to copy recognised params
-      // Skip for providers that handle their own litellm_params (llm_as_a_judge, tool_permission, content filter, PII, decision_model)
-      const providerOwnsLitellmParams = ["llm_as_a_judge", "decision_model"].includes(guardrailProvider);
-      if (providerParams && selectedProvider && !providerOwnsLitellmParams) {
-        const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
-        const providerSpecificParams = providerParams[providerKey] || {};
-
-        const allowedParams = new Set<string>();
-
-        // Add root-level parameters (like api_key, api_base, api_version)
-        Object.keys(providerSpecificParams).forEach((paramName) => {
-          if (paramName !== "optional_params") {
-            allowedParams.add(paramName);
-          }
-        });
-
-        // Add nested parameters from optional_params.fields
-        if (providerSpecificParams.optional_params && providerSpecificParams.optional_params.fields) {
-          Object.keys(providerSpecificParams.optional_params.fields).forEach((paramName) => {
-            allowedParams.add(paramName);
-          });
-        }
-
-        allowedParams.forEach((paramName) => {
-          // Check for both direct parameter name and nested optional_params object
-          const directValue = values[paramName];
-          const paramValue =
-            directValue === undefined || directValue === null || directValue === ""
-              ? readRecord(values.optional_params, paramName)
-              : directValue;
-
-          if (paramValue !== undefined && paramValue !== null && paramValue !== "") {
-            guardrailData.litellm_params[paramName] = paramValue;
-          }
-        });
+      if (!built.ok) {
+        toast.fromError(built.errorMessage);
+        setLoading(false);
+        return;
       }
 
       if (!accessToken) {
         throw new Error("No access token available");
       }
 
-      await createGuardrailCall(accessToken, guardrailData);
+      await createGuardrailCall(accessToken, built.payload);
 
       toast.success(t("guardrails.addForm.toasts.created"));
 
-      // Reset form and close modal
       resetForm();
       onSuccess();
       onClose();
@@ -803,12 +570,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     const alwaysOnItems = ALWAYS_ON_ITEMS.map(({ labelKey, value }) => ({ label: t(labelKey), value }));
     return (
       <FieldGroup>
-        <GuardrailField
-          control={form.control}
-          name="guardrail_name"
-          label={t("guardrails.addForm.fields.name.label")}
-          rules={requiredRule(t("guardrails.addForm.fields.name.required"))}
-        >
+        <GuardrailField control={form.control} name="guardrail_name" label={t("guardrails.addForm.fields.name.label")}>
           {({ ref, value, ...field }) => (
             <Input
               {...field}
@@ -819,12 +581,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           )}
         </GuardrailField>
 
-        <GuardrailField
-          control={form.control}
-          name="provider"
-          label={t("guardrails.addForm.fields.provider.label")}
-          rules={requiredRule(t("guardrails.addForm.fields.provider.required"))}
-        >
+        <GuardrailField control={form.control} name="provider" label={t("guardrails.addForm.fields.provider.label")}>
           {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
             <Combobox
               items={providerKeys}
@@ -870,7 +627,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           control={form.control}
           name="mode"
           label={labelWithHint(t("guardrails.addForm.fields.mode.label"), t("guardrails.addForm.fields.mode.hint"))}
-          rules={requiredRule(t("guardrails.addForm.fields.mode.required"))}
         >
           {({ id, value, onChange }) => (
             <MultiSelect
