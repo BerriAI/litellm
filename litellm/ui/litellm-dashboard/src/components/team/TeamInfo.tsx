@@ -398,7 +398,10 @@ const buildMemberDefaultsSchema = (t: TFunction) => {
     team_member_budget: numericInputSchema,
     team_member_rollover_max_budget: numericInputSchema,
     team_member_budget_duration: z.string().nullish(),
-    team_member_key_duration: z.string().optional(),
+    team_member_key_duration: z
+      .string()
+      .transform((value) => value.trim() || null)
+      .optional(),
     team_member_tpm_limit: numericInputSchema,
     team_member_rpm_limit: numericInputSchema,
     team_member_max_budget_alert_emails: budgetAlertRowsSchema((issue) =>
@@ -561,7 +564,7 @@ const computeEffectiveGuardrails = (info: TeamInfoRecord, globalGuardrailNames: 
     : [...Array.from(globalGuardrailNames).filter((name) => !optedOutGlobals.has(name)), ...nonGlobalOptIns];
 };
 
-const toMemberDefaultsValues = (info: TeamInfoRecord): MemberDefaultsValues => ({
+const toMemberDefaultsValues = (info: TeamInfoRecord): z.input<ReturnType<typeof buildMemberDefaultsSchema>> => ({
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
   team_member_rollover_max_budget: info.team_member_budget_table?.rollover_max_budget,
@@ -1100,8 +1103,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       ...(memberDefaultsForm.getFieldState("team_member_rollover_max_budget").isDirty
         ? { team_member_rollover_max_budget: numberOrNull(values.team_member_rollover_max_budget) }
         : {}),
-      team_member_key_duration:
-        values.team_member_key_duration === undefined ? undefined : values.team_member_key_duration.trim() || null,
+      team_member_key_duration: values.team_member_key_duration,
       ...(values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined
         ? {
             team_member_tpm_limit: numberOrNull(values.team_member_tpm_limit),
