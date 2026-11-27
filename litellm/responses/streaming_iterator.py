@@ -1386,8 +1386,10 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         event was logged as a success, here or before the consumer left. Otherwise close the stream.
         """
         self._settled_after_consumer_left = True
-        if self._unclaimed_close is not None:
-            self._unclaimed_close.cancel()
+        unclaimed_close: Final = self._unclaimed_close
+        self._unclaimed_close = None
+        if unclaimed_close is not None:
+            unclaimed_close.cancel()
         if not drain or not self._can_be_read_on():
             await self._close_upstream()
             return drain and self._success_handed_to_logging

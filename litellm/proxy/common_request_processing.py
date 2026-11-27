@@ -3915,6 +3915,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,
         skip_pre_call_logic: bool = False,
+        read_stream_on_after_disconnect: bool = True,
         sse_framing: SseFraming = OPENAI_SSE_FRAMING,
         on_passthrough_block: Callable[[ModifyResponseException], Awaitable[Response]] | None = None,
     ) -> object:
@@ -3962,6 +3963,7 @@ class ProxyBaseLLMRequestProcessing:
                     is_streaming_request=is_streaming_request,
                     contents=contents,
                     skip_pre_call_logic=skip_pre_call_logic,
+                    read_stream_on_after_disconnect=read_stream_on_after_disconnect,
                     first_chunk_framing=sse_framing.first_chunk,
                 ),
             ),
@@ -4042,6 +4044,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,  # Add contents parameter
         skip_pre_call_logic: bool = False,
+        read_stream_on_after_disconnect: bool = True,
         first_chunk_framing: FirstChunkSseFraming = OPENAI_FIRST_CHUNK_FRAMING,
     ) -> object:
         """
@@ -4145,7 +4148,8 @@ class ProxyBaseLLMRequestProcessing:
             del tasks
 
         response = responses[1]
-        if general_settings.get("cancel_on_disconnect") is not True and isinstance(responses[1], OutlivesItsConsumer):
+        reads_on: Final = read_stream_on_after_disconnect and general_settings.get("cancel_on_disconnect") is not True
+        if reads_on and isinstance(responses[1], OutlivesItsConsumer):
             responses[1].outlive_consumer_until_settled()
 
         _exception_raised = False
