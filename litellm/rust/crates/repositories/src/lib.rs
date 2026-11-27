@@ -67,7 +67,7 @@ pub use spend_log::{
 };
 pub use stored_objects::{StoredObjects, StoredObjectsRepository};
 pub use tag::{Tag, TagRepository};
-pub use team::{Team, TeamRepository};
+pub use team::{InsertedTeam, NewTeam, Team, TeamRepository};
 pub use team_membership::{
     AddedMember, JoinBudget, MemberAdd, MemberBudget, MemberRemove, NewCappedMemberBudget,
     NewMemberBudget, RefusedRoster, RemovedMember, RosterRole, TeamMembership,
