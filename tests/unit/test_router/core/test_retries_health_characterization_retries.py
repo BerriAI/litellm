@@ -13,6 +13,7 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.types.router import RetryPolicy
 from litellm.types.utils import Usage
+from tests.unit.test_router.core.construction_precall_helpers import windowed
 from tests.unit.test_router.core.retries_health_helpers import (
     ErrorBuilder,
     MakeCore,
@@ -45,7 +46,15 @@ from tests.unit.test_router.core.scripted_host import (
     server_error,
     timeout,
 )
-from tests.unit.test_router.core.streaming_helpers import request_logging
+from tests.unit.test_router.core.streaming_helpers import (
+    MESSAGE_START,
+    MESSAGE_STOP,
+    MESSAGES,
+    anthropic_stream,
+    collect_bytes,
+    request_logging,
+    text_delta,
+)
 
 
 def group(
@@ -118,6 +127,144 @@ async def test_a_403_retry_moves_to_a_deployment_that_has_not_refused_yet(
     assert len(called) == 5
     assert sorted(called[:3]) == ["a", "b", "c"]
     assert cooled_down(core, ["a", "b", "c"]) == {}
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_error_retries_on_a_deployment_that_has_not_refused(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=group("a", "b"), num_retries=2, enable_pre_call_checks=True)
+    host.answer("*", fresh(context_window), None)
+
+    response: Final = await attempt(core)
+
+    called: Final = host.deployments_called("acompletion")
+    assert not isinstance(response, Exception)
+    assert len(called) == 2
+    assert called[0] != called[1]
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_error_on_each_deployment_stops_when_none_is_left(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=group("a", "b", "c"), num_retries=4, enable_pre_call_checks=True)
+    host.answer("*", fresh(context_window))
+
+    error: Final = await attempt(core)
+
+    assert isinstance(error, litellm.ContextWindowExceededError)
+    assert sorted(host.deployments_called("acompletion")) == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_error_is_raised_over_a_rate_limit_on_the_retry(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=group("a", "b"), num_retries=1, enable_pre_call_checks=True)
+    host.answer("*", fresh(context_window), fresh(rate_limit))
+
+    error: Final = await attempt(core)
+
+    called: Final = host.deployments_called("acompletion")
+    assert isinstance(error, litellm.ContextWindowExceededError)
+    assert len(called) == 2
+    assert called[0] != called[1]
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_error_skips_the_other_region_profiles_of_the_refused_bedrock_model(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    profiles: Final = [
+        deployment("g", region, model=f"bedrock/{region}.anthropic.claude-sonnet-4-5-20250929-v1:0")
+        for region in ("us", "global", "eu")
+    ]
+    core: Final = make_core(model_list=profiles, num_retries=2, enable_pre_call_checks=True)
+    host.answer("*", fresh(context_window))
+
+    error: Final = await attempt(core)
+
+    assert isinstance(error, litellm.ContextWindowExceededError)
+    assert len(host.deployments_called("acompletion")) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_error_retries_a_copy_of_the_model_that_declares_a_larger_window(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    base_model: Final = {"base_model": "openai/cw-shared-window-base"}
+    core: Final = make_core(
+        model_list=[
+            windowed("g", "small", 1_000, weight=1, model_info=base_model),
+            windowed("g", "large", 1_000_000, weight=0, model_info=base_model),
+        ],
+        num_retries=1,
+        enable_pre_call_checks=True,
+    )
+    host.answer("*", fresh(context_window), None)
+
+    response: Final = await attempt(core)
+
+    assert not isinstance(response, Exception)
+    assert host.deployments_called("acompletion") == ["small", "large"]
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_error_retries_a_larger_copy_once_the_refused_deployment_cooled_down(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    base_model: Final = {"base_model": "openai/cw-cooled-window-base"}
+    cools_on_a_bad_request: Final = {**base_model, "allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}}
+    core: Final = make_core(
+        model_list=[
+            windowed("g", "small", 1_000, weight=1, model_info=cools_on_a_bad_request),
+            windowed("g", "large", 1_000_000, weight=0, model_info=base_model),
+        ],
+        num_retries=1,
+        enable_pre_call_checks=True,
+    )
+    host.answer("*", fresh(context_window), None)
+
+    response: Final = await attempt(core)
+
+    assert not isinstance(response, Exception)
+    assert host.deployments_called("acompletion") == ["small", "large"]
+    assert list(cooled_down(core, ["small", "large"])) == ["small"]
+
+
+@pytest.mark.asyncio
+async def test_a_stream_that_breaks_before_content_never_retries_the_deployment_that_refused_the_prompt(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    answer: Final = (MESSAGE_START, text_delta("ok"), MESSAGE_STOP)
+    core: Final = make_core(
+        model_list=[deployment("g", "a", weight=1), deployment("g", "b", weight=0)],
+        num_retries=2,
+        enable_pre_call_checks=True,
+    )
+    host.answer("openai/a", fresh(context_window))
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, error=server_error()), anthropic_stream(*answer))
+
+    stream: Final = await core.aanthropic_messages(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="g", messages=MESSAGES, max_tokens=5, stream=True
+    )
+
+    assert await collect_bytes(stream) == list(answer)
+    assert host.deployments_called() == ["a", "b", "b"]
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_error_is_not_retried_without_pre_call_checks(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=group("a", "b"), num_retries=2)
+    host.answer("*", fresh(context_window), None)
+
+    error: Final = await attempt(core)
+
+    assert isinstance(error, litellm.ContextWindowExceededError)
+    assert len(host.deployments_called("acompletion")) == 1
 
 
 @pytest.mark.asyncio
@@ -377,6 +524,7 @@ ALL_TWO: Final = [{"model_info": {"id": "a"}}, {"model_info": {"id": "b"}}]
         (plain_error(), {"healthy_deployments": None}, False),
         (bad_request(), {"healthy_deployments": HEALTHY_ONE}, False),
         (context_window(), {"healthy_deployments": HEALTHY_ONE, "context_window_fallbacks": []}, False),
+        (context_window(), {"healthy_deployments": HEALTHY_ONE}, False),
         (content_policy(), {"healthy_deployments": HEALTHY_ONE, "content_policy_fallbacks": []}, False),
         (not_found(), {"healthy_deployments": ALL_TWO, "all_deployments": ALL_TWO}, False),
         (unprocessable(), {"healthy_deployments": ALL_TWO, "all_deployments": ALL_TWO}, False),

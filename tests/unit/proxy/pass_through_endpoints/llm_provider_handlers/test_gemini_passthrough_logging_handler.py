@@ -1,6 +1,8 @@
 import asyncio
 import base64
+import io
 import json
+import wave
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from typing import Final
@@ -707,3 +709,69 @@ def test_a_rejected_gemini_batch_create_registers_nothing():
     assert outcome["result"] is None
     assert outcome["kwargs"]["model"] == "gemini-3.8-flash"
     assert "batch_id" not in outcome["kwargs"]
+
+
+def _gemini_tts_wav_base64() -> str:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(bytes(range(256)) * 8)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def _gemini_tts_reply(wav_base64: str) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {"parts": [{"inlineData": {"mimeType": "audio/wav", "data": wav_base64}}], "role": "model"},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 40, "totalTokenCount": 47},
+        "modelVersion": "gemini-3.8-flash-tts",
+    }
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+def test_gemini_passthrough_logs_the_tts_audio_the_caller_received(stream: bool) -> None:
+    wav_base64: Final = _gemini_tts_wav_base64()
+    reply: Final = _gemini_tts_reply(wav_base64)
+    method: Final = "streamGenerateContent?alt=sse" if stream else "generateContent"
+    url_route: Final = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-tts:{method}"
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[{"role": "user", "content": "Say hello"}],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, model="gemini-3.8-flash-tts")
+
+    logged: Final = (
+        GeminiPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=[f"data: {json.dumps(reply)}"],
+            litellm_logging_obj=logging_obj,
+            model="gemini-3.8-flash-tts",
+            url_route=url_route,
+        )
+        if stream
+        else GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
+            httpx_response=httpx.Response(200, json=reply),
+            response_body=reply,
+            logging_obj=logging_obj,
+            url_route=url_route,
+            result=json.dumps(reply),
+            start_time=datetime(2026, 1, 1),
+            end_time=datetime(2026, 1, 1),
+            cache_hit=False,
+            request_body={},
+        )["result"]
+    )
+
+    assert isinstance(logged, litellm.ModelResponse)
+    assert logged.choices[0].message.audio.data == wav_base64

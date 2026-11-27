@@ -6,6 +6,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
+import { messageRoleLabels } from "@/i18n/untranslated/modelText";
 import ChatImageRenderer from "../../chat_ui/ChatImageRenderer";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
@@ -106,7 +107,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
     <div className="flex flex-col gap-6 min-w-0 w-full p-4">
       {conversationBlocks.map((block, blockIndex) => {
         const assistantMessage = block.assistant;
-        const displayModel = assistantMessage?.model || t("playground.compare.messages.assistant");
+        const displayModel = assistantMessage?.model || messageRoleLabels.assistant;
         return (
           <div key={blockIndex} className="space-y-4">
             {block.user && (

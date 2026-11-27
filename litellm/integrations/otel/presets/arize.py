@@ -12,6 +12,7 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.presets.utils import credential_gated_exporters, ensure_mappers
+from litellm.types.integrations.arize import ArizeConfig
 from litellm.types.utils import StandardCallbackDynamicParams
 
 #: Arize routes an export to a project by the ``model_id`` resource attribute and
@@ -66,8 +67,8 @@ def arize_preset(
     )
 
 
-def _arize_headers(arize_cfg) -> str | None:
-    pieces: Final = []
+def _arize_headers(arize_cfg: ArizeConfig) -> str | None:
+    pieces: Final[list[str]] = []
     if arize_cfg.space_id or arize_cfg.space_key:
         pieces.append(f"space_id={arize_cfg.space_id or arize_cfg.space_key}")
     if arize_cfg.api_key:

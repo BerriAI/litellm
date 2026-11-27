@@ -293,7 +293,7 @@ class SemanticToolFilterHook(CustomLogger):
 
     def _emit_filter_metadata_safe(
         self,
-        data: dict,
+        data: dict[str, object],
         mcp_tools: Sequence[object],
         filtered_mcp_tools: Sequence[object],
         native_tools: Sequence[object],

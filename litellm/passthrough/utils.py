@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.aws_partition import contains_aws_arn
 # Headers that must not be overwritten via the x-pass- forwarding mechanism.
 # Includes standard credential/auth headers and protocol-level headers that
 # affect routing or message framing.
-_PASS_THROUGH_PROTECTED_HEADERS: Final[frozenset] = frozenset(
+_PASS_THROUGH_PROTECTED_HEADERS: Final[frozenset[str]] = frozenset(
     {
         "authorization",
         "api-key",
@@ -41,8 +41,8 @@ class BasePassthroughUtils:
     @staticmethod
     def get_merged_query_parameters(
         existing_url: httpx.URL,
-        request_query_params: Mapping[str, str | list],
-        default_query_params: dict[str, str | list] | None = None,
+        request_query_params: Mapping[str, str | list[str]],
+        default_query_params: dict[str, str | list[str]] | None = None,
     ) -> dict[str, str | list[str]]:
         # Get the existing query params from the target URL
         existing_query_string: Final = existing_url.query.decode("utf-8")
@@ -59,10 +59,10 @@ class BasePassthroughUtils:
 
     @staticmethod
     def forward_headers_from_request(
-        request_headers: dict,
-        headers: dict,
+        request_headers: dict[str, str],
+        headers: dict[str, str],
         forward_headers: bool | None = False,
-    ):
+    ) -> dict[str, str]:
         """
         Helper to forward headers from original request.
 
@@ -133,7 +133,8 @@ class CommonUtils:
         # Handle all patterns in one go - more efficient and cleaner
         patterns: Final = [
             # Custom model with 2 slashes (order matters - do this first)
-            (r"(custom-model)/([a-z0-9.-]+)/([a-z0-9]+)", r"\1%2F\2%2F\3"),
+            (r"(custom-model)/([a-z0-9.:-]+)/([a-z0-9]+)", r"\1%2F\2%2F\3"),
+            (r"(:custom-model-deployment)/", r"\1%2F"),
             # All other resource types with 1 slash
             (r"(:application-inference-profile)/", r"\1%2F"),
             (r"(:inference-profile)/", r"\1%2F"),

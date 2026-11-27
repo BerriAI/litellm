@@ -349,9 +349,9 @@ export function McpDialog({
 
   return (
     <Dialog defaultOpen={defaultOpen} onOpenChange={(open) => !open && setReplacingKey(null)}>
-      <DialogTrigger render={<InputGroupButton size="xs" aria-label={t("playground.chat.mcp.trigger")} />}>
+      <DialogTrigger render={<InputGroupButton size="xs" aria-label="MCP" />}>
         <Blocks />
-        {t("playground.chat.mcp.trigger")}
+        MCP
         {selection.length > 0 && (
           <Badge variant="secondary" className="h-4 min-w-4 px-1 tabular-nums">
             {selection.length}

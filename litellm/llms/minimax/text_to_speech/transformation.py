@@ -76,7 +76,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         "flac": "flac",
     }
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         MiniMax TTS supports these OpenAI parameters
         """
@@ -129,7 +129,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         voice: str | Mapping[str, object] | None = None,
         drop_params: bool = False,
         kwargs: Mapping[str, object] | None = None,
-    ) -> tuple[str | None, dict]:
+    ) -> tuple[str | None, dict[str, object]]:
         """
         Map OpenAI parameters to MiniMax TTS parameters
         """
@@ -184,11 +184,11 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate MiniMax environment and set up authentication headers
         """

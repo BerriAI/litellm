@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
 )
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.openai.chat.gpt_reasoning_transformation import GPT_REASONING_SERIES_MARKERS
+from litellm.llms.openai.chat.gpt_reasoning_transformation import GPT_REASONING_SERIES_MARKERS, is_chat_latest_name
 from litellm.types.llms.azure import (
     API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
     API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
@@ -170,7 +170,11 @@ class AzureOpenAIConfig(BaseConfig):
         name family needs the rename, including the ``gpt-5-chat*`` models that are excluded from
         the reasoning path by https://github.com/BerriAI/litellm/issues/13781.
         """
-        return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) or "gpt5_series" in model
+        return (
+            any(marker in model for marker in GPT_REASONING_SERIES_MARKERS)
+            or is_chat_latest_name(model)
+            or "gpt5_series" in model
+        )
 
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
@@ -292,10 +296,10 @@ class AzureOpenAIConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
         wire_messages: Final = (
             self._with_wire_safe_prompt_cache_breakpoints(model, ordered_messages, litellm_params)
@@ -347,7 +351,7 @@ class AzureOpenAIConfig(BaseConfig):
     def get_mapped_special_auth_params(self) -> dict[str, str]:
         return {"token": "azure_ad_token"}
 
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
         for param, value in non_default_params.items():
             if param == "token":
                 optional_params["azure_ad_token"] = value
@@ -381,11 +385,11 @@ class AzureOpenAIConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:

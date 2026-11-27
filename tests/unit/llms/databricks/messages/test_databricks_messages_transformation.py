@@ -304,7 +304,9 @@ SERVER_TOOLS: Final = [
 ]
 
 
-async def _workspace_request(max_tokens: int = 64, **request_params: object) -> httpx.Request:
+async def _workspace_request(
+    max_tokens: int = 64, model: str = CLAUDE_MODEL, **request_params: object
+) -> httpx.Request:
     received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what litellm sent
 
     def workspace_answers(request: httpx.Request) -> httpx.Response:
@@ -328,7 +330,7 @@ async def _workspace_request(max_tokens: int = 64, **request_params: object) -> 
         await litellm.anthropic.messages.acreate(
             max_tokens=max_tokens,
             messages=USER_TURN,
-            model=f"databricks/{CLAUDE_MODEL}",
+            model=f"databricks/{model}",
             api_key=DATABRICKS_API_KEY,
             api_base=DATABRICKS_API_BASE,
             client=upstream,
@@ -340,8 +342,10 @@ async def _workspace_request(max_tokens: int = 64, **request_params: object) -> 
     return received[0]
 
 
-async def _workspace_request_body(**request_params: object) -> dict[str, object]:
-    return json.loads((await _workspace_request(**request_params)).content)
+async def _workspace_request_body(
+    max_tokens: int = 64, model: str = CLAUDE_MODEL, **request_params: object
+) -> dict[str, object]:
+    return json.loads((await _workspace_request(max_tokens=max_tokens, model=model, **request_params)).content)
 
 
 @pytest.mark.asyncio
@@ -361,6 +365,57 @@ async def test_bound_thinking_with_display_updates_reaches_the_workspace_with_bo
     assert {"thinking-binding-controls-2026-08-01", "thinking-display-updates-2026-08-18"} <= set(
         request.headers["anthropic-beta"].split(",")
     )
+
+
+SERVER_SIDE_FALLBACK_BETA: Final = "server-side-fallback-2026-06-01"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "drop_params", "model_info", "expected_beta"),
+    [
+        pytest.param("databricks-claude-opus-4-1", True, {}, None, id="opus_4_1_under_drop_params"),
+        pytest.param(
+            "databricks-claude-opus-4-1", False, {}, SERVER_SIDE_FALLBACK_BETA, id="opus_4_1_without_drop_params"
+        ),
+        pytest.param("databricks-claude-haiku-4-5", True, {}, SERVER_SIDE_FALLBACK_BETA, id="haiku_4_5"),
+        pytest.param(
+            "databricks-claude-haiku-4-5",
+            True,
+            {"supports_server_side_fallback": False},
+            None,
+            id="deployment_turns_it_off",
+        ),
+        pytest.param(
+            "databricks-claude-opus-4-1",
+            True,
+            {"supports_server_side_fallback": True},
+            SERVER_SIDE_FALLBACK_BETA,
+            id="deployment_turns_it_on",
+        ),
+    ],
+)
+async def test_server_side_fallback_beta_reaches_the_workspace_unless_drop_params_finds_the_model_lacks_it(
+    model: str,
+    drop_params: bool,
+    model_info: dict[str, bool],
+    expected_beta: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    local_beta_headers_config: None,
+) -> None:
+    """On 2026-11-23 Databricks answered 400 to a `fallback` history without server-side-fallback-2026-06-01 and 200
+    with it on databricks-claude-haiku-4-5, and 400 invalid beta flag to the beta on databricks-claude-opus-4-1."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    request: Final = await _workspace_request(
+        model=model,
+        drop_params=drop_params,
+        model_info=model_info,
+        extra_headers={"anthropic-beta": SERVER_SIDE_FALLBACK_BETA},
+    )
+
+    assert request.headers.get("anthropic-beta") == expected_beta
 
 
 @pytest.mark.asyncio

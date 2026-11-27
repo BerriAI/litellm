@@ -898,9 +898,11 @@ def logging_payload(
         kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
     )
 
+    no_log: Final = spend_tracking_utils.is_no_log_call(kwargs)
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         persisted_metadata,
+        no_log=no_log,
         is_silent_experiment=(
             standard_logging_payload is not None
             and "is_silent_experiment" in standard_logging_payload["metadata"]
@@ -1035,6 +1037,7 @@ def logging_payload(
         clean_metadata["error_information"],
         original_exception=failure_exception,
         metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata),
+        no_log=no_log,
     )
 
     if litellm.cache is None:
@@ -1087,11 +1090,17 @@ def logging_payload(
             billing_agent_id=clean_metadata.get("billing_agent_id"),
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=custom_llm_provider or "",
-            messages=_get_messages_for_spend_logs_payload(
+            messages="{}"
+            if no_log
+            else _get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),
-            response=_get_response_for_spend_logs_payload(payload=standard_logging_payload, kwargs=kwargs),
-            proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
+            response="{}"
+            if no_log
+            else _get_response_for_spend_logs_payload(payload=standard_logging_payload, kwargs=kwargs),
+            proxy_server_request="{}"
+            if no_log
+            else _get_proxy_server_request_for_spend_logs_payload(
                 metadata=metadata,
                 litellm_params=(
                     _placeholder_stored_request_body(litellm_params, persisted_model_group, raw_model)

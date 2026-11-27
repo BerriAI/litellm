@@ -145,7 +145,7 @@ def ensure_extra_body_is_safe(extra_body: dict[str, object] | None) -> dict[str,
 _ensure_extra_body_is_safe = ensure_extra_body_is_safe
 
 
-def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
+def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n: int = 1):
     """
     Pick the n cheapest chat models from the LLM provider.
 
@@ -188,7 +188,11 @@ class _CostMapDeprecation(TypedDict):
 _COST_MAP_DEPRECATION: Final = TypeAdapter(_CostMapDeprecation)
 
 
-def _is_past_deprecation_date(cost_map_key: str) -> bool:
+def is_in_cost_map(cost_map_key: str) -> bool:
+    return cost_map_key in litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # untyped cost map JSON
+
+
+def is_cost_map_model_past_deprecation_date(cost_map_key: str) -> bool:
     return is_past_deprecation_date(
         _COST_MAP_DEPRECATION.validate_python(
             litellm.model_cost.get(cost_map_key) or {}  # pyright: ignore[reportUnknownMemberType]  # untyped cost map JSON
@@ -207,7 +211,7 @@ def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator
         yield (
             model,
             (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0),
-            _is_past_deprecation_date(model_info["key"]),
+            is_cost_map_model_past_deprecation_date(model_info["key"]),
         )
 
 

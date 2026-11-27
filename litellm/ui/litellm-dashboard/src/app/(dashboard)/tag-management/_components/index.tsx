@@ -3,6 +3,7 @@ import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls 
 import React, { useState, useEffect } from "react";
 import { RefreshCw, Tags } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
+import { displayTimestamp } from "@/i18n/displayDate";
 import { Button } from "@/components/ui/button";
 import TagInfoView from "./tag_info";
 import { modelInfoCall } from "@/components/networking";
@@ -33,7 +34,7 @@ interface TagProps {
 }
 
 const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [tags, setTags] = useState<Tag[]>([]);
   const [isLoadingTags, setIsLoadingTags] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
@@ -42,7 +43,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [tagToDelete, setTagToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [lastRefreshed, setLastRefreshed] = useState("");
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
 
   const fetchTags = async () => {
@@ -63,8 +64,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
 
   const handleRefreshClick = () => {
     fetchTags();
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
+    setLastRefreshed(new Date());
   };
 
   const handleCreate = async (formValues: CreateTagFormValues) => {
@@ -144,7 +144,26 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
     />
   ) : (
     <PageContent>
-      <PageHeader>
+      <PageHeader
+        aside={
+          <>
+            {lastRefreshed && (
+              <p className="text-sm">
+                {t("tagManagement.page.lastRefreshedPrefix")}
+                {displayTimestamp(lastRefreshed, i18n.language)}
+              </p>
+            )}
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label={t("tagManagement.page.refresh")}
+              onClick={handleRefreshClick}
+            >
+              <RefreshCw />
+            </Button>
+          </>
+        }
+      >
         <PageHeaderTitle>
           <Tags />
           {t("tagManagement.page.title")}
@@ -161,22 +180,8 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
             }}
           />
         </PageHeaderDescription>
-        <PageHeaderControls className="flex-wrap">
+        <PageHeaderControls>
           <Button onClick={() => setIsCreateModalVisible(true)}>{t("tagManagement.page.create")}</Button>
-          {lastRefreshed && (
-            <p className="text-sm">
-              {t("tagManagement.page.lastRefreshedPrefix")}
-              {lastRefreshed}
-            </p>
-          )}
-          <Button
-            variant="outline"
-            size="icon-sm"
-            aria-label={t("tagManagement.page.refresh")}
-            onClick={handleRefreshClick}
-          >
-            <RefreshCw />
-          </Button>
         </PageHeaderControls>
       </PageHeader>
 

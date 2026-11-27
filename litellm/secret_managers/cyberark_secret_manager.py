@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import os
+from collections.abc import Mapping, Sequence
 from typing import Final
 from urllib.parse import quote
 
@@ -113,7 +114,7 @@ class CyberArkSecretManager(BaseSecretManager):
         except Exception as e:
             raise RuntimeError(f"Could not authenticate to CyberArk Conjur: {e}")
 
-    def _get_request_headers(self) -> dict:
+    def _get_request_headers(self) -> dict[str, str]:
         """
         Get headers for CyberArk API requests including authentication.
 
@@ -184,7 +185,7 @@ class CyberArkSecretManager(BaseSecretManager):
     async def async_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> str | None:
         """
@@ -230,7 +231,7 @@ class CyberArkSecretManager(BaseSecretManager):
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> str | None:
         """
@@ -275,9 +276,9 @@ class CyberArkSecretManager(BaseSecretManager):
         secret_name: str,
         secret_value: str,
         description: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tags: dict | list | None = None,
+        tags: Mapping[str, object] | Sequence[object] | None = None,
     ) -> dict[str, object]:
         """
         Writes a secret to CyberArk Conjur using an async HTTPX client.
@@ -322,9 +323,9 @@ class CyberArkSecretManager(BaseSecretManager):
         self,
         secret_name: str,
         recovery_window_in_days: int | None = 7,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         CyberArk Conjur does not support direct secret deletion via API.
         Secrets can only be removed through policy updates.
@@ -357,7 +358,7 @@ class CyberArkSecretManager(BaseSecretManager):
         new_secret_value: str,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return await super().async_rotate_secret(
             current_secret_name,
             new_secret_name,

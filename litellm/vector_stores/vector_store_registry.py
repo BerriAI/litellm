@@ -1,5 +1,5 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import fields, replace
 from datetime import datetime, timezone
 from itertools import chain
@@ -27,11 +27,15 @@ from litellm.types.vector_stores import (
 )
 
 if TYPE_CHECKING:
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
     from litellm.proxy.utils import PrismaClient
 else:
     PrismaClient = Any
 
 _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_VECTOR_STORE_ROWS: Final = TypeAdapter(
+    tuple[LiteLLM_ManagedVectorStore, ...], config=ConfigDict(hide_input_in_errors=True)
+)
 _ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
 _TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
 _STORE_ID_ITEMS: Final = TypeAdapter(list[object] | tuple[object, ...], config=ConfigDict(strict=True))
@@ -140,13 +144,36 @@ class VectorStoreIndexRegistry:
 
     _get_vector_store_indexes_from_db = get_vector_store_indexes_from_db
 
+    @staticmethod
+    async def get_vector_store_indexes_from_db_writer(
+        client: "WriterPinnedClient",
+    ) -> tuple[LiteLLM_ManagedVectorStoreIndex, ...]:
+        rows: Final = await ManagedVectorStoreIndexRepository(client).table.find_many()
+        indexes: Final = tuple(VectorStoreIndexRegistry._valid_index_from_db_row(row) for row in rows)
+        return tuple(index for index in indexes if index is not None)
+
+    @staticmethod
+    def index_from_db_row(row: "Iterable[tuple[str, object]]") -> LiteLLM_ManagedVectorStoreIndex:
+        return LiteLLM_ManagedVectorStoreIndex.model_validate(_DB_ROW.validate_python(dict(row)))
+
+    @staticmethod
+    def _valid_index_from_db_row(row: "Iterable[tuple[str, object]]") -> LiteLLM_ManagedVectorStoreIndex | None:
+        try:
+            return VectorStoreIndexRegistry.index_from_db_row(row)
+        except ValidationError as e:
+            verbose_logger.warning(
+                "Skipping a vector store index row that fails validation: %s",
+                e.errors(include_url=False, include_context=False, include_input=False),
+            )
+            return None
+
 
 class VectorStoreRegistry:
     def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] | None = None):
         self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores if vector_stores is not None else []
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
 
-    def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
+    def _extract_tool_params(self, tool: Mapping[str, object]) -> VectorStoreToolParams:
         tool_fields: Final = decoded_json_object(tool)
         return replace(
             VectorStoreToolParams(),
@@ -157,7 +184,7 @@ class VectorStoreRegistry:
             },
         )
 
-    def get_vector_store_ids_to_run(self, non_default_params: dict, tools: object = None) -> list[str]:
+    def get_vector_store_ids_to_run(self, non_default_params: Mapping[str, object], tools: object = None) -> list[str]:
         """
         Returns the vector store ids to run
 
@@ -177,7 +204,7 @@ class VectorStoreRegistry:
 
     def get_and_pop_recognised_vector_store_tools(
         self,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, object]] | None = None,
         vector_store_ids: list[str] | None = None,
     ) -> dict[str, VectorStoreToolParams]:
         """
@@ -225,7 +252,7 @@ class VectorStoreRegistry:
         return params_by_id
 
     def get_vector_store_to_run(
-        self, non_default_params: dict, tools: list[dict] | None = None
+        self, non_default_params: Mapping[str, object], tools: Sequence[Mapping[str, object]] | None = None
     ) -> LiteLLM_ManagedVectorStore | None:
         """
         Returns the vector store to run
@@ -296,7 +323,7 @@ class VectorStoreRegistry:
         return None
 
     def pop_vector_stores_to_run(
-        self, non_default_params: dict, tools: list[dict] | None = None
+        self, non_default_params: MutableMapping[str, object], tools: list[dict[str, object]] | None = None
     ) -> list[LiteLLM_ManagedVectorStore]:
         """
         Pops the vector stores to run with their tool parameters merged.
@@ -339,8 +366,8 @@ class VectorStoreRegistry:
 
     async def pop_vector_stores_to_run_with_db_fallback(
         self,
-        non_default_params: dict,
-        tools: list[dict] | None = None,
+        non_default_params: MutableMapping[str, object],
+        tools: list[dict[str, object]] | None = None,
         prisma_client: PrismaClient | None = None,
     ) -> list[LiteLLM_ManagedVectorStore]:
         """
@@ -519,6 +546,16 @@ class VectorStoreRegistry:
         return vector_stores_from_db
 
     _get_vector_stores_from_db = get_vector_stores_from_db
+
+    @staticmethod
+    async def get_vector_stores_by_name_from_db(
+        client: "WriterPinnedClient", vector_store_name: str
+    ) -> tuple[LiteLLM_ManagedVectorStore, ...]:
+        rows: Final = await ManagedVectorStoresRepository(client).table.find_many(
+            where={"vector_store_name": vector_store_name},
+            order={"created_at": "desc"},
+        )
+        return _VECTOR_STORE_ROWS.validate_python(tuple(dict(row) for row in rows))
 
     def get_credentials_for_vector_store(self, vector_store_id: str) -> dict[str, object]:
         """

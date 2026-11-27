@@ -6,7 +6,7 @@ Litellm provider slug: `anthropic_text/<model_name>`
 
 import json
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -72,11 +72,11 @@ class AnthropicTextConfig(BaseConfig):
     def __init__(
         self,
         max_tokens_to_sample: int | None = DEFAULT_MAX_TOKENS,  # anthropic requires a default
-        stop_sequences: list | None = None,
+        stop_sequences: Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
         top_k: int | None = None,
-        metadata: dict | None = None,
+        metadata: Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():

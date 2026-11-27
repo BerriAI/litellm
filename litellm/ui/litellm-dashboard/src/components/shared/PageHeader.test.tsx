@@ -51,4 +51,18 @@ describe("PageHeader", () => {
     expect(screen.getByRole("heading", { name: "Teams" })).toHaveAttribute("id", "page-title");
     expect(screen.getByRole("group", { name: "Team controls" })).toBeInTheDocument();
   });
+
+  it("should render the aside content in the header next to the heading", () => {
+    renderWithProviders(
+      <PageHeader data-testid="header" aside={<button>Refresh</button>}>
+        <PageHeaderTitle>Tags</PageHeaderTitle>
+        <PageHeaderDescription>Manage tags</PageHeaderDescription>
+      </PageHeader>,
+    );
+
+    const header = screen.getByTestId("header");
+    expect(within(header).getByRole("heading", { level: 1, name: "Tags" })).toBeInTheDocument();
+    expect(within(header).getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Page controls" })).not.toBeInTheDocument();
+  });
 });

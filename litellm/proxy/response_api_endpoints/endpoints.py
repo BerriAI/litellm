@@ -28,7 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import BeforeValidator, ConfigDict, TypeAdapter, ValidationError, with_config
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -53,6 +53,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.socket_logging import collect_socket_logging
 from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
@@ -126,6 +127,7 @@ from litellm.responses.streaming_iterator import (
     GuardedResponsesWsFrame,
     ResponsesWsFrameGuard,
     ResponsesWsFrameRejection,
+    is_warmup_response_create,
     responses_ws_error_frame,
     responses_ws_error_type,
     spawn_logging_task,
@@ -2204,12 +2206,19 @@ def _extract_model_from_first_ws_event(first_event: object) -> str | None:
     return (nested.get("model") if isinstance(nested, dict) else None) or first_event.get("model")
 
 
+def _none_unless(*kinds: type[object]) -> BeforeValidator:
+    def keep(value: object) -> object:
+        return value if isinstance(value, kinds) else None
+
+    return BeforeValidator(keep)
+
+
 class _ResponseCreateRoutingHints(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    input: str | Sequence[object] | None = None
-    previous_response_id: str | None = None
-    response: "_ResponseCreateRoutingHints | None" = None
+    input: Annotated[str | Sequence[object] | None, _none_unless(Sequence)] = None
+    previous_response_id: Annotated[str | None, _none_unless(str)] = None
+    response: Annotated["_ResponseCreateRoutingHints | None", _none_unless(Mapping)] = None
 
 
 def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, object]:
@@ -2219,6 +2228,7 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
         return EMPTY_MAPPING
     nested: Final = frame.response or frame
     hints: Final = {
+        "generate": False if is_warmup_response_create(first_message) else None,
         "input": frame.input if nested.input is None else nested.input,
         "previous_response_id": (
             frame.previous_response_id if nested.previous_response_id is None else nested.previous_response_id
@@ -2736,8 +2746,9 @@ async def _bill_rejected_frame(
     exception: Exception,
     frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
 ) -> None:
-    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's slot release,
-    alerting) belong to the live connection, which stays open. Billing never replaces the guardrail's own error."""
+    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's release of the
+    connection's slot and TPM reservation, alerting) belong to the live connection, which stays open. Billing never
+    replaces the guardrail's own error."""
     for callback in litellm.callbacks:
         if isinstance(callback, ProxyDBLogger):
             try:
@@ -2899,7 +2910,10 @@ async def _responses_websocket_session(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
+    proxy_logging_obj.leave_responses_websocket_reservation_to_close()
     refused_turns: Final = _RefusedTurns()
+    unfinished_turn: Final = asyncio.Event()
+    relay_crashed: Final = asyncio.Event()
     routed_data: Final = dict(
         data,
         **_socket_trace_id(data),
@@ -2907,6 +2921,7 @@ async def _responses_websocket_session(
         responses_ws_frame_guard=_responses_ws_frame_guard(
             data, user_api_key_dict, proxy_logging_obj, refused_turns.add
         ),
+        responses_ws_on_unfinished_turn=unfinished_turn.set,
         **_routing_hints_from_first_ws_frame(first_message),
     )
 
@@ -2936,6 +2951,7 @@ async def _responses_websocket_session(
                 _ = bill_socket_failure(refused_turns.first)
             raise
         except Exception as e:
+            relay_crashed.set()
             crash_row: Final = bill_socket_failure(e)
             with contextlib.suppress(Exception):
                 await websocket.send_text(_responses_ws_failure_frame(e))
@@ -2950,10 +2966,19 @@ async def _responses_websocket_session(
         return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
 
     # Phase 2: route to upstream provider
-    try:
-        failure_row: Final = await relay_and_bill_failure()
-    finally:
-        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+    with collect_socket_logging() as socket_logging:
+        try:
+            failure_row: Final = await relay_and_bill_failure()
+        finally:
+            await proxy_logging_obj.arelease_responses_websocket_slot(
+                user_api_key_dict,
+                "turn_unfinished"
+                if unfinished_turn.is_set()
+                else "relay_failed"
+                if relay_crashed.is_set()
+                else "turns_finished",
+                socket_logging.finished,
+            )
     if failure_row is not None:
         with contextlib.suppress(Exception):
             await asyncio.shield(failure_row)

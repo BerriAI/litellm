@@ -5,6 +5,7 @@ import time
 import traceback
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, cast
@@ -21,7 +22,7 @@ from litellm.constants import (
     VLLM_CHOICE_FIELDS,
 )
 from litellm.litellm_core_utils.core_helpers import iter_items, subscript
-from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_extra_attribute
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
 )
@@ -33,6 +34,7 @@ from litellm.types.llms.openai import (
     ImageURLListItem,
     OpenAIModerationResponse,
 )
+from litellm.types.rerank import provider_usage_or_none
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageCustomToolCall,
@@ -102,7 +104,7 @@ def partition_annotations(annotations: object) -> tuple[object, tuple[object, ..
 
 
 def _normalize_images_for_message(
-    images: list[dict] | None,
+    images: list[dict[str, object]] | None,
 ) -> list[ImageURLListItem] | None:
     """
     Ensure each image has an 'index' field, as required by ImageURLListItem.
@@ -288,10 +290,18 @@ def _replay_chunks(delta: Delta) -> tuple[_ReplayChunk, ...]:
     )
 
 
+def _cached_prompt_fields(cached: "_CachedPromptFields") -> Mapping[str, object]:
+    return MappingProxyType({field: value for field, value in cached.items() if value is not None})
+
+
 def _replay_frame(
-    response: ModelResponseStream, chunk: _ReplayChunk, finish_reason: str | None, keeps_choice_metadata: bool
+    response: ModelResponseStream,
+    chunk: _ReplayChunk,
+    finish_reason: str | None,
+    keeps_choice_metadata: bool,
+    prompt_fields: Mapping[str, object] = _NO_FIELDS,
 ) -> ModelResponseStream:
-    frame: Final = response.model_copy(deep=True)
+    frame: Final = response.model_copy(deep=True, update=dict(prompt_fields))
     choice: Final = frame.choices[0]
     choice.delta = chunk.delta
     choice.finish_reason = finish_reason
@@ -305,9 +315,9 @@ def _replay_frame(
     return frame
 
 
-def _replay_frames(response: ModelResponseStream) -> Iterator[ModelResponseStream]:
+def _replay_frames(response: ModelResponseStream, prompt_fields: Mapping[str, object]) -> Iterator[ModelResponseStream]:
     if len(response.choices) != 1:
-        yield response
+        yield response.model_copy(update=dict(prompt_fields))
         return
     usage: Final = getattr(response, "usage", None)
     if usage is not None:
@@ -316,7 +326,13 @@ def _replay_frames(response: ModelResponseStream) -> Iterator[ModelResponseStrea
     chunks: Final = _replay_chunks(choice.delta)
     first_text: Final = next((index for index, chunk in enumerate(chunks) if chunk.delta.content), 0)
     for index, chunk in enumerate(chunks):
-        yield _replay_frame(response, chunk, finish_reason=None, keeps_choice_metadata=index == first_text)
+        yield _replay_frame(
+            response,
+            chunk,
+            finish_reason=None,
+            keeps_choice_metadata=index == first_text,
+            prompt_fields=prompt_fields if index == 0 else _NO_FIELDS,
+        )
     finish_frame: Final = _replay_frame(
         response, _ReplayChunk(Delta()), finish_reason=choice.finish_reason, keeps_choice_metadata=False
     )
@@ -431,7 +447,9 @@ async def convert_to_streaming_response_async(
     if "model" in response_object:
         model_response_object.model = response_object["model"]
 
-    for frame in _replay_frames(model_response_object):
+    for frame in _replay_frames(
+        model_response_object, _cached_prompt_fields(_CACHED_PROMPT_FIELDS.validate_python(response_object))
+    ):
         yield frame
         await asyncio.sleep(0)
 
@@ -495,7 +513,9 @@ def convert_to_streaming_response(
     if "model" in response_object:
         model_response_object.model = response_object["model"]
 
-    yield from _replay_frames(model_response_object)
+    yield from _replay_frames(
+        model_response_object, _cached_prompt_fields(_CACHED_PROMPT_FIELDS.validate_python(response_object))
+    )
 
 
 from collections import defaultdict
@@ -520,6 +540,11 @@ class _CachedMessageProviderFields(TypedDict, total=False):
     provider_specific_fields: ReadOnly[object]
 
 
+class _CachedPromptFields(TypedDict, total=False):
+    prompt_token_ids: ReadOnly[object]
+    prompt_text: ReadOnly[object]
+
+
 class _CachedUsageDetails(TypedDict, total=False):
     completion_tokens: ReadOnly[object]
     prompt_tokens: ReadOnly[object]
@@ -536,8 +561,10 @@ class _PromptCacheTokenCounts(TypedDict, total=False):
 
 
 _CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
+_CACHED_PROMPT_FIELDS: Final = TypeAdapter(_CachedPromptFields)
 _CACHED_USAGE_DETAILS: Final = TypeAdapter(_CachedUsageDetails)
 _FIELD_MAP: Final = TypeAdapter(dict[str, object])
+_RERANK_RESPONSE_FIELDS: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 _COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
 _PROMPT_TOKENS_DETAILS: Final = TypeAdapter(PromptTokensDetailsWrapper)
 _PROMPT_CACHE_TOKEN_COUNTS: Final = TypeAdapter(_PromptCacheTokenCounts)
@@ -651,7 +678,7 @@ class LiteLLMResponseObjectHandler:
     def convert_to_image_response(
         response_object: dict,
         model_response_object: ImageResponse | None = None,
-        hidden_params: dict | None = None,
+        hidden_params: Mapping[str, object] | None = None,
     ) -> ImageResponse:
         response_object.update({"hidden_params": hidden_params})
 
@@ -774,7 +801,7 @@ def should_convert_tool_call_to_json_mode(
     """
     if convert_tool_call_to_json_mode and tool_calls is not None and len(tool_calls) == 1:
         function: Final = tool_calls[0].get("function")
-        return function is not None and function["name"] == RESPONSE_FORMAT_TOOL_NAME
+        return function is not None and subscript(function, "name") == RESPONSE_FORMAT_TOOL_NAME
     return False
 
 
@@ -792,9 +819,9 @@ def convert_to_model_response_object(
     response_type: Literal[
         "completion", "embedding", "image_generation", "audio_transcription", "rerank"
     ] = "completion",
-    stream=False,
-    start_time=None,
-    end_time=None,
+    stream: object = False,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     hidden_params: dict | None = None,
     _response_headers: dict | None = None,
     convert_tool_call_to_json_mode: bool | None = None,  # used for supporting 'json_schema' on older models
@@ -1110,7 +1137,7 @@ def convert_to_model_response_object(
                 raise Exception("Error in response object format")
 
             if model_response_object is None:
-                model_response_object = RerankResponse(**response_object)
+                model_response_object = RerankResponse.model_validate(response_object)
                 return model_response_object
 
             if "id" in response_object:
@@ -1122,6 +1149,13 @@ def convert_to_model_response_object(
             if "results" in response_object:
                 model_response_object.results = response_object["results"]
 
+            rerank_fields: Final = _RERANK_RESPONSE_FIELDS.validate_python(response_object)
+            if "usage" in rerank_fields or "provider_usage" in rerank_fields:
+                set_extra_attribute(
+                    model_response_object,
+                    "provider_usage",
+                    provider_usage_or_none(rerank_fields.get("usage", rerank_fields.get("provider_usage"))),
+                )
             return model_response_object
     except Exception as e:
         from litellm.exceptions import APIError

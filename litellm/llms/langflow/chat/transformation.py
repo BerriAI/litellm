@@ -72,10 +72,10 @@ class LangFlowConfig(BaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     def _get_flow_id(self, model: str, optional_params: Mapping[str, object]) -> str:
@@ -284,7 +284,7 @@ class LangFlowConfig(BaseConfig):
 
     def sign_request(
         self,
-        headers: dict,
+        headers: dict[str, object],
         optional_params: Mapping[str, object],
         request_data: Mapping[str, object],
         api_base: str,
@@ -292,20 +292,20 @@ class LangFlowConfig(BaseConfig):
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, object], bytes | None]:
         self._reject_caller_tweaks(request_data)
         return headers, None
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         headers["Content-Type"] = "application/json"
 
         if api_key:

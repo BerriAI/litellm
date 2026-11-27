@@ -57,7 +57,7 @@ class myCustomGuardrail(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Optional[Union[Exception, str, dict[str, object]]]:
         """
         Runs before the LLM API call
         Runs on only Input

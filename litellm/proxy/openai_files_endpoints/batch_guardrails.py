@@ -25,7 +25,7 @@ from typing_extensions import assert_never
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get, unpackable_mapping
+from litellm.litellm_core_utils.core_helpers import SupportsGet, as_str_mapping, require_get, unpackable_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import BatchGuardrailRecord, BatchGuardrailReport
 from litellm.types.utils import CallTypes, CallTypesLiteral
@@ -251,7 +251,7 @@ def _naming_guardrail(exc: BaseException) -> str | None:
     named: Final = getattr(exc, "guardrail_name", None)
     if isinstance(named, str):
         return named
-    detail: Final = getattr(exc, "detail", None)
+    detail: Final = as_str_mapping(getattr(exc, "detail", None))
     enriched: Final = detail.get("guardrail_name") if isinstance(detail, dict) else None
     return enriched if isinstance(enriched, str) else None
 
@@ -368,7 +368,7 @@ async def _scan_record(
     proxy_logging_obj: ProxyLogging,
 ) -> _ScanOutcome | None:
     payload: Final = require_get(record.payload)
-    body: Final = payload.get("body")
+    body: Final = as_str_mapping(payload.get("body"))
     if not isinstance(body, dict):
         return UnparseableRecord(line_number=record.line_number)
 
@@ -397,12 +397,13 @@ async def _scan_record(
     try:
         # The chain hands back the body it produced, which may be a replacement for the dict it was
         # given rather than that same dict mutated, so this is what gets compared.
-        scanned: Final[dict] = await proxy_logging_obj.pre_call_hook(  # mutable-ok: the guardrails' own dict
+        scan: Final = proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=scan_input,
             call_type=call_type,
             guardrails_only=True,
         )
+        scanned: Final[dict[str, object]] = await scan  # mutable-ok: the guardrails' own dict
     except Exception as exc:
         if _is_content_block(exc):
             return RecordDropped(line_number=record.line_number, custom_id=custom_id, guardrail=_naming_guardrail(exc))

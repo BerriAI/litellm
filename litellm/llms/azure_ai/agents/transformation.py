@@ -21,7 +21,7 @@ The API uses these endpoints:
 See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -75,7 +75,7 @@ class AzureAIAgentsConfig(BaseConfig):
     MAX_POLL_ATTEMPTS = 60
     POLL_INTERVAL_SECONDS = 1.0
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         super().__init__(**kwargs)
 
     @staticmethod
@@ -128,11 +128,11 @@ class AzureAIAgentsConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to Azure Agents params.
         """
@@ -147,8 +147,8 @@ class AzureAIAgentsConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -196,10 +196,10 @@ class AzureAIAgentsConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the request for Azure Agents.
 
@@ -243,14 +243,14 @@ class AzureAIAgentsConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate and set up environment for Azure Foundry Agents requests.
 
@@ -319,17 +319,17 @@ class AzureAIAgentsConfig(BaseConfig):
     @staticmethod
     def completion(
         model: str,
-        messages: list,
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str | None,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         acompletion: bool,
         stream: bool | None = False,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> Any:
         """
         Dispatch method for Azure Foundry Agents completion.

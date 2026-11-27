@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/audio/transcriptions` to Groq's `/v1/audio/transcri
 """
 
 import types
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import litellm
@@ -11,34 +11,34 @@ import litellm
 
 class GroqSTTConfig:
     frequency_penalty: int | None = None
-    function_call: str | dict | None = None
-    functions: list | None = None
-    logit_bias: dict | None = None
+    function_call: str | Mapping[str, object] | None = None
+    functions: Sequence[object] | None = None
+    logit_bias: dict[str, object] | None = None
     max_tokens: int | None = None
     n: int | None = None
     presence_penalty: int | None = None
-    stop: str | list | None = None
+    stop: str | Sequence[object] | None = None
     temperature: int | None = None
     top_p: int | None = None
-    response_format: dict | None = None
-    tools: list | None = None
-    tool_choice: str | dict | None = None
+    response_format: dict[str, object] | None = None
+    tools: Sequence[object] | None = None
+    tool_choice: str | Mapping[str, object] | None = None
 
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: dict[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
-        tools: list | None = None,
-        tool_choice: str | dict | None = None,
+        response_format: dict[str, object] | None = None,
+        tools: Sequence[object] | None = None,
+        tool_choice: str | Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
@@ -77,11 +77,11 @@ class GroqSTTConfig:
 
     def map_openai_params_stt(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         response_formats: Final = self.get_supported_openai_response_formats_stt()
         for param, value in non_default_params.items():
             if param == "response_format":

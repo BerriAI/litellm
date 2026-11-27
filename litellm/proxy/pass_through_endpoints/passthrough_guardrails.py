@@ -7,6 +7,7 @@ Handles guardrail execution for passthrough endpoints with:
 - Automatic inheritance from org/team/key levels when enabled
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
@@ -115,7 +116,7 @@ class PassthroughGuardrailHandler:
 
     @staticmethod
     def prepare_input(
-        request_data: dict,
+        request_data: Mapping[str, object],
         guardrail_settings: PassThroughGuardrailSettings | None,
     ) -> str:
         """
@@ -136,7 +137,7 @@ class PassthroughGuardrailHandler:
 
     @staticmethod
     def prepare_output(
-        response_data: dict,
+        response_data: Mapping[str, object],
         guardrail_settings: PassThroughGuardrailSettings | None,
     ) -> str:
         """
@@ -260,7 +261,7 @@ class PassthroughGuardrailHandler:
 
     @staticmethod
     def get_field_targeted_text(
-        data: dict,
+        data: Mapping[str, object],
         guardrail_name: str,
         is_request: bool = True,
     ) -> str | None:

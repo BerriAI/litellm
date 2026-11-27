@@ -201,7 +201,7 @@ def _async_picker(router: "Router") -> Callable[..., Awaitable[object]]:
 
     async def async_get_available_deployment(
         model: str,
-        request_kwargs: dict,  # mutable-ok: the old parameter type, unchanged
+        request_kwargs: dict[str, object],  # mutable-ok: the old parameter type, unchanged
         messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
         input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
         specific_deployment: bool | None = False,
@@ -225,7 +225,7 @@ def _unreserved_picker(router: "Router") -> Callable[..., Awaitable[object]]:
 async def _async_get_available_deployment(
     router: "Router",
     model: str,
-    request_kwargs: dict,  # mutable-ok: the old parameter type, unchanged
+    request_kwargs: dict[str, object],  # mutable-ok: the old parameter type, unchanged
     messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
     input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
     specific_deployment: bool | None = False,
@@ -398,9 +398,9 @@ class DeprecatedRouterMembers:
         _note("get_router_model_info", "registry().router_model_info(...)")
         return _as_router(self).registry().router_model_info(deployment, received_model_name, id)
 
-    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+    def get_discovered_model_info(self, model_id: str | None, model: str | None = None) -> Mapping[str, int]:
         _note("get_discovered_model_info", "registry().discovered_model_info(id)")
-        return _as_router(self).registry().discovered_model_info(model_id)
+        return _as_router(self).registry().discovered_model_info(model_id, model)
 
     # -- registry: many deployments -------------------------------------------------------------
     def get_model_list(
@@ -715,7 +715,7 @@ class DeprecatedRouterMembers:
     async def async_get_healthy_deployments(
         self,
         model: str,
-        request_kwargs: dict,  # mutable-ok: the old parameter type, unchanged
+        request_kwargs: dict[str, object],  # mutable-ok: the old parameter type, unchanged
         messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
         input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
         specific_deployment: bool | None = False,
@@ -740,7 +740,7 @@ class DeprecatedRouterMembers:
         messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
         input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,  # mutable-ok: the old parameter type, unchanged
+        request_kwargs: dict[str, object] | None = None,  # mutable-ok: the old parameter type, unchanged
     ):
         _note("get_available_deployment_for_pass_through", "select(model, kind='pass_through')")
         return _run_ready(
@@ -828,7 +828,7 @@ class DeprecatedRouterMembers:
             specific_deployment=specific_deployment,
         )
 
-    def log_retry(self, kwargs: dict, e: Exception) -> dict:  # mutable-ok: the old signature, unchanged
+    def log_retry(self, kwargs: dict[str, object], e: Exception) -> dict:  # mutable-ok: the old signature, unchanged
         _note("log_retry", "RoutingContext.log_retry")
         return RoutingContext(_as_router(self)).log_retry(kwargs=kwargs, e=e)
 

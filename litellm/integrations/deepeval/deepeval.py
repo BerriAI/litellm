@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 class DeepEvalLogger(CustomLogger):
     """Logs litellm traces to DeepEval's platform."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: bool, **kwargs: object):
         api_key: Final = os.getenv("CONFIDENT_API_KEY")
         self.litellm_environment = os.getenv("LITELM_ENVIRONMENT", "development")
         validate_environment(self.litellm_environment)
@@ -129,7 +129,9 @@ class DeepEvalLogger(CustomLogger):
 
         verbose_logger.debug("DeepEvalLogger: async_event_handler: Api response %s", response)
 
-    def _create_base_api_span(self, kwargs, standard_logging_object, start_time: str, end_time: str, is_success: bool):
+    def _create_base_api_span(
+        self, kwargs: Mapping[str, object], standard_logging_object, start_time: str, end_time: str, is_success: bool
+    ):
         # extract usage
         usage: Final = standard_logging_object.get("response", {}).get("usage", {})
         if is_success:

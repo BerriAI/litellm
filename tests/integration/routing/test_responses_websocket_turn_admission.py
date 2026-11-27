@@ -55,6 +55,8 @@ INPUT_RATE: Final = 0.001
 OUTPUT_RATE: Final = 0.002
 TURN_SPEND: Final = USAGE["input_tokens"] * INPUT_RATE + USAGE["output_tokens"] * OUTPUT_RATE
 TURN_TOKENS: Final = USAGE["total_tokens"]
+KEY_TPM_LIMIT: Final = 100
+SOCKET_RESERVATION: Final = 60
 MANAGED_PROVIDER: Final = "mistral"
 SPEND_ROWS_FOR_KEY: Final = (
     "SELECT request_id, spend, status, model_group, call_type, metadata, request_tags, proxy_server_request,"
@@ -918,6 +920,48 @@ def test_a_socket_on_an_otpm_limited_deployment_serves_every_turn(limited: Gatew
 
         assert [completed(received)["status"] for received in turns] == ["completed"] * 5
         assert deployment.forwarded_turns() == 5
+
+
+async def _one_turn_socket(gateway: Gateway, key: str, model: str) -> tuple[dict[str, JsonValue], ...]:
+    async with _socket(gateway, key, model) as connection:
+        return await _say(connection, model)
+
+
+def test_a_closed_socket_gives_back_its_key_tpm_reservation_so_the_next_socket_is_served(
+    limited: Gateway, cert: tuple[Path, Path]
+) -> None:
+    with responses_peer(cert) as peer, limited.scenario() as scenario:
+        deployment: Final = _native(scenario, peer)
+        key: Final = scenario.key(
+            models=[deployment.name],
+            tpm_limit=KEY_TPM_LIMIT,
+            metadata={"default_estimated_output_tokens": SOCKET_RESERVATION},
+        )
+
+        def served_and_closed() -> tuple[tuple[dict[str, JsonValue], ...], str]:
+            received: Final = asyncio.run(_one_turn_socket(limited, key, deployment.name))
+            closed_in: Final = datetime.now(UTC).strftime("%H-%M")
+            if received[-1].get("type") != "response.completed":
+                return received, closed_in
+            billed: Final = completed(received)["id"]
+            eventually(
+                lambda: limited.rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
+                lambda found: any(row["request_id"] == billed for row in found),
+                seconds=70,
+            )
+            eventually(
+                partial(_key_tokens, key),
+                lambda tokens: tokens <= KEY_TPM_LIMIT - SOCKET_RESERVATION,
+                seconds=15,
+            )
+            return received, closed_in
+
+        minute: Final = _fresh_minute()
+        sockets: Final = tuple(served_and_closed() for _ in range(3))
+
+        assert [received[-1].get("type") for received, _ in sockets] == ["response.completed"] * 3, sockets
+        assert {closed_in for _, closed_in in sockets} == {minute}, sockets
+        assert deployment.forwarded_turns() == 3
 
 
 IO_TOKEN_LIMIT: Final = 10_000

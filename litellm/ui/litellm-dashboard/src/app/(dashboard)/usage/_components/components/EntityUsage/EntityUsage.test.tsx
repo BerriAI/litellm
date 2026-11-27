@@ -1,5 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import i18next from "i18next";
+import { I18nextProvider } from "react-i18next";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ComponentProps, type ReactNode } from "react";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
@@ -12,6 +14,7 @@ import type {
   ModelActivityData,
   SpendMetrics,
 } from "@/components/UsagePage/types";
+import zh from "@/i18n/locales/zh-CN.json";
 import EntityUsage from "./EntityUsage";
 import { getGlobalTopKeys, getTopAPIKeys } from "./entityUsageAggregations";
 
@@ -594,6 +597,18 @@ describe("EntityUsage", () => {
       const spendElements = screen.getAllByText("$100.50");
       expect(spendElements.length).toBeGreaterThan(0);
     });
+  });
+
+  it("localizes the team spend overview heading in Simplified Chinese", async () => {
+    const i18n = i18next.createInstance();
+    await i18n.init({ lng: "zh-CN", resources: { "zh-CN": { translation: zh } } });
+    render(
+      <I18nextProvider i18n={i18n}>
+        <StatefulEntityUsage {...defaultProps} entityType="team" />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "团队费用概览" })).toBeInTheDocument();
   });
 
   it("feeds the per-user spend card every visible team except the dashboard team, only for teams", async () => {

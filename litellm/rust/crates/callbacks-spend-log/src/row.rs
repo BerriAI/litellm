@@ -6,11 +6,11 @@
 
 use std::sync::LazyLock;
 
+use aws_lc_rs::digest::{SHA256, digest};
 use litellm_python_compat::{BigInt, Value, datetime::IsoDateTime, truthy::truthy, unicode};
 use num_traits::ToPrimitive;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::consts::{
     BATCH_COST_REQUEST_ID_SUFFIX, BATCH_TRACE_CALL_TYPES, CUSTOMER_IDENTITY_FIELDS,
@@ -104,7 +104,7 @@ pub fn strip_bearer(value: &str) -> &str {
 
 /// `hash_token`: the key's SHA-256 as lowercase hex.
 pub fn hash_token(token: &str) -> String {
-    format!("{:x}", Sha256::digest(token.as_bytes()))
+    hex::encode(digest(&SHA256, token.as_bytes()))
 }
 
 /// The value is a SHA-256 hex digest, so it is already the logged form of a key.
@@ -270,7 +270,10 @@ fn stored_user_email(auth: &RowAuthFacts) -> Value {
 /// are aware.
 fn duration_ms(start: &Timestamp, end: &Timestamp) -> Option<i64> {
     match (start.raw, end.raw) {
-        (Some(IsoDateTime::Aware(start)), Some(IsoDateTime::Aware(end)))
+        (
+            Some(IsoDateTime::Aware { utc: start, .. }),
+            Some(IsoDateTime::Aware { utc: end, .. }),
+        )
         | (Some(IsoDateTime::Naive(start)), Some(IsoDateTime::Naive(end))) => {
             Some(((end - start) as f64 / 1e6 * 1000.0) as i64)
         }
@@ -737,8 +740,9 @@ fn positive(value: &Value) -> bool {
     }
 }
 
-/// The row's `session_id`: the stamped session when missing sessions are omitted, the batch id
-/// for batch calls, the caller's session under request correlation, else the trace id.
+/// The row's `session_id`: the stamped session, else the parent session a proxy sub-call
+/// inherited, when missing sessions are omitted, the batch id for batch calls, the caller's
+/// session under request correlation, else the trace id.
 fn session_id(
     builder: &SpendLogRowBuilder,
     input: &RowInput,
@@ -746,7 +750,11 @@ fn session_id(
 ) -> Option<String> {
     let omit = input.auth.session_id_omitted || builder.config.omit_missing_session_id;
     if omit {
-        return input.auth.session_id.clone();
+        return input
+            .auth
+            .session_id
+            .clone()
+            .or_else(|| stamps::inherited_parent_session(&input.litellm_params));
     }
     if let (Some(kind), Some(id)) = (input.call_type.as_deref(), request_id)
         && BATCH_TRACE_CALL_TYPES.contains(&kind)

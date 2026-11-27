@@ -303,3 +303,14 @@ class TestEmbeddedErrorDetails:
             status_code=400, raw_message=raw_message
         )
         assert "details" not in response["error"]
+
+    def test_a_deeply_nested_message_keeps_its_status_and_gets_no_details_key(self) -> None:
+        depth: Final = 200_000
+        raw_message: Final = "BadRequestError - " + '{"error":' * depth + "1" + "}" * depth
+
+        response: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=400, raw_message=raw_message
+        )
+
+        assert response["error"]["type"] == "invalid_request_error"
+        assert "details" not in response["error"]

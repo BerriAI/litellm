@@ -19,6 +19,10 @@ MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
 MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES: Final = 500
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 class MemberDeleteRequest(LiteLLMPydanticObjectBase):
     user_id: str | None = None
     user_email: str | None = None
@@ -236,7 +240,7 @@ class TeamMemberInfoResponse(LiteLLM_TeamMembership):
     role: str | None = None
     user_email: str | None = None
     team_alias: str | None = None
-    effective_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    effective_max_budget: float | None = Field(default=None, exclude_if=_is_none)
 
 
 class TeamMetadataFieldSchema(LiteLLMBaseModel):

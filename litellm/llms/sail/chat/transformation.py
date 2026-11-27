@@ -17,7 +17,9 @@ _ACCEPTED_BY_SAIL: Final = ("reasoning_effort", "user")
 
 
 class SailChatConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: return type fixed by the base interface
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[str]:  # mutable-ok: return type fixed by the base interface
         inherited: Final = tuple(
             param for param in super().get_supported_openai_params(model) if param not in _REJECTED_BY_SAIL
         )
@@ -26,11 +28,11 @@ class SailChatConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,  # mutable-ok: signature fixed by the base interface
-        optional_params: dict,  # mutable-ok: signature fixed by the base interface
+        non_default_params: dict[str, object],  # mutable-ok: signature fixed by the base interface
+        optional_params: dict[str, object],  # mutable-ok: signature fixed by the base interface
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: return type fixed by the base interface
+    ) -> dict[str, object]:  # mutable-ok: return type fixed by the base interface
         completion_window_for_service_tier(non_default_params.get("service_tier"), model=model, drop_params=drop_params)
         return super().map_openai_params(
             non_default_params=non_default_params,
@@ -43,10 +45,10 @@ class SailChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: signature fixed by the base interface
-        optional_params: dict,  # mutable-ok: signature fixed by the base interface
-        litellm_params: dict,  # mutable-ok: signature fixed by the base interface
-        headers: dict,  # mutable-ok: signature fixed by the base interface
-    ) -> dict:  # mutable-ok: return type fixed by the base interface
+        optional_params: dict[str, object],  # mutable-ok: signature fixed by the base interface
+        litellm_params: dict[str, object],  # mutable-ok: signature fixed by the base interface
+        headers: dict[str, object],  # mutable-ok: signature fixed by the base interface
+    ) -> dict[str, object]:  # mutable-ok: return type fixed by the base interface
         request: Final = chat_request_for_sail(
             super().transform_request(
                 model=model,

@@ -23,6 +23,7 @@ class SemanticCachePolicy(BaseModel):
 
     scope: CachePolicyScope
     params: SemanticCacheParams | None = None
+    key_opted_out: bool = False
 
 
 def semantic_cache_params(metadata: object) -> SemanticCacheParams | None:
@@ -30,6 +31,8 @@ def semantic_cache_params(metadata: object) -> SemanticCacheParams | None:
     if fields is None:
         return None
     raw: Final = fields.get(SEMANTIC_CACHE_PARAMS_KEY)
+    if raw is None:
+        return None
     try:
         params: Final = SemanticCacheParams.model_validate(raw)
     except ValidationError:
@@ -42,6 +45,11 @@ def semantic_cache_params(metadata: object) -> SemanticCacheParams | None:
 
 def semantic_cache_policy(request: Mapping[str, object]) -> SemanticCachePolicy | None:
     return _policy_from_controls(request.get("cache"))
+
+
+def response_cache_policy_ttl(request: Mapping[str, object]) -> int | None:
+    policy: Final = semantic_cache_policy(request)
+    return policy.params.ttl if policy is not None and policy.params is not None else None
 
 
 def _policy_from_controls(controls: object) -> SemanticCachePolicy | None:

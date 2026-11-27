@@ -32,7 +32,7 @@ def can_modify_guardrails(team_obj: LiteLLM_TeamTable | None) -> bool:
     return True
 
 
-async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> bool:
+async def should_proceed_based_on_metadata(data: Mapping[str, object], guardrail_name: str) -> bool:
     """
     checks if this guardrail should be applied to this call
     """

@@ -24,6 +24,7 @@ from litellm.types.utils import DataResidency
         ("", None),
         (None, None),
         ("not a url", None),
+        (123, None),
     ],
 )
 def test_infer_openai_data_residency(api_base, expected):

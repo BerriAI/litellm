@@ -1,5 +1,6 @@
 //! What a Messages request carries in its body.
 
+use litellm_gateway_inference::messages::REQUEST_SETTINGS;
 use litellm_llms_types::formats::messages::MessagesOptionalParams;
 use serde_json::{Map, Value};
 
@@ -9,12 +10,15 @@ const REQUIRED: [&str; 2] = ["model", "messages"];
 const HOSTED_TOOLS: [&str; 2] = ["mcp", "advisor_20260301"];
 
 /// A key the Messages request type does not name is sent on to the provider by the native route,
-/// and the proxy reads its own (`user`, `tags`, `timeout`, `fallbacks`). The rest are Messages
-/// params the proxy acts on before the provider sees them.
+/// and the proxy reads its own (`user`, `tags`, `timeout`, `fallbacks`). The native route reads
+/// the request's messages settings (`drop_params`, `additional_drop_params`) as the proxy does.
+/// The rest are Messages params the proxy acts on before the provider sees them.
 pub(super) fn fields(_: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let sent = |key: &str| fields.get(key).filter(|value| !value.is_null());
     let is_read = |key: &str| {
-        REQUIRED.contains(&key) || MessagesOptionalParams::fields().any(|name| name == key)
+        REQUIRED.contains(&key)
+            || REQUEST_SETTINGS.contains(&key)
+            || MessagesOptionalParams::fields().any(|name| name == key)
     };
     [
         (
@@ -85,6 +89,9 @@ mod tests {
     )]
     #[case::a_container_by_id(r#","container":"container_1""#)]
     #[case::a_param_sent_as_null(r#","thread":null,"metadata":null"#)]
+    #[case::the_requests_messages_settings(
+        r#","drop_params":"yes","additional_drop_params":["metadata.user_id"]"#
+    )]
     fn a_body_of_messages_params_is_kept(#[case] rest: &str) {
         assert_eq!(asking(rest), None);
     }

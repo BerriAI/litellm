@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import threading
 import uuid
@@ -40,6 +41,7 @@ SECRET_KEY: Final = "sk-lf-integration"
 PROJECTS_PATH: Final = "/api/public/projects"
 TRACES_PATH: Final = "/api/public/otel/v1/traces"
 PROMPTS_PATH: Final = "/api/public/v2/prompts/"
+MEDIA_PATH: Final = "/api/public/media"
 STOCK_CONFIG: Final = Path("tests/integration/proxy_config.yaml")
 CONFIG_SECTIONS: Final = ("litellm_settings", "environment_variables")
 LANGFUSE_ENVIRONMENT: Final = ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
@@ -238,6 +240,110 @@ def test_langfuse_callback_delivers_the_generation_over_otlp_v4_with_the_caller_
             _attribute(attributes, "langfuse.observation.metadata.litellm_call_id")
             == response.headers["x-litellm-call-id"]
         )
+
+
+def test_langfuse_callback_uploads_a_base64_image_and_exports_only_its_media_reference(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "langfusemedia" + uuid.uuid4().hex
+    image: Final = (marker + "-image-bytes").encode() * 64
+    image_uri: Final = "data:image/png;base64," + base64.b64encode(image).decode()
+    image_sha256: Final = base64.b64encode(hashlib.sha256(image).digest()).decode()
+    media_id: Final = image_sha256.replace("+", "-").replace("/", "_")[:22]
+    reference: Final = f"@@@langfuseMedia:type=image/png|id={media_id}|source=base64_data_uri@@@"
+
+    def upstream(request: Request) -> Reply:
+        return _completion(marker + "-answer")
+
+    def store(request: Request) -> Reply:
+        return Reply(body=b"")
+
+    with wire_server(store) as storage:
+
+        def langfuse(request: Request) -> Reply:
+            if request.method == "GET" and request.target.startswith(PROJECTS_PATH):
+                return _projects()
+            if request.method == "POST" and request.target == MEDIA_PATH:
+                return Reply(
+                    status=201,
+                    body=json.dumps({"mediaId": media_id, "uploadUrl": storage.url + "/bucket/" + media_id}).encode(),
+                )
+            if request.method == "PATCH" and request.target.startswith(MEDIA_PATH + "/"):
+                return Reply()
+            return Reply(body=b"", content_type="application/x-protobuf")
+
+        with (
+            wire_server(upstream) as provider,
+            wire_server(langfuse) as destination,
+            owned_proxy(
+                gateway, tmp_path, _langfuse_environment(destination), config=_langfuse_config(tmp_path)
+            ) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-" + marker)
+            response: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": marker + "-question"},
+                                {"type": "image_url", "image_url": {"url": image_uri}},
+                            ],
+                        }
+                    ],
+                    "metadata": {"generation_name": marker},
+                    "cache": {"no-cache": True},
+                },
+            )
+            assert response.status_code == 200, response.text
+            received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
+            stored: Final[list[Request]] = []  # mutable-ok: same, for the media storage
+
+            def delivered() -> tuple[tuple[Span, ...], tuple[Request, ...], tuple[Request, ...]]:
+                received.extend(destination.drain())
+                stored.extend(storage.drain())
+                return (
+                    tuple(span for span in _spans(received) if span.name == marker),
+                    tuple(request for request in received if request.target.startswith(MEDIA_PATH + "/")),
+                    tuple(stored),
+                )
+
+            spans, confirmations, uploads = eventually(
+                delivered, lambda values: all(len(value) == 1 for value in values), seconds=20
+            )
+            span: Final = spans[0]
+            exported_input: Final = str(_attribute(span.attributes, "langfuse.observation.input"))
+            assert reference in exported_input
+            assert marker + "-question" in exported_input
+            for request in received:
+                assert base64.b64encode(image) not in request.body, request.target
+
+            registrations: Final = tuple(
+                request for request in received if request.method == "POST" and request.target == MEDIA_PATH
+            )
+            assert registrations
+            basic: Final = "Basic " + base64.b64encode(f"{PUBLIC_KEY}:{SECRET_KEY}".encode()).decode()
+            for registration in registrations:
+                assert registration.headers["authorization"] == basic
+                registered = json.loads(registration.body)
+                assert registered["traceId"] == span.trace_id.hex()
+                assert registered["observationId"] == span.span_id.hex()
+                assert registered["field"] == "input"
+                assert registered["contentType"] == "image/png"
+                assert registered["contentLength"] == len(image)
+                assert registered["sha256Hash"] == image_sha256
+
+            upload: Final = uploads[0]
+            assert (upload.method, upload.target, upload.body) == ("PUT", "/bucket/" + media_id, image)
+            assert upload.headers["content-type"] == "image/png"
+            assert upload.headers["x-amz-checksum-sha256"] == image_sha256
+            confirmation: Final = confirmations[0]
+            assert (confirmation.method, confirmation.target) == ("PATCH", MEDIA_PATH + "/" + media_id)
+            assert json.loads(confirmation.body)["uploadHttpStatus"] == 200
 
 
 def test_langfuse_callback_stored_in_the_db_through_config_update_delivers_the_generation_over_otlp_v4(
@@ -1514,6 +1620,173 @@ def test_audit_unauthenticated_call_leaves_no_spend_row(audit_rig: _AuditRig) ->
             )
             == []
         ), "an unauthenticated call must not write a spend row"
+
+
+def _prompt_body(endpoint: str, model: str, canary: str) -> dict[str, JsonValue]:
+    image: Final[JsonValue] = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + canary}}
+    if endpoint == "/v1/responses":
+        return {
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "describe"},
+                        {"type": "input_image", "image_url": "data:image/png;base64," + canary},
+                    ],
+                }
+            ],
+        }
+    if endpoint == "/v1/completions":
+        return {"model": model, "prompt": canary}
+    if endpoint == "/v1/embeddings":
+        return {"model": model, "input": [canary]}
+    if endpoint == "/v1/messages":
+        return {
+            "model": model,
+            "max_tokens": 16,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe"},
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": canary}},
+                    ],
+                }
+            ],
+        }
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "describe"}, image]}],
+        "cache": {"no-cache": True},
+    }
+
+
+def _refused_key(rejection: str, rig: _AuditRig, model: str) -> str:
+    if rejection == "unknown_key":
+        return "sk-" + uuid.uuid4().hex
+    if rejection == "model_not_allowed":
+        return rig.scenario.key(models=["integration-other-" + uuid.uuid4().hex])
+    if rejection == "budget_exceeded":
+        return rig.scenario.key(models=[model], max_budget=0.000001, spend=1.0)
+    assert rejection == "rate_limited", rejection
+    key: Final = rig.scenario.key(models=[model], rpm_limit=1)
+    primed: Final = rig.candidate.request(
+        "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": "prime"}]}, key=key
+    )
+    assert primed.status_code == 200, primed.text
+    return key
+
+
+@pytest.mark.parametrize(
+    "endpoint", ("/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/embeddings")
+)
+@pytest.mark.parametrize("rejection", ("unknown_key", "model_not_allowed", "budget_exceeded", "rate_limited"))
+def test_refused_request_keeps_the_prompt_out_of_the_generation_model_parameters(
+    audit_rig: _AuditRig, endpoint: str, rejection: str
+) -> None:
+    marker: Final = "refused" + uuid.uuid4().hex
+    provider_secret: Final = "synthetic-provider-secret-" + marker
+    canary: Final = base64.b64encode(uuid.uuid4().bytes * 256).decode()
+    call_id: Final = str(uuid.uuid4())
+    targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
+
+    with wire_server(_audit_upstream(provider_secret, marker, targets)) as provider:
+        model: Final = audit_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
+        key: Final = _refused_key(rejection, audit_rig, model)
+        primed: Final = len(targets)
+        metadata_field: Final = "litellm_metadata" if endpoint == "/v1/messages" else "metadata"
+        refused: Final = audit_rig.candidate.request(
+            "POST",
+            endpoint,
+            {**_prompt_body(endpoint, model, canary), "litellm_call_id": call_id, metadata_field: {"tags": [marker]}},
+            key=key,
+        )
+        assert 400 <= refused.status_code < 500, refused.text
+        assert targets[primed:] == [], targets
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
+
+        def exported() -> tuple[Span, ...]:
+            received.extend(audit_rig.destination.drain())
+            return tuple(
+                span
+                for span in _spans(received)
+                if _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id") == call_id
+                or marker in (_attribute(span.attributes, "langfuse.trace.tags") or ())
+            )
+
+        spans: Final = eventually(exported, lambda values: len(values) == 1, seconds=20)
+        attributes: Final = spans[0].attributes
+        assert _attribute(attributes, "langfuse.observation.level") == "ERROR"
+        assert canary not in str(_attribute(attributes, "langfuse.observation.model.parameters"))
+        assert (canary in str(_attribute(attributes, "langfuse.observation.input"))) == (rejection != "rate_limited")
+
+
+def _refused_prompt(shape: str, canary: str) -> tuple[str, dict[str, JsonValue]]:
+    chat_messages: Final[JsonValue] = [{"role": "user", "content": canary}]
+    return {
+        "chat": ("/v1/chat/completions", {"messages": chat_messages}),
+        "anthropic_messages": ("/v1/messages", {"max_tokens": 16, "messages": chat_messages}),
+        "responses_text": ("/v1/responses", {"input": canary}),
+        "responses_items": (
+            "/v1/responses",
+            {"input": [{"role": "user", "content": [{"type": "input_text", "text": canary}]}]},
+        ),
+        "completions_text": ("/v1/completions", {"prompt": canary}),
+        "completions_list": ("/v1/completions", {"prompt": [canary]}),
+        "embeddings_text": ("/v1/embeddings", {"input": canary}),
+        "embeddings_list": ("/v1/embeddings", {"input": [canary]}),
+    }[shape]
+
+
+@pytest.mark.parametrize(
+    "shape",
+    (
+        "chat",
+        "anthropic_messages",
+        "responses_text",
+        "responses_items",
+        "completions_text",
+        "completions_list",
+        "embeddings_text",
+        "embeddings_list",
+    ),
+)
+@pytest.mark.parametrize("rejection", ("unknown_key", "model_not_allowed", "budget_exceeded"))
+def test_refused_request_logs_the_prompt_as_the_generation_input(
+    audit_rig: _AuditRig, shape: str, rejection: str
+) -> None:
+    marker: Final = "refused" + uuid.uuid4().hex
+    provider_secret: Final = "synthetic-provider-secret-" + marker
+    canary: Final = "prompt-" + uuid.uuid4().hex
+    call_id: Final = str(uuid.uuid4())
+    targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
+
+    with wire_server(_audit_upstream(provider_secret, marker, targets)) as provider:
+        model: Final = audit_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
+        endpoint, prompt = _refused_prompt(shape, canary)
+        refused: Final = audit_rig.candidate.request(
+            "POST",
+            endpoint,
+            {"model": model, **prompt, "litellm_call_id": call_id},
+            key=_refused_key(rejection, audit_rig, model),
+        )
+        assert 400 <= refused.status_code < 500, refused.text
+        assert targets == [], targets
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
+
+        def exported() -> tuple[Span, ...]:
+            received.extend(audit_rig.destination.drain())
+            return tuple(
+                span
+                for span in _spans(received)
+                if _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id") == call_id
+            )
+
+        spans: Final = eventually(exported, lambda values: len(values) == 1, seconds=20)
+        attributes: Final = spans[0].attributes
+        assert _attribute(attributes, "langfuse.observation.level") == "ERROR"
+        assert canary in str(_attribute(attributes, "langfuse.observation.input"))
 
 
 @pytest.mark.parametrize(("endpoint", "kind", "expected_target"), _AUDIT_ENDPOINTS[:2])

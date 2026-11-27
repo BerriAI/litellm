@@ -21,6 +21,7 @@ pub enum Estimate {
     NoBody,
     Tokens(i64),
     Failed,
+    Unpriced,
 }
 
 pub trait CounterStore: Send + Sync {
@@ -146,13 +147,11 @@ pub trait CapacityHost: Send + Sync {
     fn metrics_enabled(&self) -> SeamFuture<'_, bool>;
     fn throttled<'a>(&'a self, event: &'a Throttle) -> SeamFuture<'a, ()>;
     fn set_share<'a>(&'a self, gauge: &'a ShareGauge) -> SeamFuture<'a, ()>;
-    fn unlicensed_priority(&self) -> Result<(), CapacityError>;
-    fn log(&self, level: &'static str, message: &str) -> Result<(), CapacityError>;
     fn model_group<'a>(&'a self, model: &'a str) -> SeamFuture<'a, String>;
     fn estimate_tokens<'a>(
         &'a self,
         tpm_share: i64,
-        model: &'a str,
+        model: Option<&'a str>,
         call_type: Option<&'a str>,
     ) -> SeamFuture<'a, Estimate>;
     fn post_call_success<'a>(&'a self, headers: &'a [(String, Value)]) -> SeamFuture<'a, ()>;
@@ -244,14 +243,6 @@ impl<D: HostTransport> CapacityHost for JsonHost<D> {
         self.invoke("set_share", json!(gauge))
     }
 
-    fn unlicensed_priority(&self) -> Result<(), CapacityError> {
-        self.invoke_now("unlicensed_priority", json!({}))
-    }
-
-    fn log(&self, level: &'static str, message: &str) -> Result<(), CapacityError> {
-        self.invoke_now("log", json!({"level": level, "message": message}))
-    }
-
     fn model_group<'a>(&'a self, model: &'a str) -> SeamFuture<'a, String> {
         self.invoke("model_group", json!({"model": model}))
     }
@@ -259,7 +250,7 @@ impl<D: HostTransport> CapacityHost for JsonHost<D> {
     fn estimate_tokens<'a>(
         &'a self,
         tpm_share: i64,
-        model: &'a str,
+        model: Option<&'a str>,
         call_type: Option<&'a str>,
     ) -> SeamFuture<'a, Estimate> {
         self.invoke(

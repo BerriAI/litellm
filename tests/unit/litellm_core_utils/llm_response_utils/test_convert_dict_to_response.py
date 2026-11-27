@@ -3002,6 +3002,71 @@ class TestConvertToModelResponseObjectRerank:
         assert result.id == "rerank-123"
         assert result.results[0]["relevance_score"] == 0.9
 
+    @pytest.mark.parametrize("usage_key", ["usage", "provider_usage"])
+    @pytest.mark.parametrize("supplied", [True, False])
+    def test_rerank_keeps_the_provider_usage_on_both_overloads(self, usage_key: str, supplied: bool) -> None:
+        from litellm.types.utils import RerankResponse
+
+        usage: Final = {"search_units": 1, "cost": 0.002, "vendor_detail": {"tier": "x"}}
+        response_object: Final = {"id": "rerank-123", "meta": None, "results": [], usage_key: usage}
+        supplied_response: Final = RerankResponse() if supplied else None
+
+        result: Final = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=supplied_response,
+            response_type="rerank",
+        )
+
+        assert not supplied or result is supplied_response
+        assert isinstance(result, RerankResponse)
+        assert result.provider_usage == usage
+        assert result.model_dump(by_alias=True)["usage"] == usage
+
+    @pytest.mark.parametrize("malformed_usage", ["n/a", ["search_units", 1], 7, None])
+    def test_rerank_with_malformed_provider_usage_still_converts(self, malformed_usage: object) -> None:
+        from litellm.types.utils import RerankResponse
+
+        result: Final = convert_to_model_response_object(
+            response_object={"id": "rerank-123", "meta": None, "results": [], "usage": malformed_usage},
+            model_response_object=None,
+            response_type="rerank",
+        )
+
+        assert isinstance(result, RerankResponse)
+        assert result.id == "rerank-123"
+        assert result.provider_usage is None
+        assert "usage" not in result.model_dump(by_alias=True)
+
+    @pytest.mark.parametrize(
+        ("incoming", "expected_usage"),
+        [
+            ({"usage": None}, None),
+            ({"provider_usage": None}, None),
+            ({"usage": "n/a"}, None),
+            ({"usage": ["search_units", 1]}, None),
+            ({"provider_usage": 7}, None),
+            ({"usage": {"search_units": 2, "cost": 0.004}}, {"search_units": 2, "cost": 0.004}),
+            ({"usage": None, "provider_usage": {"search_units": 2, "cost": 0.004}}, None),
+            ({}, {"search_units": 1, "cost": 0.002}),
+        ],
+    )
+    def test_rerank_updates_provider_usage_only_when_supplied(
+        self, incoming: Mapping[str, object], expected_usage: Mapping[str, object] | None
+    ) -> None:
+        from litellm.types.utils import RerankResponse
+
+        supplied: Final = RerankResponse(id="stale", results=[], usage={"search_units": 1, "cost": 0.002})
+
+        result: Final = convert_to_model_response_object(
+            response_object={"id": "rerank-123", "results": [], **incoming},
+            model_response_object=supplied,
+            response_type="rerank",
+        )
+
+        assert result is supplied
+        assert result.id == "rerank-123"
+        assert result.provider_usage == expected_usage
+
 class TestConvertToModelResponseObjectCompletion:
     def test_tool_calls_finish_reason_override(self):
         response_object = {
@@ -3419,3 +3484,16 @@ def test_url_citation_annotations_keep_provider_keys() -> None:
 
     assert message.annotations == [_URL_CITATION]
     assert "annotations" not in (message.provider_specific_fields or {})
+
+
+@pytest.mark.parametrize(
+    ("tool_calls", "expected"),
+    (
+        ([ChatCompletionMessageToolCall(function=Function(name="json_tool_call", arguments="{}"))], True),
+        ([ChatCompletionMessageToolCall(function=Function(name="other", arguments="{}"))], False),
+        ([{"function": {"name": "json_tool_call", "arguments": "{}"}}], True),
+        ([{"id": "x"}], False),
+    ),
+)
+def test_json_mode_tool_call_detection_reads_models_and_dicts_alike(tool_calls: list[object], expected: bool) -> None:
+    assert should_convert_tool_call_to_json_mode(tool_calls, convert_tool_call_to_json_mode=True) is expected

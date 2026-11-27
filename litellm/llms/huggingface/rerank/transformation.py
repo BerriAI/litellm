@@ -145,17 +145,17 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: OptionalRerankParams | dict,
+        optional_rerank_params: OptionalRerankParams | Mapping[str, object],
         headers: Mapping[str, object],
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for HuggingFace rerank")
         if "texts" not in optional_rerank_params:
             raise ValueError("Cohere 'documents' param is required for HuggingFace rerank")
         # Ensure return_text is a boolean value
         # HuggingFace API expects return_text parameter, corresponding to our return_documents parameter
-        request_body: Final = {
+        request_body: Final[dict[str, object]] = {
             "raw_scores": False,
             "truncation_direction": "Right",
         }

@@ -56,7 +56,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
@@ -69,10 +69,10 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to AgentCore params
         """
@@ -222,9 +222,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
+        headers: dict[str, object],
     ) -> dict[str, object]:
         """
         Transform the request to AgentCore format.
@@ -309,7 +309,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return bool(value)
         return False
 
-    def _extract_sse_json(self, line: str) -> dict | None:
+    def _extract_sse_json(self, line: str) -> dict[str, object] | None:
         """Extract and parse JSON from an SSE data line."""
         if not line.startswith("data:"):
             return None
@@ -674,7 +674,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: Mapping[str, object],
         messages: Sequence[object],
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
@@ -904,7 +904,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: Mapping[str, object],
         messages: Sequence[object],
         client: Optional["AsyncHTTPHandler"] = None,
@@ -1099,17 +1099,19 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def should_fake_stream(

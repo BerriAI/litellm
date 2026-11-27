@@ -157,11 +157,11 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
     def validate_environment(
         self,
         api_key: str | None,
-        headers: dict | None,
+        headers: dict[str, object] | None,
         model: str,
-        litellm_params: GenericLiteLLMParams | dict | None,
-    ) -> dict:
-        default_headers: Final = {
+        litellm_params: GenericLiteLLMParams | dict[str, object] | None,
+    ) -> dict[str, object]:
+        default_headers: Final[dict[str, object]] = {
             "Content-Type": "application/json",
         }
         # Use the passed api_key first, then fall back to litellm_params and environment
@@ -185,7 +185,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
 
     def _get_common_auth_components(
         self,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> tuple[str | None, str | None, str | None]:
         """
         Get common authentication components used by both sync and async methods.
@@ -207,8 +207,8 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         vertex_credentials: str | None,
         stream: bool,
         api_base: str | None,
-        litellm_params: dict,
-    ) -> tuple[dict, str]:
+        litellm_params: dict[str, object],
+    ) -> tuple[dict[str, object], str]:
         """
         Build final headers and API URL from auth components.
         """
@@ -240,9 +240,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         self,
         api_base: str | None,
         model: str,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool,
-    ) -> tuple[dict, str]:
+    ) -> tuple[dict[str, object], str]:
         """
         Sync version of get_auth_token_and_url.
         """
@@ -273,9 +273,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         self,
         api_base: str | None,
         model: str,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool,
-    ) -> tuple[dict, str]:
+    ) -> tuple[dict[str, object], str]:
         """
         Get the complete URL for the request.
 
@@ -311,7 +311,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         )
 
     @staticmethod
-    def _normalize_response_schema(generate_content_config_dict: dict, model: str) -> None:
+    def _normalize_response_schema(generate_content_config_dict: dict[str, object], model: str) -> None:
         schema_key: Final = next(
             (k for k in ("responseSchema", "response_schema") if k in generate_content_config_dict),
             None,
@@ -354,9 +354,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         model: str,
         contents: GenerateContentContentListUnionDict,
         tools: ToolConfigDict | None,
-        generate_content_config_dict: dict,
+        generate_content_config_dict: dict[str, object],
         system_instruction: object | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         from litellm.types.google_genai.main import (
             GenerateContentConfigDict,
             GenerateContentRequestDict,
@@ -411,7 +411,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
 
         return GenerateContentResponse(**response)
 
-    def convert_citation_sources_to_citations(self, response: dict) -> dict:
+    def convert_citation_sources_to_citations(self, response: dict) -> dict[str, object]:
         """
         Convert citation sources to citations.
         API's camelCase citationSources becomes the SDK's snake_case citations

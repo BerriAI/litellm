@@ -14,7 +14,7 @@ from typing import Final
 from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-_JSON_VALUE: Final = TypeAdapter(JsonValue)
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 class WireCompat(str, Enum):

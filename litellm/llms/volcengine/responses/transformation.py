@@ -108,7 +108,9 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             headers=typed_headers,
         )
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         """
         Build auth headers for Volcengine Responses API.
         """
@@ -185,7 +187,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         input: str | ResponseInputParam,
         response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict:
         """
         Volcengine rejects any undocumented fields (including extra_body). Fail fast

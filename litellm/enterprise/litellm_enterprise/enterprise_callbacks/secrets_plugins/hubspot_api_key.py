@@ -15,7 +15,7 @@ class HubSpotApiTokenDetector(RegexBasedDetector):
         return "HubSpot API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # HubSpot API Token
             re.compile(

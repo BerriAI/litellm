@@ -53,6 +53,13 @@ impl MessagesEndpoint for MinimaxMessagesConfig {
         }
         Ok(format!("{base}{MESSAGES_PATH}"))
     }
+    fn checks_claude_signatures(
+        &self,
+        _api_base: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        false
+    }
 }
 
 impl MessagesAuth for MinimaxMessagesConfig {

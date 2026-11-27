@@ -133,7 +133,7 @@ class _ManagedFileCopy:
 _PROBE_ARGUMENTS: Final = frozenset(
     {"vector_store_id", "file_id", "extra_headers", "timeout", "custom_llm_provider", "no-log"}
 )
-_EXTRA_HEADERS: Final = TypeAdapter(dict[str, str] | None)
+_EXTRA_HEADERS: Final[TypeAdapter[dict[str, str] | None]] = TypeAdapter(dict[str, str] | None)
 
 
 async def _store_lacks_file(
@@ -453,7 +453,7 @@ async def _update_request_data_with_managed_file_id(
     return data, None
 
 
-def _replace_file_id_in_response(response, original_file_id: str):
+def _replace_file_id_in_response(response, original_file_id: str) -> object:
     """
     Replace the provider file ID in the response with the original managed file ID.
 

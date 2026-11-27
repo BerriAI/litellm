@@ -21,6 +21,7 @@ from litellm.anthropic_beta_gated_fields import active_beta_values, log_beta_gat
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    DROP_UNSUPPORTED_PARAMS_HINT,
     RESPONSE_FORMAT_TOOL_NAME,
     RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
@@ -40,6 +41,7 @@ from litellm.litellm_core_utils.core_helpers import (
     safe_deep_copy,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates.common_utils import invalid_type_message
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
@@ -71,6 +73,7 @@ from litellm.llms.anthropic.chat.transformation import (
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
     tools_without_unsupported_tool_search,
+    without_malformed_thinking_blocks,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
@@ -360,6 +363,36 @@ def _with_guarded_text_as_text(message: AllMessageValues) -> AllMessageValues:
 
 def _leading_system_count(messages: Sequence[AllMessageValues]) -> int:
     return next((index for index, message in enumerate(messages) if not is_system_message(message)), len(messages))
+
+
+def _has_numeric_thinking_blocks(message: object) -> bool:
+    thinking_blocks: Final = message_field(message, "thinking_blocks")
+    return (
+        message_field(message, "role") == "assistant"
+        and isinstance(thinking_blocks, (int, float))
+        and bool(thinking_blocks)
+    )
+
+
+def _numeric_thinking_blocks_error(messages: Sequence[object]) -> BedrockError | None:
+    index: Final = next(
+        (position for position, message in enumerate(messages) if _has_numeric_thinking_blocks(message)), None
+    )
+    if index is None:
+        return None
+    return BedrockError(
+        status_code=400,
+        message=invalid_type_message(
+            f"messages[{index}].thinking_blocks", message_field(messages[index], "thinking_blocks"), "a list"
+        ),
+    )
+
+
+def _without_numeric_thinking_blocks(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+    return [
+        without_malformed_thinking_blocks(message) if _has_numeric_thinking_blocks(message) else message
+        for message in messages
+    ]
 
 
 def _guarded_text_as_text_past_the_system_prompt(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
@@ -1227,7 +1260,7 @@ class AmazonConverseConfig(BaseConfig):
         )
 
     @staticmethod
-    def _add_additional_properties_to_schema(schema: dict) -> dict:
+    def _add_additional_properties_to_schema(schema: dict[str, object]) -> dict[str, object]:
         """
         Recursively ensure all object types in a JSON schema have
         ``"additionalProperties": false``.
@@ -1353,11 +1386,11 @@ class AmazonConverseConfig(BaseConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         model_info: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         request_params: Final = tool_params_without_hosted_mcp(
             non_default_params,
             model=model,
@@ -1407,10 +1440,7 @@ class AmazonConverseConfig(BaseConfig):
                 elif not self._supports_sampling_params(model):
                     if not (litellm.drop_params or drop_params):
                         raise litellm.utils.UnsupportedParamsError(
-                            message=(
-                                f"{model} does not support {param}={value}. "
-                                "To drop unsupported params, set `litellm.drop_params = True`."
-                            ),
+                            message=f"{model} does not support {param}={value}. {DROP_UNSUPPORTED_PARAMS_HINT}",
                             status_code=400,
                         )
                 else:
@@ -1490,10 +1520,7 @@ class AmazonConverseConfig(BaseConfig):
             ):
                 if not (litellm.drop_params or drop_params):
                     raise litellm.utils.UnsupportedParamsError(
-                        message=(
-                            f"{model} does not support reasoning_effort={value}. "
-                            "To drop unsupported params, set `litellm.drop_params = True`."
-                        ),
+                        message=f"{model} does not support reasoning_effort={value}. {DROP_UNSUPPORTED_PARAMS_HINT}",
                         status_code=400,
                     )
                 verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning_effort", value, model)
@@ -1582,8 +1609,7 @@ class AmazonConverseConfig(BaseConfig):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
                     f"{model} does not support service_tier={value!r} on this Bedrock route, which takes "
-                    f"auto, standard, or one of {', '.join(BEDROCK_SERVICE_TIERS)}. "
-                    "To drop unsupported params, set `litellm.drop_params = True`."
+                    f"auto, standard, or one of {', '.join(BEDROCK_SERVICE_TIERS)}. {DROP_UNSUPPORTED_PARAMS_HINT}"
                 ),
                 status_code=400,
             )
@@ -1712,7 +1738,9 @@ class AmazonConverseConfig(BaseConfig):
             deployment_model_info(litellm_params),
         )
 
-    def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
+    def update_optional_params_with_thinking_tokens(
+        self, non_default_params: dict[str, object], optional_params: dict[str, object]
+    ):
         """
         Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
 
@@ -2150,7 +2178,7 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _merge_parallel_tool_use_config(
-        additional_request_params: dict, parallel_tool_use_config: dict
+        additional_request_params: dict, parallel_tool_use_config: dict[str, object]
     ) -> dict[str, object]:
         merged_entries: Final = {
             key: (
@@ -2304,7 +2332,7 @@ class AmazonConverseConfig(BaseConfig):
 
     def _process_tools_and_beta(
         self,
-        original_tools: list,
+        original_tools: list[OpenAIChatCompletionToolParam],
         model: str,
         headers: dict[str, object] | None,
         additional_request_params: dict[str, object],
@@ -2512,7 +2540,7 @@ class AmazonConverseConfig(BaseConfig):
         self,
         model: str,
         system_content_blocks: list[SystemContentBlock],
-        optional_params: dict,
+        optional_params: dict[str, object],
         messages: list[AllMessageValues] | None = None,
         headers: dict[str, object] | None = None,
         drop_params: bool = False,
@@ -2680,12 +2708,19 @@ class AmazonConverseConfig(BaseConfig):
         capability_model: Final = bedrock_capability_model(model, base_model)
         model_info: Final = routed_model_info(litellm_params.get("model_info"))
         json_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
+        requested_messages: Final = (
+            _without_numeric_thinking_blocks(messages)
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            else messages
+        )
         guards_user_input: Final = self._guards_user_input(messages, json_optional_params)
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
             messages, json_optional_params, guards_user_input=guards_user_input
         )
         marked_messages: Final = self._messages_with_cache_marks(
-            _guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages,
+            _guarded_text_as_text_past_the_system_prompt(requested_messages)
+            if keeps_full_input_check
+            else requested_messages,
             capability_model,
             model,
             drops_unsupported_params(litellm_params.get("drop_params")),
@@ -2738,24 +2773,30 @@ class AmazonConverseConfig(BaseConfig):
             litellm_params=litellm_params,
         )
 
-        bedrock_messages: Final = list(
-            with_mistral_tool_use_ids(
-                place_tool_result_images(
-                    await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-                        messages=messages,
-                        model=capability_model,
-                        deployment_model=model,
-                        model_info=model_info,
-                        llm_provider="bedrock_converse",
-                        user_continue_message=litellm_params.pop("user_continue_message", None),
-                        base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
-                        drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+        try:
+            bedrock_messages: Final = list(
+                with_mistral_tool_use_ids(
+                    place_tool_result_images(
+                        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                            messages=messages,
+                            model=capability_model,
+                            deployment_model=model,
+                            model_info=model_info,
+                            llm_provider="bedrock_converse",
+                            user_continue_message=litellm_params.pop("user_continue_message", None),
+                            base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                            drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                        ),
+                        capability_model,
                     ),
                     capability_model,
-                ),
-                capability_model,
+                )
             )
-        )
+        except TypeError as error:
+            thinking_blocks_error: Final = _numeric_thinking_blocks_error(requested_messages)
+            if thinking_blocks_error is None:
+                raise
+            raise thinking_blocks_error from error
 
         request_metadata: Final = resolve_bedrock_request_metadata(
             litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
@@ -2778,9 +2819,9 @@ class AmazonConverseConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         return cast(
             dict,
@@ -2807,12 +2848,19 @@ class AmazonConverseConfig(BaseConfig):
         capability_model: Final = bedrock_capability_model(model, base_model)
         model_info: Final = routed_model_info(litellm_params.get("model_info"))
         json_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
+        requested_messages: Final = (
+            _without_numeric_thinking_blocks(messages)
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            else messages
+        )
         guards_user_input: Final = self._guards_user_input(messages, json_optional_params)
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
             messages, json_optional_params, guards_user_input=guards_user_input
         )
         marked_messages: Final = self._messages_with_cache_marks(
-            _guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages,
+            _guarded_text_as_text_past_the_system_prompt(requested_messages)
+            if keeps_full_input_check
+            else requested_messages,
             capability_model,
             model,
             drops_unsupported_params(litellm_params.get("drop_params")),
@@ -2865,24 +2913,30 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         ## TRANSFORMATION ##
-        bedrock_messages: Final[list[MessageBlock]] = list(
-            with_mistral_tool_use_ids(
-                place_tool_result_images(
-                    _bedrock_converse_messages_pt(
-                        messages=messages,
-                        model=capability_model,
-                        deployment_model=model,
-                        model_info=model_info,
-                        llm_provider="bedrock_converse",
-                        user_continue_message=litellm_params.pop("user_continue_message", None),
-                        base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
-                        drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+        try:
+            bedrock_messages: Final[list[MessageBlock]] = list(
+                with_mistral_tool_use_ids(
+                    place_tool_result_images(
+                        _bedrock_converse_messages_pt(
+                            messages=messages,
+                            model=capability_model,
+                            deployment_model=model,
+                            model_info=model_info,
+                            llm_provider="bedrock_converse",
+                            user_continue_message=litellm_params.pop("user_continue_message", None),
+                            base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                            drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                        ),
+                        capability_model,
                     ),
                     capability_model,
-                ),
-                capability_model,
+                )
             )
-        )
+        except TypeError as error:
+            thinking_blocks_error: Final = _numeric_thinking_blocks_error(requested_messages)
+            if thinking_blocks_error is None:
+                raise
+            raise thinking_blocks_error from error
 
         request_metadata: Final = resolve_bedrock_request_metadata(
             litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
@@ -2902,10 +2956,10 @@ class AmazonConverseConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: Logging,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -3362,8 +3416,8 @@ class AmazonConverseConfig(BaseConfig):
         logging_obj: Logging | None,
         optional_params: dict,
         api_key: str | None,
-        data: dict | str,
-        messages: list,
+        data: Mapping[str, object] | str,
+        messages: Sequence[object],
         encoding: object,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -3533,7 +3587,9 @@ class AmazonConverseConfig(BaseConfig):
 
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return BedrockError(
             message=error_message,
             status_code=status_code,
@@ -3545,8 +3601,8 @@ class AmazonConverseConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:

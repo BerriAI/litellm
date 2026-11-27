@@ -23,6 +23,7 @@ from litellm.constants import (
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
@@ -57,6 +58,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
+    TokenTypeCostBreakdown,
     calculate_cache_writing_cost,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -77,67 +79,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.service_tier_utils import GEMINI_TRAFFIC_TYPE_SERVICE_TIERS
-from litellm.llms.anthropic.cost_calculation import (
-    cost_per_token as anthropic_cost_per_token,
-)
-from litellm.llms.anthropic.cost_calculation import (
-    get_anthropic_web_search_requests_from_response,
-)
-from litellm.llms.azure.cost_calculation import (
-    cost_per_token as azure_openai_cost_per_token,
-)
-from litellm.llms.azure_ai.cost_calculator import (
-    cost_per_token as azure_ai_cost_per_token,
-)
-from litellm.llms.azure_ai.cost_calculator import (
-    is_azure_model_router as azure_ai_is_model_router_name,
-)
 from litellm.llms.base_llm.search.transformation import SearchResponse
-from litellm.llms.bedrock.cost_calculation import (
-    cost_per_token as bedrock_cost_per_token,
-)
-from litellm.llms.databricks.cost_calculator import (
-    cost_per_token as databricks_cost_per_token,
-)
-from litellm.llms.deepseek.cost_calculator import (
-    cost_per_token as deepseek_cost_per_token,
-)
-from litellm.llms.fireworks_ai.cost_calculator import (
-    cost_per_token as fireworks_ai_cost_per_token,
-)
-from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_per_token
-from litellm.llms.lemonade.cost_calculator import (
-    cost_per_token as lemonade_cost_per_token,
-)
-from litellm.llms.openai.cost_calculation import (
-    cost_per_second as openai_cost_per_second,
-)
-from litellm.llms.openai.cost_calculation import (
-    cost_per_token as openai_cost_per_token,
-)
-from litellm.llms.openai.cost_calculation import (
-    video_clip_cost,
-    video_output_cost_per_second,
-)
-from litellm.llms.perplexity.cost_calculator import (
-    cost_per_token as perplexity_cost_per_token,
-)
-from litellm.llms.tencent.cost_calculator import (
-    cost_per_token as tencent_cost_per_token,
-)
-from litellm.llms.together_ai.cost_calculator import (
-    get_model_params_and_category,
-    has_together_registry_pricing,
-)
-from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_generation_cost
-from litellm.llms.vertex_ai.cost_calculator import (
-    cost_per_character as google_cost_per_character,
-)
-from litellm.llms.vertex_ai.cost_calculator import (
-    cost_per_token as google_cost_per_token,
-)
-from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
-from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.rust_bridge._native import NativeReceipt, billable_service_tier
 from litellm.types.agents import LiteLLMSendMessageResponse
@@ -191,8 +133,11 @@ from litellm.utils import (
     TranscriptionResponse,
     cached_cost_map_key,
     cached_get_model_info_helper,
+    cached_model_info_for_call,
+    get_model_info_for_call,
     mapped_model_fill_missing,
     pricing_with_overrides,
+    provider_matched_runtime_model_cost_registrations,
     runtime_model_cost_registrations,
     token_counter,
     unmapped_model_generalization,
@@ -467,9 +412,11 @@ def _per_second_pricing_cost(
     custom_llm_provider: str | None,
     response_time_ms: float | None,
     audio_seconds: float = 0.0,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[float, float] | None:
     try:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = cached_model_info_for_call(model, custom_llm_provider, api_base, api_key)
     except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
         return None
     return _per_second_pricing_cost_from_info(model_info, response_time_ms, audio_seconds)
@@ -546,6 +493,8 @@ def cost_per_token(
     request_model: str | None = None,  # original request model for router detection
     custom_model_info: OCRPricing | None = None,
     bedrock_model_info: ModelInfo | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -644,6 +593,8 @@ def cost_per_token(
         if per_second is not None:
             return per_second
         if custom_llm_provider == "anthropic":
+            from litellm.llms.anthropic.cost_calculation import cost_per_token as anthropic_cost_per_token
+
             return anthropic_cost_per_token(
                 model=model, usage=usage_block, service_tier=service_tier, model_info=requested_model_info_override
             )
@@ -719,7 +670,7 @@ def cost_per_token(
         model = model_without_prefix
 
     if is_decisions_call_type(call_type):
-        decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        decisions_model_info: Final = cached_model_info_for_call(model, custom_llm_provider, api_base, api_key)
         decisions_overrides: Final = decisions_pricing_fields(
             litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
         )
@@ -738,13 +689,12 @@ def cost_per_token(
                 ),
             )
     if call_type == "speech" or call_type == "aspeech":
-        lyria_generation_cost: Final = (
-            get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
-            if custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
-            else None
-        )
-        if lyria_generation_cost is not None:
-            return 0.0, lyria_generation_cost
+        if custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
+            from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_generation_cost
+
+            lyria_generation_cost: Final = get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
+            if lyria_generation_cost is not None:
+                return 0.0, lyria_generation_cost
         speech_model_info: Final = cached_get_model_info_helper(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
@@ -834,6 +784,8 @@ def cost_per_token(
             )
             else audio_transcription_file_duration
         )
+        from litellm.llms.openai.cost_calculation import cost_per_second as openai_cost_per_second
+
         return openai_cost_per_second(
             model=model_without_prefix,
             custom_llm_provider=transcription_provider,
@@ -856,10 +808,16 @@ def cost_per_token(
             custom_llm_provider=custom_llm_provider,
             response_time_ms=response_time_ms,
             audio_seconds=audio_transcription_file_duration,
+            api_base=api_base,
+            api_key=api_key,
         )
     ) is not None:
         return per_second_cost
     elif custom_llm_provider == "vertex_ai":
+        from litellm.llms.vertex_ai.cost_calculator import cost_per_character as google_cost_per_character
+        from litellm.llms.vertex_ai.cost_calculator import cost_per_token as google_cost_per_token
+        from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
+
         cost_router: Final = google_cost_router(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
@@ -884,6 +842,8 @@ def cost_per_token(
                 vertex_location=vertex_location,
             )
     elif custom_llm_provider == "anthropic":
+        from litellm.llms.anthropic.cost_calculation import cost_per_token as anthropic_cost_per_token
+
         return anthropic_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "bedrock":
         resolved_bedrock_info: Final = bedrock_model_info or _bedrock_pricing_info(model, None, "bedrock", False)
@@ -895,8 +855,12 @@ def cost_per_token(
                 service_tier=service_tier,
                 model_info=resolved_bedrock_info,
             )
+        from litellm.llms.bedrock.cost_calculation import cost_per_token as bedrock_cost_per_token
+
         return bedrock_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "openai":
+        from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
+
         return openai_cost_per_token(
             model=model,
             usage=usage_block,
@@ -904,10 +868,16 @@ def cost_per_token(
             data_residency=data_residency,
         )
     elif custom_llm_provider == "databricks":
+        from litellm.llms.databricks.cost_calculator import cost_per_token as databricks_cost_per_token
+
         return databricks_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "fireworks_ai":
+        from litellm.llms.fireworks_ai.cost_calculator import cost_per_token as fireworks_ai_cost_per_token
+
         return fireworks_ai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure":
+        from litellm.llms.azure.cost_calculation import cost_per_token as azure_openai_cost_per_token
+
         return azure_openai_cost_per_token(
             model=model,
             usage=usage_block,
@@ -915,16 +885,28 @@ def cost_per_token(
             service_tier=service_tier,
         )
     elif custom_llm_provider == "gemini":
+        from litellm.llms.gemini.cost_calculator import cost_per_token as gemini_cost_per_token
+
         return gemini_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "deepseek":
+        from litellm.llms.deepseek.cost_calculator import cost_per_token as deepseek_cost_per_token
+
         return deepseek_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "tencent":
+        from litellm.llms.tencent.cost_calculator import cost_per_token as tencent_cost_per_token
+
         return tencent_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
+        from litellm.llms.perplexity.cost_calculator import cost_per_token as perplexity_cost_per_token
+
         return perplexity_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "xai":
+        from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
+
         return xai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "lemonade":
+        from litellm.llms.lemonade.cost_calculator import cost_per_token as lemonade_cost_per_token
+
         return lemonade_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
         from litellm.llms.dashscope.cost_calculator import (
@@ -933,6 +915,8 @@ def cost_per_token(
 
         return dashscope_cost_per_token(model=model, usage=usage_block, custom_llm_provider=custom_llm_provider)
     elif custom_llm_provider == "azure_ai":
+        from litellm.llms.azure_ai.cost_calculator import cost_per_token as azure_ai_cost_per_token
+
         return azure_ai_cost_per_token(
             model=model,
             usage=usage_block,
@@ -941,7 +925,7 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = cached_model_info_for_call(model, custom_llm_provider, api_base, api_key)
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
@@ -954,7 +938,7 @@ def cost_per_token(
         return 0.0, 0.0
 
 
-def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
+def get_replicate_completion_pricing(completion_response: dict, total_time: float = 0.0):
     # see https://replicate.com/pricing
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
     a100_80gb_price_per_second_public: Final = (
@@ -1121,6 +1105,8 @@ def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | Non
 def _routed_model_pricing_provider(
     request_model: str | None, served_model: str | None, custom_llm_provider: object
 ) -> str | None:
+    from litellm.llms.azure_ai.cost_calculator import is_azure_model_router as azure_ai_is_model_router_name
+
     if custom_llm_provider != "azure" or request_model is None or served_model is None:
         return None
     if not azure_ai_is_model_router_name(request_model) or _resolves_to_rates(served_model, "azure"):
@@ -1199,7 +1185,11 @@ def select_model_name_for_cost_calc(
             return_model = model
 
     elif priced_base_model is not None or bedrock_pricing_model is not None:
-        return_model = priced_base_model if priced_base_model is not None else bedrock_pricing_model
+        return_model = (
+            _base_model_without_nested_provider(priced_base_model, custom_llm_provider)
+            if priced_base_model is not None
+            else bedrock_pricing_model
+        )
 
     elif provider_response_model is not None:
         return _served_or_priced_requested_model(
@@ -1246,6 +1236,16 @@ def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
     return key is not None and _cost_map_entry_prices_anything(
         declared_cost_map_pricing(key, model, custom_llm_provider)
     )
+
+
+def _base_model_without_nested_provider(base_model: str, custom_llm_provider: str | None) -> str:
+    provider, _, rest = base_model.partition("/")
+    nested_provider, _, name = rest.partition("/")
+    nests_a_provider: Final = provider in LlmProvidersSet and nested_provider in LlmProvidersSet and bool(name)
+    if not nests_a_provider or _resolves_to_rates(base_model, custom_llm_provider):
+        return base_model
+    unnested: Final = f"{provider}/{name}"
+    return unnested if _resolves_to_rates(unnested, custom_llm_provider) else base_model
 
 
 def _served_or_priced_requested_model(
@@ -1594,7 +1594,7 @@ def _store_cost_breakdown_in_logging_obj(
     completion_tokens_cost_usd_dollar: float | None,
     cost_for_built_in_tools_cost_usd_dollar: float | None,
     total_cost_usd_dollar: float,
-    additional_costs: dict | None = None,
+    additional_costs: dict[str, float] | None = None,
     original_cost: float | None = None,
     discount_percent: float | None = None,
     discount_amount: float | None = None,
@@ -1767,6 +1767,29 @@ def split_reported_cost_by_cost_map_ratio(
     return input_cost, reported_total - input_cost
 
 
+def billed_flat_cost(
+    base_cost: float,
+    custom_llm_provider: str | None,
+    model: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+) -> float:
+    adjusted: Final = adjusted_cost(base_cost, custom_llm_provider, model)
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=None,
+        completion_tokens_cost_usd_dollar=None,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        total_cost_usd_dollar=adjusted.cost,
+        original_cost=base_cost,
+        discount_percent=adjusted.discount_percent,
+        discount_amount=adjusted.discount_amount,
+        margin_percent=adjusted.margin_percent,
+        margin_fixed_amount=adjusted.margin_fixed_amount,
+        margin_total_amount=adjusted.margin_total_amount,
+    )
+    return adjusted.cost
+
+
 def _adjusted_provider_billed_cost(
     reported_cost: float,
     custom_llm_provider: str | None,
@@ -1826,6 +1849,8 @@ def _adjusted_stored_cost(
     vertex_location: str | None,
     custom_cost_per_token: CostPerToken | None,
     bedrock_model_info: ModelInfo | None,
+    api_base: str | None,
+    api_key: str | None,
 ) -> float:
     adjusted: Final = adjusted_cost(original_cost, custom_llm_provider, discount_model, region_name)
     token_breakdown: Final = (
@@ -1838,6 +1863,8 @@ def _adjusted_stored_cost(
             vertex_location=vertex_location,
             custom_cost_per_token=custom_cost_per_token,
             model_info=bedrock_model_info,
+            api_base=api_base,
+            api_key=api_key,
         )
         if litellm_logging_obj is not None and usage is not None and model
         else None
@@ -1866,6 +1893,88 @@ def _adjusted_stored_cost(
     return adjusted.cost
 
 
+class _ImageCostItemization:
+    def __init__(self) -> None:
+        self.input_cost = 0.0
+        self.output_cost: float | None = None
+        self.token_breakdown: TokenTypeCostBreakdown | None = None
+
+    def record_token_cost(
+        self, input_cost: float, output_cost: float, breakdown: TokenTypeCostBreakdown | None
+    ) -> None:
+        self.input_cost += input_cost
+        self.output_cost = (self.output_cost or 0.0) + output_cost
+        if breakdown is not None:
+            self.token_breakdown = breakdown
+
+    def store(
+        self,
+        logging_obj: LitellmLoggingObject | None,
+        total_cost: float,
+        service_tier: str | None,
+        vertex_location: str | None,
+        has_svg_authoring: bool,
+    ) -> None:
+        output_cost: Final = self.output_cost
+        token_breakdown: Final = self.token_breakdown
+        remainder: Final = 0.0 if output_cost is None else total_cost - (self.input_cost + output_cost)
+        _store_cost_breakdown_in_logging_obj(
+            litellm_logging_obj=logging_obj,
+            prompt_tokens_cost_usd_dollar=self.input_cost,
+            completion_tokens_cost_usd_dollar=(
+                total_cost
+                if output_cost is None
+                else total_cost - self.input_cost
+                if has_svg_authoring
+                else output_cost
+            ),
+            cost_for_built_in_tools_cost_usd_dollar=(
+                None if has_svg_authoring or math.isclose(remainder, 0.0, abs_tol=1e-15) else remainder
+            ),
+            total_cost_usd_dollar=total_cost,
+            cache_read_cost=None if token_breakdown is None else token_breakdown.cache_read_cost,
+            cache_creation_cost=None if token_breakdown is None else token_breakdown.cache_creation_cost,
+            reasoning_cost=None if token_breakdown is None else token_breakdown.reasoning_cost,
+            service_tier=service_tier,
+            vertex_location=vertex_location,
+            billed_token_rates=None if token_breakdown is None else token_breakdown.rates,
+        )
+
+
+def _image_response_cost(
+    model: str,
+    custom_llm_provider: str | None,
+    completion_response: ImageResponse,
+    quality: str | None,
+    n: int | None,
+    size: str | None,
+    optional_params: Mapping[str, object] | None,
+    call_type: str,
+    model_info: ModelInfo | None,
+    vertex_location: str | None,
+    service_tier: str | None,
+    logging_obj: LitellmLoggingObject | None,
+) -> float:
+    itemization: Final = _ImageCostItemization() if logging_obj is not None else None
+    total: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        completion_response=completion_response,
+        quality=quality,
+        n=n,
+        size=size,
+        optional_params=optional_params,
+        call_type=call_type,
+        model_info=model_info,
+        vertex_location=vertex_location,
+        service_tier=service_tier,
+        report_token_cost=None if itemization is None else itemization.record_token_cost,
+    )
+    if itemization is not None:
+        itemization.store(logging_obj, total, service_tier, vertex_location, completion_response.svg_usage is not None)
+    return total
+
+
 _NO_HIDDEN_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -1888,6 +1997,8 @@ def _reports_web_search_another_way(completion_response: object, usage: Usage) -
 
 def _web_search_requests_for_rust(completion_response: object, usage: Usage) -> int | None:
     """The web search count the Rust core bills: the usage's, else a raw Messages response's."""
+    from litellm.llms.anthropic.cost_calculation import get_anthropic_web_search_requests_from_response
+
     reported: Final = get_web_search_requests_from_usage(usage)
     if reported is not None or isinstance(completion_response, ModelResponse):
         return reported
@@ -1915,6 +2026,8 @@ def rust_priced_cost(
     """``completion_cost`` of a Claude token call on the /v1/messages providers, priced in Rust. ``None`` where
     ``completion_cost`` prices the call the old way: another provider or call kind, built-in tools other than a
     reported web search, a provider-stated cost, or a call the Rust core leaves to Python."""
+    from litellm.llms.azure_ai.cost_calculator import is_azure_model_router as azure_ai_is_model_router_name
+
     if call_type not in _RUST_PRICED_CALL_TYPES or model is None or usage is None:
         return None
     if not isinstance(custom_llm_provider, str) or custom_llm_provider not in _RUST_PRICED_PROVIDERS:
@@ -2018,7 +2131,7 @@ def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
     prompt: str = "",
-    messages: list = [],
+    messages: Sequence[object] = [],
     completion: str | list[str] | None = "",
     total_time: float | None = 0.0,  # used for replicate, sagemaker
     call_type: CallTypesLiteral | None = None,
@@ -2033,7 +2146,7 @@ def completion_cost(
     custom_cost_per_token: CostPerToken | None = None,
     custom_cost_per_second: float | None = None,
     requested_model_info_override: ModelInfo | None = None,
-    optional_params: dict | None = None,
+    optional_params: dict[str, object] | None = None,
     custom_pricing: bool | None = None,
     base_model: str | None = None,
     standard_built_in_tools_params: StandardBuiltInToolsParams | None = None,
@@ -2059,7 +2172,11 @@ def completion_cost(
     Raises if no candidate model name resolves to pricing. Register the model via `litellm.register_model`
     or add it to model_prices_and_context_window.json.
     """
+    from litellm.llms.azure_ai.cost_calculator import is_azure_model_router as azure_ai_is_model_router_name
+    from litellm.llms.together_ai.cost_calculator import get_model_params_and_category, has_together_registry_pricing
+
     try:
+        response_api_base: Final = _response_api_base(completion_response)
         call_type = infer_call_type(call_type, completion_response) or "completion"
         if isinstance(completion_response, DecisionsResponse) and completion_response.usage is None:
             raise ValueError("Cannot calculate Decisions cost: provider did not report usage")
@@ -2337,8 +2454,7 @@ def completion_cost(
                 if CostCalculatorUtils.call_type_has_image_response(call_type) and isinstance(
                     completion_response, ImageResponse
                 ):
-                    ### IMAGE GENERATION COST CALCULATION ###
-                    return CostCalculatorUtils.route_image_generation_cost_calculator(
+                    return _image_response_cost(
                         model=model,
                         custom_llm_provider=custom_llm_provider,
                         completion_response=completion_response,
@@ -2350,6 +2466,7 @@ def completion_cost(
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
                         service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
+                        logging_obj=litellm_logging_obj,
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -2480,6 +2597,8 @@ def completion_cost(
                         vertex_location=None,
                         custom_cost_per_token=None,
                         bedrock_model_info=None,
+                        api_base=None,
+                        api_key=None,
                     )
                 elif call_type == _AREALTIME_CALL_TYPE and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
@@ -2518,6 +2637,7 @@ def completion_cost(
                 if (
                     not caller_set_prices
                     and (reported_cost := billed_usage_cost(priced_response, custom_llm_provider)) is not None
+                    and not _has_registered_rerank_price(call_type, model, custom_llm_provider)
                 ):
                     return _adjusted_provider_billed_cost(
                         reported_cost=reported_cost,
@@ -2598,6 +2718,8 @@ def completion_cost(
                     response=completion_response,
                     custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     bedrock_model_info=bedrock_model_info,
+                    api_base=_request_api_base(litellm_logging_obj, response_api_base),
+                    api_key=_request_api_key(litellm_logging_obj),
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
@@ -2660,6 +2782,8 @@ def completion_cost(
                     vertex_location=vertex_location,
                     custom_cost_per_token=custom_cost_per_token,
                     bedrock_model_info=bedrock_model_info,
+                    api_base=_request_api_base(litellm_logging_obj, response_api_base),
+                    api_key=_request_api_key(litellm_logging_obj),
                 )
             except Exception as e:
                 verbose_logger.debug(
@@ -2744,7 +2868,7 @@ def response_cost_calculator(
         "extraction",
         "aextraction",
     ],
-    optional_params: dict,
+    optional_params: dict[str, object],
     cache_hit: bool | None = None,
     base_model: str | None = None,
     custom_pricing: bool | None = None,
@@ -2888,6 +3012,27 @@ def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject 
     return float(cost_per_query) if isinstance(cost_per_query, (int, float)) else None
 
 
+def _response_api_base(completion_response: object) -> str | None:
+    return _get_hidden_str_for_cost_calc(attribute_or_none(completion_response, "_hidden_params"), "api_base")
+
+
+def _logged_api_base(litellm_logging_obj: LitellmLoggingObject | None) -> str | None:
+    logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
+    if not isinstance(logged_params, Mapping):
+        return None
+    api_base: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params).get("api_base")
+    return api_base if isinstance(api_base, str) and api_base else None
+
+
+def _request_api_base(litellm_logging_obj: LitellmLoggingObject | None, response_api_base: str | None) -> str | None:
+    return _logged_api_base(litellm_logging_obj) or response_api_base
+
+
+def _request_api_key(litellm_logging_obj: LitellmLoggingObject | None) -> str | None:
+    api_key: Final = getattr(litellm_logging_obj, "model_info_api_key", None)
+    return api_key if isinstance(api_key, str) and _logged_api_base(litellm_logging_obj) else None
+
+
 def _deployment_model_info(
     litellm_logging_obj: LitellmLoggingObject | None,
     custom_pricing: bool | None,
@@ -2942,9 +3087,13 @@ def _layered_ocr_pricing(*sources: Mapping[str, object] | None) -> OCRPricing:
     )
 
 
-def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
+def _cost_map_model_info(
+    model: str, custom_llm_provider: str | None, api_base: str | None = None, api_key: str | None = None
+) -> ModelInfo | None:
     try:
-        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        return get_model_info_for_call(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+        )
     except Exception:
         return None
 
@@ -3045,8 +3194,11 @@ def pricing_entry_for_cost_calc(
         selected_entry: Final[Mapping[str, object]] = bedrock_model_info
         return key, MappingProxyType({name: value for name, value in selected_entry.items() if name in declared_keys})
     candidates: Final = (selected_model, _get_response_model(completion_response), model)
+    api_base: Final = _request_api_base(litellm_logging_obj, _response_api_base(completion_response))
+    api_key: Final = _request_api_key(litellm_logging_obj)
+    lookups: Final = (_cost_map_model_info(name, custom_llm_provider, api_base, api_key) for name in candidates if name)
     resolved: Final = next(
-        (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
+        (info for info in lookups if info),
         None,
     )
     if resolved is None:
@@ -3249,6 +3401,15 @@ def vector_store_search_cost(
     )
 
 
+def _has_registered_rerank_price(call_type: str | None, model: str | None, custom_llm_provider: str | None) -> bool:
+    if call_type not in _RERANK_CALL_TYPES or model is None or custom_llm_provider is None:
+        return False
+    return any(
+        _cost_map_entry_prices_anything(entry)
+        for _, entry in provider_matched_runtime_model_cost_registrations(model, custom_llm_provider)
+    )
+
+
 def rerank_cost(
     model: str,
     custom_llm_provider: str | None,
@@ -3284,6 +3445,8 @@ def rerank_cost(
 
 
 def transcription_cost(model: str, custom_llm_provider: str | None, duration: float) -> tuple[float, float]:
+    from litellm.llms.openai.cost_calculation import cost_per_second as openai_cost_per_second
+
     return openai_cost_per_second(model=model, custom_llm_provider=custom_llm_provider, duration=duration)
 
 
@@ -3407,6 +3570,8 @@ def default_video_cost_calculator(
     Raises:
         Exception: If model pricing not found in cost map
     """
+    from litellm.llms.openai.cost_calculation import video_clip_cost, video_output_cost_per_second
+
     # Use custom model_info pricing if provided (deployment-specific pricing)
     cost_info: dict | None = None
     if model_info is not None:
@@ -4118,6 +4283,20 @@ def _first_live_model_rate(
     )
 
 
+_ADDON_PRICING_MODELS: Final = TypeAdapter(tuple[str, ...])
+
+
+def _transcription_addon_pricing_models(litellm_logging_obj: LitellmLoggingObject | None) -> tuple[str, ...]:
+    if litellm_logging_obj is None:
+        return ()
+    try:
+        return _ADDON_PRICING_MODELS.validate_python(
+            litellm_logging_obj.model_call_details.get(REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY, ())
+        )
+    except ValidationError:
+        return ()
+
+
 def _xai_metered_usage(litellm_logging_obj: LitellmLoggingObject | None) -> RealtimeMeteredUsage | None:
     if litellm_logging_obj is None:
         return None
@@ -4273,6 +4452,7 @@ def handle_realtime_stream_cost_calculation(
             custom_llm_provider=custom_llm_provider,
             litellm_model_name=litellm_model_name,
             custom_pricing_model=custom_pricing_model,
+            addon_pricing_models=_transcription_addon_pricing_models(litellm_logging_obj),
         )
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
@@ -4427,6 +4607,7 @@ def handle_realtime_transcription_cost_calculation(
     custom_llm_provider: str,
     litellm_model_name: str,
     custom_pricing_model: str | None = None,
+    addon_pricing_models: Sequence[str] = (),
 ) -> float:
     """
     Cost for realtime transcription sessions (e.g. gpt-realtime-whisper).
@@ -4454,10 +4635,19 @@ def handle_realtime_transcription_cost_calculation(
     override_info: Final = (
         _cost_map_model_info(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
     )
-    return sum(
+    base_cost: Final = sum(
         (_transcription_usage_cost(dict(usage), model_infos[model], override_info) for usage, model in clip_models),
         0.0,
     )
+    addon_cost: Final = sum(
+        (_clips_cost(clips, _cost_map_model_info(addon, custom_llm_provider)) for addon in addon_pricing_models),
+        0.0,
+    )
+    return base_cost + addon_cost
+
+
+def _clips_cost(clips: Sequence[tuple[Mapping[str, object], str | None]], model_info: ModelInfo | None) -> float:
+    return sum((_transcription_usage_cost(dict(usage), model_info) for usage, _ in clips), 0.0)
 
 
 _TRANSCRIPTION_SESSION_EVENT_TYPES: Final = frozenset(

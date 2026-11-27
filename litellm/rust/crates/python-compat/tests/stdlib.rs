@@ -7,6 +7,7 @@ use litellm_python_compat::{
     unicode::isspace,
     urllib::quote,
 };
+use rstest::rstest;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -109,15 +110,41 @@ fn utc_fields_match_datetime() {
     }
 }
 
+#[rstest]
+fn a_clock_reading_has_the_fields_of_its_timestamp() {
+    for row in fixtures().utc {
+        let offset = std::time::Duration::from_secs(row.seconds.unsigned_abs());
+        let whole = if row.seconds < 0 {
+            std::time::UNIX_EPOCH - offset
+        } else {
+            std::time::UNIX_EPOCH + offset
+        };
+        let at = whole
+            + std::time::Duration::from_micros(u64::from(row.micros))
+            + std::time::Duration::from_nanos(999);
+        assert_eq!(
+            UtcDateTime::from_system_time(at),
+            UtcDateTime::from_timestamp(row.seconds, row.micros),
+            "{} {}",
+            row.seconds,
+            row.micros
+        );
+    }
+}
+
 #[test]
 fn fromisoformat_matches_datetime() {
     for row in fixtures().fromisoformat {
         let expected = match (row.naive, row.aware) {
-            (Some(micros), None) => Some(IsoDateTime::Naive(micros)),
-            (None, Some(micros)) => Some(IsoDateTime::Aware(micros)),
+            (Some(micros), None) => Some((true, micros)),
+            (None, Some(micros)) => Some((false, micros)),
             _ => None,
         };
-        assert_eq!(fromisoformat(&row.text), expected, "{:?}", row.text);
+        let read = fromisoformat(&row.text).map(|at| match at {
+            IsoDateTime::Naive(micros) => (true, micros),
+            IsoDateTime::Aware { utc, .. } => (false, utc),
+        });
+        assert_eq!(read, expected, "{:?}", row.text);
     }
 }
 

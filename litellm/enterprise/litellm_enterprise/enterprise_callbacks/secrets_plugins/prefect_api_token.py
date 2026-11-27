@@ -15,5 +15,5 @@ class PrefectApiTokenDetector(RegexBasedDetector):
         return "Prefect API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [re.compile(r"""(?i)\b(pnu_[a-z0-9]{36})(?:['|\"|\n|\r|\s|\x60|;]|$)""")]

@@ -297,7 +297,7 @@ class GenAIMetricRecorder:
 
     def _common_attributes(self, kwargs: _MetricKwargs) -> dict:
         params: Final = kwargs.get("litellm_params") or {}
-        common_attrs: Final[dict] = {
+        common_attrs: Final[dict[str, object]] = {
             GenAI.OPERATION_NAME: resolve_operation(
                 kwargs.get("call_type"), kwargs.get(PASSTHROUGH_OPERATION_KEY)
             ).value,
@@ -392,7 +392,7 @@ class GenAIMetricRecorder:
     #  Per-metric recording
     # ------------------------------------------------------------------ #
 
-    def _record_token_usage(self, response_obj: _ResponseView | None, common_attrs: dict) -> None:
+    def _record_token_usage(self, response_obj: _ResponseView | None, common_attrs: MetricAttributes) -> None:
         if not response_obj:
             return
         usage: Final = response_obj.get("usage")
@@ -403,7 +403,7 @@ class GenAIMetricRecorder:
         self._metrics.token_usage.record(usage.get("prompt_tokens", 0), attributes=in_attrs)
         self._metrics.token_usage.record(usage.get("completion_tokens", 0), attributes=out_attrs)
 
-    def _record_time_to_first_token(self, kwargs: _MetricKwargs, common_attrs: dict) -> None:
+    def _record_time_to_first_token(self, kwargs: _MetricKwargs, common_attrs: MetricAttributes) -> None:
         time_to_first_chunk: Final = time_to_first_chunk_seconds(kwargs)
         if time_to_first_chunk is None:
             return
@@ -415,7 +415,7 @@ class GenAIMetricRecorder:
         response_obj: _ResponseView | None,
         end_time: datetime,
         duration_s: float,
-        common_attrs: dict,
+        common_attrs: MetricAttributes,
     ) -> None:
         usage: Final = response_obj.get("usage") if response_obj else None
         completion_tokens: Final = usage.get("completion_tokens") if usage else None
@@ -440,7 +440,9 @@ class GenAIMetricRecorder:
         if generation_time > 0:
             self._metrics.time_per_output_token.record(generation_time / completion_tokens, attributes=common_attrs)
 
-    def _record_response_duration(self, kwargs: _MetricKwargs, end_time: datetime, common_attrs: dict) -> None:
+    def _record_response_duration(
+        self, kwargs: _MetricKwargs, end_time: datetime, common_attrs: MetricAttributes
+    ) -> None:
         api_call_start_time: Final = kwargs.get("api_call_start_time")
         if api_call_start_time is None:
             return

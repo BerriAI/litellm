@@ -43,7 +43,9 @@ class TritonConfig(BaseConfig):
     Handles routing between /infer and /generate triton completion llms
     """
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return TritonError(status_code=status_code, message=error_message, headers=headers)
 
     def validate_environment(
@@ -64,10 +66,10 @@ class TritonConfig(BaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params[param] = value

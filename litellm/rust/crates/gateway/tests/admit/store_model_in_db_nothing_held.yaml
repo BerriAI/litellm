@@ -1,0 +1,18 @@
+# With the stored config layered in and none of the stored objects the gateway does not read in
+# the database, Rust answers, though supported_db_objects loads every kind.
+stored: loaded
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    store_model_in_db: true
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

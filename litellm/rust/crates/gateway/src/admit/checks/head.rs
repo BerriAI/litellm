@@ -11,6 +11,7 @@ use super::{Admit, Reason, Refused, config::messages_only};
 
 const MESSAGES: &str = "/v1/messages";
 const CALL_ID: &str = "x-litellm-call-id";
+const FORWARDED_FOR: &str = "x-forwarded-for";
 const CLAUDE_CODE: [&str; 2] = ["claude-cli/", "claude-code/"];
 
 /// The native app serves `POST /v1/messages` and nothing else, and not even that when a setting
@@ -20,6 +21,16 @@ pub(super) fn route(admit: &Admit, request: &Parts) -> Option<Reason> {
         return Some(Reason::new(Refused::Route, "unserved_route"));
     }
     messages_only(&admit.config).map(|over| Reason::new(Refused::Settings, over))
+}
+
+/// Under `allowed_ips`, the address Python checks is the one its server resolved, which reads
+/// `x-forwarded-for` from a peer the operator trusts. Only `use_x_forwarded_for` makes the proxy
+/// read the header itself, so with it off a request that sends one is left to Python.
+pub(super) fn forwarded_for(admit: &Admit, request: &Parts) -> Option<Reason> {
+    (admit.allowlists.client_addresses.reads_address()
+        && !admit.config.general_settings.use_x_forwarded_for
+        && request.headers.contains_key(FORWARDED_FOR))
+    .then(|| Reason::new(Refused::Headers, "general_settings.allowed_ips"))
 }
 
 pub(super) fn headers(admit: &Admit, request: &Parts) -> Option<Reason> {

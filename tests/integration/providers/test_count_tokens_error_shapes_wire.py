@@ -149,6 +149,28 @@ def test_local_messages_count_classifies_only_unsupported_content_as_an_invalid_
 
 
 @pytest.mark.parametrize(
+    ("deployment", "call_endpoint"),
+    (("mistral/mistral-small-latest", False), ("hosted_vllm/zai-org/GLM-5.3", True)),
+    ids=("local", "call-endpoint-without-a-provider-counter"),
+)
+def test_utils_token_counter_answers_400_naming_a_block_the_local_counter_cannot_read(
+    gateway: Gateway, deployment: str, call_endpoint: bool
+) -> None:
+    content: Final[list[JsonValue]] = [{"type": "future_block", "future_block": {"value": "ignore me"}}]
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(model=deployment, api_base="http://127.0.0.1:9/v1")
+        response: Final = gateway.request(
+            "POST",
+            f"/utils/token_counter?call_endpoint={str(call_endpoint).lower()}",
+            {"model": model, "messages": [{"role": "user", "content": content}]},
+        )
+        assert response.status_code == 400, response.text
+        error: Final = _JSON_OBJECT.validate_json(response.content)["error"]
+        assert isinstance(error, dict), response.text
+        assert error["type"] == "invalid_request_error" and "future_block" in str(error["message"]), response.text
+
+
+@pytest.mark.parametrize(
     ("deployment", "missing"),
     (
         ({"model": "anthropic/claude-sonnet-4-6"}, "No Anthropic API key is set for model "),

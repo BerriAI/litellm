@@ -112,9 +112,11 @@ pub fn team_ids(claims: &Claims, settings: &JwtSettings) -> Vec<String> {
             other => items(other),
         };
     }
-    configured(claims, settings.config.team_ids_jwt_field.as_ref())
-        .map(items)
-        .unwrap_or_default()
+    match configured(claims, settings.config.team_ids_jwt_field.as_ref()) {
+        Some(Value::String(team_id)) if !team_id.is_empty() => vec![team_id.clone()],
+        Some(other) => items(other),
+        None => Vec::new(),
+    }
 }
 
 /// `get_all_jwt_team_ids`: the plural claim's ids, then the singular claim's ids not already seen.
@@ -587,7 +589,10 @@ mod tests {
 
     #[rstest]
     #[case::list(json!({"teams": ["a", "b"]}), vec!["a", "b"])]
-    #[case::string_is_not_a_list(json!({"teams": "a"}), vec![])]
+    #[case::text_is_one_team(json!({"teams": "a"}), vec!["a"])]
+    #[case::empty_text_is_no_team(json!({"teams": ""}), vec![])]
+    #[case::number_is_no_team(json!({"teams": 7}), vec![])]
+    #[case::object_is_no_team(json!({"teams": {"a": 1}}), vec![])]
     #[case::trusted_string(json!({"_litellm_jwt_issuer": "https://idp", "_litellm_team_ids": "n", "teams": ["a"]}), vec!["n"])]
     #[case::trusted_other_type_blocks_fallback(json!({"_litellm_jwt_issuer": "https://idp", "_litellm_team_ids": 3, "teams": ["a"]}), vec![])]
     fn team_ids_read_plural_claim(#[case] token: Value, #[case] expected: Vec<&str>) {
@@ -604,6 +609,7 @@ mod tests {
     #[case::singular_list(json!({"teams": ["a"], "team": ["b", null, "", "a", 5]}), vec!["a", "b", "5"])]
     #[case::falsy_singular_skipped(json!({"team": 0}), vec![])]
     #[case::default_not_consulted(json!({}), vec![])]
+    #[case::plural_text_then_singular(json!({"teams": "a", "team": "b"}), vec!["a", "b"])]
     fn all_team_ids_merge_both_claims(#[case] token: Value, #[case] expected: Vec<&str>) {
         assert_eq!(
             all_team_ids(&claims(token), &settings(team_ids_config())),

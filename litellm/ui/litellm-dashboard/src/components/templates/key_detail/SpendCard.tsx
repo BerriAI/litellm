@@ -13,6 +13,7 @@ import { budgetUsagePercent, type AppliedBudget } from "@/components/shared/appl
 import { StatusBadge } from "@/components/shared/table_cells";
 import type { BudgetAlertRow } from "@/components/key_team_helpers/budgetAlertEmails";
 import { budgetPeriodRange, formatBudgetResetTime } from "@/utils/budgetUtils";
+import { formatDateWithEnglishPattern } from "@/i18n/formats";
 import { cn } from "@/lib/cva.config";
 
 import { headroomKey, meterTone, ownerText, resetCaption, resetSentence, SCOPE_KEYS } from "./budgetText";
@@ -83,22 +84,29 @@ export function SpendCard(props: SpendCardProps) {
   );
 }
 
-function periodHint(budgetDuration: string | null, budgetResetAt: string | null): string | null {
+const PERIOD_DAY_FORMAT: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", timeZone: "UTC" };
+const RESET_DAY_FORMAT: Intl.DateTimeFormatOptions = { ...PERIOD_DAY_FORMAT, year: "numeric" };
+
+function periodHint(budgetDuration: string | null, budgetResetAt: string | null, language: string) {
   const period = budgetPeriodRange(budgetDuration, budgetResetAt);
   if (!period) return null;
   const start = dayjs.utc(period.start);
   const end = dayjs.utc(period.end);
   if (end.diff(start) < TWO_DAYS_MS) return null;
-  return `${start.format("MMM D")}|${end.subtract(1, "millisecond").format("MMM D")}|${end.format("MMM D, YYYY")}`;
+  const lastDay = end.subtract(1, "millisecond");
+  return {
+    start: formatDateWithEnglishPattern(start.toDate(), language, start.format("MMM D"), PERIOD_DAY_FORMAT),
+    end: formatDateWithEnglishPattern(lastDay.toDate(), language, lastDay.format("MMM D"), PERIOD_DAY_FORMAT),
+    reset: formatDateWithEnglishPattern(end.toDate(), language, end.format("MMM D, YYYY"), RESET_DAY_FORMAT),
+  };
 }
 
 function SpendHeadline({ spend, budgetDuration, budgetResetAt, hasOwnBudget }: SpendCardProps) {
-  const { t } = useTranslation();
-  const resetTime = formatBudgetResetTime(budgetResetAt);
-  const range = periodHint(budgetDuration, budgetResetAt);
-  const [start, end, reset] = range ? range.split("|") : [];
+  const { t, i18n } = useTranslation();
+  const resetTime = formatBudgetResetTime(budgetResetAt, t, i18n.language);
+  const range = periodHint(budgetDuration, budgetResetAt, i18n.language);
   const hint = (() => {
-    if (range) return t("keyDetail.overview.spend.periodRange", { start, end, reset });
+    if (range) return t("keyDetail.overview.spend.periodRange", range);
     if (resetTime) return t("keyDetail.overview.spend.resetsAt", { time: resetTime });
     return hasOwnBudget ? t("keyDetail.overview.spend.neverResets") : t("keyDetail.overview.spend.neverResetsNoBudget");
   })();
@@ -118,7 +126,7 @@ function SpendHeadline({ spend, budgetDuration, budgetResetAt, hasOwnBudget }: S
 }
 
 function LifetimeStat({ totalSpend, lifetimeNeedsBackfill, createdAt }: SpendCardProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const total = totalSpend ?? 0;
   return (
     <div data-testid="key-lifetime-spend">
@@ -147,7 +155,7 @@ function LifetimeStat({ totalSpend, lifetimeNeedsBackfill, createdAt }: SpendCar
       <p className="m-0 mt-1 text-[15px] leading-[22px] font-semibold tabular-nums">{formatMoney(total)}</p>
       {createdAt && !lifetimeNeedsBackfill ? (
         <p className="m-0 text-xs text-muted-foreground">
-          {t("keyDetail.overview.spend.since", { date: formatDate(createdAt) })}
+          {t("keyDetail.overview.spend.since", { date: formatDate(createdAt, i18n.language) })}
         </p>
       ) : null}
     </div>
@@ -164,7 +172,7 @@ function UsedUpBadge({ throttles }: { throttles: boolean }) {
 }
 
 function CanStillSpendSlot({ budgets, keyThrottlesOnBudget, budgetResetAt }: SpendCardProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const result = canStillSpend(budgets, keyThrottlesOnBudget);
   const label = (
     <div className="mb-2 text-xs font-medium text-muted-foreground">{t("keyDetail.overview.canStillSpend.title")}</div>
@@ -186,7 +194,7 @@ function CanStillSpendSlot({ budgets, keyThrottlesOnBudget, budgetResetAt }: Spe
   const { budget, remaining, spend, throttles } = result;
   const usedUp = remaining === 0;
   const owner = ownerText(budget, usedUp);
-  const reset = resetSentence(budget, formatBudgetResetTime(budgetResetAt));
+  const reset = resetSentence(budget, formatBudgetResetTime(budgetResetAt, t, i18n.language));
   const figures = t("keyDetail.overview.canStillSpend.figures", {
     spend: formatMoney(spend),
     limit: formatMoney(budget.maxBudget),
@@ -228,11 +236,11 @@ function BudgetRow({
   budgetResetAt,
   budgetHref,
 }: SpendCardProps & { budget: AppliedBudget }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const usage = budgetUsagePercent(budget);
   const throttles = budgetThrottles(budget, keyThrottlesOnBudget);
   const scopeLabel = t(`keyDetail.overview.budgets.scopes.${SCOPE_KEYS[budget.scope]}` as ParseKeys);
-  const caption = resetCaption(budget, formatBudgetResetTime(budgetResetAt));
+  const caption = resetCaption(budget, formatBudgetResetTime(budgetResetAt, t, i18n.language));
   return (
     <li className="grid grid-cols-1 items-center gap-x-6 gap-y-1 border-t border-border py-2.5 md:grid-cols-[minmax(160px,260px)_minmax(120px,1fr)_minmax(180px,220px)]">
       <div className="min-w-0">

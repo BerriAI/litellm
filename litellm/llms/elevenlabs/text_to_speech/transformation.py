@@ -170,11 +170,11 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate Azure environment and set up authentication headers
         """
@@ -192,7 +192,9 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return ElevenLabsException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_text_to_speech_request(

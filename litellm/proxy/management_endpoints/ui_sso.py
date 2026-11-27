@@ -134,6 +134,7 @@ from litellm.proxy.management_endpoints.team_endpoints import new_team, team_mem
 from litellm.proxy.management_endpoints.types import (
     LITELLM_USER_ROLE_HIERARCHY,
     CustomOpenID,
+    GenericOpenID,
     get_litellm_user_role,
     is_valid_litellm_user_role,
 )
@@ -971,7 +972,7 @@ def process_sso_jwt_access_token(
     sso_jwt_handler: ClaimReading | None,
     result: OpenID | dict | None,
     role_mappings: Optional["RoleMappings"] = None,
-) -> dict | None:
+) -> dict[str, object] | None:
     """
     Process SSO JWT access token and extract team IDs and user role if available.
 
@@ -1287,7 +1288,7 @@ async def google_login(
 
 
 def generic_response_convertor(
-    response,
+    response: Mapping[str, object],
     jwt_handler: ClaimReading,
     sso_jwt_handler: ClaimReading | None = None,
     role_mappings: Optional["RoleMappings"] = None,
@@ -1404,7 +1405,7 @@ def generic_response_convertor(
             attr_name = attr_name.strip()
             extra_fields[attr_name] = get_nested_value(response, attr_name)
 
-    return CustomOpenID(
+    return GenericOpenID(
         id=get_nested_value(response, generic_user_id_attribute_name),
         display_name=get_nested_value(response, generic_user_display_name_attribute_name),
         email=normalize_email(get_nested_value(response, generic_user_email_attribute_name)),
@@ -1650,14 +1651,14 @@ async def get_generic_sso_response(
     generic_client_id: str,
     redirect_url: str,
 ) -> tuple[
-    OpenID | dict, dict | None, dict | None, SSOIdentityAssertion | None
+    OpenID | dict, dict[str, object] | None, dict[str, object] | None, SSOIdentityAssertion | None
 ]:  # (result, received_response, access_token_payload, sso_assertion)
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
 
     from litellm.proxy import proxy_server
 
-    received_response: dict | None = None
+    received_response: dict[str, object] | None = None
     sso_assertion: SSOIdentityAssertion | None = None
 
     # Setup environment variables
@@ -1727,7 +1728,7 @@ async def get_generic_sso_response(
     additional_generic_sso_headers_dict: Final = _parse_generic_sso_headers()
 
     code_verifier: str | None = None  # assigned inside try; initialized for type tracking
-    access_token_payload: dict | None = None  # decoded JWT access token claims
+    access_token_payload: dict[str, object] | None = None  # decoded JWT access token claims
 
     try:
         token_exchange_params: Final = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
@@ -2207,7 +2208,7 @@ def _build_sso_user_update_data(
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _sync_user_role_from_jwt_role_map(
     jwt_handler: ClaimReading | None,
-    received_response: dict | None,
+    received_response: dict[str, object] | None,
     user_info: LiteLLM_UserTable | NewUserResponse | None,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
@@ -2527,7 +2528,7 @@ async def saml_callback(request: Request):
 
 
 async def _build_cli_sso_user_defined_values(
-    result: OpenID | dict,
+    result: OpenID | dict[str, object],
     parsed_openid_result: ParsedOpenIDResult,
 ) -> SSOUserDefinedValues | None:
     custom_sso_handler: Final = _configured_custom_sso()
@@ -2617,8 +2618,8 @@ async def _complete_cli_sso_callback_session(
     *,
     request: Request,
     key: str,
-    flow: dict,
-    result: OpenID | dict,
+    flow: dict[str, object],
+    result: OpenID | dict[str, object],
     parsed_openid_result: ParsedOpenIDResult,
     user_defined_values: SSOUserDefinedValues | None,
     prisma_client: PrismaClient,
@@ -2717,7 +2718,7 @@ async def cli_sso_callback(
     request: Request,
     key: str | None = None,
     result: OpenID | dict | None = None,
-    received_response: dict | None = None,
+    received_response: Mapping[str, object] | None = None,
     prefill_user_code: str | None = None,
     sso_assertion: SSOIdentityAssertion | None = None,
 ):
@@ -2920,7 +2921,7 @@ async def cli_poll_key(
 
 
 async def insert_sso_user(
-    result_openid: OpenID | dict | None,
+    result_openid: OpenID | Mapping[str, object] | None,
     user_defined_values: SSOUserDefinedValues | None = None,
 ) -> NewUserResponse:
     """
@@ -3704,7 +3705,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     async def upsert_sso_user(
-        result: CustomOpenID | OpenID | dict | None,
+        result: CustomOpenID | OpenID | Mapping[str, object] | None,
         user_info: NewUserResponse | LiteLLM_UserTable | None,
         user_email: str | None,
         user_defined_values: SSOUserDefinedValues | None,
@@ -3753,7 +3754,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     async def add_user_to_teams_from_sso_response(
-        result: CustomOpenID | OpenID | dict | None,
+        result: CustomOpenID | OpenID | Mapping[str, object] | None,
         user_info: NewUserResponse | LiteLLM_UserTable | None,
     ):
         """
@@ -3774,9 +3775,9 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def verify_user_in_restricted_sso_group(
-        general_settings: dict,
-        result: CustomOpenID | OpenID | dict | None,
-        received_response: dict | None,
+        general_settings: Mapping[str, object],
+        result: CustomOpenID | OpenID | Mapping[str, object] | None,
+        received_response: Mapping[str, object] | None,
     ) -> Literal[True]:
         """
         when ui_access_mode.type == "restricted_sso_group":
@@ -3870,7 +3871,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def _cast_and_deepcopy_litellm_default_team_params(
-        default_team_params: DefaultTeamSSOParams | dict,
+        default_team_params: DefaultTeamSSOParams | Mapping[str, object],
         team_request: NewTeamRequest,
         litellm_team_id: str,
         litellm_team_name: str | None = None,
@@ -3925,7 +3926,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     def get_user_email_and_id_from_result(
-        result: OpenID | dict | None,
+        result: OpenID | Mapping[str, object] | None,
         generic_client_id: str | None = None,
     ) -> ParsedOpenIDResult:
         """
@@ -3985,12 +3986,12 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     async def get_redirect_response_from_openid(
-        result: OpenID | dict | CustomOpenID,
+        result: OpenID | Mapping[str, object] | CustomOpenID,
         request: Request,
-        received_response: dict | None = None,
+        received_response: dict[str, object] | None = None,
         generic_client_id: str | None = None,
-        ui_access_mode: dict | None = None,
-        access_token_payload: dict | None = None,
+        ui_access_mode: Mapping[str, object] | None = None,
+        access_token_payload: dict[str, object] | None = None,
         jwt_handler: ClaimReading | None = None,
         return_to: str | None = None,
         sso_assertion: SSOIdentityAssertion | None = None,
@@ -4021,7 +4022,7 @@ class SSOAuthenticationHandler:
         verbose_proxy_logger.info("SSO callback result: %s", result)
 
         user_info = None
-        user_id_models: Final[list] = []
+        user_id_models: Final[list[str]] = []
         max_internal_user_budget: Final = litellm.max_internal_user_budget
         internal_user_budget_duration: Final = litellm.internal_user_budget_duration
 
@@ -4998,7 +4999,7 @@ class MicrosoftSSOHandler:
 
     @staticmethod
     async def fetch_and_parse_groups(
-        url: str, headers: dict, async_client: AsyncHTTPHandler
+        url: str, headers: dict[str, str], async_client: AsyncHTTPHandler
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)

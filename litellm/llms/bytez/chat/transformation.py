@@ -122,14 +122,14 @@ class BytezChatConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         headers.update(
             {
                 "content-type": "application/json",
@@ -162,7 +162,7 @@ class BytezChatConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
@@ -258,7 +258,7 @@ class BytezChatConfig(BaseConfig):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: Mapping[str, object],
         messages: Sequence[object],
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -303,7 +303,7 @@ class BytezChatConfig(BaseConfig):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: Mapping[str, object],
         messages: Sequence[object],
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -431,7 +431,7 @@ def adapt_messages_to_bytez_standard(messages: list[dict]) -> list[dict[str, obj
 # "content": "The cat ran so fast"
 # becomes
 # "content": [{"type": "text", "text": "The cat ran so fast"}]
-def _adapt_string_only_content_to_lists(messages: list[dict]) -> list[dict[str, object]]:
+def _adapt_string_only_content_to_lists(messages: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
     new_messages: Final[list[dict[str, object]]] = []
 
     for message in messages:

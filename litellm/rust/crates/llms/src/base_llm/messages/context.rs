@@ -28,6 +28,7 @@ impl SupportedEffortTiers {
 pub struct MessagesShapeOptions {
     pub reasoning_auto_summary: bool,
     pub presanitized: bool,
+    pub drops_unsupported_params: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +75,8 @@ pub struct BedrockCapabilities {
     pub supports_tool_search: bool,
     #[serde(default)]
     pub supports_per_turn_control: bool,
+    #[serde(default)]
+    pub supports_server_side_fallback: bool,
     #[serde(default)]
     pub native_output: NativeOutputSupport,
 }
@@ -188,6 +191,7 @@ pub struct MessagesTransformContext {
     pub drops_unsupported_params: bool,
     pub global_drop_params: bool,
     pub claude_base_model: bool,
+    pub keeps_unsigned_thinking: bool,
 }
 impl MessagesTransformContext {
     pub fn new(capabilities: MessagesModelCapabilities, drop_params: bool) -> Self {
@@ -211,6 +215,7 @@ impl MessagesTransformContext {
             drops_unsupported_params: false,
             global_drop_params: false,
             claude_base_model: false,
+            keeps_unsigned_thinking: false,
         }
     }
 

@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm._internal_context import nested_tool_call_failure
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.integrations.custom_logger_v2.rust import RustLogger
@@ -171,6 +172,21 @@ async def test_a_failure_writes_the_released_reservation_back(proxy: Proxy) -> N
     await bill_failure_in_rust(auth, ValueError("refused"), {"model": "gpt-4o", "metadata": {}})
 
     assert auth.budget_reservation is not None
+    assert auth.budget_reservation.get("finalized") is True
+
+
+@pytest.mark.asyncio
+async def test_a_failed_tool_call_inside_the_request_keeps_the_requests_reservation_held(proxy: Proxy) -> None:
+    auth: Final = _auth(budget_reservation={"reserved_cost": 0.5, "entries": []})
+
+    with nested_tool_call_failure():
+        await bill_failure_in_rust(
+            auth, ValueError("tool failed"), {"model": "MCP: add", "call_type": "call_mcp_tool", "metadata": {}}
+        )
+    assert auth.budget_reservation is not None
+    assert auth.budget_reservation.get("finalized") is None
+
+    await bill_failure_in_rust(auth, ValueError("request failed"), {"model": "gpt-4o", "metadata": {}})
     assert auth.budget_reservation.get("finalized") is True
 
 
@@ -519,6 +535,18 @@ async def test_a_billed_customer_failure_row_is_charged_the_surcharge_main_appli
     expected: Final = snapshotless_cost_with_customer_margin(2.0, 0.5)
     assert rows[0]["spend"] == expected.amount == 3.0
     assert _metadata(rows[0])["cost_breakdown"] == expected.logging_breakdown()
+
+
+@pytest.mark.asyncio
+async def test_a_billed_failure_row_raises_the_spend_counters_through_the_proxy(proxy: Proxy) -> None:
+    await bill_failure_in_rust(
+        _auth(),
+        ValueError("the stream broke"),
+        {"model": "gpt-4o", "metadata": {}, "response_cost": 2.0, "combined_usage_object": litellm.Usage()},
+    )
+
+    assert len(await proxy.rows()) == 1
+    assert ps.spend_counter_store.handle.get_local("spend:user:user-1") == 2.0
 
 
 def _attempt(outcome: Outcome, metadata: Mapping[str, object]) -> HookArgs:

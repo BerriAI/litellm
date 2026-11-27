@@ -43,6 +43,7 @@ use litellm_callbacks::{
 };
 use litellm_callbacks_budgets::Budgets;
 use litellm_redaction::TokenRedactor;
+use litellm_redis_store::RequestRedis;
 use litellm_spend_log_writer::{LedgerStore, SpendLogWriter};
 
 pub use hook_input::SpendLogInput;
@@ -124,7 +125,15 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
         &self.writer
     }
 
-    async fn run(&self, input: &HookInput, host: Host) -> HookOutput {
+    /// One hook run for a request whose Redis batches are `redis`: the counter step's increments
+    /// ride its post-call batch, which tracks the request's own committed charge until it lands.
+    /// `None` outside a request sends them at once.
+    pub async fn handle_with(
+        &self,
+        input: &HookInput,
+        host: Host,
+        redis: Option<&RequestRedis>,
+    ) -> HookOutput {
         if input.hook == Hook::AttemptEnded
             && matches!(
                 input.fields.get::<typed::Outcome>()?,
@@ -160,11 +169,11 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
         let before = reservation.clone();
         match (input.hook, parsed) {
             (Hook::AttemptEnded, SpendLogInput::Success(success)) => {
-                self.on_success(*success, &fields, &mut reservation, &host)
+                self.on_success(*success, &fields, &mut reservation, &host, redis)
                     .await;
             }
             (Hook::PostCallFailure, SpendLogInput::Failure(failure)) => {
-                self.on_failure(*failure, &fields, &mut reservation, &host)
+                self.on_failure(*failure, &fields, &mut reservation, &host, redis)
                     .await;
             }
             _ => {}
@@ -213,6 +222,6 @@ impl<S: LedgerStore + 'static> Callback for SpendLogCallback<S> {
         _state: Option<&'a ()>,
         host: Host,
     ) -> BoxFuture<'a, HookOutput> {
-        Box::pin(self.run(input, host))
+        Box::pin(self.handle_with(input, host, None))
     }
 }

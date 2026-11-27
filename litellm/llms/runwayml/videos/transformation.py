@@ -206,11 +206,11 @@ class RunwayMLVideoConfig(BaseVideoConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up authentication headers.
         RunwayML uses Bearer token authentication via RUNWAYML_API_SECRET.
@@ -742,7 +742,9 @@ class RunwayMLVideoConfig(BaseVideoConfig):
     ) -> NoReturn:
         raise NotImplementedError("video extension is not supported for RunwayML")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return RunwayMLError(
             status_code=status_code,
             message=error_message,

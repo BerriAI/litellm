@@ -1,4 +1,6 @@
 import traceback
+from collections.abc import Callable
+from datetime import datetime
 from typing import Final, Protocol
 
 from litellm._logging import verbose_logger
@@ -52,10 +54,10 @@ class TraceloopLogger:
         self,
         kwargs,
         response_obj,
-        start_time,
+        start_time: datetime,
         end_time,
         user_id: object,
-        print_verbose,
+        print_verbose: Callable[[str], object],
         level: str = "DEFAULT",
         status_message: object = None,
     ) -> None:
@@ -68,9 +70,9 @@ class TraceloopLogger:
             tracer: Final = self.tracer_wrapper.get_tracer()
 
             optional_params: Final = kwargs.get("optional_params", {})
-            start_time = int(start_time.timestamp())
+            start_timestamp: Final = int(start_time.timestamp())
             end_time = int(end_time.timestamp())
-            span: Final = tracer.start_span("litellm.completion", kind=SpanKind.CLIENT, start_time=start_time)
+            span: Final = tracer.start_span("litellm.completion", kind=SpanKind.CLIENT, start_time=start_timestamp)
 
             if span.is_recording():
                 span.set_attribute(SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model"))

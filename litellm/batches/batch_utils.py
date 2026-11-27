@@ -201,6 +201,7 @@ class _BatchOutputLineStats:
     reasoning_tokens: int
     model: str | None
     usage: Usage | None
+    provider_failed: bool = False
 
 
 def _classify_output_line_stats(
@@ -214,13 +215,38 @@ def _classify_output_line_stats(
     a second read of a potentially huge output file. A line the provider reported as
     failed yields ``PROVIDER_FAILED``; a successful line litellm could not price
     yields ``UNCOSTABLE`` and still counts as a successful request billed at $0, so
-    the counts stay reconcilable with the provider's own ``request_counts``."""
-    for entry in entries:
-        if not _batch_response_was_successful(entry, custom_llm_provider):
-            yield _LineOutcome.PROVIDER_FAILED
-            continue
-        stats = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
-        yield stats if stats is not None else _LineOutcome.UNCOSTABLE
+    the counts stay reconcilable with the provider's own ``request_counts``. A failed
+    line that still reports usage was billed by the provider, so it is priced and
+    counted as failed."""
+    return (
+        _classify_output_line(entry, custom_llm_provider, model_name, model_info, vertex_location) for entry in entries
+    )
+
+
+def _classify_output_line(
+    entry: Mapping[str, object],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    model_name: str | None,
+    model_info: ModelInfo | None,
+    vertex_location: str | None,
+) -> _BatchOutputLineStats | _LineOutcome:
+    if _batch_response_was_successful(entry, custom_llm_provider):
+        stats: Final = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
+        return stats if stats is not None else _LineOutcome.UNCOSTABLE
+    billed: Final = (
+        _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
+        if _failed_line_reports_usage(entry, custom_llm_provider)
+        else None
+    )
+    return _LineOutcome.PROVIDER_FAILED if billed is None else dataclasses_replace(billed, provider_failed=True)
+
+
+def _failed_line_reports_usage(entry: Mapping[str, object], custom_llm_provider: str) -> bool:
+    if custom_llm_provider in ("anthropic", "bedrock"):
+        return False
+    envelope: Final = as_str_mapping(entry.get("response"))
+    body: Final = None if envelope is None else as_str_mapping(envelope.get("body"))
+    return body is not None and as_str_mapping(body.get("usage")) is not None
 
 
 def _safe_output_line_stats(
@@ -391,7 +417,12 @@ def _aggregate_batch_cost_usage_models(
         _classify_output_line_stats(entries, custom_llm_provider, model_name, model_info, vertex_location)
     )
     line_stats: Final = tuple(result for result in all_results if isinstance(result, _BatchOutputLineStats))
-    failed_requests: Final = sum(1 for result in all_results if result is _LineOutcome.PROVIDER_FAILED)
+    failed_requests: Final = sum(
+        1
+        for result in all_results
+        if result is _LineOutcome.PROVIDER_FAILED
+        or (isinstance(result, _BatchOutputLineStats) and result.provider_failed)
+    )
     successful_requests: Final = len(all_results) - failed_requests
 
     cache_token_params: Final = {
@@ -844,7 +875,7 @@ def _get_batch_job_usage_from_response_body(
         )
         if titan_usage is not None:
             return titan_usage
-        usage_object: Final = response_body.get("usage", None) or {}
+        usage_object: Final = response_body.get("usage", None) or dict[str, object]()
         if custom_llm_provider == "bedrock" and AmazonConverseConfig.is_converse_usage_shape(usage_object):
             return AmazonConverseConfig().usage_from_batch_output(usage_object)
         anthropic_usage: Final = AnthropicConfig().calculate_usage(
@@ -904,7 +935,7 @@ def _get_response_from_batch_job_output_file(
     _response: Final = cast(  # cast-ok: batch output response comes from provider JSON
         Mapping[str, object], batch_job_output_file.get("response", None) or {}
     )
-    _response_body: Final = _response.get("body", None) or {}
+    _response_body: Final = _response.get("body", None) or dict[str, object]()
     return cast(Mapping[str, object], _response_body)  # cast-ok: batch response body comes from provider JSON
 
 

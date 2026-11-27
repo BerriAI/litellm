@@ -1,3 +1,5 @@
+import { formatDateWithEnglishPattern } from "@/i18n/formats";
+
 const RELATIVE_STEPS: readonly (readonly [Intl.RelativeTimeFormatUnit, number])[] = [
   ["year", 365 * 24 * 60 * 60],
   ["month", 30 * 24 * 60 * 60],
@@ -16,18 +18,23 @@ export const formatMoney = (value: number): string => `$${value.toLocaleString("
 
 export const formatCount = (value: number): string => value.toLocaleString("en-US");
 
-export const formatDate = (iso: string): string =>
-  new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+const DATE_FORMAT: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "numeric" };
+
+export const formatDate = (iso: string, language: string): string => {
+  const date = new Date(iso);
+  return formatDateWithEnglishPattern(date, language, date.toLocaleDateString("en-US", DATE_FORMAT), DATE_FORMAT);
+};
 
 const DATE_TIME_FORMAT: Intl.DateTimeFormatOptions = {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
+  ...DATE_FORMAT,
   hour: "numeric",
   minute: "2-digit",
 };
 
-export const formatDateTime = (iso: string): string => new Date(iso).toLocaleString("en-US", DATE_TIME_FORMAT);
+export const formatDateTime = (iso: string, language: string): string => {
+  const date = new Date(iso);
+  return formatDateWithEnglishPattern(date, language, date.toLocaleString("en-US", DATE_TIME_FORMAT), DATE_TIME_FORMAT);
+};
 
 export const formatRelative = (iso: string, nowMs: number, locale: string): string => {
   const seconds = Math.round((Date.parse(iso) - nowMs) / 1000);

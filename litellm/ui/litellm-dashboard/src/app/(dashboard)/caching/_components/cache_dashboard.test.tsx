@@ -1,6 +1,9 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { I18nextProvider } from "react-i18next";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CacheDashboard from "./cache_dashboard";
 
@@ -54,9 +57,11 @@ const cacheActivity = {
   ],
 };
 
-const renderDashboard = () =>
+const renderDashboard = (locale = i18n) =>
   renderWithProviders(
-    <CacheDashboard accessToken="sk-test" token="tok" userRole="Admin" userID="u1" premiumUser={false} />,
+    <I18nextProvider i18n={locale}>
+      <CacheDashboard accessToken="sk-test" token="tok" userRole="Admin" userID="u1" premiumUser={false} />
+    </I18nextProvider>,
   );
 
 const REQUESTS_CHART_TITLE = "Cache Hits vs API Requests";
@@ -95,6 +100,28 @@ describe("CacheDashboard cache analytics charts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useCacheActivity.mockReturnValue({ data: cacheActivity, refetch: vi.fn() });
+  });
+
+  it("reformats the last refresh on a language change and displays the next refresh time", async () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    await locale.changeLanguage("en");
+    const firstRefresh = new Date(2026, 10, 27, 3, 0, 27);
+
+    vi.setSystemTime(firstRefresh);
+    try {
+      renderDashboard(locale);
+      expect(screen.getByText(`Last Refreshed: ${firstRefresh.toLocaleString()}`)).toBeInTheDocument();
+
+      await act(() => locale.changeLanguage("zh-CN"));
+      expect(screen.getByText("上次刷新：2026/11/27 03:00:27")).toBeInTheDocument();
+
+      vi.setSystemTime(new Date(2026, 10, 27, 3, 1, 28));
+      fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+      expect(screen.getByText("上次刷新：2026/11/27 03:01:28")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders both chart card titles", async () => {

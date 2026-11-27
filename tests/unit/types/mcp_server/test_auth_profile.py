@@ -11,6 +11,7 @@ from litellm.types.mcp_server.auth_profile import (
     MCPAuthProfile,
     StaticAuthProfile,
     parse_auth_profile_json,
+    profile_id_key,
 )
 
 PROFILES: Final[TypeAdapter[MCPAuthProfile]] = TypeAdapter(MCPAuthProfile)
@@ -169,3 +170,11 @@ def test_reading_profile_json_accepts_both_static_and_oauth_credentials() -> Non
         parse_auth_profile_json('{"id":"test","auth_type":"oauth2","oauth2_flow":"client_credentials"}'),
         ClientCredentialsAuthProfile,
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (("Build", "build"), ("DEFAULT", "default"), ("\u212aey", "\u212aey"), ("\u017fecret", "\u017fecret")),
+)
+def test_profile_id_key_folds_ascii_case_and_leaves_other_text_unchanged(value: str, expected: str) -> None:
+    assert profile_id_key(value) == expected

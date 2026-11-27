@@ -40,7 +40,7 @@ NUM_CANDIDATES_MULTIPLIER: Final = 10
 MIN_NUM_CANDIDATES: Final = 100
 MAX_NUM_CANDIDATES: Final = 10_000
 MAX_QUERY_CHARACTERS: Final = 32_000
-_EMPTY_EMBEDDING_CONFIG: Final = MappingProxyType({})
+_EMPTY_EMBEDDING_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
 _SEARCH_ONLY_MESSAGE: Final = (
     "MongoDB vector store is search-only. Create the collection and its MongoDB Vector Search "
     "index in MongoDB directly, then register it here by index name."

@@ -1,6 +1,7 @@
 "use client";
 
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cva.config";
 
@@ -26,6 +27,25 @@ export function PageTabsList({ className, ...props }: ComponentProps<typeof Tabs
       )}
       {...props}
     />
+  );
+}
+
+type PageTabsBarProps = ComponentProps<typeof TabsList> & { actions?: ReactNode };
+
+export function PageTabsBar({ actions, className, ...props }: PageTabsBarProps) {
+  if (!actions) return <PageTabsList className={className} {...props} />;
+  return (
+    <div data-slot="page-tabs-bar" className="@container w-full min-w-0">
+      <div className="flex flex-col gap-3 @3xl:flex-row @3xl:gap-0">
+        <div className="flex flex-wrap items-center gap-2 @3xl:h-9 @3xl:shrink-0 @3xl:flex-nowrap @3xl:border-b @3xl:border-border @3xl:pr-6">
+          {actions}
+        </div>
+        <div className="hidden h-9 shrink-0 items-center border-b border-border pr-6 @3xl:flex">
+          <ToolbarSeparator className="mx-0 h-6" />
+        </div>
+        <PageTabsList className={cn("min-w-0 flex-1", className)} {...props} />
+      </div>
+    </div>
   );
 }
 

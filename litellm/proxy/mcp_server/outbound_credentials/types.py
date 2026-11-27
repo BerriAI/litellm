@@ -280,6 +280,7 @@ class ClientCredentialsConfig(HeaderCarrier):
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.client_credentials] = AuthSpecKind.client_credentials
+    profile_id: str | None = None
     client_id: str | None = None
     client_secret: SecretStr | None = None
     token_url: str | None = None

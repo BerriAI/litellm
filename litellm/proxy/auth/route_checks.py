@@ -350,7 +350,7 @@ class RouteChecks:
         route: str,
         request: Request,
         valid_token: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: Mapping[str, object],
     ):
         """
         Checks if Non Proxy Admin User is allowed to access the route
@@ -968,7 +968,7 @@ class RouteChecks:
     def _check_proxy_admin_viewer_access(
         route: str,
         _user_role: str,
-        request_data: dict,
+        request_data: Mapping[str, object],
         request: Request | None = None,
     ) -> None:
         """

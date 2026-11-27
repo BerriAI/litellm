@@ -364,7 +364,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):
@@ -426,7 +426,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> "GenericGuardrailAPIInputs":

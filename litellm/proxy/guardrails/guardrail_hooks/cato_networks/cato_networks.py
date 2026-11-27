@@ -186,9 +186,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         verbose_proxy_logger.debug("Inside Cato Pre-Call Hook")
         # /embeddings carries documents being indexed, not a conversation to inspect.
         if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
@@ -203,10 +203,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         verbose_proxy_logger.debug("Inside Cato Moderation Hook")
         if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
             verbose_proxy_logger.debug("Cato: skipping non-conversational call type %s", call_type)
@@ -320,7 +320,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         hook: str,
         key_alias: str | None,
         user_email: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         call_id: Final = data.get("litellm_call_id")
         headers: Final = self._build_cato_headers(
             hook=hook,
@@ -364,7 +364,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         )
         raise HTTPException(status_code=400, detail=detection_message)
 
-    def _anonymize_request(self, res: _CatoAnalyzeResponse, data: dict) -> dict:
+    def _anonymize_request(self, res: _CatoAnalyzeResponse, data: dict) -> dict[str, object]:
         verbose_proxy_logger.info("Cato: anonymize action")
         redacted_chat: Final = res.get("redacted_chat")
         if not redacted_chat:
@@ -626,7 +626,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     async def _inspect_output_text(
         self,
-        data: dict,
+        data: dict[str, object],
         text: str,
         user_api_key_dict: UserAPIKeyAuth,
         user_email: str | None,
@@ -647,7 +647,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:
@@ -739,7 +739,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         await websocket.send(json.dumps({"done": True}))
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.cato_networks import (
             CatoNetworksGuardrailConfigModel,
         )

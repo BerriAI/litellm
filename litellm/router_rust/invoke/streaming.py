@@ -28,6 +28,7 @@ which is why they live in the host. Ported from the Python router's ``_acompleti
 import asyncio
 import contextlib
 import dataclasses
+import itertools
 import json
 import time
 import weakref
@@ -131,6 +132,8 @@ class StreamAttempt:
     committed_budget: int | None = None
     # The group a pre-routing hook selected for ``group``, which a fallback lookup keys on first.
     routed: str | None = None
+    refused_ids: tuple[str, ...] = ()
+    provider_refused_window: bool = False
     # The deployment's max_parallel_requests slot the attempt holds; an open chat or speech stream takes it.
     slot: contextlib.ExitStack | None = None
     explain_failure: "Callable[[BaseException], tuple[str, str] | None] | None" = None
@@ -141,6 +144,8 @@ class StreamAttempt:
     # attempt's failure blocks this one's report, the stream's own log of its failure does not.
     failure_logged_before: frozenset[str] = frozenset()
     counted_tokens: int = 0
+    # The provider the walk that opened this stream first sent the caller's key to, for a recovery walk to keep.
+    caller_key_origin: str | None = None
     outcome_reported: bool = False
     # The background recording of the stream's failure, which a same-group retry waits for so it
     # picks with the failed deployment already cooled down.
@@ -160,6 +165,8 @@ class StreamAttempt:
             "attempted_retries": self.attempted_retries,
             "committed_budget": self.committed_budget,
             "routed": self.routed,
+            "refused_ids": list(self.refused_ids),
+            "provider_refused_window": self.provider_refused_window,
         }
 
     def policy(self, trigger: BaseException | None = None) -> Mapping[str, object]:
@@ -184,14 +191,25 @@ class StreamAttempt:
 
     async def fallback(self, trigger: BaseException, request: Mapping[str, object] | None = None) -> object:
         """The fallback walk for this stream's failure; raises when no fallback answers."""
-        return await self.core.recover_stream("fallback", self.op, request or self.request, self.origin(), trigger)
+        return await self.core.recover_stream(
+            "fallback",
+            self.op,
+            request or self.request,
+            self.origin(),
+            trigger,
+            caller_key_origin=self.caller_key_origin,
+        )
 
     def fallback_sync(self, trigger: BaseException) -> object:
-        return self.core.recover_stream_sync("fallback", self.op, self.request, self.origin(), trigger)
+        return self.core.recover_stream_sync(
+            "fallback", self.op, self.request, self.origin(), trigger, caller_key_origin=self.caller_key_origin
+        )
 
     async def retry(self, trigger: BaseException) -> "tuple[object, int, int] | BaseException":
         """A same-group retry: the retried response with the retry count and budget, or the newest failure."""
-        return await self.core.retry_stream(self.op, self.request, self.origin(), trigger)
+        return await self.core.retry_stream(
+            self.op, self.request, self.origin(), trigger, caller_key_origin=self.caller_key_origin
+        )
 
     # -- the stream's outcome, reported once when it ends --------------------------------------
 
@@ -494,6 +512,7 @@ _CONTENT_DELTA_KEYS: Final = (
     "tool_calls",
     "function_call",
     "reasoning_content",
+    "reasoning_details",
     "thinking_blocks",
     "reasoning_items",
     "audio",
@@ -1199,6 +1218,18 @@ class FallbackAwareAnthropicMessagesStream:
             getattr(source_iterator, "_hidden_params", None) or {}
         )
         self._followed_source_params: object = None
+        self.client_message_id: str | None = None
+
+    def note_client_message_start(self, chunk: object) -> None:
+        if self.client_message_id is None and _opens_message_start(chunk):
+            self.client_message_id = _message_start_id(chunk)
+
+    def adopt_client_message_id(self, message_id: str) -> None:
+        self.client_message_id = message_id
+
+    @property
+    def source_logging(self) -> "LiteLLMLogging | None":
+        return _stream_logging(self._source_iterator)
 
     @property
     def has_buffered_provider_output(self) -> bool:
@@ -1264,10 +1295,104 @@ class FallbackAwareAnthropicMessagesStream:
         }
 
 
-def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: bool) -> bool:
+def _anthropic_stream_sends_message_start_live(policy: Mapping[str, object], request: Mapping[str, object]) -> bool:
+    return (
+        policy.get("can_retry") is True
+        and policy.get("can_fall_back") is not True
+        and policy.get("refusal_fallback") is not True
+        and policy.get("context_window_fallback") is not True
+        and request.get("thread") is None
+    )
+
+
+def _is_sse_comment_frame(chunk: object) -> bool:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import SSE_FRAME_TERMINATORS
+
+    return (
+        isinstance(chunk, (bytes, bytearray))
+        and chunk.endswith(SSE_FRAME_TERMINATORS)
+        and all(line.startswith(b":") or not line.strip() for line in chunk.splitlines())
+    )
+
+
+def _is_keepalive_frame(chunk: object) -> bool:
     from litellm.llms.anthropic.messages.native.streaming_iterator import is_anthropic_ping_chunk
 
-    return not has_generated_content and is_anthropic_ping_chunk(chunk)
+    return is_anthropic_ping_chunk(chunk) or _is_sse_comment_frame(chunk)
+
+
+def _opens_message_start(chunk: object) -> bool:
+    event: Final = as_str_mapping(chunk)
+    if event is not None:
+        return event.get("type") == "message_start"
+    return isinstance(chunk, (bytes, bytearray)) and chunk.startswith(
+        (b"event: message_start\n", b"event: message_start\r\n")
+    )
+
+
+def _message_start_id(chunk: object) -> str | None:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import sse_frame_event
+
+    event: Final = as_str_mapping(chunk) or (
+        sse_frame_event(bytes(chunk)) if isinstance(chunk, (bytes, bytearray)) else None
+    )
+    message: Final = as_str_mapping(event.get("message")) if event is not None else None
+    message_id: Final = message.get("id") if message is not None else None
+    return message_id if isinstance(message_id, str) else None
+
+
+def _is_whole_message_start(chunk: object) -> bool:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import SSE_FRAME_TERMINATORS
+
+    return _opens_message_start(chunk) and (
+        not isinstance(chunk, (bytes, bytearray)) or chunk.endswith(SSE_FRAME_TERMINATORS)
+    )
+
+
+def _stands_apart(frame: object) -> bool:
+    return not isinstance(frame, (bytes, bytearray)) or _opens_message_start(frame)
+
+
+def _message_start_apart(frames: Sequence[bytes]) -> Iterator[bytes]:
+    for apart, run in itertools.groupby(frames, key=_stands_apart):
+        if apart:
+            yield from run
+        else:
+            yield b"".join(run)
+
+
+async def _whole_frames_by_read(source: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None]:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import sse_frames_by_read
+
+    reads: Final = sse_frames_by_read(source)
+    try:
+        async for frames in reads:
+            for run in _message_start_apart(frames):
+                yield run
+    finally:
+        await reads.aclose()
+
+
+def _anthropic_stream_reads(
+    source: AsyncIterator[bytes], sends_message_start_live: bool, retried: bool
+) -> AsyncIterator[bytes]:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import sse_frames
+
+    if sends_message_start_live:
+        return _whole_frames_by_read(source)
+    if retried:
+        return sse_frames(source)
+    return source
+
+
+def _goes_out_live_while_held(chunk: object, holding: bool, message_start_live: bool, nothing_held: bool) -> bool:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import is_anthropic_ping_chunk
+
+    if not holding:
+        return False
+    if not message_start_live:
+        return is_anthropic_ping_chunk(chunk)
+    return _is_keepalive_frame(chunk) or (nothing_held and _is_whole_message_start(chunk))
 
 
 _ANTHROPIC_PREAMBLE_EVENT_LINES: Final = frozenset((b"event: message_start", b"event: ping"))
@@ -1404,29 +1529,30 @@ def _hop_error_frame(
 def wrap_anthropic_stream(
     attempt: StreamAttempt, response: AsyncIterator[bytes]
 ) -> FallbackAwareAnthropicMessagesStream:
-    """``_aanthropic_messages_streaming_iterator``: lifecycle frames are held while a retry or a fallback
-    can still take over; an error frame, a raised error or a safeguard refusal before content is
-    retried in the group, then falls back, as the core decides."""
+    """``_aanthropic_messages_streaming_iterator``: while a retry or a fallback can still take over, pings
+    go out live and every other frame is held until content, except that while only a retry can and the
+    request has no message ``thread`` (whose next turn names the answering attempt's message id), the
+    stream is read as whole SSE frames, ``message_start`` and keepalive frames go out live, and the retry
+    drops its own ``message_start``; an error frame, a raised error or a safeguard refusal before content
+    is retried in the group, then falls back, as the core decides."""
     from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         aclose_if_supported,
         aclose_superseded_attempt,
         parse_anthropic_error_event,
         parse_anthropic_refusal_stop_details,
-        sse_frames,
     )
     from litellm.llms.anthropic.messages.native.utils import safeguard_refusal_error
 
     source_iterator: Final = response
-    framed_source: Final = sse_frames(source_iterator) if attempt.level > 0 else source_iterator
     replays_a_finished_agentic_turn: Final = isinstance(source_iterator, FakeAnthropicMessagesStreamIterator)
     model: Final = attempt.group
     usage: Final = _AnthropicStreamUsage()
     attempt.take_outcome()
 
-    async def close_source() -> None:
+    async def close_source(reads: AsyncIterator[bytes]) -> None:
         with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
-            await aclose_if_supported(framed_source)
+            await aclose_if_supported(reads)
             await aclose_if_supported(source_iterator)
 
     async def close_superseded() -> None:
@@ -1438,17 +1564,20 @@ def wrap_anthropic_stream(
         has_generated_content = not (  # rebind-ok: set once content is seen, the buffer cap is hit, or nothing can take over
             policy.get("can_retry") is True or policy.get("can_fall_back") is True
         )
+        sends_message_start_live: Final = _anthropic_stream_sends_message_start_live(policy, attempt.request)
+        reads: Final = _anthropic_stream_reads(source_iterator, sends_message_start_live, attempt.level > 0)
+        message_start_sent = False  # rebind-ok: set once message_start went out ahead of the held frames
         buffered: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
         content_seen = False  # rebind-ok: set at the first chunk past message_start and pings
         try:
-            async for chunk in _areported(attempt, framed_source, usage.total_tokens, usage.observe):
-                if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
+            async for chunk in _areported(attempt, reads, usage.total_tokens, usage.observe):
+                if _goes_out_live_while_held(chunk, not has_generated_content, sends_message_start_live, not buffered):
+                    message_start_sent = message_start_sent or _opens_message_start(chunk)
+                    wrapper.note_client_message_start(chunk)
                     yield chunk
                     continue
                 before_content = not content_seen
                 content_seen = content_seen or not _is_anthropic_preamble_chunk(chunk)
-                if _stream_commits_now(chunk, has_generated_content, len(buffered)):
-                    has_generated_content = True
                 # A transport can split one SSE data line across byte chunks, so pre-content detection
                 # parses the held frames plus the current chunk.
                 parse_window = (
@@ -1456,6 +1585,8 @@ def wrap_anthropic_stream(
                     if not has_generated_content and isinstance(chunk, (bytes, bytearray))  # pyright: ignore[reportUnnecessaryIsInstance]  # see above
                     else chunk
                 )
+                if _stream_commits_now(parse_window, has_generated_content, len(buffered)):
+                    has_generated_content = True
                 error_event = parse_anthropic_error_event(parse_window)
                 bridged_failure = _bridged_stream_failure(source_iterator) if error_event is not None else None
                 if bridged_failure is not None:
@@ -1506,45 +1637,49 @@ def wrap_anthropic_stream(
             async for item in _anthropic_recover_stream_error(
                 attempt,
                 stream_error,
-                has_generated_content,
-                content_seen,
-                buffered,
+                _AnthropicStreamProgress(has_generated_content, content_seen, message_start_sent, buffered),
                 model,
                 wrapper,
                 close_superseded,
             ):
                 yield item
         finally:
-            await close_source()
+            await close_source(reads)
 
     wrapper: Final = FallbackAwareAnthropicMessagesStream(stream_with_fallbacks(), source_iterator, attempt)
     return wrapper
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _AnthropicStreamProgress:
+    has_generated_content: bool
+    content_seen: bool
+    message_start_sent: bool
+    buffered: tuple[bytes, ...]
+
+
 async def _anthropic_recover_stream_error(
     attempt: StreamAttempt,
     stream_error: Exception,
-    has_generated_content: bool,
-    content_seen: bool,
-    buffered: tuple[bytes, ...],
+    progress: _AnthropicStreamProgress,
     model: str,
     wrapper: FallbackAwareAnthropicMessagesStream,
     close_superseded: Callable[[], Awaitable[None]],
 ) -> AsyncGenerator[bytes, None]:
     """Turns a source-iterator failure into a retry, a fallback, or the error reaching the caller."""
     if isinstance(stream_error, MidStreamFallbackError) and _anthropic_stream_should_decline_fallback(
-        has_generated_content, stream_error
+        progress.has_generated_content, stream_error
     ):
-        for buffered_chunk in buffered:
+        for buffered_chunk in progress.buffered:
             yield buffered_chunk
-        _raise_stream_failure(attempt, stream_error, not content_seen)
+        _raise_stream_failure(attempt, stream_error, not progress.content_seen)
     fallback_error: Final = (
         stream_error
         if isinstance(stream_error, MidStreamFallbackError)
-        else _stream_fallback_error_for_raised(attempt, stream_error, model, has_generated_content)
+        else _stream_fallback_error_for_raised(attempt, stream_error, model, progress.has_generated_content)
     )
     if fallback_error is None:
-        _raise_stream_failure(attempt, stream_error, not content_seen)
+        _raise_stream_failure(attempt, stream_error, not progress.content_seen)
     # A native error frame or a refusal the wrapper raised fails the attempt too (a raised error or a
     # bridged frame already did).
     attempt.report_failure(fallback_error)
@@ -1559,7 +1694,7 @@ async def _anthropic_recover_stream_error(
                 retried if isinstance(retried, Exception) else fallback_error, model, fallback_error.llm_provider
             )
         )
-        async for item in _anthropic_fallback_attempt(attempt, last_error, wrapper):
+        async for item in _anthropic_fallback_attempt(attempt, last_error, wrapper, progress.message_start_sent):
             yield item
         return
     response, attempted, budget = retried
@@ -1568,44 +1703,76 @@ async def _anthropic_recover_stream_error(
         inner.attempt.attempted_retries = attempted
         inner.attempt.explain_failure = attempt.explain_failure
         inner.attempt.committed_budget = budget
-    async for item in _anthropic_yield_recovered(inner, wrapper, (attempted, budget)):
+    async for item in _anthropic_yield_recovered(inner, wrapper, progress.message_start_sent, (attempted, budget)):
         yield item
+
+
+async def _anthropic_replayed_stream(response: object) -> AsyncGenerator[bytes, None]:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import anthropic_messages_response_as_sse_events
+
+    for event in anthropic_messages_response_as_sse_events(response):  # pyright: ignore[reportArgumentType]  # the non-streaming shape by elimination
+        yield event
+
+
+def _keep_client_message_id(recovered: object, wrapper: FallbackAwareAnthropicMessagesStream) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    message_id: Final = wrapper.client_message_id
+    if message_id is None:
+        return
+    if isinstance(recovered, FallbackAwareAnthropicMessagesStream):
+        recovered.adopt_client_message_id(message_id)
+    for logging_obj in (wrapper.attempt.kwargs.get("litellm_logging_obj"), _anthropic_stream_logging(recovered)):
+        if isinstance(logging_obj, LiteLLMLogging):
+            logging_obj.record_streamed_anthropic_message_id(message_id)
 
 
 async def _anthropic_yield_recovered(
     recovered: object,
     wrapper: FallbackAwareAnthropicMessagesStream,
+    message_start_sent: bool,
     retry_counters: tuple[int, int] | None = None,
 ) -> AsyncGenerator[bytes, None]:
-    """Hands a retry's or a fallback's response to the client through the wrapper, closing it after."""
-    from litellm.llms.anthropic.messages.native.streaming_iterator import (
-        aclose_if_supported,
-        anthropic_messages_response_as_sse_events,
-    )
+    """Hands a retry's or a fallback's response to the client through the wrapper, closing it after. A
+    complete response for a streaming request is replayed as the SSE lifecycle a stream sends. When the
+    client already has a ``message_start``, the response is read as whole frames, its own is dropped, and
+    its spend row keeps the id the client saw."""
+    from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_if_supported, sse_frames
 
     hidden_params, headers = _prepare_fallback_hidden_params(recovered)
     wrapper.merge_fallback_hidden_params(hidden_params, headers)
     wrapper.adopt_fallback_source(recovered)
+    if message_start_sent:
+        _keep_client_message_id(recovered, wrapper)
     if retry_counters is not None:
         add_retry_headers_to_response(
             response=wrapper, attempted_retries=retry_counters[0], max_retries=retry_counters[1]
         )
+    events: Final = (
+        cast("AsyncIterator[bytes]", recovered)  # cast-ok: __aiter__ checked
+        if hasattr(recovered, "__aiter__")
+        else _anthropic_replayed_stream(recovered)
+    )
+    frames: Final = sse_frames(events) if message_start_sent else events
+    awaiting_repeat = message_start_sent  # rebind-ok: until the response's message_start or other output comes
     try:
-        if hasattr(recovered, "__aiter__"):
-            async for item in cast("AsyncIterator[bytes]", recovered):  # cast-ok: __aiter__ checked above
-                wrapper.follow_source_attribution()
-                yield item
-            return
-        # A complete response for a streaming request is replayed as the SSE lifecycle a stream sends.
-        for event in anthropic_messages_response_as_sse_events(recovered):  # pyright: ignore[reportArgumentType]  # the non-streaming shape by elimination
-            yield event
+        async for frame in frames:
+            wrapper.follow_source_attribution()
+            repeats_message_start = awaiting_repeat and _opens_message_start(frame)
+            awaiting_repeat = awaiting_repeat and _is_keepalive_frame(frame)
+            if not repeats_message_start:
+                yield frame
     finally:
         with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+            await aclose_if_supported(frames)
             await aclose_if_supported(recovered)
 
 
 async def _anthropic_fallback_attempt(
-    attempt: StreamAttempt, e: MidStreamFallbackError, wrapper: FallbackAwareAnthropicMessagesStream
+    attempt: StreamAttempt,
+    e: MidStreamFallbackError,
+    wrapper: FallbackAwareAnthropicMessagesStream,
+    message_start_sent: bool,
 ) -> AsyncGenerator[bytes, None]:
     """Re-enters the fallback walk for a ``/v1/messages`` stream error and yields what the fallback produces."""
     trigger: Final = _fallback_trigger(
@@ -1615,7 +1782,7 @@ async def _anthropic_fallback_attempt(
     content_seen = False  # rebind-ok: set at the fallback's first chunk past message_start and pings
     try:
         fallback_response: Final = await attempt.fallback(trigger)
-        async for fallback_item in _anthropic_yield_recovered(fallback_response, wrapper):
+        async for fallback_item in _anthropic_yield_recovered(fallback_response, wrapper, message_start_sent):
             content_seen = content_seen or not _is_anthropic_preamble_chunk(fallback_item)
             yield fallback_item
     except Exception as fallback_error:  # noqa: BLE001  # as the Python wrapper: logged, then the stream's error raises
@@ -1703,6 +1870,12 @@ def _stream_logging(stream: object) -> "LiteLLMLogging | None":
 
     logging_obj: Final = getattr(stream, "logging_obj", getattr(stream, "litellm_logging_obj", None))
     return logging_obj if isinstance(logging_obj, LiteLLMLogging) else None
+
+
+def _anthropic_stream_logging(stream: object) -> "LiteLLMLogging | None":
+    if isinstance(stream, FallbackAwareAnthropicMessagesStream):
+        return stream.source_logging
+    return _stream_logging(stream)
 
 
 def _cost_breakdown_of(stream: object) -> CostBreakdown | None:
@@ -1834,6 +2007,17 @@ class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
 
     def hold_primary_partial(self) -> None:
         self._primary_partial = _held_partial(self._source_iterator)
+
+    def outlive_consumer_until_settled(self) -> None:
+        from litellm.responses.streaming_iterator import keep_responses_stream_open_for_disconnect_drain
+
+        keep_responses_stream_open_for_disconnect_drain(self._source_iterator)
+
+    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+        from litellm.responses.streaming_iterator import settle_responses_stream_after_consumer_left
+
+        primary_alone: Final = self._billing_source is self._source_iterator and self._primary_partial is None
+        return await settle_responses_stream_after_consumer_left(self._source_iterator, drain=drain and primary_alone)
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect

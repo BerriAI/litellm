@@ -94,7 +94,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: dict,
+        data: dict[str, object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> Mapping[str, object]:
@@ -132,7 +132,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         input_data: str,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
-    ) -> dict:
+    ) -> dict[str, object]:
         """Process a single string input through the guardrail."""
         inputs: Final = GenericGuardrailAPIInputs(texts=[input_data])
         if model := data.get("model"):
@@ -161,7 +161,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         input_data: list[str | int | list[int]],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
-    ) -> dict:
+    ) -> dict[str, object]:
         """Process a list input through the guardrail (if it contains strings or text blocks)."""
         if len(input_data) == 0:
             return data
@@ -212,7 +212,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
     ) -> "EmbeddingResponse":
         """
         Process output response - embeddings responses contain vectors, not text.

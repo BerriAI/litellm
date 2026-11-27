@@ -221,7 +221,7 @@ def require_caller_user_id_for_non_admin(
     return user_api_key_dict.user_id
 
 
-_ROUTE_LIST: Final = TypeAdapter(list[str] | None)
+_ROUTE_LIST: Final[TypeAdapter[list[str] | None]] = TypeAdapter(list[str] | None)
 
 
 def _passthrough_routes_permission_error(field: str, entity: str) -> HTTPException:
@@ -635,6 +635,8 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
 )
 
 
+_TEMP_BUDGET_FIELDS: Final = frozenset({"temp_budget_increase", "temp_budget_expiry"})
+_BUDGET_CAP_FIELDS: Final = frozenset({"max_budget", "rollover_max_budget"})
 _BUDGET_COLUMNS: Final = TypeAdapter(dict[str, object])
 
 MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
@@ -674,6 +676,16 @@ def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
         for request_field, column in MEMBER_BUDGET_PATCH_FIELDS.items()
         if request_field in provided
     }
+
+
+def _follows_live_default_cap(default_budget: Mapping[str, object]) -> bool:
+    cap: Final = default_budget.get("max_budget")
+    return (
+        isinstance(cap, (int, float))
+        and not isinstance(cap, bool)
+        and cap > 0
+        and default_budget.get("rollover_max_budget") is None
+    )
 
 
 def _is_set_budget_value(value: object) -> bool:
@@ -789,6 +801,12 @@ async def upsert_budget_and_membership(
     if is_shared_default and all(source.get(field) == value for field, value in effective_patch.items()):
         return
 
+    inherits_team_default_cap: Final = (
+        team_default_budget_id is not None
+        and existing_budget_id == team_default_budget_id
+        and frozenset(effective_patch) <= _TEMP_BUDGET_FIELDS
+        and _follows_live_default_cap(source)
+    )
     create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
@@ -803,6 +821,7 @@ async def upsert_budget_and_membership(
                     or source.get("budget_id") != team_default_budget_id
                 )
                 and _is_set_budget_value(source.get(f))
+                and not (inherits_team_default_cap and f in _BUDGET_CAP_FIELDS)
             }
         ),
         **write_data,

@@ -46,5 +46,5 @@ class DatabricksEmbeddingConfig:
     ) -> list[str]:  # no optional openai embedding params supported
         return []
 
-    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict):
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
         return optional_params

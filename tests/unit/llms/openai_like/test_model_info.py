@@ -1,9 +1,11 @@
+import asyncio
 from collections.abc import Mapping
 from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
+from fastapi.encoders import jsonable_encoder
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -82,9 +84,11 @@ async def test_cache_is_scoped_to_endpoint_and_authentication_and_expires() -> N
         cache: Final = InMemoryCache(clock=clock)
 
         async def lookup(model: str = "first", host: str = "one.test", key: str = "one") -> Mapping[str, int]:
-            return await get_openai_compatible_model_info(
+            limits: Final = await get_openai_compatible_model_info(
                 model=model, api_base=f"https://{host}", headers={"Authorization": key}, client=handler, cache=cache
             )
+            assert limits is not None
+            return limits
 
         assert (await lookup())["max_input_tokens"] == 1024
         assert (await lookup("second"))["max_input_tokens"] == 2048
@@ -121,6 +125,55 @@ async def test_unavailable_metadata_is_best_effort_and_negative_cached(
                 await get_openai_compatible_model_info(
                     model="model", api_base="https://backend.test", headers={}, client=handler, cache=cache
                 )
-                == {}
+                is None
             )
         assert responder.call_count == 1
+
+
+async def test_first_card_wins_when_an_endpoint_repeats_a_model_id() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"data": [{"id": "model", "max_model_len": 4096}, {"id": "model", "max_model_len": 8192}]}
+        )
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        limits: Final = await get_openai_compatible_model_info(
+            model="model", api_base="https://backend.test", headers={}, client=handler, cache=InMemoryCache()
+        )
+    assert limits == {"max_tokens": 4096, "max_input_tokens": 4096, "max_output_tokens": 4096}
+
+
+async def _contended_lookups(cache: InMemoryCache) -> tuple[Mapping[str, int] | None, ...]:
+    async def respond(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.01)
+        return httpx.Response(200, json={"data": [{"id": "model", "max_model_len": 4096}]})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        return tuple(
+            await asyncio.gather(
+                *(
+                    get_openai_compatible_model_info(
+                        model="model", api_base="https://backend.test", headers={}, client=handler, cache=cache
+                    )
+                    for _ in range(3)
+                )
+            )
+        )
+
+
+def test_concurrent_lookups_on_each_event_loop_leave_an_encodable_cache() -> None:
+    clock: Final = Mock(return_value=0)
+    cache: Final = InMemoryCache(clock=clock)
+    limits: Final = {"max_tokens": 4096, "max_input_tokens": 4096, "max_output_tokens": 4096}
+
+    assert asyncio.run(_contended_lookups(cache)) == (limits,) * 3
+    clock.return_value = MODEL_INFO_REFRESH_SECONDS + 1
+    assert asyncio.run(_contended_lookups(cache)) == (limits,) * 3
+
+    assert [entry["by_model"] for entry in jsonable_encoder(cache.cache_dict).values()] == [{"model": limits}]

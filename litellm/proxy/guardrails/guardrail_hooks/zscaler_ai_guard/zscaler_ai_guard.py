@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.guardrails import LitellmParams
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import ZscalerAIGuardConfigModel
 
 DEFAULT_GUARDRAIL_TIMEOUT: Final = 5.0
 _ZSCALER_RESPONSE: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
@@ -209,7 +209,7 @@ class ZscalerAIGuard(CustomGuardrail):
             )
             verbose_proxy_logger.info("policy_id applied: %s", policy_id)
 
-            kwargs: Final = {}
+            kwargs: Final[dict[str, str]] = {}
             if self.send_user_api_key_alias:
                 kwargs["user_api_key_alias"] = self._resolve_metadata_value(request_data, "user_api_key_alias") or "N/A"
             if self.send_user_api_key_team_id:
@@ -442,7 +442,7 @@ class ZscalerAIGuard(CustomGuardrail):
             raise HTTPException(status_code=500, detail=user_facing_error)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[ZscalerAIGuardConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import (
             ZscalerAIGuardConfigModel,
         )

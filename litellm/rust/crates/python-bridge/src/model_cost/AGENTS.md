@@ -1,5 +1,6 @@
 # Model cost bridge
 
+- Python reads its settings and passes the values in. `NativeCostMapSource.remote`, `NativeFetchPolicy` and `NativeModelCostMap.bundled` apply the core's rule and defaults to them, and none of them reads the environment
 - `NativeModelCostMap` holds inputs only, the installed `CostMap`, kept `Registrations` and the name index. Python's `litellm.model_cost` is the only copy of the live rows
 - Every call that reads or writes rows takes the dict as an argument. Never store rows or build a second table here
 - `LiveDict` holds a reference to that same dict and reads it under the GIL on every query, so a Python write is seen on the next read
@@ -18,4 +19,6 @@
   - Lowerings are kept by row key and billed provider together with the fields they were lowered from, and reused only while the row reads exactly those fields. A row replaced or edited in place is lowered again on the next call, with no `changed_in_place()` needed
   - `invalidate` drops the current snapshot along with the name index, so the next call reads the rules and names again
   - Tests that install a fake host module hold `HOST_MODULE`, since Python can switch threads while one runs
-- `fetch_blocking` runs on a throwaway runtime with an unpooled client so an importing process can still fork. `fetch` is for workers after the fork
+- `refresh_blocking` and `fetch_blocking` run on a throwaway runtime with an unpooled client so an importing process can still fork. `refresh` is for workers after the fork
+- `refresh_blocking` and `refresh` fetch and read off the GIL and touch no state. They return a `CostMapRefreshed` or a `CostMapKept`, whose wording comes from the core's `Refreshed::or_kept`, so no failure text is written in Python. `install_refreshed` is the only step that needs the GIL, since it builds the table
+- A blocking refresh runs on a daemon thread, and a thread that comes back from native code once the interpreter is finalizing aborts the process on Linux. `CostMapRefreshStop.stop` ends the fetch and returns only after `refresh_blocking` has left native code, so Python calls it from `atexit`. Each refresh takes a stop of its own, so a forked child never waits on a lock its parent's thread held

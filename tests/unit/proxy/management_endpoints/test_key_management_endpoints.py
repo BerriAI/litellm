@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     GenerateKeyRequest,
     GenerateKeyResponse,
     KeyManagementRoutes,
+    KeyRequest,
     LiteLLM_BudgetTable,
     LiteLLM_ObjectPermissionBase,
     LiteLLM_OrganizationTable,
@@ -53,6 +54,7 @@ from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    KeyPersistenceError,
     KeyProjectBindingError,
     _advance_one_key_budget_window,
     _window_with_reset_at,
@@ -93,6 +95,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     generate_service_account_key_fn,
     info_key_fn,
+    info_key_fn_v2,
     key_aliases,
     key_generation_check,
     list_key_helper,
@@ -223,6 +226,45 @@ async def test_key_info_access_by_owner_requires_a_real_shared_owner(
         await _can_user_query_key_info(user_api_key_dict=auth, key=other_key.token, key_info=other_key)
         is expected
     ), f"caller user_id={caller_user_id!r} reading key owned by {owner_user_id!r}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_user_id", "own_key", "expected"),
+    [(None, True, True), (None, False, False), ("member", False, True)],
+    ids=["service-account-own-key", "service-account-other-key", "user-other-key"],
+)
+async def test_key_info_same_team_visibility(
+    monkeypatch: pytest.MonkeyPatch, caller_user_id: str | None, own_key: bool, expected: bool
+) -> None:
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team-a", members_with_roles=[Member(user_id="member", role="user")])
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object", AsyncMock(return_value=team)
+    )
+    caller: Final = UserAPIKeyAuth(
+        api_key="caller-key", team_id=team.team_id, user_id=caller_user_id, metadata={"service_account_id": "sa-1"}
+    )
+    target: Final = LiteLLM_VerificationToken(token="caller-key" if own_key else "other-key", team_id=team.team_id)
+
+    assert await _can_user_query_key_info(user_api_key_dict=caller, key=target.token, key_info=target) is expected
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_v2_returns_only_the_calling_service_account_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team-a")
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object", AsyncMock(return_value=team)
+    )
+    caller: Final = UserAPIKeyAuth(api_key="caller-key", team_id=team.team_id, metadata={"service_account_id": "sa-1"})
+    own: Final = LiteLLM_VerificationToken(token="caller-key", team_id=team.team_id, key_alias="own")
+    other: Final = LiteLLM_VerificationToken(token="other-key", team_id=team.team_id, key_alias="other")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", SimpleNamespace(get_data=AsyncMock(return_value=[own, other]))
+    )
+
+    response: Final = await info_key_fn_v2(data=KeyRequest(keys=["caller-key", "other-key"]), user_api_key_dict=caller)
+
+    assert [row["key_alias"] for row in response["info"]] == ["own"]
 
 
 @pytest.mark.asyncio
@@ -1990,12 +2032,20 @@ def _key_generation_prisma_client(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rejection", ("project_binding", "persistence", "alias_conflict"))
 async def test_rejected_key_generation_deletes_created_budget_and_default_permission(
     monkeypatch: pytest.MonkeyPatch,
+    rejection: str,
 ) -> None:
     prisma_client, budget_table, object_permission_table = _key_generation_prisma_client(
         {"project_id": "project-b", "team_id": "team-b"}
     )
+    if rejection == "persistence":
+        prisma_client.insert_data.side_effect = KeyPersistenceError(status_code=409, detail="Key was retired")
+    if rejection == "alias_conflict":
+        prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+            return_value=LiteLLM_VerificationToken(token="existing-token", key_alias="lens-models-race")
+        )
     monkeypatch.setattr(litellm, "key_generation_settings", None)
     monkeypatch.setattr(
         litellm,
@@ -2006,13 +2056,14 @@ async def test_rejected_key_generation_deletes_created_budget_and_default_permis
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
 
-    with pytest.raises(KeyProjectBindingError) as exc:
+    with pytest.raises((HTTPException, ProxyException)) as exc:
         await _common_key_generation_helper(
             data=GenerateKeyRequest(
                 budget_id="caller-budget-id",
                 project_id="project-b",
+                key_alias="lens-models-race" if rejection == "alias_conflict" else None,
                 soft_budget=3.5,
-                team_id="team-a",
+                team_id="team-b" if rejection == "persistence" else "team-a",
             ),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -2023,14 +2074,20 @@ async def test_rejected_key_generation_deletes_created_budget_and_default_permis
             team_table=None,
         )
 
-    assert exc.value.status_code == 400
+    if isinstance(exc.value, ProxyException):
+        assert exc.value.code == "400"
+    else:
+        assert exc.value.status_code == (409 if rejection == "persistence" else 400)
     budget_table.create.assert_awaited_once()
     budget_table.delete.assert_awaited_once_with(where={"budget_id": "created-budget-id"})
     object_permission_table.create.assert_awaited_once_with(data={"vector_stores": ["default-vector-store"]})
     object_permission_table.delete.assert_awaited_once_with(
         where={"object_permission_id": "created-object-permission-id"}
     )
-    prisma_client.insert_data.assert_not_awaited()
+    if rejection != "persistence":
+        prisma_client.insert_data.assert_not_awaited()
+    else:
+        prisma_client.insert_data.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -20748,6 +20805,24 @@ async def test_default_key_generate_params_allowed_routes_keeps_explicit_value(m
     assert key_row["allowed_routes"] == ["info_routes"]
 
 
+_BROAD_DEFAULT_KEY_ROUTES: Final = (
+    "/key/info",
+    "llm_api_routes",
+    "management_routes",
+    "/key/generate",
+    "/user/*",
+    "/key/*",
+    "info_routes",
+    "/v2/key/info",
+    "/key/spend/report",
+    "/key/health",
+    "/model/info",
+    "/v1/model/info",
+    "/v2/model/info",
+    "/model_group/info",
+)
+
+
 @pytest.mark.asyncio
 async def test_default_key_generate_params_allowed_routes_extends_key_type_preset_it_covers(
     monkeypatch: pytest.MonkeyPatch,
@@ -20757,7 +20832,7 @@ async def test_default_key_generate_params_allowed_routes_extends_key_type_prese
     monkeypatch.setattr(
         litellm,
         "default_key_generate_params",
-        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+        {"allowed_routes": list(_BROAD_DEFAULT_KEY_ROUTES)},
     )
     mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
 
@@ -20772,7 +20847,7 @@ async def test_default_key_generate_params_allowed_routes_extends_key_type_prese
     )
 
     key_call: Final = next(c for c in mock_insert_data.call_args_list if c.kwargs["table_name"] == "key")
-    assert key_call.kwargs["data"]["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+    assert key_call.kwargs["data"]["allowed_routes"] == list(_BROAD_DEFAULT_KEY_ROUTES)
 
 
 @pytest.mark.asyncio
@@ -20821,22 +20896,48 @@ def test_effective_key_for_generate_shows_default_allowed_routes_to_the_policy(
 
 
 @pytest.mark.asyncio
-async def test_default_key_generate_params_allowed_routes_skips_team_service_account_keys(
+@pytest.mark.parametrize(
+    ("key_type", "expected_routes"),
+    [
+        (None, []),
+        (
+            LiteLLMKeyType.LLM_API,
+            [
+                "/key/info",
+                "llm_api_routes",
+                "/key/spend/report",
+                "/key/health",
+                "/model/info",
+                "/v1/model/info",
+                "/v2/model/info",
+                "/model_group/info",
+            ],
+        ),
+        (LiteLLMKeyType.DEFAULT, []),
+        (LiteLLMKeyType.MANAGEMENT, ["management_routes"]),
+        (LiteLLMKeyType.READ_ONLY, ["info_routes"]),
+    ],
+    ids=["unset", "llm_api", "full_access", "management", "read_only"],
+)
+async def test_default_key_generate_params_allowed_routes_for_team_service_account_keys(
     monkeypatch: pytest.MonkeyPatch,
+    key_type: LiteLLMKeyType | None,
+    expected_routes: list[str],
 ) -> None:
     monkeypatch.setattr(
         litellm,
         "default_key_generate_params",
-        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+        {"allowed_routes": list(_BROAD_DEFAULT_KEY_ROUTES)},
     )
     mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
 
-    key_row: Final = await _generate_key_and_get_persisted_row(
-        GenerateKeyRequest(team_id="team-a", metadata={"service_account_id": "sa-1"}),
-        mock_insert_data,
-    )
+    request: Final = GenerateKeyRequest(team_id="team-a", metadata={"service_account_id": "sa-1"})
+    key_request: Final = request if key_type is None else request.model_copy(update={"key_type": key_type})
+    effective_key: Final = _effective_key_for_generate(data=key_request, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    key_row: Final = await _generate_key_and_get_persisted_row(key_request, mock_insert_data)
 
-    assert not key_row.get("allowed_routes")
+    assert (effective_key.allowed_routes or []) == expected_routes
+    assert (key_row.get("allowed_routes") or []) == expected_routes
 
 
 @pytest.mark.asyncio
@@ -21029,6 +21130,25 @@ async def test_key_generate_omitted_budget_duration_still_takes_default_key_gene
 
     assert key_row["budget_duration"] == "30d"
     assert key_row["budget_reset_at"] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_null", (True, False))
+async def test_key_identity_defaults_respect_explicit_null_without_dropping_usage_limits(
+    monkeypatch: pytest.MonkeyPatch, explicit_null: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"user_id": "default-owner", "team_id": "default-team", "max_budget": 10, "rpm_limit": 60},
+    )
+    insert: Final = _wire_key_generation_prisma(monkeypatch)
+    request: Final = GenerateKeyRequest(user_id=None, team_id=None) if explicit_null else GenerateKeyRequest()
+    row: Final = await _generate_key_and_get_persisted_row(request, insert)
+    assert (row["user_id"], row["team_id"]) == (
+        (None, None) if explicit_null else ("default-owner", "default-team")
+    )
+    assert (row["max_budget"], row["rpm_limit"]) == (10, 60)
 
 
 @pytest.mark.asyncio

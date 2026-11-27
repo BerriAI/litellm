@@ -233,10 +233,10 @@ async def test_only_a_v2_callback_that_filters_makes_the_core_ask_for_filters(
 ) -> None:
     checks: Final = _checks(make_core)
     host.lists["callbacks"].append(Inert())
-    without_filter: Final = checks.has_filters()
+    without_filter: Final = checks.has_filters({})
     host.lists["callbacks"].append(Picker([]))
 
-    assert (without_filter, checks.has_filters()) == (False, True)
+    assert (without_filter, checks.has_filters({})) == (False, True)
 
 
 async def test_the_pick_honours_a_v2_callback_between_legacy_filters(make_core: MakeCore, host: ScriptedHost) -> None:

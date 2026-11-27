@@ -29,7 +29,7 @@ Events:
   included only when content capture is enabled).
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Final, Protocol
@@ -129,9 +129,9 @@ class OTELGenAISemconvMixin:
 
         def _capture_in_event(self) -> bool: ...
 
-        def _transform_messages_to_otel_semantic_conventions(self, messages: list[dict] | str) -> list[dict]: ...
+        def _transform_messages_to_otel_semantic_conventions(self, messages: Iterable[object] | str) -> list[dict]: ...
 
-        def _transform_choices_to_otel_semantic_conventions(self, choices: list[dict]) -> list[dict]: ...
+        def _transform_choices_to_otel_semantic_conventions(self, choices: Iterable[object]) -> list[dict]: ...
 
         def _to_ns(self, dt: datetime) -> int: ...
 
@@ -235,8 +235,8 @@ class OTELGenAISemconvMixin:
 
     def _emit_inference_details_event(
         self,
-        kwargs: dict,
-        response_obj: dict,
+        kwargs: dict[str, object],
+        response_obj: dict[str, object],
         provider: str | None,
         otel_logger,
         parent_ctx: "SpanContext",

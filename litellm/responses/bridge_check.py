@@ -1,17 +1,20 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final, cast  # noqa: TID251  # moved unchanged from litellm/main.py
 from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
 )
+from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import is_whitespace_user_message
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
-from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
+from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config, AzureAIStudioConfig
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -27,6 +30,8 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_model_info_helper, model_cost_registration_row
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
+_REASONING_OBJECT_KEYS: Final = ("reasoning_effort", "reasoning")
+_SDK_MERGED_REASONING_KEYS: Final = ("reasoning",)
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
 ROUTABLE_MODES: Final = frozenset({"chat", "responses"})
 
@@ -111,14 +116,252 @@ def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
     )
 
 
+def _extra_body_reasoning_effort(
+    nested_body: Mapping[str, object], *, reaches_openai: bool
+) -> str | Mapping[str, object] | None:
+    nested_effort: Final = nested_body.get("reasoning_effort")
+    if isinstance(nested_effort, str):
+        return nested_effort
+    nested_object: Final = str_keyed_mapping(nested_effort)
+    if nested_object is not None or not reaches_openai:
+        return nested_object
+    return str_keyed_mapping(nested_body.get("reasoning"))
+
+
 def bridge_reasoning_effort(
-    reasoning_effort: str | Mapping[str, object] | None, extra_body: object
+    reasoning_effort: str | Mapping[str, object] | None,
+    extra_body: object,
+    *,
+    custom_llm_provider: str,
+    api_base: str | None,
 ) -> str | Mapping[str, object] | None:
     nested_body: Final = str_keyed_mapping(extra_body)
-    if reasoning_effort is not None or nested_body is None:
+    if nested_body is None:
         return reasoning_effort
-    nested_effort: Final = nested_body.get("reasoning_effort")
-    return nested_effort if isinstance(nested_effort, str) else str_keyed_mapping(nested_effort)
+    reaches_openai: Final = _reaches_openai(custom_llm_provider, api_base)
+    nested: Final = _extra_body_reasoning_effort(nested_body, reaches_openai=reaches_openai)
+    return nested if nested is not None and (reasoning_effort is None or reaches_openai) else reasoning_effort
+
+
+def _targets_openai_api(api_base: str | None) -> bool:
+    resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
+    return resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
+
+
+def _reaches_openai(custom_llm_provider: str, api_base: str | None) -> bool:
+    return custom_llm_provider == "openai" and _targets_openai_api(api_base)
+
+
+def _chat_refuses_effort_level(model: str, level: str) -> bool:
+    if "reasoning_effort" not in (get_supported_openai_params(model=model, custom_llm_provider="openai") or ()):
+        return True
+    return OpenAIGPT5Config.is_model_gpt_5_model(model) and OpenAIGPT5Config.refuses_reasoning_effort_level(
+        model, level
+    )
+
+
+def _without_refused_effort(
+    reasoning: Mapping[str, object],
+    *,
+    model: str,
+    deployment_model_info: Mapping[str, object] | None,
+    refuses_level: Callable[[str, str], bool],
+) -> Mapping[str, object]:
+    effort: Final = reasoning.get("effort")
+    if (
+        not isinstance(effort, str)
+        or effort in (deployment_reasoning_effort_levels(deployment_model_info) or ())
+        or not refuses_level(model.removeprefix("responses/"), effort)
+    ):
+        return reasoning
+    return {key: value for key, value in reasoning.items() if key != "effort"}
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenAIReasoningJudge:
+    model: str
+    base_model: str | None
+    api_base: str | None
+    deployment_model_info: Mapping[str, object] | None
+
+    def accepted(self, requested: Mapping[str, object], additional_drop_params: object) -> Mapping[str, object] | None:
+        from litellm.responses.utils import bridge_reasoning
+
+        return str_keyed_mapping(
+            bridge_reasoning(
+                requested=requested,
+                effort_kept=True,
+                summary_alias=None,
+                model=self.model,
+                base_model=self.base_model,
+                custom_llm_provider="openai",
+                api_base=self.api_base,
+                deployment_model_info=self.deployment_model_info,
+                drop_params=True,
+                additional_drop_params=additional_drop_params,
+            )
+        )
+
+    def _with_effort_checked(self, nested: Mapping[str, object]) -> Mapping[str, object]:
+        return _without_refused_effort(
+            nested,
+            model=self.model,
+            deployment_model_info=self.deployment_model_info,
+            refuses_level=OpenAIGPT5Config.row_disables_reasoning_effort_level,
+        )
+
+    def cleaned(self, body: Mapping[str, object], keys: Sequence[str] = _REASONING_OBJECT_KEYS) -> Mapping[str, object]:
+        judged: Final = {
+            key: self.accepted(self._with_effort_checked(nested), additional_drop_params=None)
+            for key in keys
+            if (nested := str_keyed_mapping(body.get(key))) is not None
+        }
+        return {
+            **{key: value for key, value in body.items() if key not in judged},
+            **{key: value for key, value in judged.items() if value is not None},
+        }
+
+
+def drop_refused_extra_body_reasoning(
+    params: Mapping[str, object],
+    *,
+    model: str,
+    base_model: str | None,
+    custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+) -> Mapping[str, object]:
+    if not drop_params or not _reaches_openai(custom_llm_provider, api_base):
+        return params
+    judge: Final = _OpenAIReasoningJudge(model, base_model, api_base, deployment_model_info)
+    sdk_merged: Final = judge.cleaned(params, keys=_SDK_MERGED_REASONING_KEYS)
+    extra_body: Final = str_keyed_mapping(params.get("extra_body"))
+    return sdk_merged if extra_body is None else {**sdk_merged, "extra_body": judge.cleaned(extra_body)}
+
+
+def drop_refused_forwarded_reasoning(forwarded_kwargs: Mapping[str, object], *, model: str) -> Mapping[str, object]:
+    requested_api_base: Final = forwarded_kwargs.get("api_base")
+    api_base: Final = requested_api_base if isinstance(requested_api_base, str) else None
+    if (
+        forwarded_kwargs.get("custom_llm_provider") != "openai"
+        or not _targets_openai_api(api_base)
+        or not drops_unsupported_params(forwarded_kwargs.get("drop_params"))
+    ):
+        return forwarded_kwargs
+    base_model: Final = forwarded_kwargs.get("base_model")
+    judge: Final = _OpenAIReasoningJudge(
+        model=model.removeprefix("openai/"),
+        base_model=base_model if isinstance(base_model, str) else None,
+        api_base=api_base,
+        deployment_model_info=str_keyed_mapping(forwarded_kwargs.get("model_info")),
+    )
+    requested: Final = str_keyed_mapping(forwarded_kwargs.get("reasoning_effort"))
+    additional_drop_params: Final = forwarded_kwargs.get("additional_drop_params")
+    extra_body: Final = str_keyed_mapping(forwarded_kwargs.get("extra_body"))
+    return {
+        **judge.cleaned(forwarded_kwargs, keys=_SDK_MERGED_REASONING_KEYS),
+        **({} if requested is None else {"reasoning_effort": judge.accepted(requested, additional_drop_params)}),
+        **({} if extra_body is None else {"extra_body": _with_responses_reasoning(judge.cleaned(extra_body))}),
+    }
+
+
+def _with_responses_reasoning(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    effort_object: Final = str_keyed_mapping(extra_body.get("reasoning_effort"))
+    if effort_object is None:
+        return extra_body
+    kept: Final = {key: value for key, value in extra_body.items() if key != "reasoning_effort"}
+    return kept if str_keyed_mapping(kept.get("reasoning")) is not None else {**kept, "reasoning": effort_object}
+
+
+def _with_chat_extra_body_effort(
+    optional_params: dict[str, object],  # mutable-ok: the provider handlers write to this dict and logging shares it
+    *,
+    model: str,
+    deployment_model_info: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: the provider handlers write to this dict and logging shares it
+    extra_body: Final = str_keyed_mapping(optional_params.get("extra_body"))
+    objects: Final = (
+        ()
+        if extra_body is None
+        else tuple(
+            nested for key in _REASONING_OBJECT_KEYS if (nested := str_keyed_mapping(extra_body.get(key))) is not None
+        )
+    )
+    if extra_body is None or not objects:
+        return optional_params
+    kept: Final = {
+        key: value
+        for key, value in extra_body.items()
+        if key not in _REASONING_OBJECT_KEYS or str_keyed_mapping(value) is None
+    }
+    effort: Final = _without_refused_effort(
+        objects[0],
+        model=model,
+        deployment_model_info=deployment_model_info,
+        refuses_level=_chat_refuses_effort_level,
+    ).get("effort")
+    return {
+        **optional_params,
+        "extra_body": (
+            kept if "reasoning_effort" in kept or not isinstance(effort, str) else {**kept, "reasoning_effort": effort}
+        ),
+    }
+
+
+def _collapse_loses_fields(sent: object) -> bool:
+    sent_object: Final = str_keyed_mapping(sent)
+    return sent_object is not None and any(key != "effort" and value is not None for key, value in sent_object.items())
+
+
+def settle_chat_reasoning_effort(
+    optional_params: dict[str, object],  # mutable-ok: the provider handlers write to this dict and logging shares it
+    *,
+    requested: object,
+    model: str,
+    base_model: str | None,
+    custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> dict[str, object]:  # mutable-ok: the provider handlers write to this dict and logging shares it
+    chat_params: Final = (
+        _with_chat_extra_body_effort(optional_params, model=model, deployment_model_info=deployment_model_info)
+        if drop_params and _reaches_openai(custom_llm_provider, api_base)
+        else optional_params
+    )
+    reasoning_object: Final = str_keyed_mapping(requested)
+    if (
+        reasoning_object is None
+        or "reasoning_effort" not in chat_params
+        or not _reaches_openai(custom_llm_provider, api_base)
+    ):
+        return chat_params
+
+    from litellm.responses.utils import (
+        RefusedReasoningFields,
+        chat_reasoning_effort,
+        raise_refused_reasoning_fields,
+    )
+
+    effort: Final = chat_reasoning_effort(
+        requested=reasoning_object,
+        model=model,
+        base_model=base_model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        deployment_model_info=deployment_model_info,
+        drop_params=drop_params,
+        additional_drop_params=additional_drop_params,
+    )
+    if isinstance(effort, RefusedReasoningFields):
+        raise_refused_reasoning_fields(effort, model, custom_llm_provider)
+    if effort is not None and (drop_params or not _collapse_loses_fields(chat_params["reasoning_effort"])):
+        return {**chat_params, "reasoning_effort": effort}
+    if not drop_params:
+        return chat_params
+    return {key: value for key, value in chat_params.items() if key != "reasoning_effort"}
 
 
 def backend_serves_chat_completions(shared_model_info: Mapping[str, object]) -> bool:
@@ -167,6 +410,7 @@ def responses_api_bridge_check(
     reasoning_summary: object | None = None,
     api_base: str | None = None,
     deployment_model_info: Mapping[str, object] | None = None,
+    base_model: str | None = None,
 ) -> tuple[dict[str, object], str]:
     model_info: dict[str, object] = {}
 
@@ -180,7 +424,7 @@ def responses_api_bridge_check(
     try:
         model_info = cast(
             dict[str, object],
-            get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
+            get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True),
         )
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
@@ -222,12 +466,17 @@ def responses_api_bridge_check(
         (tool.get("type") if isinstance(tool, dict) else getattr(tool, "type", None)) == "tool_search"
         for tool in (tools or ())
     )
+    series_model: Final = (
+        AzureAIStudioConfig.gpt_5_base_model(model, base_model) or model
+        if custom_llm_provider == LlmProviders.AZURE_AI.value
+        else model
+    )
     requested_effort: Final = reasoning_effort.get("effort") if isinstance(reasoning_effort, dict) else reasoning_effort
     requested_summary: Final = reasoning_effort.get("summary") if isinstance(reasoning_effort, dict) else None
     reasoning_active: Final = (
         requested_effort != "none"
         or requested_summary is not None
-        or _chat_gate_refuses_reasoning_effort_none(model, custom_llm_provider)
+        or _chat_gate_refuses_reasoning_effort_none(series_model, custom_llm_provider)
     )
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
@@ -235,7 +484,6 @@ def responses_api_bridge_check(
     # exactly as the chat handler does, so a custom base set via litellm.api_base or
     # OPENAI_BASE_URL/OPENAI_API_BASE isn't misread as the default and bridged to a /responses route it
     # lacks. A whitespace-only base collapses to the default too.
-    resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
     on_foundry_openai_endpoint: Final = custom_llm_provider == "azure_ai" and azure_ai_supports_native_responses(
         model, api_base
     )
@@ -248,18 +496,15 @@ def responses_api_bridge_check(
         and isinstance(reasoning_effort, Mapping)
         and reasoning_effort.get("summary") is not None
     )
-    gpt_series_name: Final = mantle_series_name or model
+    gpt_series_name: Final = mantle_series_name or series_model
     on_constraint_enforcing_endpoint: Final = (
-        custom_llm_provider == "azure"
-        or on_mantle_responses_endpoint
-        or resolved_api_base == ""
-        or _is_openai_backed_api_base(resolved_api_base)
+        custom_llm_provider == "azure" or on_mantle_responses_endpoint or _targets_openai_api(api_base)
     )
     chat_rejects_function_tools: Final = (
         has_function_tool
         and reasoning_active
         and (
-            foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
+            foundry_chat_rejects_function_tools_while_reasoning(series_model, reasoning_effort)
             if on_foundry_openai_endpoint
             else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(gpt_series_name)
@@ -277,7 +522,11 @@ def responses_api_bridge_check(
     if (
         (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint or on_mantle_responses_endpoint)
         and model_info.get("mode") != "responses"
-        and OpenAIGPT5Config.is_model_gpt_5_model(gpt_series_name)
+        and (
+            OpenAIGPT5Config.is_openai_gpt_5_model(gpt_series_name)
+            if custom_llm_provider == "openai"
+            else OpenAIGPT5Config.is_model_gpt_5_model(gpt_series_name)
+        )
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(gpt_series_name)
         and (
             (reasoning_effort is not None and summary_requested)
@@ -316,6 +565,7 @@ def chat_completion_ends_in_responses_api(
     except Exception as error:  # noqa: BLE001  # unknown model names must not fail message translation
         verbose_logger.debug("responses replay check failed for %s: %s", model, error)
         return False
+    declared_base_model: Final = None if deployment_model_info is None else deployment_model_info.get("base_model")
     model_info, _resolved = responses_api_bridge_check(
         model=resolved_model,
         custom_llm_provider=provider,
@@ -324,6 +574,7 @@ def chat_completion_ends_in_responses_api(
         reasoning_summary=reasoning_summary,
         api_base=api_base,
         deployment_model_info=deployment_model_info,
+        base_model=declared_base_model if isinstance(declared_base_model, str) else None,
     )
     return model_info.get("mode") == "responses"
 

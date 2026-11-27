@@ -99,7 +99,7 @@ class S3Logger:
         s3_region_name: object = None,
         s3_api_version: object = None,
         s3_use_ssl: object = True,
-        s3_verify=None,
+        s3_verify: bool | str | None = None,
         s3_endpoint_url: object = None,
         s3_aws_access_key_id: object = None,
         s3_aws_secret_access_key: object = None,

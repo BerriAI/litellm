@@ -29,16 +29,17 @@ use litellm_callbacks::{
     Patch, Scalar, Selection, Subscription, UsageRecord, Verdict, typed,
 };
 use litellm_callbacks_model_capacity::{
-    CapacityError, ClassShareEntity, Engine, Fact, Facts, GroupInfo, KeyFacts, LoggedGroup, NAME,
-    PreCall, Priority, Request as CapacityRequest, SaturationFallback, Settings as EngineSettings,
-    Settlement, SharedStash, StoreLimiter, TokenRateLimitType, UsageTokens,
+    CapacityError, Charge, ClassShareEntity, Engine, Fact, Facts, GroupInfo, KeyFacts, LoggedGroup,
+    NAME, PreCall, Priority, Request as CapacityRequest, SaturationFallback,
+    Settings as EngineSettings, Settlement, SharedStash, StoreLimiter, TokenRateLimitType,
+    UsageTokens,
 };
 use litellm_callbacks_parallel_request_limiter::{
     PolicyFacts, TokenRateLimitType as LimiterTokenType,
 };
 use litellm_config::{Config, PriorityReservation};
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::Caller;
+use litellm_gateway_auth_core::Credential;
 use litellm_gateway_inference::group_limits;
 use litellm_python_compat::json::loaded_str;
 use litellm_redis_store::{RequestRedis, active_teams::ActiveTeams, rate_limits::RateLimits};
@@ -179,9 +180,9 @@ pub struct Counted {
 impl Counted {
     /// The master key names no priority class. A key names the one its row holds.
     fn of(identity: &Authenticated<NativeRows>) -> Self {
-        let priority = match &**identity {
-            Caller::MasterKey => None,
-            Caller::Key(key) => key.key.priority().cloned(),
+        let priority = match &identity.credential {
+            Credential::MasterKey => None,
+            Credential::Key { key } => key.priority().cloned(),
         };
         Self {
             key: KeyFacts {
@@ -322,7 +323,10 @@ impl ModelCapacity {
                 Some(&counted.stash),
                 &settlement,
                 counted.priority.as_deref(),
-                UsageTokens::settled(Some(&used), self.settings.rate_limit_type),
+                Charge::Reported(UsageTokens::settled(
+                    Some(&used),
+                    self.settings.rate_limit_type,
+                )),
                 Some(&request),
             )
             .await;

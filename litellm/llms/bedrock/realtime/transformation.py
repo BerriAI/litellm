@@ -278,7 +278,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+    def validate_environment(self, headers: dict[str, str], model: str, api_key: str | None = None) -> dict[str, str]:
         """Validate environment - no special validation needed for Bedrock."""
         return headers
 

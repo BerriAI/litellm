@@ -18,6 +18,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     drops_unsupported_params,
     map_finish_reason,
     require_attributes,
@@ -45,6 +46,10 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     drop_non_python_regex_patterns,
     flatten_combinators_and_drop_non_python_regex_patterns,
     tool_with_sanitized_parameters,
+)
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    place_mid_conversation_system,
+    split_leading_system_run,
 )
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     chat_completion_prompt_cache_breakpoints_for_wire,
@@ -79,9 +84,9 @@ from litellm.types.utils import (
     ModelResponseStream,
     chat_completion_tool_call_from_dict,
 )
-from litellm.utils import convert_to_model_response_object, declared_mid_conversation_system_support
+from litellm.utils import convert_to_model_response_object, declares_system_first
 
-from ..common_utils import OpenAIError, without_cache_control
+from ..common_utils import OpenAIError, RelayOnlyBodyOpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 if TYPE_CHECKING:
@@ -130,6 +135,11 @@ def _roles(messages: Sequence[AllMessageValues]) -> tuple[str, ...]:
     return tuple(message["role"] for message in messages)
 
 
+def _placed_for_system_first_model(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    leading, conversation = split_leading_system_run(hoist_developer_messages_into_leading_system_message(messages))
+    return (*leading, *place_mid_conversation_system(conversation, supports_mid_conversation_system=False))
+
+
 def translate_developer_role_for_openai_compatible_endpoint(
     messages: Sequence[AllMessageValues],
     *,
@@ -141,10 +151,12 @@ def translate_developer_role_for_openai_compatible_endpoint(
     in_place: Final = map_developer_role_to_system_role(messages=messages)
     if targets_openai_hosted_endpoint(custom_llm_provider, api_base):
         return in_place
-    placed: Final = hoist_developer_messages_into_leading_system_message(messages=messages)
-    if _roles(placed) == _roles(in_place):
+    if not any(message["role"] in ("system", "developer") for message in messages[1:]):
         return in_place
-    if declared_mid_conversation_system_support(model, custom_llm_provider, model_info) is not False:
+    if not declares_system_first(model, custom_llm_provider, model_info):
+        return in_place
+    placed: Final = _placed_for_system_first_model(messages)
+    if _roles(placed) == _roles(in_place):
         return in_place
     return placed
 
@@ -260,7 +272,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_params: Final = [
             "frequency_penalty",
             "logit_bias",
@@ -338,8 +350,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -549,7 +561,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         A developer message only changes role, except on a model whose deployment or cost
         map declares `supports_mid_conversation_system` false, where the instructions are
-        placed in one leading system message for its chat template.
+        placed in one leading system message for its chat template and every later system
+        message becomes a user turn in place.
         """
         return translate_developer_role_for_openai_compatible_endpoint(
             messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, model_info=model_info
@@ -739,9 +752,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         if not has_file_id_urls(messages, _PDF_URL_STARTS):
             return self.transform_request(model, messages, optional_params, litellm_params, headers)
@@ -763,7 +776,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         finally:
             _prefetched_pdf_urls.reset(reset_token)
 
-    def _passed_in_tools(self, optional_params: dict) -> bool:
+    def _passed_in_tools(self, optional_params: dict[str, object]) -> bool:
         return optional_params.get("tools", None) is not None
 
     def _check_and_fix_if_content_is_tool_call(
@@ -805,7 +818,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         choices: list[OpenAIChatCompletionChoices],
         json_mode: bool | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
     ) -> list[Choices]:
         transformed_choices: Final = []
 
@@ -883,10 +896,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -938,8 +951,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -966,8 +979,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -1060,11 +1073,26 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
     """A model the openai provider does not recognize is typically a LiteLLM proxy alias, so
     forward reasoning_effort and let the server decide whether it is supported."""
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
         return super().get_supported_openai_params(model) + ["reasoning_effort"]
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
+    passthrough_top_level_fields: tuple[str, ...] = ()
+
+    def __init__(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse | None,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+        *,
+        passthrough_top_level_fields: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # base iterator leaves streaming_response untyped
+            streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode
+        )
+        self.passthrough_top_level_fields = passthrough_top_level_fields
+
     def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
         """
         Map 'reasoning' field to 'reasoning_content' field in delta.
@@ -1104,9 +1132,10 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             error_details: Final = self._extract_error_from_chunk(chunk)
             if error_details is not None:
                 error_message, error_status_code = error_details
-                raise OpenAIError(
+                raise RelayOnlyBodyOpenAIError(
                     status_code=error_status_code,
                     message=error_message,
+                    body=as_str_mapping(_OBJECT_MAPPING.validate_python(chunk).get("error")),
                 )
             raw_choices: Final = chunk.get("choices") or []
             if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(raw_choices)):
@@ -1124,6 +1153,11 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 "created": chunk.get("created"),
                 "model": chunk.get("model"),
                 "choices": choices,
+                **{
+                    field: chunk[field]
+                    for field in self.passthrough_top_level_fields
+                    if field in chunk and chunk[field] is not None
+                },
             }
             if "usage" in chunk and chunk["usage"] is not None:
                 kwargs["usage"] = chunk["usage"]

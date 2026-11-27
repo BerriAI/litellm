@@ -15,7 +15,7 @@ class CoinbaseAccessTokenDetector(RegexBasedDetector):
         return "Coinbase Access Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Coinbase Access Token
             re.compile(

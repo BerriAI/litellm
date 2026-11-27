@@ -720,7 +720,7 @@ def _delete_customer_id_from_cache(kwargs: Mapping[str, object]):
 
 
 async def send_management_endpoint_alert(
-    request_kwargs: dict,
+    request_kwargs: dict[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     function_name: str,
 ):
@@ -880,7 +880,7 @@ async def _emit_management_endpoint_otel_span(
         )
 
         route = get_request_route(http_request)
-        request_body: dict = (  # rebind-ok: pre-existing rebinding on a rename-only line
+        request_body: dict[str, object] = (  # rebind-ok: pre-existing rebinding on a rename-only line
             await read_request_body(request=http_request) if log_payload else {}
         )
     else:

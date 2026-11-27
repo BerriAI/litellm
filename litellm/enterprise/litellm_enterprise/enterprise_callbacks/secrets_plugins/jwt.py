@@ -15,7 +15,7 @@ class JWTBase64Detector(RegexBasedDetector):
         return "Base64-encoded JSON Web Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Base64-encoded JSON Web Token
             re.compile(

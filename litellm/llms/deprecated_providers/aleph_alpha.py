@@ -1,7 +1,7 @@
 import json
 import time
 import types
-from collections.abc import Callable, Mapping, Sized
+from collections.abc import Callable, Mapping, Sequence, Sized
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -112,14 +112,14 @@ class AlephAlphaConfig:
     penalty_exceptions_include_stop_sequences: bool | None = None
     best_of: int | None = None
     n: int | None = None
-    logit_bias: dict | None = None
+    logit_bias: Mapping[object, object] | None = None
     log_probs: int | None = None
-    stop_sequences: list | None = None
+    stop_sequences: Sequence[object] | None = None
     tokens: bool | None = None
     raw_completion: bool | None = None
     disable_optimizations: bool | None = None
-    completion_bias_inclusion: list | None = None
-    completion_bias_exclusion: list | None = None
+    completion_bias_inclusion: Sequence[object] | None = None
+    completion_bias_exclusion: Sequence[object] | None = None
     completion_bias_inclusion_first_token_only: bool | None = None
     completion_bias_exclusion_first_token_only: bool | None = None
     contextual_control_threshold: int | None = None
@@ -146,14 +146,14 @@ class AlephAlphaConfig:
         penalty_exceptions_include_stop_sequences: bool | None = None,
         best_of: int | None = None,
         n: int | None = None,
-        logit_bias: dict | None = None,
+        logit_bias: Mapping[object, object] | None = None,
         log_probs: int | None = None,
-        stop_sequences: list | None = None,
+        stop_sequences: Sequence[object] | None = None,
         tokens: bool | None = None,
         raw_completion: bool | None = None,
         disable_optimizations: bool | None = None,
-        completion_bias_inclusion: list | None = None,
-        completion_bias_exclusion: list | None = None,
+        completion_bias_inclusion: Sequence[object] | None = None,
+        completion_bias_exclusion: Sequence[object] | None = None,
         completion_bias_inclusion_first_token_only: bool | None = None,
         completion_bias_exclusion_first_token_only: bool | None = None,
         contextual_control_threshold: int | None = None,

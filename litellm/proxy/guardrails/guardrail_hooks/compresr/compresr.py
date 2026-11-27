@@ -964,7 +964,7 @@ class CompresrGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -1091,7 +1091,7 @@ class CompresrGuardrail(CustomGuardrail):
         self,
         tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         response: object,
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None,
         anthropic_messages_optional_request_params: dict,

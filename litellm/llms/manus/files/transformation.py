@@ -75,14 +75,14 @@ class ManusFilesConfig(BaseFilesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: Sequence[object],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for Manus API.
 
@@ -116,10 +116,10 @@ class ManusFilesConfig(BaseFilesConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to Manus-specific parameters.
         Manus is OpenAI-compatible, so no special mapping needed.
@@ -155,7 +155,7 @@ class ManusFilesConfig(BaseFilesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         """
         Return the appropriate error class for Manus API errors.

@@ -2312,6 +2312,48 @@ async def test_raw_vertex_claude_rows_are_priced_like_with_the_native_output_fla
 
 
 @pytest.mark.asyncio
+async def test_gemini_malformed_rows_without_output_are_billed_like_with_the_native_output_flag(monkeypatch):
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    def native_row(custom_id: str, candidate: Mapping[str, object]) -> Mapping[str, object]:
+        return {
+            "status": "",
+            "processed_time": "2026-11-23T18:13:16.826+00:00",
+            "request": {"contents": [], "labels": {"litellm_custom_id": custom_id}},
+            "response": {
+                "candidates": [candidate],
+                "modelVersion": "gemini-3.8-flash",
+                "usageMetadata": {"promptTokenCount": 900, "candidatesTokenCount": 40, "totalTokenCount": 940},
+            },
+        }
+
+    native_rows: Final = [
+        native_row("ok", {"content": {"role": "model", "parts": [{"text": "Paris is 12C."}]}, "finishReason": "STOP"}),
+        native_row("malformed", {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL"}),
+    ]
+    transformed: Final = VertexAIFilesConfig()._try_transform_vertex_batch_output_to_openai(
+        "\n".join(json.dumps(row) for row in native_rows).encode("utf-8")
+    )
+    openai_rows: Final = [json.loads(line) for line in transformed.decode("utf-8").splitlines()]
+
+    async def cost(rows: list[Mapping[str, object]], flag: bool) -> bu.BatchCostUsageResult:
+        monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", flag, raising=False)
+        return await bu.calculate_batch_cost_and_usage(
+            file_content_dictionary=rows, custom_llm_provider="vertex_ai", model_name="gemini-3.8-flash"
+        )
+
+    from_openai_rows: Final = await cost(openai_rows, False)
+    from_native_rows: Final = await cost(native_rows, True)
+
+    assert from_native_rows.cost > 0
+    assert (from_openai_rows.cost, from_openai_rows.usage.total_tokens) == (
+        pytest.approx(from_native_rows.cost),
+        from_native_rows.usage.total_tokens,
+    )
+    assert (from_openai_rows.successful_requests, from_openai_rows.failed_requests) == (1, 1)
+
+
+@pytest.mark.asyncio
 async def test_openai_shaped_vertex_rows_keep_the_generic_path_without_flag(monkeypatch):
     monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", False, raising=False)
     monkeypatch.setattr(

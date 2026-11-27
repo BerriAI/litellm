@@ -317,7 +317,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model_name: str,
         template_messages: Sequence[object],
         params: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
         # LangChain agents pass strict=true at top level, which fails for GPT models
         # Anthropic models accept strict, so preserve it for them
@@ -344,7 +344,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         placeholder_defaults = params.pop("placeholder_defaults", {})
         placeholder_defaults = {"defaults": placeholder_defaults} if placeholder_defaults else {}
 
-        optional_modules: Final = {}
+        optional_modules: Final[dict[str, object]] = {}
         optional_modules_lst: Final = ["grounding", "masking", "filtering", "translation"]
         for module in optional_modules_lst:
             if params.get(module, None) is not None:
@@ -384,7 +384,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         fallback_modules: Final = optional_params.pop("fallback_sap_modules", [])
 
         optional_params.pop("stream", None)
-        stream_config: Final[dict] = {}
+        stream_config: Final[dict[str, object]] = {}
         if "stream_options" in optional_params:
             stream_options: Final = optional_params.pop("stream_options", {})
             if "chunk_size" in stream_options:
@@ -453,7 +453,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
         response = ModelResponse.model_validate(
-            normalize_reasoning_blocks(raw_response.json()["final_result"], "message")
+            normalize_reasoning_blocks(_DECODED_JSON.validate_python(raw_response.json()["final_result"]), "message")
         )
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
