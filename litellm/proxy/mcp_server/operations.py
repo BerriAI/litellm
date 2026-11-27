@@ -1586,7 +1586,7 @@ async def _get_tools_from_mcp_servers(
                     tools=raw_aggregated.tools,
                     outcomes=raw_aggregated.outcomes | left_out_outcomes,
                     next_cursor=raw_aggregated.next_cursor,
-                    ttl_ms=raw_aggregated.ttl_ms,
+                    ttl_ms=0,
                 )
                 if left_out_outcomes
                 else raw_aggregated

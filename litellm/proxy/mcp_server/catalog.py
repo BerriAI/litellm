@@ -1198,10 +1198,12 @@ async def list_gateway_catalog(
 
     from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
     from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy.mcp_server.auth_profile_selection import raise_unusable_profile
     from litellm.proxy.mcp_server.operations import (
-        get_usable_mcp_servers,
+        _get_allowed_mcp_servers,
         global_mcp_server_manager,
         raise_denied_scoped_mcp_access,
+        split_usable_mcp_servers,
     )
 
     context = replace(context, _caller=await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth))
@@ -1212,11 +1214,16 @@ async def list_gateway_catalog(
     scope: Final = context.mcp_servers
     client_ip: Final = context.client_ip
     async with global_mcp_server_manager.catalog.operation() as snapshot:
-        allowed: Final = await get_usable_mcp_servers(user_api_key_auth=caller, mcp_servers=scope, client_ip=client_ip)
-        if scope and not allowed:
+        all_allowed: Final = await _get_allowed_mcp_servers(
+            user_api_key_auth=caller, mcp_servers=scope, client_ip=client_ip
+        )
+        if scope and not all_allowed:
             await raise_denied_scoped_mcp_access(
                 requested_names=list(scope), user_api_key_auth=caller, client_ip=client_ip
             )
+        allowed, left_out = await split_usable_mcp_servers(all_allowed, caller)
+        if left_out and not allowed:
+            raise_unusable_profile(left_out[0][1])
         servers: Final = {server.server_id: server for server in allowed}
         rejections: Final[list[ProxyRateLimitError]] = []  # mutable-ok: concurrent fetches share first-page errors
 
@@ -1281,13 +1288,22 @@ async def list_gateway_catalog(
         )
         if params.cursor is None and servers and len(rejections) == len(servers):
             raise rejections[0]
+        from litellm.proxy.mcp_server.auth_profile_selection import unusable_profile_status
         from litellm.proxy.mcp_server.faults.list_outcomes import (
             SERVER_OUTCOMES_META_KEY,
+            ServerListFault,
             ServerOutcome,
             outcome_wire_value,
         )
+        from litellm.proxy.mcp_server.operations import _aggregate_server_key
 
-        typed_outcomes: Final = TypeAdapter(dict[str, ServerOutcome]).validate_python(outcomes)
+        left_out_outcomes: Final[Mapping[str, ServerOutcome]] = {
+            _aggregate_server_key(server): ServerListFault(
+                tag="internal", status_code=unusable_profile_status(unusable)
+            )
+            for server, unusable in left_out
+        }
+        typed_outcomes: Final = TypeAdapter(dict[str, ServerOutcome]).validate_python(outcomes) | left_out_outcomes
         return combine_optional_catalog(
             request,
             pages,
@@ -1295,7 +1311,7 @@ async def list_gateway_catalog(
             _OUTCOME_VALUES.validate_python(
                 {SERVER_OUTCOMES_META_KEY: {key: outcome_wire_value(value) for key, value in typed_outcomes.items()}}
             )
-            if outcomes
+            if typed_outcomes
             else None,
         )
 

@@ -3240,6 +3240,7 @@ async def test_a_tool_listing_leaves_out_a_server_whose_profile_is_unusable_and_
 
     assert [listed.name for listed in listing.tools] == ["wiki-tool_default_credential"]
     assert listing.outcomes["tickets"] == ServerListFault(tag="internal", status_code=500)
+    assert listing.ttl_ms == 0
     assert upstream.credentials_seen() == {f"Bearer {DEFAULT_CREDENTIAL}"}
 
 
