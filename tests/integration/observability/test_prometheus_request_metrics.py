@@ -23,6 +23,8 @@ _GOOD: Final = "prometheus-good-endpoint"
 _LIMITED: Final = "prometheus-rate-limited-endpoint"
 _FAILING: Final = "prometheus-failing-endpoint"
 _LATENCY: Final = "prometheus-latency-endpoint"
+_DEPLOYMENT: Final = "openai/prometheus-scripted-chat"
+_DEPLOYMENT_FAILURE_PROMPT: Final = "return a provider error for this deployment"
 _END_USER: Final = f"prometheus-end-user-{uuid.uuid4().hex}"
 
 
@@ -33,7 +35,13 @@ class _Rig:
 
 
 def _respond(request: Request) -> Reply:
-    if json.loads(request.body)["model"] == "429":
+    body: Final = json.loads(request.body)
+    if (
+        body["model"] == _DEPLOYMENT.removeprefix("openai/")
+        and body["messages"][0]["content"] == _DEPLOYMENT_FAILURE_PROMPT
+    ):
+        return Reply(status=503, body=b'{"error":{"message":"provider unavailable","type":"server_error"}}')
+    if body["model"] == "429":
         return Reply(
             status=429,
             body=json.dumps({"error": {"message": "rate limited", "type": "rate_limit_error", "code": "429"}}).encode(),
@@ -73,6 +81,7 @@ def _config(directory: Path, upstream: Wire) -> Path:
         ),
         {"model_name": _LIMITED, "litellm_params": {"model": "openai/429", **params}},
         {"model_name": _FAILING, "litellm_params": {"model": "openai/429", **params}},
+        {"model_name": "prometheus-chat-alias", "litellm_params": {"model": _DEPLOYMENT, **params}},
     ]
     configuration["litellm_settings"]["callbacks"] = ["prometheus"]
     configuration["litellm_settings"]["disable_end_user_cost_tracking_prometheus_only"] = True
@@ -112,6 +121,28 @@ def _series(samples: Sequence[Sample], name: str, **labels: str) -> tuple[Sample
 
 def _until(rig: _Rig, name: str, **labels: str) -> tuple[Sample, ...]:
     return eventually(lambda: _series(scrape(rig.gateway), name, **labels), bool, seconds=30)
+
+
+def test_a_deployment_name_labels_both_success_and_provider_failure(rig: _Rig) -> None:
+    total: Final = "litellm_proxy_total_requests_metric_total"
+    success: Final = _ask(rig, _DEPLOYMENT)
+    assert success.status_code == 200, success.text
+    assert [sample.value for sample in _until(rig, total, requested_model=_DEPLOYMENT, status_code="200")] == [1.0]
+
+    failure: Final = rig.gateway.request(
+        "POST",
+        "/chat/completions",
+        {"model": _DEPLOYMENT, "messages": [{"role": "user", "content": _DEPLOYMENT_FAILURE_PROMPT}]},
+    )
+    assert failure.status_code == 503, failure.text
+    assert [(request.target, json.loads(request.body)["model"]) for request in rig.upstream.drain()] == [
+        ("/v1/chat/completions", _DEPLOYMENT.removeprefix("openai/"))
+    ] * 2
+
+    failed: Final = _until(rig, "litellm_proxy_failed_requests_metric_total", exception_status="503")
+    totals: Final = _until(rig, total, status_code="503")
+    assert [(sample.labels["requested_model"], sample.value) for sample in failed] == [(_DEPLOYMENT, 1.0)]
+    assert [(sample.labels["requested_model"], sample.value) for sample in totals] == [(_DEPLOYMENT, 1.0)]
 
 
 def test_a_rate_limited_call_counts_as_a_failed_and_a_429_total_request(rig: _Rig) -> None:

@@ -9,6 +9,7 @@ names, aliases, and wildcard-matched names keep their own label values.
 
 import sys
 import types
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -114,6 +115,45 @@ async def test_unknown_models_collapse_to_one_series_on_proxy_request_metrics(ro
         assert _requested_model_values(metric) == {UNRECOGNIZED_REQUESTED_MODEL_LABEL}
         assert _series_count(metric) == 1
         assert _total_value(metric) == 25
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handoff", "expected"),
+    [
+        (datetime(2026, 1, 1), "openai/gpt-4o-mini"),
+        (1.0, UNRECOGNIZED_REQUESTED_MODEL_LABEL),
+        (None, UNRECOGNIZED_REQUESTED_MODEL_LABEL),
+    ],
+)
+async def test_configured_deployment_name_is_kept_only_with_a_provider_handoff(
+    handoff: datetime | float | None, expected: str
+) -> None:
+    deployment = "openai/gpt-4o-mini"
+    router = litellm.Router(
+        model_list=[{"model_name": "chat", "litellm_params": {"model": deployment, "api_key": "fake-key"}}],
+    )
+    logger = PrometheusLogger()
+
+    with patch(
+        "litellm.proxy.proxy_server.llm_router", router, create=True
+    ):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        await logger.async_post_call_failure_hook(
+            request_data={
+                "model": deployment,
+                "first_api_call_start_time": handoff,
+                "metadata": {},
+                "proxy_server_request": {},
+            },
+            original_exception=litellm.ServiceUnavailableError(
+                message="provider unavailable", llm_provider="openai", model=deployment
+            ),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key-1"),
+        )
+
+    for metric in (logger.litellm_proxy_failed_requests_metric, logger.litellm_proxy_total_requests_metric):
+        assert _requested_model_values(metric) == {expected}
+        assert _total_value(metric) == 1
 
 
 @pytest.mark.asyncio

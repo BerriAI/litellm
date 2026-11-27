@@ -621,12 +621,15 @@ def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str,
     )
 
 
-def _bounded_requested_model_label(requested_model: object, router_originated: bool = False) -> str | None:
+def _bounded_requested_model_label(
+    requested_model: object, router_originated: bool = False, *, reached_provider: bool = False
+) -> str | None:
     """
     Bound ``requested_model`` label cardinality: names the router recognizes
     (model names, deployment ids, aliases, routing groups, team public model
     names) or matches via a global or team wildcard/pattern route keep their
-    own label value; any other client-supplied string collapses into the
+    own label value, as do configured deployment names after provider handoff.
+    Any other client-supplied string collapses into the
     single ``other`` bucket, as does any non-string request ``model`` value.
     With no proxy router to vouch for the string, client-supplied values
     collapse to ``other`` while ``router_originated`` values (emitted by an
@@ -653,6 +656,8 @@ def _bounded_requested_model_label(requested_model: object, router_originated: b
         team_pattern_router.route(requested_model) is not None
         for team_pattern_router in registry.patterns(team=True).values()
     ):
+        return requested_model
+    if reached_provider and requested_model in registry.names(kind="deployment_names"):
         return requested_model
     return UNRECOGNIZED_REQUESTED_MODEL_LABEL
 
@@ -3331,7 +3336,10 @@ class PrometheusLogger(CustomLogger):
                 team_alias=user_api_key_dict.team_alias,
                 org_id=user_api_key_dict.org_id,
                 org_alias=user_api_key_dict.organization_alias,
-                requested_model=_bounded_requested_model_label(self._failed_request_requested_model(request_data)),
+                requested_model=_bounded_requested_model_label(
+                    self._failed_request_requested_model(request_data),
+                    reached_provider=isinstance(request_data.get("first_api_call_start_time"), datetime),
+                ),
                 status_code=str(status_code),
                 exception_status=str(status_code),
                 exception_class=self._get_exception_class_name(original_exception),
@@ -3391,7 +3399,11 @@ class PrometheusLogger(CustomLogger):
             model=billed_model.removeprefix(f"{provider}/" if isinstance(provider, str) else "")
             if isinstance(billed_model, str)
             else None,
-            requested_model=billed_group if isinstance(billed_group, str) else enum_values.requested_model,
+            requested_model=(
+                billed_group
+                if isinstance(billed_group, str)
+                else _bounded_requested_model_label(self._failed_request_requested_model(request_data))
+            ),
         )
         label_context: Final = PrometheusLabelFactoryContext(billed_values)
 
