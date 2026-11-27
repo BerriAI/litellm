@@ -4,19 +4,20 @@ import { SearchSelect, type SearchSelectOption } from "@/components/shared/Searc
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
-import { FormProvider, useForm } from "react-hook-form";
+import { FormProvider, useForm, type UseFormReturn } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { authTypeFieldKeys } from "../add_model/provider_auth_types";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
+import { useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
 import {
-  MountedFormField,
-  MountedFormProvider,
-  projectMountedValues,
-  useMountRegistry,
-  type MountedFormValues,
-} from "../common_components/MountedFormField";
+  DeploymentMountedField as MountedFormField,
+  DeploymentMountedProvider,
+  useDeploymentForm,
+} from "../add_model/deployment-form/DeploymentMountedField";
+import { readDeploymentDraft } from "../add_model/deployment-form/mapper";
+import type { FieldValidation } from "../add_model/deployment-form/schema";
 import { CredentialItem } from "../networking";
 import { getProviderLogoAndName, Providers } from "../provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -75,7 +76,23 @@ interface CredentialModalProps {
 const sameProvider = (left: string | null | undefined, right: string | null | undefined): boolean =>
   (left ?? "").toLowerCase() === (right ?? "").toLowerCase();
 
-export default function CredentialModal({
+export default function CredentialModal(props: CredentialModalProps) {
+  return props.mode === "edit" ? <EditCredentialModal {...props} /> : <CreateCredentialModal {...props} />;
+}
+
+function CreateCredentialModal(props: CredentialModalProps) {
+  const initialValues = initialFormValues(props.existingCredential, props.initialProvider);
+  const { form, rules } = useDeploymentForm(initialValues);
+  return <CredentialModalForm {...props} form={form} rules={rules} initialValues={initialValues} />;
+}
+
+function EditCredentialModal(props: CredentialModalProps) {
+  const initialValues = initialFormValues(props.existingCredential, props.initialProvider);
+  const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: initialValues });
+  return <CredentialModalForm {...props} form={form} rules={null} initialValues={initialValues} />;
+}
+
+function CredentialModalForm({
   open,
   onCancel,
   onSubmit,
@@ -85,7 +102,14 @@ export default function CredentialModal({
   initialAuthMethod,
   initialAuthTypeId,
   providerLocked = false,
-}: CredentialModalProps) {
+  form,
+  rules,
+  initialValues,
+}: CredentialModalProps & {
+  form: UseFormReturn<MountedFormValues>;
+  rules: Map<string, FieldValidation> | null;
+  initialValues: MountedFormValues | undefined;
+}) {
   const { t } = useTranslation();
   const isEdit = mode === "edit";
   const [selectedProvider, setSelectedProvider] = useState<string | null>(
@@ -104,9 +128,6 @@ export default function CredentialModal({
   const [identitySource, setIdentitySource] = useState<IdentitySourceId>(storedIdentitySource);
   const selection = selectionFor(federatedProviderOf(selectedProvider), authMethod, identitySource);
 
-  const initialValues = initialFormValues(existingCredential, initialProvider);
-
-  const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: initialValues });
   const registry = useMountRegistry();
 
   const formAdapterFor = (provider: string | null) => ({
@@ -132,7 +153,7 @@ export default function CredentialModal({
     if (!isValid) {
       return;
     }
-    const values = projectMountedValues(registry, form.getValues);
+    const values = readDeploymentDraft(registry, form.getValues);
     const meta = {
       credential_name: String(values.credential_name),
       custom_llm_provider: String(values.custom_llm_provider),
@@ -177,7 +198,7 @@ export default function CredentialModal({
           </DialogTitle>
         </DialogHeader>
         <FormProvider {...form}>
-          <MountedFormProvider value={{ control: form.control, registry }}>
+          <DeploymentMountedProvider rules={rules} value={{ control: form.control, registry }}>
             <form
               onSubmit={(event) => {
                 event.preventDefault();
@@ -308,7 +329,7 @@ export default function CredentialModal({
                 </div>
               </div>
             </form>
-          </MountedFormProvider>
+          </DeploymentMountedProvider>
         </FormProvider>
       </DialogContent>
     </Dialog>

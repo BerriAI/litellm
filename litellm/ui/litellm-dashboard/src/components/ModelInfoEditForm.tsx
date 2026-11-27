@@ -1,13 +1,11 @@
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
 import { CircleHelp } from "lucide-react";
 import type { Dayjs } from "dayjs";
 import type { ParseKeys, TFunction } from "i18next";
 import * as React from "react";
-import { useForm, type Resolver } from "react-hook-form";
 import { useTranslation } from "react-i18next";
-import { z } from "zod";
+import { useZodForm } from "@/lib/forms/useZodForm";
 
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { FormField } from "@/components/shared/form/FormField";
@@ -36,21 +34,16 @@ import NumericalInput from "./shared/numerical_input";
 import type { Tag } from "./tag_management/types";
 import { ModelTeamSelect } from "./view_model/ModelTeamSelect";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import { formatPtuUtcDisplay, utcIsoToPickerValue } from "../utils/ptuDatetime";
-import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
-import {
-  MAX_COST_PER_PTU_PER_HOUR,
-  MAX_PTU_COUNT,
-  PTU_COUNT_FIELD,
-  PTU_END_FIELD,
-  PTU_RATE_FIELD,
-  PTU_START_FIELD,
-  isFilledPtuValue,
-  isNonNegativePtuRate,
-  isPositiveWholePtuCount,
-  ptuWindowIsOrdered,
-} from "../utils/ptuValidation";
+import { formatPtuUtcDisplay } from "../utils/ptuDatetime";
+import { PTU_COUNT_FIELD, PTU_END_FIELD, PTU_RATE_FIELD, PTU_START_FIELD } from "../utils/ptuValidation";
 import { codeSamples } from "@/i18n/untranslated/codeSamples";
+import { toModelEditFormValues } from "./model-edit/mapper";
+import {
+  buildModelEditSchema,
+  type ModelEditFieldName,
+  type ModelEditSubmitValues,
+  type TouchedPricingField,
+} from "./model-edit/schema";
 
 interface PtuEditField {
   name: string;
@@ -78,15 +71,6 @@ const PTU_EDIT_FIELDS: PtuEditField[] = [
   { name: PTU_END_FIELD, label: "modelInfoEditForm.fields.ptuEffectiveTo.label", input: "datetime" },
 ];
 
-const PRICING_FIELDS = [
-  "input_cost",
-  "output_cost",
-  "cache_read_cost",
-  "cache_write_cost",
-  "cache_write_cost_1h",
-] as const;
-export type TouchedPricingField = (typeof PRICING_FIELDS)[number];
-
 const COST_SOURCES: Record<TouchedPricingField, string> = {
   input_cost: "input_cost_per_token",
   output_cost: "output_cost_per_token",
@@ -94,169 +78,6 @@ const COST_SOURCES: Record<TouchedPricingField, string> = {
   cache_write_cost: "cache_creation_input_token_cost",
   cache_write_cost_1h: "cache_creation_input_token_cost_above_1hr",
 };
-
-const scalar = z.union([z.string(), z.number(), z.null()]).optional();
-const textish = z.string().optional();
-
-const isBlank = (value: string | number | null | undefined): boolean => value == null || String(value).trim() === "";
-
-export const perMillionToPerToken = scalar
-  .refine((perMillion) => isBlank(perMillion) || (Number.isFinite(Number(perMillion)) && Number(perMillion) >= 0), {
-    error: () => i18n.t("modelInfoEditForm.validation.priceNonNegative"),
-  })
-  .transform((perMillion) => (isBlank(perMillion) ? null : Number(perMillion) / 1_000_000));
-
-const modelEditShape = {
-  model_name: textish,
-  litellm_model_name: textish,
-  api_base: textish,
-  custom_llm_provider: textish,
-  organization: textish,
-  tpm: scalar,
-  rpm: scalar,
-  max_retries: scalar,
-  timeout: scalar,
-  stream_timeout: scalar,
-  input_cost: perMillionToPerToken,
-  output_cost: perMillionToPerToken,
-  cache_read_cost: perMillionToPerToken,
-  cache_write_cost: perMillionToPerToken,
-  cache_write_cost_1h: perMillionToPerToken,
-  ptu_count: scalar,
-  cost_per_ptu_per_hour: scalar,
-  ptu_effective_from: z.custom<Dayjs | null>().nullish(),
-  ptu_effective_to: z.custom<Dayjs | null>().nullish(),
-  cache_control: z.boolean().optional(),
-  cache_control_injection_points: z.array(z.custom<CacheControlInjectionPoint>()).optional(),
-  model_access_group: z.array(z.string()).optional(),
-  guardrails: z.array(z.string()).optional(),
-  vector_store_ids: z.array(z.string()).optional(),
-  tags: z.array(z.string()).optional(),
-  health_check_model: z.string().nullish(),
-  litellm_credential_name: z.string().nullish(),
-  litellm_extra_params: textish,
-  model_info: textish,
-  team_id: textish,
-};
-
-type ModelEditFieldName = keyof typeof modelEditShape;
-
-const buildSchema = (
-  ptuEnabled: boolean,
-  isFieldTouched: (field: TouchedPricingField) => boolean,
-  t: TFunction = i18n.t.bind(i18n),
-) =>
-  z.object(modelEditShape).superRefine((values, ctx) => {
-    const reject = (path: ModelEditFieldName, message: string) =>
-      ctx.addIssue({ code: "custom", path: [path], message });
-
-    if (parseModelExtraParams(values.litellm_extra_params) === null) {
-      reject("litellm_extra_params", t("modelInfoEditForm.validation.invalidJson"));
-    }
-
-    // antd validates only mounted fields, and the PTU block does not render when the flag is off.
-    if (!ptuEnabled) {
-      return;
-    }
-
-    if (!isPositiveWholePtuCount(values.ptu_count)) {
-      reject("ptu_count", t("modelInfoEditForm.validation.ptuCountRange", { max: MAX_PTU_COUNT.toLocaleString() }));
-    }
-    if (!isNonNegativePtuRate(values.cost_per_ptu_per_hour)) {
-      reject(
-        "cost_per_ptu_per_hour",
-        t("modelInfoEditForm.validation.ptuRateRange", { max: MAX_COST_PER_PTU_PER_HOUR.toLocaleString() }),
-      );
-    }
-    if (isFilledPtuValue(values.ptu_count) !== isFilledPtuValue(values.cost_per_ptu_per_hour)) {
-      const message = t("modelInfoEditForm.validation.ptuPair");
-      reject("ptu_count", message);
-      reject("cost_per_ptu_per_hour", message);
-    }
-    if (isFilledPtuValue(values.ptu_count) && !isFilledPtuValue(values.ptu_effective_from)) {
-      reject("ptu_effective_from", t("modelInfoEditForm.validation.ptuStartRequired"));
-    }
-    if (!ptuWindowIsOrdered(values.ptu_effective_from, values.ptu_effective_to)) {
-      const message = t("modelInfoEditForm.validation.ptuWindowOrder");
-      reject("ptu_effective_from", message);
-      reject("ptu_effective_to", message);
-    }
-
-    for (const field of PRICING_FIELDS) {
-      const value = values[field];
-      if (
-        isFieldTouched(field) &&
-        isFilledPtuValue(values.ptu_count) &&
-        isFilledPtuValue(value) &&
-        Number(value) !== 0
-      ) {
-        reject(field, t("modelInfoEditForm.validation.ptuPricing"));
-      }
-    }
-  });
-
-type ModelEditSchema = ReturnType<typeof buildSchema>;
-export type ModelEditFormValues = z.input<ModelEditSchema>;
-export type ModelEditSubmitValues = z.output<ModelEditSchema>;
-
-const perMillionTokens = (...rates: (number | null | undefined)[]): number | null => {
-  const rate = rates.find((candidate) => candidate != null);
-  return rate == null ? null : rate * 1_000_000;
-};
-
-export const toModelEditFormValues = (localModelData: any, isWildcardModel: boolean): ModelEditFormValues => ({
-  model_name: localModelData.model_name,
-  litellm_model_name: localModelData.litellm_model_name,
-  api_base: localModelData.litellm_params.api_base,
-  custom_llm_provider: localModelData.litellm_params.custom_llm_provider,
-  organization: localModelData.litellm_params.organization,
-  tpm: localModelData.litellm_params.tpm,
-  rpm: localModelData.litellm_params.rpm,
-  max_retries: localModelData.litellm_params.max_retries,
-  timeout: localModelData.litellm_params.timeout,
-  stream_timeout: localModelData.litellm_params.stream_timeout,
-  input_cost: perMillionTokens(
-    localModelData.litellm_params.input_cost_per_token,
-    localModelData.model_info?.input_cost_per_token,
-  ),
-  output_cost: perMillionTokens(
-    localModelData.litellm_params?.output_cost_per_token,
-    localModelData.model_info?.output_cost_per_token,
-  ),
-  ptu_count: localModelData.model_info?.ptu_count ?? null,
-  cost_per_ptu_per_hour: localModelData.model_info?.cost_per_ptu_per_hour ?? null,
-  ptu_effective_from: utcIsoToPickerValue(localModelData.model_info?.ptu_effective_from),
-  ptu_effective_to: utcIsoToPickerValue(localModelData.model_info?.ptu_effective_to),
-  cache_read_cost: perMillionTokens(
-    localModelData.litellm_params?.cache_read_input_token_cost,
-    localModelData.model_info?.cache_read_input_token_cost,
-  ),
-  cache_write_cost: perMillionTokens(
-    localModelData.litellm_params?.cache_creation_input_token_cost,
-    localModelData.model_info?.cache_creation_input_token_cost,
-  ),
-  cache_write_cost_1h: perMillionTokens(
-    localModelData.litellm_params?.cache_creation_input_token_cost_above_1hr,
-    localModelData.model_info?.cache_creation_input_token_cost_above_1hr,
-  ),
-  cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
-  cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
-  model_access_group: Array.isArray(localModelData.model_info?.access_groups)
-    ? localModelData.model_info.access_groups
-    : [],
-  guardrails: Array.isArray(localModelData.litellm_params?.guardrails) ? localModelData.litellm_params.guardrails : [],
-  vector_store_ids:
-    Array.isArray(localModelData.litellm_params?.vector_store_ids) &&
-    localModelData.litellm_params.vector_store_ids.length > 0
-      ? localModelData.litellm_params.vector_store_ids
-      : undefined,
-  tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
-  // antd never mounted this field for a non-wildcard model, so the key must be absent, not null.
-  ...(isWildcardModel ? { health_check_model: localModelData.model_info?.health_check_model } : {}),
-  litellm_credential_name: localModelData.litellm_params?.litellm_credential_name ?? null,
-  litellm_extra_params: JSON.stringify(editableModelExtraParams(localModelData.litellm_params ?? {}), null, 2),
-  team_id: localModelData.model_info?.team_id ?? undefined,
-});
 
 const displayCost = (localModelData: any, field: TouchedPricingField, t: TFunction = i18n.t.bind(i18n)): string => {
   const key = COST_SOURCES[field];
@@ -337,6 +158,15 @@ const ChipList: React.FC<{ values: unknown; emptyLabel: string }> = ({ values, e
   );
 };
 
+function createPricingTouches() {
+  const fields = new Set<string>();
+  return {
+    has: (field: TouchedPricingField) => fields.has(field),
+    mark: (field: string) => fields.add(field),
+    clear: () => fields.clear(),
+  };
+}
+
 const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   localModelData,
   modelData,
@@ -359,18 +189,9 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
 }) => {
   const { t } = useTranslation();
   // Neither RHF's blur-based touchedFields nor its resettable dirtyFields matches antd's touched-on-change.
-  const touchedRef = React.useRef<ReadonlySet<string>>(new Set<string>());
-  const isFieldTouched = React.useCallback((field: TouchedPricingField) => touchedRef.current.has(field), []);
-  const markTouched = (field: string) => {
-    touchedRef.current = new Set([...touchedRef.current, field]);
-  };
+  const [{ has: isFieldTouched, mark: markTouched, clear: clearTouched }] = React.useState(createPricingTouches);
 
-  // react-hook-form refreshes control._options every render, so this rebuild is what the next submit runs.
-  const resolver: Resolver<ModelEditFormValues, unknown, ModelEditSubmitValues> = (values, context, options) =>
-    zodResolver(buildSchema(ptuCostAttributionEnabled, isFieldTouched, t))(values, context, options);
-
-  const form = useForm<ModelEditFormValues, unknown, ModelEditSubmitValues>({
-    resolver,
+  const form = useZodForm(buildModelEditSchema(ptuCostAttributionEnabled, isFieldTouched, t), {
     defaultValues: toModelEditFormValues(localModelData, isWildcardModel),
   });
 
@@ -381,7 +202,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
 
   const cancel = () => {
     form.reset(toModelEditFormValues(localModelData, isWildcardModel));
-    touchedRef.current = new Set<string>();
+    clearTouched();
     onCancel();
   };
 

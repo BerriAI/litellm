@@ -1,16 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import { useWatch } from "react-hook-form";
 import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
 import AddModelForm from "@/components/add_model/AddModelForm";
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
-import {
-  projectMountedValues,
-  useMountRegistry,
-  type MountedFormValues,
-} from "@/components/common_components/MountedFormField";
+import { useMountRegistry } from "@/components/common_components/MountedFormField";
+import { MountedValidationProvider, useDeploymentForm } from "@/components/add_model/deployment-form/DeploymentMountedField";
+import { deploymentDefaults, readDeploymentDraft } from "@/components/add_model/deployment-form/mapper";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
@@ -19,13 +17,11 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { buildDecisionCatalog } from "@/lib/decisionModels";
 
-const INITIAL_VALUES: MountedFormValues = { litellm_credential_name: null };
-
 const PREFILL_URL_PARAMS = { provider: parseAsString, litellm_model: parseAsString };
 
 export default function AddModelPanel() {
   const { accessToken } = useAuthorized();
-  const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: INITIAL_VALUES });
+  const { form, rules } = useDeploymentForm(deploymentDefaults);
   const registry = useMountRegistry();
   const queryClient = useQueryClient();
   const { data: modelCostMapData } = useModelCostMap(true, true);
@@ -67,7 +63,7 @@ export default function AddModelPanel() {
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["models", "list"] });
 
-  const mountedValues = () => projectMountedValues(registry, form.getValues);
+  const mountedValues = () => readDeploymentDraft(registry, form.getValues);
 
   const handleOk = async (): Promise<boolean> => {
     const isValid = await form.trigger(registry.mountedNames() as string[]);
@@ -79,7 +75,7 @@ export default function AddModelPanel() {
       accessToken,
       {
         resetFields: () => {
-          form.reset(INITIAL_VALUES);
+          form.reset(deploymentDefaults);
           void setPrefillParams({ provider: null, litellm_model: null });
         },
       },
@@ -89,20 +85,22 @@ export default function AddModelPanel() {
   };
 
   return (
-    <AddModelForm
-      form={form}
-      registry={registry}
-      mountedValues={mountedValues}
-      handleOk={handleOk}
-      selectedProvider={selectedProvider}
-      setSelectedProvider={setSelectedProvider}
-      providerModels={providerModels}
-      getPlaceholder={getPlaceholder}
-      showAdvancedSettings={showAdvancedSettings}
-      setShowAdvancedSettings={setShowAdvancedSettings}
-      teams={teams ?? null}
-      credentials={credentialsResponse?.credentials || []}
-      decisionCatalog={decisionCatalog}
-    />
+    <MountedValidationProvider value={rules}>
+      <AddModelForm
+        form={form}
+        registry={registry}
+        mountedValues={mountedValues}
+        handleOk={handleOk}
+        selectedProvider={selectedProvider}
+        setSelectedProvider={setSelectedProvider}
+        providerModels={providerModels}
+        getPlaceholder={getPlaceholder}
+        showAdvancedSettings={showAdvancedSettings}
+        setShowAdvancedSettings={setShowAdvancedSettings}
+        teams={teams ?? null}
+        credentials={credentialsResponse?.credentials || []}
+        decisionCatalog={decisionCatalog}
+      />
+    </MountedValidationProvider>
   );
 }

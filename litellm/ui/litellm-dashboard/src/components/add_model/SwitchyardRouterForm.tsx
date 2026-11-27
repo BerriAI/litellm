@@ -1,22 +1,19 @@
 "use client";
 
 import { useId, useState } from "react";
+import { useWatch } from "react-hook-form";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { modelPatchUpdateCall } from "@/components/networking";
-import {
-  emptySwitchyardConfig,
-  isDecisionModelMode,
-  switchyardConfigSchema,
-  switchyardRouterPayload,
-  switchyardSaveError,
-  type SwitchyardConfig,
-} from "./switchyard_config";
+import { emptySwitchyardConfig, isDecisionModelMode, type SwitchyardConfig } from "./switchyard_config";
 import SwitchyardConfigFields from "./SwitchyardConfigFields";
 import { handleAddSwitchyardSubmit, type SwitchyardModelInfo } from "./handle_add_auto_router_submit";
 import { useTranslation } from "react-i18next";
+import { switchyardEditDefaults, toSwitchyardEditPayload } from "./switchyard-edit/mapper";
+import { switchyardEditSchema } from "./switchyard-edit/schema";
 
 interface FieldsProps {
   accessToken: string;
@@ -112,24 +109,22 @@ interface Props {
 export default function SwitchyardRouterForm({ accessToken, onSuccess, initial }: Props) {
   const { t } = useTranslation();
   const id = useId();
-  const parsed = switchyardConfigSchema.safeParse(initial.config);
-  const [config, setConfig] = useState<SwitchyardConfig>(parsed.success ? parsed.data : emptySwitchyardConfig());
-  const [name, setName] = useState(initial.name);
-  const [error, setError] = useState<string | null>(
-    parsed.success ? null : "The stored Switchyard configuration is invalid. Correct it before saving.",
-  );
+  const [initialDraft] = useState(() => switchyardEditDefaults(initial));
+  const form = useZodForm(switchyardEditSchema, { defaultValues: initialDraft.values });
+  const [name, config] = useWatch({ control: form.control, name: ["name", "config"] });
+  const [error, setError] = useState(initialDraft.error);
   const [toolError, setToolError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const save = async () => {
-    const invalid = switchyardSaveError(name, config);
-    if (invalid) {
-      setError(invalid);
+    const result = switchyardEditSchema.safeParse(form.getValues());
+    if (!result.success) {
+      setError(result.error.issues[0].message);
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      const payload = switchyardRouterPayload(name, config);
+      const payload = toSwitchyardEditPayload(result.data);
       await modelPatchUpdateCall(accessToken, payload, initial.modelId);
       onSuccess({
         model_name: payload.model_name,
@@ -153,13 +148,13 @@ export default function SwitchyardRouterForm({ accessToken, onSuccess, initial }
         <label htmlFor={`${id}-name`} className="text-sm font-medium">
           {t("addModel.switchyardRouterForm.routerName")}
         </label>
-        <Input id={`${id}-name`} value={name} onChange={(event) => setName(event.target.value)} />
+        <Input id={`${id}-name`} value={name} onChange={(event) => form.setValue("name", event.target.value)} />
       </div>
       <SwitchyardModelFields
         accessToken={accessToken}
         routerName={name}
         value={config}
-        onChange={setConfig}
+        onChange={(value) => form.setValue("config", value)}
         onToolSemanticsError={setToolError}
       />
       {(error || toolError) && (

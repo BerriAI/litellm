@@ -49,7 +49,8 @@ import {
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
-import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
+import ModelInfoEditForm from "./ModelInfoEditForm";
+import type { ModelEditSubmitValues, TouchedPricingField } from "./model-edit/schema";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";

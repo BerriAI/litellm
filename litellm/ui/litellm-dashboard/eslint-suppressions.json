@@ -1195,11 +1195,6 @@
       "count": 1
     }
   },
-  "src/components/ModelInfoEditForm.tsx": {
-    "max-lines": {
-      "count": 1
-    }
-  },
   "src/components/Navbar/BlogDropdown/BlogDropdown.test.tsx": {
     "max-nested-callbacks": {
       "count": 10
@@ -1696,7 +1691,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 3
+      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 1

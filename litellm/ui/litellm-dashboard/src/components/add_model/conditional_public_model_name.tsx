@@ -6,7 +6,8 @@ import { DataTable } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { validatorRules } from "../common_components/formRules";
-import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
+import type { MountedFormValues } from "../common_components/MountedFormField";
+import { DeploymentMountedField as MountedFormField } from "./deployment-form/DeploymentMountedField";
 import { Providers } from "../provider_info_helpers";
 
 interface ModelMapping {

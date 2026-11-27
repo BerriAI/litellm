@@ -5,7 +5,8 @@ import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
-import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
+import type { MountedFormValues } from "../common_components/MountedFormField";
+import { DeploymentMountedField as MountedFormField } from "./deployment-form/DeploymentMountedField";
 import { Providers } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
