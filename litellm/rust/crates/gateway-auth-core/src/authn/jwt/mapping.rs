@@ -152,6 +152,13 @@ async fn cache(
     mapping: &CachedMapping,
     settings: &JwtSettings,
 ) -> Result<(), Error> {
+    if !matches!(mapping, CachedMapping::Key(_))
+        && settings
+            .config
+            .disables_global_key_mapping_fallback(claim.issuer)
+    {
+        return Ok(());
+    }
     host.cache_key_mapping(claim, &mapping.value(), ttl(settings))
         .await
 }
@@ -762,6 +769,43 @@ mod tests {
                 "get jwt_key_mapping:idp:client_id:7",
                 "mapping client_id=7 idp"
             ]
+        );
+    }
+
+    #[rstest]
+    #[case::reject(Behavior::Reject)]
+    #[case::fallback_team(Behavior::FallbackTeamMapping)]
+    #[case::proxy_admin(Behavior::AutoRegister)]
+    #[tokio::test]
+    async fn strict_miss_does_not_change_a_permissive_replica(#[case] behavior: Behavior) {
+        let host = ScriptedHost {
+            mappings: HashMap::from([("client_id=7 -".to_owned(), "global".to_owned())]),
+            keys: HashMap::from([("global", mapped("global"))]),
+            ..ScriptedHost::default()
+        };
+        let mut settings = settings(behavior, true);
+        settings.config.disable_global_key_mapping_fallback = true;
+        settings.config.issuers = Some(Box::new([JwtIssuerConfig {
+            issuer: "idp".to_owned(),
+            ..JwtIssuerConfig::default()
+        }]));
+        let claims = claims(json!({"client_id": 7, "_litellm_jwt_issuer": "idp"}));
+
+        match (behavior, resolve(&host, &claims, &settings).await) {
+            (Behavior::Reject, Err(Error::Jwt(JwtDenial::NoMapping { .. })))
+            | (Behavior::FallbackTeamMapping, Ok(Resolved::Unmapped)) => {}
+            (Behavior::AutoRegister, Ok(Resolved::Pending(pending))) => {
+                remember_proxy_admin(&host, &pending, &settings)
+                    .await
+                    .unwrap();
+            }
+            (_, result) => panic!("unexpected strict mapping result: {result:?}"),
+        }
+
+        settings.config.disable_global_key_mapping_fallback = false;
+        assert_eq!(
+            resolve(&host, &claims, &settings).await,
+            Ok(Resolved::Key(mapped("global")))
         );
     }
 
