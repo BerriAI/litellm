@@ -3306,7 +3306,7 @@ def test_filter_schema_fields_still_stops_at_a_cycle():
 
     filtered = filter_schema_fields(node, {"type", "properties"})
 
-    assert filtered["properties"]["name"] == {"type": "string"}
+    assert filtered == {"type": "object", "properties": {"name": {"type": "string"}, "child": node}}
     assert filtered["properties"]["child"] is node
 
 
