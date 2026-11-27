@@ -1714,7 +1714,7 @@ _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
 def _extended_exception_chain(chain: tuple[BaseException, ...], iteration: int) -> tuple[BaseException, ...]:
     if len(chain) != iteration + 1:
         return chain
-    following: Final = chain[-1].__cause__ or chain[-1].__context__
+    following: Final = chain[-1].__cause__ or (None if chain[-1].__suppress_context__ else chain[-1].__context__)
     if following is None or following in chain:
         return chain
     return (*chain, following)
