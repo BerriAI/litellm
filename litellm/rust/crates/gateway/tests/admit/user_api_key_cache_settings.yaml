@@ -1,0 +1,26 @@
+# The auth cache's TTL and size are read as Python reads them, so a config that sets them, as the
+# customer's config does, is served natively for the master key and for a virtual key.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    user_api_key_cache_ttl: 600
+    user_api_key_cache_max_size: 500
+
+keys:
+  sk-claude: [claude]
+
+requests:
+  - name: the master key
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a virtual key
+    headers: {authorization: Bearer sk-claude}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

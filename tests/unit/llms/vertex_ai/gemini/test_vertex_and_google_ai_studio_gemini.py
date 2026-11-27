@@ -11693,7 +11693,7 @@ def test_gemini_context_caching_with_ttl():
         },
     ]
 
-    cached_messages, non_cached_messages = separate_cached_messages(messages_mixed)
+    cached_messages, non_cached_messages = separate_cached_messages(messages_mixed, lambda _: True)
     assert len(cached_messages) > 0
     assert len(non_cached_messages) > 0
 
@@ -11750,7 +11750,7 @@ def test_gemini_context_caching_separate_messages():
             ],
         },
     ]
-    cached_messages, non_cached_messages = separate_cached_messages(messages)
+    cached_messages, non_cached_messages = separate_cached_messages(messages, lambda _: True)
     print(cached_messages)
     print(non_cached_messages)
     assert len(cached_messages) > 0, "Cached messages should be present"
@@ -13462,7 +13462,13 @@ def test_litellm_api_base(monkeypatch, provider, route):
         mock_response.headers = {"Content-Type": "application/json"}
         mock_response.json.return_value = {
             "candidates": [
-                {"content": {"parts": [{"text": "test response"}], "role": "model"}, "finishReason": "STOP"}
+                {
+                    "content": {
+                        "parts": [{"text": "test response"}, {"inlineData": {"mimeType": "image/png", "data": "dGVzdA=="}}],
+                        "role": "model",
+                    },
+                    "finishReason": "STOP",
+                }
             ],
             "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
             "embedding": {"values": [0.1, 0.2]},

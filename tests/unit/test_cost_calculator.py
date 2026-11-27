@@ -2144,6 +2144,62 @@ def test_completion_cost_image_generation_registered_deployment_price_keeps_map_
     assert cost == pytest.approx(expected)
 
 
+@pytest.mark.parametrize(
+    ("model", "provider", "call_type", "token_priced"),
+    [
+        ("gpt-image-2.6-sunburst", "openai", "aimage_generation", True),
+        ("gpt-image-2.6-sunburst", "openai", "aimage_edit", True),
+        ("gemini-3.1-flash-lite-image", "vertex_ai", "aimage_generation", True),
+        ("gemini-3.1-flash-lite-image", "gemini", "aimage_edit", True),
+        ("dall-e-3", "azure", "aimage_generation", False),
+    ],
+)
+def test_image_cost_records_the_input_and_output_costs(
+    model: str, provider: str, call_type: Literal["aimage_generation", "aimage_edit"], token_priced: bool
+) -> None:
+    usage: Final = (
+        ImageUsage(
+            input_tokens=12,
+            input_tokens_details=ImageUsageInputTokensDetails(text_tokens=12, image_tokens=0),
+            output_tokens=345,
+            total_tokens=357,
+        )
+        if token_priced
+        else None
+    )
+    response: Final = ImageResponse(created=1000, data=[ImageObject(b64_json="aW1hZ2U=")], usage=usage)
+    logger: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="image-cost-test",
+        function_id="image-cost-test",
+    )
+    if token_priced:
+        prices: Final = model_cost[model if provider == "openai" else f"{provider}/{model}"]
+        expected_input, expected_output = 12 * prices["input_cost_per_token"], 345 * prices["output_cost_per_image_token"]
+    else:
+        flat_prices: Final = model_cost[f"{provider}/standard/1024-x-1024/{model}"]
+        expected_input, expected_output = 0.0, 1024 * 1024 * flat_prices["input_cost_per_pixel"]
+
+    cost: Final = completion_cost(
+        model=model,
+        custom_llm_provider=provider,
+        completion_response=response,
+        call_type=call_type,
+        litellm_logging_obj=logger,
+    )
+
+    assert cost == pytest.approx(expected_input + expected_output)
+    breakdown: Final = logger.cost_breakdown
+    assert breakdown is not None
+    assert breakdown.get("total_cost") == cost
+    assert breakdown.get("input_cost") == pytest.approx(expected_input)
+    assert breakdown.get("output_cost") == pytest.approx(expected_output)
+
+
 def test_completion_cost_image_generation_ignores_deployment_model_info_without_custom_pricing(
     _local_model_cost_map: None,
 ) -> None:

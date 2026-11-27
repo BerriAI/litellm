@@ -350,7 +350,9 @@ async def test_a_consumed_messages_stream_counts_its_final_tokens_and_one_reques
     core: Final = make_core(model_list=group("a", rpm=100))
 
     stream: Final = await open_messages(core)
-    assert len(await collect_bytes(stream)) == 5
+    assert b"".join(await collect_bytes(stream)) == (
+        MESSAGE_START_WITH_USAGE + text_delta("hello") + MESSAGE_DELTA_WITH_USAGE + MESSAGE_STOP
+    )
     await settle()
 
     assert await core.health().usage("g") == (12, 1)

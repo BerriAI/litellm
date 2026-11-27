@@ -210,6 +210,7 @@ def test_client_credentials_maps_full_config():
             url="https://up.example.com/mcp",
             token_url="https://idp.example.com/token",
             client_id="cid",
+            auth_profile_id="Build",
             client_secret="csec",
             scopes=["read", "write"],
             audience="https://up.example.com",
@@ -219,6 +220,7 @@ def test_client_credentials_maps_full_config():
     assert spec is not None
     config = spec.config
     assert isinstance(config, ClientCredentialsConfig)
+    assert config.profile_id == "Build"
     assert config.client_id == "cid"
     assert config.client_secret is not None
     assert config.client_secret.get_secret_value() == "csec"

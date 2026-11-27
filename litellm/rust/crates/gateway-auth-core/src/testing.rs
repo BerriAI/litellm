@@ -13,6 +13,7 @@ use crate::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
         key::{CachedTeam, KeyRecord, Keyed},
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
@@ -84,6 +85,8 @@ pub(crate) struct ScriptedHost {
     pub(crate) delegated_team: Option<&'static str>,
     /// The JWT `finish_jwt` last finished an auto-registered key for.
     pub(crate) finished_mapping: Mutex<Option<MappedJwt<String>>>,
+    /// Stored credentials by name.
+    pub(crate) credentials: HashMap<&'static str, Params>,
     pub(crate) calls: Mutex<Vec<String>>,
 }
 
@@ -201,6 +204,10 @@ impl AuthHost for ScriptedHost {
     async fn with_team(&self, key: &String, team: &String) -> Result<String, Error> {
         self.step("with_team", format!("with_team {key} {team}"))?;
         Ok(format!("{key}+team"))
+    }
+    async fn credential(&self, name: &str) -> Result<Option<Params>, Error> {
+        self.step("credential", format!("credential {name}"))?;
+        Ok(self.credentials.get(name).cloned())
     }
     async fn db_key(&self, _: &KeyHash, end_user: &String) -> Result<Option<Keyed<String>>, Error> {
         self.step("db_key", format!("db_key {end_user}"))?;

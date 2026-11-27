@@ -9,7 +9,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CircleHelp, Info, Save } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { FieldGroup } from "@/components/ui/field";
@@ -22,15 +21,9 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import {
-  DEFAULT_FORM_VALUES,
-  TOP_K_MAX,
-  TOP_K_MIN,
-  clampTopK,
-  formToPayload,
-  storedValuesToForm,
-  ToolSearchFormValues,
-} from "./toolSearchForm";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { DEFAULT_FORM_VALUES, TOP_K_MAX, TOP_K_MIN, clampTopK, formToPayload, storedValuesToForm } from "./mapper";
+import { toolSearchSchema, type ToolSearchFormValues } from "./schema";
 import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface MCPToolSearchSettingsProps {
@@ -53,7 +46,7 @@ export default function MCPToolSearchSettings({ accessToken }: MCPToolSearchSett
   const { t } = useTranslation();
   const { data, isLoading, isError, error } = useMCPToolSearchSettings();
   const { mutate: updateSettings, isPending: isUpdating } = useUpdateMCPToolSearchSettings();
-  const form = useForm<ToolSearchFormValues>({ defaultValues: DEFAULT_FORM_VALUES });
+  const form = useZodForm(toolSearchSchema, { defaultValues: DEFAULT_FORM_VALUES });
   const isDirty = form.formState.isDirty;
   const [embeddingModels, setEmbeddingModels] = useState<ModelGroup[]>([]);
   const [loadingModels, setLoadingModels] = useState(true);

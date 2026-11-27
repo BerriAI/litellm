@@ -38,6 +38,7 @@ from ..common_utils import (
     client_error_details,
     with_inference_component_hint,
 )
+from ..embedding.cohere_transformation import cohere_extra_body_params
 from ..embedding.transformation import SagemakerEmbeddingConfig
 from .transformation import SagemakerConfig
 
@@ -564,7 +565,7 @@ class SagemakerLLM(BaseAWSLLM):
     def embedding(
         self,
         model: str,
-        input: list,
+        input: list[str] | list[int] | list[list[int]],  # mutable-ok: mirrors the provider transform contract
         model_response: EmbeddingResponse,
         print_verbose: Callable[[str], object],
         encoding: object,
@@ -612,9 +613,13 @@ class SagemakerLLM(BaseAWSLLM):
         inference_component_name: Final = embedding_params.get("model_id")
         if inference_component_name is not None and not isinstance(inference_component_name, str):
             raise SagemakerError(status_code=400, message="model_id must be the inference component name as a string")
-        body_params: Final = {k: v for k, v in embedding_params.items() if k not in ("model_id", "extra_body")}
+        extra_body: Final = extra_body_fields(embedding_params)
+        body_params: Final = {
+            **cohere_extra_body_params(provider_config, input, extra_body),
+            **{k: v for k, v in embedding_params.items() if k not in ("model_id", "extra_body")},
+        }
         request_data: Final = {
-            **extra_body_fields(embedding_params),
+            **extra_body,
             **provider_config.transform_embedding_request(endpoint_name, input, body_params, {}),
         }
         data: Final = json.dumps(request_data).encode("utf-8")

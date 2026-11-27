@@ -101,19 +101,24 @@ impl Document {
 }
 
 /// The resolved `document` as the typed config, with its `environment_variables` in front of
-/// `process` under it, so a key the config leaves unset is read from its variable.
+/// `process` under it, so a key the config leaves unset is read from its variable, and `process`
+/// alone under the keys the proxy reads before it exports `environment_variables`.
 fn typed(document: Value, process: Arc<dyn Lookup + Send + Sync>) -> Result<Config, Error> {
     let config = Config::from_value(document)?;
-    let environment =
-        ConfigEnvironment::new(environment_values(&config.environment_variables)?, process);
-    Ok(config.with_environment(&environment))
+    let environment = ConfigEnvironment::new(
+        environment_values(&config.environment_variables)?,
+        Arc::clone(&process),
+    );
+    Ok(config
+        .with_environment(&environment)
+        .with_process_environment(process.as_ref()))
 }
 
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
-    use litellm_config::{Object, db::switches::DbObject};
+    use litellm_config::{Object, Spelled, db::switches::DbObject};
     use litellm_secret_value::SecretValue;
     use litellm_secrets::{OidcResolver, SecretManagerState};
     use rstest::{fixture, rstest};
@@ -186,6 +191,41 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(key.expose(), api_key);
+    }
+
+    #[rstest]
+    #[case::only_a_stored_variable_sets_it(None, None)]
+    #[case::the_process_sets_it_too(Some("5"), Some(5.0))]
+    #[tokio::test]
+    async fn a_stored_config_reads_request_timeout_from_the_process_and_never_from_a_stored_variable(
+        #[case] process: Option<&'static str>,
+        #[case] seconds: Option<f64>,
+    ) {
+        let secrets = SecretResolver::new_python_compatible(
+            Arc::new(SecretManagerState::default()),
+            Arc::new(move |name: &str| {
+                (name == "REQUEST_TIMEOUT")
+                    .then_some(process)
+                    .flatten()
+                    .map(str::to_owned)
+            }),
+            OidcResolver::new(litellm_http::Client::for_test()),
+        );
+        let rows = SettingsRows {
+            environment_variables: BTreeMap::from([(
+                "REQUEST_TIMEOUT".to_owned(),
+                SecretValue::new("2".to_owned()),
+            )]),
+            ..SettingsRows::default()
+        };
+        let (overlaid, _) = document("model_list: []\n").overlay(&rows);
+
+        let (config, _) = overlaid.resolve_with_stored(secrets, [], []).await.unwrap();
+
+        assert_eq!(
+            config.litellm_settings.request_timeout,
+            seconds.map(Spelled::Value)
+        );
     }
 
     #[rstest]

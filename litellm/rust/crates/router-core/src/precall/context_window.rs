@@ -57,7 +57,7 @@ pub(super) fn exceeded<'a>(model: &str, overflows: impl Iterator<Item = &'a Over
 }
 
 /// The deployment's `base_model` from its `model_info`, then its params, else its model.
-fn named_model(deployment: &Deployment) -> String {
+pub(crate) fn named_model(deployment: &Deployment) -> String {
     let base_model = |section: &serde_json::Map<String, Value>| {
         section
             .get("base_model")

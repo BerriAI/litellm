@@ -2,6 +2,8 @@
 //! `can_key_call_model` reads a list. The host supplies each list it read as a [`Layer`] and the
 //! [`ModelAsk`] its router resolved the name to, and decides nothing itself.
 
+use crate::{AuthzDenial, DeniedList};
+
 /// One model list the host read for a caller. A request has to be reached by every layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layer<'a> {
@@ -17,13 +19,6 @@ pub struct ModelAsk<'a> {
     pub name: &'a str,
     pub group: &'a str,
     pub access_groups: &'a [String],
-}
-
-/// The layer whose list does not reach the model.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum Denied {
-    #[error("the key's model list does not reach the model")]
-    Key,
 }
 
 /// The entries that reach every model.
@@ -46,10 +41,13 @@ fn reaches(models: &[String], ask: &ModelAsk<'_>) -> bool {
 pub fn authorize<'a>(
     layers: impl IntoIterator<Item = Layer<'a>>,
     ask: &ModelAsk<'_>,
-) -> Result<(), Denied> {
+) -> Result<(), AuthzDenial> {
     layers.into_iter().try_for_each(|layer| match layer {
         Layer::Key(models) if reaches(models, ask) => Ok(()),
-        Layer::Key(_) => Err(Denied::Key),
+        Layer::Key(_) => Err(AuthzDenial::ModelAccess {
+            list: DeniedList::Key,
+            model: ask.name.to_owned(),
+        }),
     })
 }
 
@@ -90,7 +88,27 @@ mod tests {
 
         let authorized = authorize([Layer::Key(&models)], &ask);
 
-        assert_eq!(authorized, if allowed { Ok(()) } else { Err(Denied::Key) });
+        let refused = AuthzDenial::ModelAccess {
+            list: DeniedList::Key,
+            model: name.to_owned(),
+        };
+        assert_eq!(authorized, if allowed { Ok(()) } else { Err(refused) });
+    }
+
+    #[rstest]
+    fn a_refused_model_reads_as_every_model_denial_does() {
+        let ask = ModelAsk {
+            name: "gpt",
+            group: "gpt",
+            access_groups: &[],
+        };
+
+        let refused = authorize([Layer::Key(&owned(&["claude"]))], &ask).unwrap_err();
+
+        assert_eq!(
+            refused.to_string(),
+            crate::ModelAccessDenied { model: "gpt" }.to_string()
+        );
     }
 
     #[rstest]

@@ -8,6 +8,7 @@ description = "Rust repositories for the auth objects the proxy reads from Postg
 include = ["Cargo.toml", "README.md", "src/**", ".sqlx/**"]
 
 [dependencies]
+litellm-call-scope.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 jiff.workspace = true
 litellm-core-utils.workspace = true

@@ -63,8 +63,10 @@ impl RetryPolicy {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RetryContext {
     pub healthy: usize,
+    pub untried: usize,
     pub all: usize,
-    /// `context_window_fallbacks is not None`.
+    /// A `context_window_fallbacks` chain matches the failed group
+    /// (`context_window_fallback_model_group`).
     pub has_context_window_fallbacks: bool,
     /// `content_policy_fallbacks is not None`.
     pub has_content_policy_fallbacks: bool,
@@ -74,8 +76,8 @@ pub struct RetryContext {
 
 /// `should_retry_this_error`, as a predicate: `false` where Python raises the error.
 pub fn should_retry(failure: &AttemptError, ctx: RetryContext) -> bool {
-    if failure.is_a("ContextWindowExceededError") && ctx.has_context_window_fallbacks {
-        return false;
+    if failure.is_a("ContextWindowExceededError") {
+        return !ctx.has_context_window_fallbacks && ctx.untried > 0;
     }
     if failure.is_a("ContentPolicyViolationError") && ctx.has_content_policy_fallbacks {
         return false;
@@ -187,7 +189,7 @@ pub(crate) fn retry_step(state: RetryState<'_>) -> RetryStep {
 }
 
 /// `ContentPolicyViolationError`'s classes, most specific first.
-pub(crate) fn content_policy_classes() -> Vec<std::sync::Arc<str>> {
+pub(crate) fn content_policy_classes() -> Box<[std::sync::Arc<str>]> {
     [
         "ContentPolicyViolationError",
         "BadRequestError",
@@ -465,6 +467,7 @@ mod tests {
     ) {
         let ctx = RetryContext {
             healthy,
+            untried: healthy,
             all,
             has_regular_fallbacks,
             ..RetryContext::default()
@@ -473,5 +476,26 @@ mod tests {
             should_retry(&AttemptError::new(kind, status), ctx),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::a_sibling_has_not_refused(2, 1, false, true)]
+    #[case::every_healthy_deployment_refused(2, 0, false, false)]
+    #[case::context_window_fallbacks_take_over(2, 1, true, false)]
+    fn context_window_error_moves_to_a_deployment_that_has_not_refused(
+        #[case] healthy: usize,
+        #[case] untried: usize,
+        #[case] has_context_window_fallbacks: bool,
+        #[case] expected: bool,
+    ) {
+        let ctx = RetryContext {
+            healthy,
+            untried,
+            all: 2,
+            has_context_window_fallbacks,
+            ..RetryContext::default()
+        };
+        let failure = AttemptError::new(FailureKind::ContextWindowExceeded, Some(400));
+        assert_eq!(should_retry(&failure, ctx), expected);
     }
 }

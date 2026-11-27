@@ -2,6 +2,7 @@ mod admit;
 mod boot;
 mod callbacks;
 mod config_sync;
+mod cost_map;
 mod db;
 mod error;
 mod gateway_requests;
@@ -25,6 +26,7 @@ pub use callbacks::{
     parallel_request_limiter::{self, KeyLimiter},
     spend_log::{SpendLog, SpendLogs},
 };
+pub use cost_map::CostMapRefresh;
 pub use error::Error;
 pub use gateway_requests::{Category, GatewayRequests};
 pub use live::{Live, Served};
@@ -124,7 +126,7 @@ pub(crate) async fn inference_over(
     spend_log: Option<&SpendLog>,
 ) -> Result<Inference, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
-    let (router, shaping) = boot::router(config, &catalog).await?;
+    let router = boot::router(config).await?;
     let deployments = router.registry().deployments(&DeploymentFilter::default());
     let windows = host::ContextWindows::read(&catalog, &deployments).await;
     let limits = parallel_request_limiter::Settings::read(config, variables);
@@ -150,10 +152,13 @@ pub(crate) async fn inference_over(
         resources.http.clone(),
         resources.secrets.clone(),
         router,
-        shaping,
+        boot::configured(&config.litellm_settings),
         routing,
         host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
-    )?;
+    )?
+    .with_body_check(litellm_gateway_inference::BodyCheck::new(
+        &config.general_settings,
+    ));
     Ok(Inference {
         gateway: Arc::new(gateway),
         key_limiter,
@@ -185,5 +190,9 @@ pub fn router(state: AppState, config: &Config) -> Router {
         state.auth(config),
         litellm_gateway_auth::authenticate::<host::NativeRows>,
     ));
+    let inference = middleware::allowlisted(
+        inference,
+        middleware::request_allowlist::Settings::from_general(&config.general_settings),
+    );
     middleware::inference(inference).merge(health::router(state))
 }

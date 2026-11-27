@@ -172,7 +172,7 @@ impl UserRepository {
     /// `links_any_user`; the sign-in does not wait for it.
     fn set_sso_user_id_later(&self, user_id: String, sso_user_id: String) {
         let database = self.database.clone();
-        tokio::spawn(async move {
+        litellm_call_scope::spawn_in_call(async move {
             let outcome = database
                 .run(UPDATE_USER, || async {
                     let mut session = database.session(Side::Writer).await?;

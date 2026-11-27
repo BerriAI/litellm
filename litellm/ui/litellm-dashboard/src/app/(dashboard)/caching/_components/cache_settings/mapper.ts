@@ -1,7 +1,5 @@
 import { CACHE_FIELDS, CacheField, CacheSection, REDACTED_VALUE, RedisType } from "./cacheSettingsFields";
-
-export type CacheFormValue = string | number | boolean | null | undefined;
-export type CacheFormValues = Record<string, CacheFormValue>;
+import type { CacheFormValue, CacheFormValues } from "./schema";
 export type CacheSavePayloadValue = string | number | boolean | unknown[];
 export type CacheSavePayload = Record<string, CacheSavePayloadValue>;
 

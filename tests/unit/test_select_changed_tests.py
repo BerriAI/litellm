@@ -188,6 +188,34 @@ def test_a_change_outside_proxy_extras_selects_no_proxy_extras_test(tmp_path):
     assert _select(root, "litellm/proxy/schema.prisma", "litellm/proxy-extras-notes.md") == ()
 
 
+@pytest.mark.parametrize(
+    "changed", ("model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json")
+)
+def test_a_cost_map_change_selects_the_cost_map_tests_only(tmp_path, changed):
+    root: Final = _tree(
+        tmp_path,
+        "tests/unit/test_model_prices_and_context_window.py",
+        "tests/unit/test_utils.py",
+        "tests/unit/litellm_proxy_extras/test_litellm_proxy_extras_utils.py",
+    )
+    assert _select(root, changed) == ("tests/unit/test_model_prices_and_context_window.py",)
+
+
+def test_a_file_named_like_the_cost_map_elsewhere_selects_no_cost_map_test(tmp_path):
+    root: Final = _tree(tmp_path, "tests/unit/test_model_prices_and_context_window.py")
+    assert _select(root, "litellm/model_prices_and_context_window.json", "docs/model_prices_and_context_window.json") == ()
+
+
+@pytest.mark.parametrize(
+    "changed", ("model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json")
+)
+def test_the_real_unit_workflow_lets_a_cost_map_change_run_the_cost_map_tests(changed):
+    workflow: Final = yaml.safe_load((_REPO_ROOT / ".github/workflows/test-unit.yml").read_text(encoding="utf-8"))
+    assert selector.select((changed,), selector.exclusions(workflow, "3.12"), _REPO_ROOT) == (
+        "tests/unit/test_model_prices_and_context_window.py",
+    )
+
+
 def test_the_real_unit_workflow_lets_a_migration_change_run_the_migration_ddl_tests():
     workflow: Final = yaml.safe_load((_REPO_ROOT / ".github/workflows/test-unit.yml").read_text(encoding="utf-8"))
     changed: Final = ("litellm/proxy-extras/litellm_proxy_extras/migrations/20990101000000_add_column/migration.sql",)

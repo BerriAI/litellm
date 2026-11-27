@@ -126,6 +126,7 @@ async def test_anthropic_handler_converts_structured_messages_to_anthropic_forma
         messages=COMPRESSED_MESSAGES_NON_SYSTEM,
         model="claude-3-5-sonnet-20241022",
         llm_provider="anthropic",
+        rewrites_tool_use_ids=False,
     )
     assert result["messages"] == converted_back
 

@@ -2,7 +2,8 @@
 
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { ChevronDown } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 
 import { getAvailablePages } from "@/components/page_utils";
@@ -10,6 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toPageVisibilityFields, toPageVisibilityUpdate } from "./mapper";
+import { pageVisibilitySchema } from "./schema";
 
 const pageVisibilityCheckboxId = (page: string) => `page-visibility-${page}`;
 
@@ -40,23 +44,30 @@ export default function PageVisibilitySettings({
     });
     return grouped;
   }, [availablePages]);
-  const [selectedPages, setSelectedPages] = useState<string[]>(enabledPagesInternalUsers || []);
+  const { control, getValues, reset } = useZodForm(pageVisibilitySchema, {
+    defaultValues: toPageVisibilityFields(enabledPagesInternalUsers),
+  });
+  const { field } = useController({ control, name: "selectedPages" });
+  const selectedPages = field.value;
 
-  useMemo(() => {
-    setSelectedPages(enabledPagesInternalUsers || []);
-  }, [enabledPagesInternalUsers]);
+  useLayoutEffect(() => {
+    reset(toPageVisibilityFields(enabledPagesInternalUsers));
+  }, [enabledPagesInternalUsers, reset]);
 
   const togglePage = (page: string, checked: boolean) => {
-    setSelectedPages((current) => (checked ? [...current, page] : current.filter((item) => item !== page)));
+    const current = getValues("selectedPages");
+    field.onChange(checked ? [...current, page] : current.filter((item) => item !== page));
   };
 
   const handleSavePageVisibility = () => {
-    onUpdate({ enabled_ui_pages_internal_users: selectedPages.length > 0 ? selectedPages : null });
+    const draft = pageVisibilitySchema.safeParse(getValues());
+    if (draft.success) onUpdate(toPageVisibilityUpdate(draft.data));
   };
 
   const handleResetToDefault = () => {
-    setSelectedPages([]);
-    onUpdate({ enabled_ui_pages_internal_users: null });
+    const defaults = toPageVisibilityFields(null);
+    field.onChange(defaults.selectedPages);
+    onUpdate(toPageVisibilityUpdate(defaults));
   };
 
   return (

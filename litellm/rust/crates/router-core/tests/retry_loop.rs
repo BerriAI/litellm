@@ -137,7 +137,7 @@ fn server_error() -> AttemptError {
 
 fn unsupported_endpoint() -> AttemptError {
     let mut failure = AttemptError::new(FailureKind::Declined, Some(400));
-    failure.classes = vec!["UnsupportedEndpointError".into(), "BadRequestError".into()];
+    failure.classes = ["UnsupportedEndpointError".into(), "BadRequestError".into()].into();
     failure
 }
 

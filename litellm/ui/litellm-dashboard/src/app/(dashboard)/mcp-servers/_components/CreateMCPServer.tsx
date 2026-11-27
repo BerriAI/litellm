@@ -401,8 +401,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       if (Object.keys(stdioObj).length > 0) {
         prefillValues.stdio_config = JSON.stringify(stdioObj, null, 2);
       }
-    } else if (prefillData.url) {
-      prefillValues.url = prefillData.url;
+    } else {
+      if (prefillData.url) prefillValues.url = prefillData.url;
+      prefillValues.auth_type = prefillData.auth_type || null;
     }
 
     setFieldsValue(form, prefillValues);

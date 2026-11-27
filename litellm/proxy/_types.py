@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Ty
 import httpx
 from pydantic import (
     AfterValidator,
+    AliasChoices,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -233,6 +234,7 @@ from litellm.types.proxy.auth.user_roles import (  # noqa: E402  # re-export aft
     KeyManagementRoutes as KeyManagementRoutes,  # noqa: PLC0414  # public re-export
 )
 
+CLAUDE_CODE_GATEWAY_PREFIX: Final = "/claude_code_gateway"
 MODEL_LIST_ROUTES: Final = ("/models", "/v1/models", "/claude_code_gateway/v1/models")
 
 
@@ -3247,6 +3249,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=False,
         description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
     )
+    require_key_mcp_access_defined: bool | None = Field(
+        None,
+        description="When true, a virtual key that grants no MCP servers of its own inherits none from its team, so the team acts as a ceiling rather than a default and the key reaches no MCP servers until it grants some explicitly or through an access group. Keyless subjects admitted through a gateway or the dashboard are unaffected, since team membership is their only access path. Default false: such a key inherits every MCP server its team holds.",
+    )
     mcp_client_id_header: str | None = Field(
         None,
         description="Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.",
@@ -3271,6 +3277,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_model_in_db: bool | None = Field(
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
+    )
+    customer_budget_response_headers: bool | None = Field(
+        None,
+        description="If True, responses carry x-litellm-app-customer-org-* and x-litellm-app-customer-member-* headers with the spend, max budget, remaining budget and reset time the calling app holds for the request's customer organization and member, one set per budget window. A key not pinned to one customer organization reads the budget of whichever organization it names.",
     )
     forward_client_headers_to_llm_api: bool | None = Field(
         None,
@@ -3808,6 +3818,11 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     parallel_tool_calls: JsonValue = None
     response_format: JsonValue = None
     web_search_options: JsonValue = None
+    system_instruction: JsonValue = Field(
+        default=None,
+        validation_alias=AliasChoices("systemInstruction", "system_instruction"),
+        description="Google systemInstruction, counted with contents",
+    )
 
 
 from litellm.types.integrations.slack_alerting import CallInfo as CallInfo  # noqa: E402, PLC0414  # public re-export
@@ -3888,6 +3903,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "OTEL_ENDPOINT",
             "OTEL_TRACES_ENDPOINT",
             "OTEL_HEADERS",
+            "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS",
         ],
     )
 
@@ -4006,6 +4022,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
         ],
+    )
+
+    mixpanel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="mixpanel",
+        ui_callback_name="Mixpanel",
+        litellm_callback_params=("MIXPANEL_PROJECT_TOKEN", "MIXPANEL_REGION", "MIXPANEL_ENDPOINT"),
     )
 
     signoz: CallbackOnUI = CallbackOnUI(

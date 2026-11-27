@@ -9,8 +9,10 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import require_attributes, str_param
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.gemini.common_utils import (
@@ -36,6 +38,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GeminiRetrievedContext(TypedDict, total=False):
@@ -130,7 +134,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         headers = headers or {}
         headers.setdefault("Content-Type", "application/json")
         if litellm_params:
-            api_key: Final = litellm_params.get("api_key") or get_api_key_from_env()
+            api_key: Final = str_param(litellm_params, "api_key") or get_api_key_from_env()
             if api_key:
                 self._cached_api_key = api_key
                 headers["x-goog-api-key"] = api_key
@@ -234,7 +238,9 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Extracts grounding metadata and citations from the response.
         """
         try:
-            response_data: Final[GeminiFileSearchResponse] = response.json()
+            response_data: Final = require_attributes(
+                _DECODED_JSON.validate_python(response.json()), GeminiFileSearchResponse, "get"
+            )
             results: Final[list[VectorStoreSearchResult]] = []
 
             # Extract candidates and grounding metadata
@@ -343,7 +349,9 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Transform Gemini's fileSearchStore response to standard format.
         """
         try:
-            response_data: Final[GeminiFileSearchStore] = response.json()
+            response_data: Final = require_attributes(
+                _DECODED_JSON.validate_python(response.json()), GeminiFileSearchStore, "get"
+            )
 
             # Extract store name (format: fileSearchStores/xxxxxxx)
             store_name: Final = response_data.get("name", "")

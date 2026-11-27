@@ -7,6 +7,7 @@ use indexmap::{IndexMap, IndexSet};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::bundled::BUNDLED_REGISTRY;
 use crate::error::{Error, Loaded, Rejects, Repr, pointer_child, pointer_for_key};
 use crate::fallback::{CapabilityRules, FallbackGeneralizations, FallbackRule};
 use crate::model::Model;
@@ -27,7 +28,6 @@ pub struct IntegrityLimits {
 #[derive(Clone, Debug)]
 pub struct ModelEntry {
     fields: Fields,
-    model: Option<Model>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -123,11 +123,38 @@ impl IntegrityLimits {
         min_reference_ratio: 0.0,
     };
 
+    /// What every host uses unless its operator sets otherwise: at least 50 models and half the bundled count
+    pub const DEFAULT: Self = Self {
+        min_model_count: 50,
+        min_reference_ratio: 0.5,
+    };
+
+    pub fn min_model_count(&self) -> usize {
+        self.min_model_count
+    }
+
+    pub fn min_reference_ratio(&self) -> f64 {
+        self.min_reference_ratio
+    }
+
     pub fn new(min_model_count: usize, min_reference_ratio: f64) -> Option<Self> {
         (0.0..=1.0).contains(&min_reference_ratio).then_some(Self {
             min_model_count,
             min_reference_ratio,
         })
+    }
+
+    /// `DEFAULT` with the limits a host's operator set over it, or the ratio outside 0 to 1 that was refused
+    pub fn over_default(
+        min_model_count: Option<usize>,
+        min_reference_ratio: Option<f64>,
+    ) -> Result<Self, f64> {
+        let ratio = min_reference_ratio.unwrap_or(Self::DEFAULT.min_reference_ratio);
+        Self::new(
+            min_model_count.unwrap_or(Self::DEFAULT.min_model_count),
+            ratio,
+        )
+        .ok_or(ratio)
     }
 }
 
@@ -139,14 +166,19 @@ impl ModelEntry {
     pub fn fields(&self) -> &Fields {
         &self.fields
     }
-
-    pub fn model(&self) -> Option<&Model> {
-        self.model.as_ref()
-    }
 }
 
 impl Catalog {
     pub fn parse(body: &[u8]) -> Result<Loaded<Self>, Error> {
+        Self::parse_rows(body, read_row)
+    }
+
+    /// The bundled registry, which CI validates. Rows are indexed but not lowered, so row problems are not collected
+    pub fn bundled() -> Result<Loaded<Self>, Error> {
+        Self::parse_rows(BUNDLED_REGISTRY, read_trusted_row)
+    }
+
+    fn parse_rows(body: &[u8], read: fn(&Fields) -> RowRead) -> Result<Loaded<Self>, Error> {
         let document = match text_after_byte_order_mark(body) {
             Some(text) => serde_json::from_str::<Fields>(&text),
             None => serde_json::from_slice::<Fields>(body),
@@ -173,7 +205,7 @@ impl Catalog {
                     continue;
                 }
             };
-            let row = read_row(&fields);
+            let row = read(&fields);
             problems.extend(
                 row.problems
                     .into_iter()
@@ -191,13 +223,7 @@ impl Catalog {
             if let Some(aliases) = row.aliases {
                 alias_lists.push((name.clone(), aliases));
             }
-            entries.insert(
-                name,
-                ModelEntry {
-                    fields,
-                    model: row.model,
-                },
-            );
+            entries.insert(name, ModelEntry { fields });
         }
         if entries.is_empty() {
             return Err(Error::new("", Repr::Empty));
@@ -419,16 +445,6 @@ impl Catalog {
         (catalog, removed_errors)
     }
 
-    pub fn unrecognized(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.rows().entries.iter().flat_map(|(name, entry)| {
-            entry
-                .model
-                .iter()
-                .flat_map(|model| &model.unrecognized)
-                .map(move |key| (name.as_str(), key.as_str()))
-        })
-    }
-
     pub fn lookup(&self, key: &str) -> Option<ModelMatch<'_>> {
         let rows = self.rows();
         let found = self.store.find_key(key)?;
@@ -515,7 +531,6 @@ impl CatalogView for Catalog {
 }
 
 struct RowRead {
-    model: Option<Model>,
     aliases: Option<Vec<String>>,
     alias_of: Option<String>,
     problems: Vec<Error>,
@@ -529,7 +544,6 @@ fn read_row(fields: &Fields) -> RowRead {
             .filter(|key| *key != "alias_of")
             .map(|key| Error::from_key(key, Repr::AliasRowField));
         return RowRead {
-            model: None,
             aliases: None,
             alias_of: Some(target),
             problems: wire.problems.into_iter().chain(other_fields).collect(),
@@ -537,18 +551,25 @@ fn read_row(fields: &Fields) -> RowRead {
     }
     let aliases = wire.attributes.aliases.clone();
     let timezone_error = unknown_timezone(&wire);
-    let (model, problems) = match Model::try_from(wire) {
-        Ok(model) => (Some(model), timezone_error.into_iter().collect()),
-        Err(mut errors) => {
-            errors.extend(timezone_error);
-            (None, errors)
-        }
-    };
+    let problems = Model::try_from(wire)
+        .err()
+        .unwrap_or_default()
+        .into_iter()
+        .chain(timezone_error)
+        .collect();
     RowRead {
-        model,
         aliases,
         alias_of: None,
         problems,
+    }
+}
+
+fn read_trusted_row(fields: &Fields) -> RowRead {
+    let read = |key: &str| fields.get(key).filter(|value| !value.is_null());
+    RowRead {
+        aliases: read("aliases").and_then(|value| Vec::<String>::deserialize(value).ok()),
+        alias_of: read("alias_of").and_then(|value| String::deserialize(value).ok()),
+        problems: Vec::new(),
     }
 }
 
@@ -637,7 +658,7 @@ mod tests {
         assert_eq!(rejected.len(), 1);
         assert!(catalog.lookup("bad").is_none());
         let good = catalog.lookup("good").unwrap();
-        assert!(good.entry.model().is_some());
+        assert!(Model::from_fields(good.entry.fields()).is_ok());
         assert_eq!(
             good.entry.field("custom_metadata"),
             Some(&Value::Bool(true))
@@ -651,6 +672,32 @@ mod tests {
             Catalog::problems(body)
                 .iter()
                 .any(|problem| problem.kind() == crate::ErrorKind::NoFallbackRules)
+        );
+    }
+
+    #[rstest]
+    #[case::nothing_set(None, None, Ok(IntegrityLimits::DEFAULT))]
+    #[case::only_the_count(Some(7), None, Ok(IntegrityLimits::new(7, 0.5).unwrap()))]
+    #[case::only_the_ratio(None, Some(0.25), Ok(IntegrityLimits::new(50, 0.25).unwrap()))]
+    #[case::both(Some(7), Some(0.25), Ok(IntegrityLimits::new(7, 0.25).unwrap()))]
+    #[case::a_ratio_above_one(Some(7), Some(1.5), Err(1.5))]
+    #[case::a_negative_ratio(None, Some(-0.1), Err(-0.1))]
+    fn limits_an_operator_set_go_over_the_defaults(
+        #[case] min_model_count: Option<usize>,
+        #[case] min_reference_ratio: Option<f64>,
+        #[case] limits: Result<IntegrityLimits, f64>,
+    ) {
+        assert_eq!(
+            IntegrityLimits::over_default(min_model_count, min_reference_ratio),
+            limits
+        );
+    }
+
+    #[rstest]
+    fn the_default_limits_are_fifty_models_and_half_the_bundled_count() {
+        assert_eq!(
+            IntegrityLimits::DEFAULT,
+            IntegrityLimits::new(50, 0.5).unwrap()
         );
     }
 }

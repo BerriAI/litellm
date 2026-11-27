@@ -18,7 +18,7 @@ def _sample(metric: MetricWrapperBase, suffix: str = "") -> float:
 
 
 def test_delivery_metrics_publish_backlog_and_clamp_clock_skew() -> None:
-    instruments = metrics._INSTRUMENTS
+    instruments = metrics._instruments()
     assert instruments is not None
     batches_before = _sample(instruments.batch_time, "_count")
 
@@ -33,6 +33,20 @@ def test_delivery_metrics_publish_backlog_and_clamp_clock_skew() -> None:
         _sample(instruments.table_bytes),
     ) == (4.0, 1.0, 0.0, 7.0, 8192.0)
     assert _sample(instruments.batch_time, "_count") == batches_before + 1
+
+
+def test_importing_metrics_defers_prometheus_client_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delitem(sys.modules, "prometheus_client", raising=False)
+    spec = importlib.util.spec_from_file_location("accounting_metrics_lazy_import", metrics.__file__)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+
+    spec.loader.exec_module(module)
+
+    assert "prometheus_client" not in sys.modules
 
 
 def test_delivery_metrics_are_skipped_when_prometheus_client_is_not_installed(

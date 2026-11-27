@@ -36,6 +36,9 @@ from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_pr
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     OPTIONAL_PresidioPIIMasking,
     PresidioPerRequestConfig,
+    _classify_completed_frames,
+    _coalesce_first_sse_frame,
+    _SsePreface,
 )
 from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
 from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
@@ -4341,6 +4344,83 @@ async def test_apply_to_output_streaming_named_error_frame_holding_a_text_delta_
     wire: Final = b"".join(collected).decode()
     assert "4111" not in wire
     assert "<CREDIT_CARD>" in wire
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_many_leading_non_object_reads_still_mask():
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
+    )
+    leading_reads: Final = 7000
+    byte_chunks: Final = (
+        *([b"data: 5\n\n"] * leading_reads),
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    )
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected: Final = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        )
+    ]
+
+    assert b"4111" not in b"".join(collected)
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
+
+
+@pytest.mark.asyncio
+async def test_coalesce_first_sse_frame_classifies_each_read_only_once():
+    reads: Final = (
+        b": keepalive\n\n",
+        b"data: 5\n",
+        b"\ndata: 6\r\n\r",
+        b"\ndata: 7\n\nda",
+        b"ta: 8\r\r",
+        b'data: {"type": "ping"}\n\n',
+    )
+    classified_per_read: Final[list[tuple[bytes, bytes]]] = []
+
+    def recording_classifier(pending: bytearray, classified: int, appended: int) -> tuple[bytes, bytes, int]:
+        result: Final = _classify_completed_frames(pending, classified, appended)
+        classified_per_read.append(result[:2])
+        return result
+
+    async def upstream() -> AsyncIterator[object]:
+        for chunk in reads:
+            yield chunk
+
+    forwarded: Final = [chunk async for chunk in _coalesce_first_sse_frame(upstream(), recording_classifier)]
+
+    assert classified_per_read == [
+        (b": keepalive\n\n", b""),
+        (b"", b""),
+        (b"", b"data: 5\n\n"),
+        (b"", b"data: 6\r\n\r\ndata: 7\n\n"),
+        (b"", b"data: 8\r\r"),
+        (b"", b'data: {"type": "ping"}\n\n'),
+    ]
+    assert forwarded == [_SsePreface(b": keepalive\n\n"), b"".join(reads[1:])]
 
 
 @pytest.mark.asyncio

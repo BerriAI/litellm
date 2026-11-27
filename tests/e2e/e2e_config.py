@@ -107,6 +107,7 @@ UI_BASE_URL = os.environ.get("E2E_UI_BASE_URL", PROXY_BASE_URL).rstrip("/")
 
 CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
 CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
+PROMPT_CACHE_OPENAI_MODEL = os.environ.get("E2E_PROMPT_CACHE_OPENAI_MODEL", "gpt-6.2-sol")
 S3_PARTITION_GRANULARITY = os.environ.get("E2E_S3_PARTITION_GRANULARITY", "day")
 
 # Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
