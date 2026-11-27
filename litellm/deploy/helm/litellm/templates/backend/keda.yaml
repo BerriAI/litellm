@@ -1,0 +1,9 @@
+{{- if and (include "litellm.backend.render" .) .Values.backend.keda.enabled }}
+{{- include "litellm.keda.scaledObject" (dict
+  "root" .
+  "valuesKey" "backend"
+  "keda" .Values.backend.keda
+  "name" (include "litellm.backend.fullname" .)
+  "component" "backend"
+) }}
+{{- end }}

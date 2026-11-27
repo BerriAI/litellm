@@ -15,5 +15,5 @@ class PulumiApiTokenDetector(RegexBasedDetector):
         return "Pulumi API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [re.compile(r"""(?i)\b(pul-[a-f0-9]{40})(?:['|\"|\n|\r|\s|\x60|;]|$)""")]

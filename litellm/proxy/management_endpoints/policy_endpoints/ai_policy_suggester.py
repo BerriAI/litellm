@@ -62,7 +62,7 @@ class AiPolicySuggester:
         attack_examples: list[str],
         description: str,
         model: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         system_prompt: Final = self._build_system_prompt(templates)
         user_prompt: Final = self._build_user_prompt(attack_examples, description)
         model = model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
@@ -120,7 +120,7 @@ class AiPolicySuggester:
             raise
 
     def _build_system_prompt(self, templates: list) -> str:
-        template_descriptions: Final = []
+        template_descriptions: Final[list[str]] = []
         for t in templates:
             examples = t.get("example_sentences", [])
             examples_str = ", ".join(f'"{e}"' for e in examples) if examples else "none"
@@ -142,7 +142,7 @@ class AiPolicySuggester:
         )
 
     def _build_user_prompt(self, attack_examples: list[str], description: str) -> str:
-        parts: Final = []
+        parts: Final[list[str]] = []
         filtered_examples: Final = [e for e in attack_examples if e.strip()]
         if filtered_examples:
             parts.append("Example attack prompts I want to block:")

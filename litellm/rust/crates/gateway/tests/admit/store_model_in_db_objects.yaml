@@ -1,0 +1,26 @@
+# With the stored config layered in, the proxy also loads guardrails, policies and the other stored
+# objects a request reaches, which the gateway does not read. A kind the database holds sends every
+# request to Python unless supported_db_objects leaves it out: the tool policies held here are left
+# out, the cache settings are not.
+stored: loaded
+held:
+  tool_policies: true
+  cache_settings: true
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    store_model_in_db: true
+    supported_db_objects: [models, cache_settings]
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: general_settings.supported_db_objects.cache_settings

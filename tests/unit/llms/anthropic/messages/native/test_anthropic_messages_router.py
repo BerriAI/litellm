@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import struct
@@ -30,15 +29,12 @@ from litellm.types.utils import StandardLoggingPayload
 
 _ALIAS: Final = "claude-special-alias"
 _ANTHROPIC_MODEL: Final = "claude-haiku-4-5-20251001"
-_BEDROCK_MODEL: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 _BEDROCK_SONNET: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 _OPENAI_MODEL: Final = "openai/gpt-4.1-mini"
 _JOKE: Final = "why did the chicken cross the road"
 _PROMPT: Final = "Hello, can you tell me a short joke?"
 _ANTHROPIC_URL: Final = r".*api\.anthropic\.com/v1/messages.*"
 _OPENAI_RESPONSES_URL: Final = r".*api\.openai\.com/v1/responses.*"
-_BEDROCK_INVOKE_URL: Final = r".*bedrock-runtime.*/invoke$"
-_BEDROCK_INVOKE_STREAM_URL: Final = r".*bedrock-runtime.*/invoke-with-response-stream$"
 _BEDROCK_CONVERSE_URL: Final = r".*bedrock-runtime.*/converse$"
 _BEDROCK_CONVERSE_STREAM_URL: Final = r".*bedrock-runtime.*/converse-stream$"
 
@@ -149,13 +145,6 @@ def _event_frame(event_type: str, payload: Mapping[str, object]) -> bytes:
     return prelude + message + struct.pack("!I", crc32(message, prelude_crc) & 0xFFFFFFFF)
 
 
-def _invoke_stream_body() -> bytes:
-    return b"".join(
-        _event_frame("chunk", {"bytes": base64.b64encode(json.dumps(event).encode()).decode()})
-        for event in _STREAM_EVENTS
-    )
-
-
 def _anthropic_sse_body() -> bytes:
     return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in _STREAM_EVENTS).encode()
 
@@ -263,73 +252,21 @@ async def test_router_aanthropic_messages_latency_routing_forwards_user_id(respx
 
 
 @pytest.mark.asyncio
-async def test_router_aanthropic_messages_falls_back_to_bedrock_after_anthropic_401(respx_mock, monkeypatch):
-    _set_fake_aws_env(monkeypatch)
-    anthropic_route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
-        return_value=httpx.Response(
-            401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
-        )
-    )
-    bedrock_route: Final = respx_mock.post(url__regex=_BEDROCK_INVOKE_URL).mock(
-        return_value=httpx.Response(200, json=_anthropic_body(model=_BEDROCK_SONNET, msg_id="msg_bedrock"))
-    )
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "anthropic/claude-opus-4-7",
-                "litellm_params": {"model": "anthropic/claude-opus-4-7", "api_key": "bad-key"},
-            },
-            {"model_name": f"bedrock/{_BEDROCK_SONNET}", "litellm_params": {"model": f"bedrock/{_BEDROCK_SONNET}"}},
-        ],
-        fallbacks=[{"anthropic/claude-opus-4-7": [f"bedrock/{_BEDROCK_SONNET}"]}],
-    )
-    response: Final = await router.aanthropic_messages(
-        messages=[{"role": "user", "content": _PROMPT}],
-        model="anthropic/claude-opus-4-7",
-        max_tokens=100,
-        metadata={"user_id": "hello"},
-    )
-    assert anthropic_route.call_count == 1
-    assert anthropic_route.calls.last.request.headers["x-api-key"] == "bad-key"
-    assert bedrock_route.call_count == 1
-    assert "authorization" in bedrock_route.calls.last.request.headers
-    _assert_anthropic_message(response, _BEDROCK_SONNET)
-    assert response["id"] == "msg_bedrock"
-
-
-@pytest.mark.asyncio
-async def test_router_aanthropic_messages_bedrock_converse_and_invoke(respx_mock, monkeypatch):
+async def test_router_aanthropic_messages_bedrock_converse(respx_mock, monkeypatch):
     _set_fake_aws_env(monkeypatch)
     converse_route: Final = respx_mock.post(url__regex=_BEDROCK_CONVERSE_URL).mock(
         return_value=httpx.Response(200, json=_CONVERSE_BODY)
     )
-    invoke_route: Final = respx_mock.post(url__regex=_BEDROCK_INVOKE_URL).mock(
-        return_value=httpx.Response(200, json=_anthropic_body(model=_BEDROCK_SONNET))
-    )
     converse_model: Final = f"bedrock/converse/{_BEDROCK_SONNET}"
-    invoke_model: Final = f"bedrock/{_BEDROCK_SONNET}"
-    router: Final = Router(
-        model_list=[
-            {"model_name": converse_model, "litellm_params": {"model": converse_model}},
-            {"model_name": invoke_model, "litellm_params": {"model": invoke_model}},
-        ]
-    )
+    router: Final = Router(model_list=[{"model_name": converse_model, "litellm_params": {"model": converse_model}}])
     converse_response: Final = await router.aanthropic_messages(
         messages=[{"role": "user", "content": _PROMPT}], model=converse_model, max_tokens=100
     )
-    invoke_response: Final = await router.aanthropic_messages(
-        messages=[{"role": "user", "content": _PROMPT}], model=invoke_model, max_tokens=100
-    )
     assert converse_route.call_count == 1
-    assert invoke_route.call_count == 1
     converse_request: Final = converse_route.calls.last.request
-    invoke_request: Final = invoke_route.calls.last.request
     assert "authorization" in converse_request.headers
-    assert "authorization" in invoke_request.headers
     assert json.loads(converse_request.read())["messages"] == [{"role": "user", "content": [{"text": _PROMPT}]}]
-    assert json.loads(invoke_request.read())["messages"] == [{"role": "user", "content": _PROMPT}]
     _assert_anthropic_message(converse_response, _BEDROCK_SONNET)
-    _assert_anthropic_message(invoke_response, _BEDROCK_SONNET)
 
 
 def test_sync_openai_bridge_anthropic_messages_returns_content_blocks(respx_mock):
@@ -353,13 +290,6 @@ def test_sync_openai_bridge_anthropic_messages_returns_content_blocks(respx_mock
     ("model", "url", "body", "expected_model"),
     [
         pytest.param(_ANTHROPIC_MODEL, _ANTHROPIC_URL, _anthropic_body(), _ANTHROPIC_MODEL, id="anthropic"),
-        pytest.param(
-            _BEDROCK_MODEL,
-            _BEDROCK_INVOKE_URL,
-            _anthropic_body(model="us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            id="bedrock-invoke",
-        ),
         pytest.param(_OPENAI_MODEL, _OPENAI_RESPONSES_URL, _OPENAI_BODY, "gpt-4.1-mini", id="openai-bridge"),
     ],
 )
@@ -411,14 +341,6 @@ async def test_router_aanthropic_messages_non_streaming_logs_usage_model_and_cos
             _anthropic_sse_body(),
             _ANTHROPIC_MODEL,
             id="anthropic",
-        ),
-        pytest.param(
-            _BEDROCK_MODEL,
-            _BEDROCK_INVOKE_STREAM_URL,
-            "application/vnd.amazon.eventstream",
-            _invoke_stream_body(),
-            _BEDROCK_MODEL,
-            id="bedrock-invoke",
         ),
     ],
 )
@@ -622,44 +544,11 @@ async def test_bedrock_converse_system_prompt_caching_returns_cache_tokens(respx
 
 
 @pytest.mark.asyncio
-async def test_bedrock_invoke_system_prompt_caching_returns_cache_tokens(respx_mock, monkeypatch):
-    _set_fake_aws_env(monkeypatch)
-    route: Final = respx_mock.post(url__regex=_BEDROCK_INVOKE_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                **_anthropic_body(model=_BEDROCK_SONNET),
-                "usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 20,
-                    "cache_creation_input_tokens": 50,
-                    "cache_read_input_tokens": 500,
-                },
-            },
-        )
-    )
-    response: Final = await python_messages.anthropic_messages(
-        model=f"bedrock/invoke/{_BEDROCK_SONNET}",
-        messages=[{"role": "user", "content": "What are the key terms?"}],
-        system=_cached_system(),
-        max_tokens=100,
-    )
-    sent: Final = json.loads(route.calls.last.request.read())
-    assert sent["system"] == _cached_system()
-    assert isinstance(response, dict)
-    assert response["usage"]["cache_creation_input_tokens"] == 50
-    assert response["usage"]["cache_read_input_tokens"] == 500
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "url", "body"),
     [
         pytest.param(
             f"bedrock/converse/{_BEDROCK_SONNET}", _BEDROCK_CONVERSE_STREAM_URL, _converse_stream_body(), id="converse"
-        ),
-        pytest.param(
-            f"bedrock/invoke/{_BEDROCK_SONNET}", _BEDROCK_INVOKE_STREAM_URL, _invoke_stream_body(), id="invoke"
         ),
     ],
 )
@@ -1009,3 +898,378 @@ async def test_mixed_openai_azure_group_answers_the_same_400_for_a_null_tool_res
     }
     assert openai_route.call_count == 0
     assert azure_route.call_count == 0
+
+
+_NON_STRING_TEXTS: Final = (pytest.param(None, id="null"), pytest.param(5, id="number"))
+
+
+def _prompt_with_text(text: object) -> list[dict[str, object]]:
+    return [{"role": "user", "content": [{"type": "text", "text": _PROMPT}, {"type": "text", "text": text}]}]
+
+
+_CLEAN_PROMPT: Final = [{"role": "user", "content": [{"type": "text", "text": _PROMPT}]}]
+_BLANK_BEFORE_NULL_PROMPT: Final = [
+    {
+        "role": "user",
+        "content": [{"type": "text", "text": ""}, {"type": "text", "text": None}, {"type": "text", "text": _PROMPT}],
+    }
+]
+
+
+async def _bridge_rejection(
+    router: Router, deployment_id: str, messages: list[dict[str, object]]
+) -> litellm.BadRequestError:
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await router.aanthropic_messages(model=deployment_id, max_tokens=64, messages=messages)
+    return rejected.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "field"),
+    (
+        pytest.param(_prompt_with_text(None), "messages.0.content.1.text", id="null-beside-text"),
+        pytest.param(_prompt_with_text(5), "messages.0.content.1.text", id="number-beside-text"),
+        pytest.param(
+            [{"role": "user", "content": [{"type": "text", "text": None}]}], "messages.0.content.0.text", id="only-null"
+        ),
+        pytest.param(_BLANK_BEFORE_NULL_PROMPT, "messages.0.content.1.text", id="blank-before-null"),
+    ),
+)
+async def test_mixed_openai_azure_group_answers_the_same_400_for_a_non_string_user_text_on_either_deployment(
+    respx_mock: respx.MockRouter, messages: list[dict[str, object]], field: str
+) -> None:
+    openai_route: Final = respx_mock.post(url__regex=_OPENAI_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json=_OPENAI_BODY)
+    )
+    azure_route: Final = respx_mock.post(url__regex=_MIXED_AZURE_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_MIXED_AZURE_CHAT_BODY)
+    )
+    router: Final = _mixed_openai_azure_router()
+
+    rejections: Final = [
+        await _bridge_rejection(router, deployment_id, messages) for deployment_id in _MIXED_DEPLOYMENT_IDS
+    ]
+
+    assert [(rejection.status_code, rejection.llm_provider) for rejection in rejections] == [
+        (400, "openai"),
+        (400, "azure"),
+    ]
+    assert {rejection.message.partition("\n\n")[0] for rejection in rejections} == {
+        f"litellm.BadRequestError: {field}: Input should be a valid string"
+    }
+    assert openai_route.call_count == 0
+    assert azure_route.call_count == 0
+
+
+def _dropping_mixed_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                **deployment,
+                "litellm_params": {**deployment["litellm_params"], "drop_params": True},
+            }
+            for deployment in _mixed_openai_azure_router().model_list
+        ],
+        num_retries=0,
+    )
+
+
+async def _bridged_bodies(
+    respx_mock: respx.MockRouter, router: Router, messages: list[dict[str, object]]
+) -> tuple[object, object]:
+    openai_route: Final = respx_mock.post(url__regex=_OPENAI_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json=_OPENAI_BODY)
+    )
+    azure_route: Final = respx_mock.post(url__regex=_MIXED_AZURE_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_MIXED_AZURE_CHAT_BODY)
+    )
+    for deployment_id in _MIXED_DEPLOYMENT_IDS:
+        await router.aanthropic_messages(model=deployment_id, max_tokens=64, messages=messages)
+    return (
+        json.loads(openai_route.calls.last.request.read())["input"],
+        json.loads(azure_route.calls.last.request.read())["messages"],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", _NON_STRING_TEXTS)
+async def test_mixed_group_deployment_drop_params_drops_a_non_string_user_text_on_either_deployment(
+    respx_mock: respx.MockRouter, text: object
+) -> None:
+    router: Final = _dropping_mixed_router()
+
+    dropped: Final = await _bridged_bodies(respx_mock, router, _prompt_with_text(text))
+    clean: Final = await _bridged_bodies(respx_mock, router, _CLEAN_PROMPT)
+
+    assert dropped == clean
+
+
+@pytest.mark.asyncio
+async def test_mixed_group_drop_params_drops_a_user_turn_left_with_no_content(respx_mock: respx.MockRouter) -> None:
+    router: Final = _dropping_mixed_router()
+    history: Final[list[dict[str, object]]] = [
+        *_CLEAN_PROMPT,
+        {"role": "assistant", "content": [{"type": "text", "text": _JOKE}]},
+    ]
+
+    dropped: Final = await _bridged_bodies(
+        respx_mock, router, [*history, {"role": "user", "content": [{"type": "text", "text": None}]}]
+    )
+    clean: Final = await _bridged_bodies(respx_mock, router, history)
+
+    assert dropped == clean
+
+
+async def _native_body_sent(
+    respx_mock: respx.MockRouter,
+    messages: list[dict[str, object]],
+    deployment_params: Mapping[str, object],
+    **params: object,
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_anthropic_body("claude-opus-5-5"))
+    )
+    deployment: Final = {
+        "model_name": _ALIAS,
+        "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "fake-key", **deployment_params},
+    }
+    await Router(model_list=[deployment]).aanthropic_messages(messages=messages, model=_ALIAS, max_tokens=64, **params)
+    return json.loads(route.calls.last.request.read())
+
+
+_DROP_PARAMS_SOURCES: Final = (
+    pytest.param({"drop_params": True}, {}, False, id="deployment"),
+    pytest.param({}, {"drop_params": True}, False, id="request"),
+    pytest.param({}, {}, True, id="global"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", _NON_STRING_TEXTS)
+@pytest.mark.parametrize(("deployment_params", "request_params", "drop_globally"), _DROP_PARAMS_SOURCES)
+async def test_native_anthropic_drop_params_drops_a_non_string_user_text_from_every_source(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    text: object,
+    deployment_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+
+    dropped: Final = await _native_body_sent(respx_mock, _prompt_with_text(text), deployment_params, **request_params)
+    only_null: Final = await _native_body_sent(
+        respx_mock,
+        [*_CLEAN_PROMPT, {"role": "user", "content": [{"type": "text", "text": text}]}],
+        deployment_params,
+        **request_params,
+    )
+
+    assert dropped["messages"] == _CLEAN_PROMPT
+    assert only_null["messages"] == _CLEAN_PROMPT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("deployment_params", "request_params", "drop_globally"), _DROP_PARAMS_SOURCES)
+async def test_native_anthropic_drop_params_strips_a_blank_text_beside_a_dropped_user_text_from_every_source(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+
+    sent: Final = await _native_body_sent(respx_mock, _BLANK_BEFORE_NULL_PROMPT, deployment_params, **request_params)
+
+    assert sent["messages"] == _CLEAN_PROMPT
+
+
+_SYSTEM_TEXT: Final = {"type": "text", "text": "Answer in one word"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", _NON_STRING_TEXTS)
+@pytest.mark.parametrize(("deployment_params", "request_params", "drop_globally"), _DROP_PARAMS_SOURCES)
+async def test_native_anthropic_drop_params_drops_a_non_string_system_text_and_a_system_prompt_it_empties(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    text: object,
+    deployment_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    non_string: Final = {"type": "text", "text": text}
+
+    dropped: Final = await _native_body_sent(
+        respx_mock, _CLEAN_PROMPT, deployment_params, system=[non_string, _SYSTEM_TEXT], **request_params
+    )
+    emptied: Final = await _native_body_sent(
+        respx_mock, _CLEAN_PROMPT, deployment_params, system=[non_string], **request_params
+    )
+
+    assert dropped["system"] == [_SYSTEM_TEXT]
+    assert dropped["messages"] == emptied["messages"] == _CLEAN_PROMPT
+    assert "system" not in emptied
+
+
+@pytest.mark.asyncio
+async def test_native_anthropic_still_strips_empty_user_text_and_non_string_assistant_text_without_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    sent: Final = await _native_body_sent(
+        respx_mock,
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": _PROMPT}, {"type": "text", "text": " "}, {"type": "text"}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": None}, {"type": "text", "text": _JOKE}]},
+            {"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": "again"}]},
+        ],
+        {},
+    )
+
+    assert sent["messages"] == [
+        *_CLEAN_PROMPT,
+        {"role": "assistant", "content": [{"type": "text", "text": _JOKE}]},
+        {"role": "user", "content": [{"type": "text", "text": "again"}]},
+    ]
+
+
+_EMPTIED_MESSAGES_ERROR: Final = (
+    "litellm.BadRequestError: messages: no message has content left after dropping empty or non-string text blocks"
+)
+
+
+def _non_string_text_error(field: str) -> str:
+    return f"litellm.BadRequestError: {field}: Input should be a valid string"
+
+
+_REJECTED_REQUESTS: Final = (
+    pytest.param(
+        [{"role": "user", "content": [{"type": "text", "text": None}]}],
+        {"drop_params": True},
+        _EMPTIED_MESSAGES_ERROR,
+        id="only-null-dropped",
+    ),
+    pytest.param(
+        [
+            {"role": "user", "content": [{"type": "text", "text": 5}]},
+            {"role": "user", "content": [{"type": "text", "text": " "}, {"type": "text", "text": None}]},
+        ],
+        {"drop_params": True},
+        _EMPTIED_MESSAGES_ERROR,
+        id="every-turn-emptied",
+    ),
+    pytest.param(
+        _prompt_with_text(None), {}, _non_string_text_error("messages.0.content.1.text"), id="null-beside-text"
+    ),
+    pytest.param(
+        _BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text"), id="blank-before-null"
+    ),
+    pytest.param(
+        _CLEAN_PROMPT,
+        {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+        _non_string_text_error("system.1.text"),
+        id="null-system-text",
+    ),
+    pytest.param(
+        _prompt_with_text(None),
+        {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+        _non_string_text_error("messages.0.content.1.text"),
+        id="null-user-text-before-null-system-text",
+    ),
+)
+_EVERY_MESSAGES_PATH: Final = (
+    pytest.param("anthropic/claude-opus-5-5", id="native-anthropic"),
+    pytest.param("openai/gpt-5.6", id="responses-bridge"),
+    pytest.param("gemini/gemini-3.8-flash", id="chat-completions-bridge"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("non-streaming", "streaming"))
+@pytest.mark.parametrize(("messages", "request_params", "error"), _REJECTED_REQUESTS)
+@pytest.mark.parametrize("model", _EVERY_MESSAGES_PATH)
+async def test_a_non_string_user_text_or_a_request_left_with_no_message_answers_400_before_any_provider_call(
+    respx_mock: respx.MockRouter,
+    model: str,
+    messages: list[dict[str, object]],
+    request_params: Mapping[str, object],
+    error: str,
+    stream: bool,
+) -> None:
+    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
+    router: Final = Router(
+        model_list=[{"model_name": _ALIAS, "litellm_params": {"model": model, "api_key": "fake-key"}}], num_retries=0
+    )
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await router.aanthropic_messages(
+            model=_ALIAS, max_tokens=64, messages=messages, stream=stream, **request_params
+        )
+
+    assert rejected.value.status_code == 400
+    assert rejected.value.message.partition("\n\n")[0] == error
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_a_non_string_user_text_answers_its_own_400_when_the_model_names_no_known_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await litellm.anthropic.messages.acreate(
+            model="unknown-provider-model", api_key="fake-key", max_tokens=64, messages=_prompt_with_text(None)
+        )
+
+    assert rejected.value.message.partition("\n\n")[0] == _non_string_text_error("messages.0.content.1.text")
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(("messages", "request_params", "error"), _REJECTED_REQUESTS)
+def test_sync_messages_create_answers_the_same_400_for_a_non_string_user_text_or_no_message_left(
+    respx_mock: respx.MockRouter, messages: list[dict[str, object]], request_params: Mapping[str, object], error: str
+) -> None:
+    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=_anthropic_body()))
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.anthropic.messages.create(
+            model="anthropic/claude-opus-5-5", api_key="fake-key", max_tokens=64, messages=messages, **request_params
+        )
+
+    assert rejected.value.message.partition("\n\n")[0] == error
+    assert rejected.value.llm_provider == "anthropic"
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_native_messages_strip_empty_blocks_beside_a_non_string_tool_result_text(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_anthropic_body())
+    )
+    tool_use: Final = {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}
+    tool_result: Final = {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": None}]}
+
+    await _router(_ALIAS, _ANTHROPIC_MODEL).aanthropic_messages(
+        model=_ALIAS,
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": _PROMPT},
+            {"role": "assistant", "content": [{"type": "text", "text": ""}, tool_use]},
+            {"role": "user", "content": [tool_result, {"type": "text", "text": " "}]},
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.read())["messages"] == [
+        {"role": "user", "content": _PROMPT},
+        {"role": "assistant", "content": [tool_use]},
+        {"role": "user", "content": [tool_result]},
+    ]

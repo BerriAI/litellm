@@ -37,6 +37,10 @@ Every secret in a Debug output is hidden the same way, so a reviewer can tell at
 - An opaque handle over `Arc<dyn Trait>` whose trait has no `Debug` gets a newtype whose `Debug` prints only the type name with `finish_non_exhaustive()`. That impl shows nothing, so it is not a redaction impl and the first rule does not apply. A type holding such a handle can derive `Debug`
 - Never put a secret in a tracing field or an error message. Log the type with `?value`, or log only non-secret fields. See the rust-tracing and rust-error skills
 
+## Secrets in free text
+
+`SecretValue` covers a value we know is a secret. Text we do not control, such as an upstream error message, a log line or a logged request, can still carry one. Scrub it with `SecretRedactor` or `TokenRedactor` from `crates/redaction`, imported as `litellm_redaction::...` everywhere. No crate re-exports them, so there is one import path
+
 ## Tests
 
 - One test per type that holds a secret, built the way production builds it, asserting the plaintext is absent from `format!("{value:?}")` and `[REDACTED]` is present

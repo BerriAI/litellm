@@ -9,17 +9,23 @@ import itertools
 import json
 import os
 import sys
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Final
+from typing import Annotated, Final, Literal
 
 import anyio
+import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
@@ -27,8 +33,11 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
 from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_superseded_attempt
 from litellm.llms.anthropic.messages.native.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
 from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import (
+    AnthropicResponsesSSEByteStream,
     AnthropicResponsesStreamWrapper,
 )
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, SyncResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse
 
 
@@ -179,6 +188,7 @@ class TestReasoningItemWithoutSummaryText:
             ("content_block_start", 0),
             ("content_block_delta", 0),
             ("content_block_delta", 0),
+            ("content_block_delta", 0),
             ("content_block_stop", 0),
             ("content_block_start", 1),
             ("content_block_delta", 1),
@@ -190,10 +200,73 @@ class TestReasoningItemWithoutSummaryText:
         assert "".join(c["delta"]["thinking"] for c in chunks[2:4]) == "Weighing options"
 
     def test_the_reasoning_item_id_is_never_streamed_as_a_signature(self):
-        """A stand-in signature would be replayed as a real one, so none is ever sent."""
+        """A stand-in signature would be replayed as a real one, so the block closes with an empty one."""
         chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=["Weighing options"]))
 
-        assert not [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
+        signature_deltas: Final = [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
+        assert [(c["index"], c["delta"]["signature"]) for c in signature_deltas] == [(0, "")]
+        assert chunks[chunks.index(signature_deltas[0]) + 1] == {"type": "content_block_stop", "index": 0}
+
+
+class TestRawReasoningTextIsStreamedAsThinking:
+    """Servers that return a reasoning item's raw text (vLLM and OpenRouter for gpt-oss)
+    stream it as ``response.reasoning_text.delta`` instead of a summary."""
+
+    def test_reasoning_text_deltas_become_one_closed_thinking_block(self):
+        chunks: Final = _drain_async(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
+                {"type": "response.reasoning_text.delta", "item_id": "rs_1", "content_index": 0, "delta": "17*23"},
+                {"type": "response.reasoning_text.delta", "item_id": "rs_1", "content_index": 0, "delta": " is 391."},
+                {"type": "response.output_item.done", "item": {"type": "reasoning", "id": "rs_1"}},
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "391"},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.completed"},
+            ]
+        )
+
+        assert [(c["type"], c.get("index"), c.get("content_block") or c.get("delta")) for c in chunks[1:-2]] == [
+            ("content_block_start", 0, {"type": "thinking", "thinking": "", "signature": ""}),
+            ("content_block_delta", 0, {"type": "thinking_delta", "thinking": "17*23"}),
+            ("content_block_delta", 0, {"type": "thinking_delta", "thinking": " is 391."}),
+            ("content_block_delta", 0, {"type": "signature_delta", "signature": ""}),
+            ("content_block_stop", 0, None),
+            ("content_block_start", 1, {"type": "text", "text": ""}),
+            ("content_block_delta", 1, {"type": "text_delta", "text": "391"}),
+            ("content_block_stop", 1, None),
+        ]
+
+    def test_a_whole_reasoning_item_without_deltas_becomes_one_closed_thinking_block(self):
+        reasoning_item: Final = {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": "Just answer 391."}],
+            "encrypted_content": None,
+        }
+        chunks: Final = _drain_async(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_item.added", "item": reasoning_item},
+                {"type": "response.output_item.done", "item": reasoning_item},
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "391"},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.completed"},
+            ]
+        )
+
+        assert [(c["type"], c.get("index"), c.get("content_block") or c.get("delta")) for c in chunks[1:-2]] == [
+            ("content_block_start", 0, {"type": "thinking", "thinking": "", "signature": ""}),
+            ("content_block_delta", 0, {"type": "thinking_delta", "thinking": "Just answer 391."}),
+            ("content_block_delta", 0, {"type": "signature_delta", "signature": ""}),
+            ("content_block_stop", 0, None),
+            ("content_block_start", 1, {"type": "text", "text": ""}),
+            ("content_block_delta", 1, {"type": "text_delta", "text": "391"}),
+            ("content_block_stop", 1, None),
+        ]
 
 
 _ENCRYPTED_REASONING = "gAAAAABp_encrypted_reasoning_bytes_only_openai_can_read"
@@ -707,11 +780,13 @@ class _FailureHookRecorder:
     def __init__(self) -> None:
         self.received: tuple[Exception, ...] = ()
 
-    async def __call__(self, failure: Exception) -> None:
+    async def __call__(self, _logging_obj: object, failure: Exception) -> None:
         self.received = (*self.received, failure)
 
 
-def _logging_obj_with_failure_hook(on_failure: Callable[[Exception], Awaitable[None]]) -> LitellmLogging:
+def _logging_obj_with_failure_hook(
+    on_failure: Callable[[LitellmLogging, Exception], Awaitable[None]],
+) -> LitellmLogging:
     logging_obj = LitellmLogging(
         model="m",
         messages=[{"role": "user", "content": "hi"}],
@@ -740,7 +815,7 @@ class _DeliveryCountingConsumer:
         self.delivered: tuple[dict[str, object], ...] = ()
         self.delivered_when_hook_fired: tuple[int, ...] = ()
 
-    async def hook(self, failure: Exception) -> None:
+    async def hook(self, _logging_obj: object, failure: Exception) -> None:
         self.delivered_when_hook_fired = (*self.delivered_when_hook_fired, len(self.delivered))
 
     async def drain(self, wrapper: AnthropicResponsesStreamWrapper) -> None:
@@ -806,7 +881,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
         assert "Rate limit reached for gpt-5.5, try again in 20s." in failure.message
 
     def test_a_raising_hook_never_hides_the_error_event_from_the_client(self):
-        async def _exploding_hook(failure: Exception) -> None:
+        async def _exploding_hook(_logging_obj: object, failure: Exception) -> None:
             raise RuntimeError("spend writer is down")
 
         logging_obj = _logging_obj_with_failure_hook(_exploding_hook)
@@ -872,7 +947,7 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
         hook_released = anyio.Event()
         finished: list[Exception] = []
 
-        async def _held_hook(failure: Exception) -> None:
+        async def _held_hook(_logging_obj: object, failure: Exception) -> None:
             hook_started.set()
             await hook_released.wait()
             finished.append(failure)
@@ -896,3 +971,669 @@ class TestUpstreamFailureReachesTheProxyFailureHook:
 
         asyncio.run(_disconnect_mid_hook())
         assert len(finished) == 1
+
+
+_RESPONSE_CREATED: Final = (
+    b'data: {"type": "response.created", "response": {"id": "resp_1", "status": "in_progress", "output": []}}\n\n'
+)
+_MESSAGE_ADDED: Final = (
+    b'data: {"type": "response.output_item.added", "output_index": 0, "item": '
+    b'{"type": "message", "id": "msg_1", "role": "assistant", "content": [], "status": "in_progress"}}\n\n'
+)
+_TEXT_DELTA: Final = (
+    b'data: {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, '
+    b'"content_index": 0, "delta": "word "}\n\n'
+)
+
+
+class _EndlessProviderStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        while True:
+            yield _TEXT_DELTA
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _EndlessSyncProviderStream(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        while True:
+            yield _TEXT_DELTA
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _ProviderStreamThatPausesAfterTheFirstTextDelta(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+        self.paused = asyncio.Event()
+        self.resume = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        yield _TEXT_DELTA
+        self.paused.set()
+        await self.resume.wait()
+        yield _TEXT_DELTA
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize(
+    ("provider_stream", "upstream_class"),
+    [
+        (_EndlessProviderStream(), ResponsesAPIStreamingIterator),
+        (_EndlessSyncProviderStream(), SyncResponsesAPIStreamingIterator),
+    ],
+    ids=["async_responses_call", "sync_responses_call"],
+)
+def test_closing_the_sse_stream_mid_response_closes_the_provider_response(
+    provider_stream: _EndlessProviderStream | _EndlessSyncProviderStream,
+    upstream_class: type[ResponsesAPIStreamingIterator] | type[SyncResponsesAPIStreamingIterator],
+):
+    async def _close_after_the_first_text_delta() -> bool:
+        upstream: Final = upstream_class(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_with_failure_hook(_FailureHookRecorder()),
+        )
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        async for frame in sse:
+            if b'"text_delta"' in frame:
+                await sse.aclose()
+                return provider_stream.closed
+        pytest.fail("the stream ended without a text delta")
+
+    assert asyncio.run(_close_after_the_first_text_delta())
+
+
+def test_a_close_refused_while_another_task_reads_leaves_the_provider_response_to_that_read():
+    async def _close_from_another_task_mid_read() -> tuple[bool, bytes]:
+        provider_stream: Final = _ProviderStreamThatPausesAfterTheFirstTextDelta()
+        upstream: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_with_failure_hook(_FailureHookRecorder()),
+        )
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        text_deltas: Final = (frame async for frame in sse if b'"text_delta"' in frame)
+        await text_deltas.__anext__()
+        second_text_delta: Final = asyncio.ensure_future(text_deltas.__anext__())
+        await provider_stream.paused.wait()
+        with pytest.raises(RuntimeError, match="already running"):
+            await sse.aclose()
+        closed_by_the_refused_close: Final = provider_stream.closed
+        provider_stream.resume.set()
+        return closed_by_the_refused_close, await second_text_delta
+
+    closed_by_the_refused_close, second_frame = asyncio.run(_close_from_another_task_mid_read())
+    assert not closed_by_the_refused_close
+    assert b'"text_delta"' in second_frame
+
+
+class _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+        self.quiet = threading.Event()
+        self.next_bytes = threading.Event()
+        self.sent_next_bytes = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        yield _TEXT_DELTA
+        self.quiet.set()
+        self.sent_next_bytes = self.next_bytes.wait(timeout=5)
+        if self.closed:
+            raise httpx.ReadError("[Errno 9] Bad file descriptor")
+        yield _TEXT_DELTA
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures: tuple[object, ...] = ()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.failures = (*self.failures, kwargs.get("exception"))
+
+
+def _logging_obj_that_records_failures(failure_recorder: _FailureRecorder) -> LitellmLogging:
+    return LitellmLogging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="close-test",
+        function_id="close-test",
+        dynamic_async_failure_callbacks=[failure_recorder],
+    )
+
+
+_SSE_BYTE_STREAMS_OVER_A_SYNC_UPSTREAM: Final = pytest.mark.parametrize(
+    "sse_byte_stream",
+    [
+        AnthropicResponsesStreamWrapper.async_anthropic_sse_wrapper,
+        AnthropicResponsesStreamWrapper.anthropic_sse_wrapper,
+    ],
+    ids=["async_sse_wrapper", "sync_sse_wrapper"],
+)
+
+
+async def _close_after_cancelling_a_quiet_read(
+    provider_stream: _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta,
+    logging_obj: LitellmLogging,
+    sse_byte_stream: Callable[[AnthropicResponsesStreamWrapper], AnthropicResponsesSSEByteStream],
+) -> None:
+    upstream: Final = SyncResponsesAPIStreamingIterator(
+        response=httpx.Response(200, stream=provider_stream),
+        model="m",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+    )
+    sse: Final = sse_byte_stream(AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m"))
+    while b'"text_delta"' not in await sse.__anext__():
+        pass
+    quiet_read: Final = asyncio.ensure_future(sse.__anext__())
+    assert await asyncio.to_thread(provider_stream.quiet.wait, 5)
+    _ = quiet_read.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await quiet_read
+    await sse.aclose()
+
+
+@_SSE_BYTE_STREAMS_OVER_A_SYNC_UPSTREAM
+def test_closing_a_sync_stream_after_a_cancelled_read_closes_the_provider_response_once_that_read_returns(
+    sse_byte_stream: Callable[[AnthropicResponsesStreamWrapper], AnthropicResponsesSSEByteStream],
+):
+    provider_stream: Final = _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta()
+    failure_recorder: Final = _FailureRecorder()
+
+    async def _give_up_while_the_provider_is_quiet() -> None:
+        await _close_after_cancelling_a_quiet_read(
+            provider_stream, _logging_obj_that_records_failures(failure_recorder), sse_byte_stream
+        )
+        provider_stream.next_bytes.set()
+
+    asyncio.run(_give_up_while_the_provider_is_quiet())
+    assert provider_stream.sent_next_bytes
+    assert provider_stream.closed
+    assert failure_recorder.failures == ()
+
+
+@_SSE_BYTE_STREAMS_OVER_A_SYNC_UPSTREAM
+def test_closing_a_sync_stream_during_a_quiet_read_leaves_the_other_worker_threads_free(
+    sse_byte_stream: Callable[[AnthropicResponsesStreamWrapper], AnthropicResponsesSSEByteStream],
+):
+    provider_stream: Final = _SyncProviderStreamThatGoesQuietAfterTheFirstTextDelta()
+
+    async def _run_other_work_while_the_provider_is_quiet() -> int:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=2))
+        try:
+            await _close_after_cancelling_a_quiet_read(
+                provider_stream, _logging_obj_that_records_failures(_FailureRecorder()), sse_byte_stream
+            )
+            return await asyncio.wait_for(asyncio.to_thread(threading.get_ident), timeout=2)
+        finally:
+            provider_stream.next_bytes.set()
+
+    _ = asyncio.run(_run_other_work_while_the_provider_is_quiet())
+    assert provider_stream.closed
+
+
+_RESPONSE_IN_PROGRESS: Final = (
+    b'data: {"type": "response.in_progress", "response": {"id": "resp_1", "status": "in_progress", "output": []}}\n\n'
+)
+
+
+class _SyncProviderStreamThatSendsNoTextAfterGoingQuiet(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+        self.quiet = threading.Event()
+        self.next_bytes = threading.Event()
+        self.read_after_close = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield _RESPONSE_CREATED
+        yield _MESSAGE_ADDED
+        yield _TEXT_DELTA
+        self.quiet.set()
+        _ = self.next_bytes.wait(timeout=5)
+        yield _RESPONSE_IN_PROGRESS
+        self.read_after_close = self.closed
+        if self.closed:
+            raise httpx.ReadError("[Errno 9] Bad file descriptor")
+        yield _TEXT_DELTA
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_closing_a_sync_stream_while_another_task_reads_ends_that_read_without_reading_the_closed_provider_response():
+    provider_stream: Final = _SyncProviderStreamThatSendsNoTextAfterGoingQuiet()
+    failure_recorder: Final = _FailureRecorder()
+
+    async def _close_while_the_provider_is_quiet() -> None:
+        upstream: Final = SyncResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_that_records_failures(failure_recorder),
+        )
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").anthropic_sse_wrapper()
+        while b'"text_delta"' not in await sse.__anext__():
+            pass
+        quiet_read: Final = asyncio.ensure_future(sse.__anext__())
+        assert await asyncio.to_thread(provider_stream.quiet.wait, 5)
+        sse.close()
+        provider_stream.next_bytes.set()
+        with pytest.raises(StopAsyncIteration):
+            await quiet_read
+
+    asyncio.run(_close_while_the_provider_is_quiet())
+    assert provider_stream.closed
+    assert not provider_stream.read_after_close
+    assert failure_recorder.failures == ()
+
+
+_RESPONSE_COMPLETED: Final = (
+    b'data: {"type": "response.completed", "response": {"id": "resp_1", "status": "completed", "output": []}}\n\n'
+)
+_PARALLEL_CALLS: Final = (
+    ("fc_a", "call_98145f1b9bdb40fc82c5b2415ed291a5", "read_file", '{"path": "notes/a.md"}'),
+    ("fc_b", "call_0c8a1d2e3f4b5a6978695a4b3c2d1e0f", "run_command", '{"cmd": ["ls", "-la"]}'),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCallStreamShape:
+    argument_deltas: tuple[str, ...] = ()
+    deltas_carry_item_id: bool = True
+    sends_arguments_done: bool = True
+    output_item_done_carries_arguments: bool = True
+
+
+def _halves(arguments: str) -> tuple[str, ...]:
+    return (arguments[: len(arguments) // 2], arguments[len(arguments) // 2 :])
+
+
+class _ToolCallProviderStream(httpx.AsyncByteStream):
+    def __init__(
+        self,
+        shape: _ToolCallStreamShape,
+        split_arguments: Callable[[str], tuple[str, ...]],
+        created: bytes = _RESPONSE_CREATED,
+        hangs_before_completing: bool = False,
+    ) -> None:
+        self._shape: Final = shape
+        self._split_arguments: Final = split_arguments
+        self._created: Final = created
+        self._hangs_before_completing: Final = hangs_before_completing
+
+    def call_events(
+        self, output_index: int, item_id: str, call_id: str, name: str, arguments: str
+    ) -> Iterator[Mapping[str, object]]:
+        item: Final = {"type": "function_call", "id": item_id, "call_id": call_id, "name": name}
+        yield {
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": {**item, "arguments": "", "status": "in_progress"},
+        }
+        for piece in self._split_arguments(arguments):
+            yield {
+                "type": "response.function_call_arguments.delta",
+                "output_index": output_index,
+                "delta": piece,
+                **({"item_id": item_id} if self._shape.deltas_carry_item_id else {}),
+            }
+        if self._shape.sends_arguments_done:
+            yield {
+                "type": "response.function_call_arguments.done",
+                "output_index": output_index,
+                "item_id": item_id,
+                "arguments": arguments,
+            }
+        yield {
+            "type": "response.output_item.done",
+            "output_index": output_index,
+            "item": {
+                **item,
+                "arguments": arguments if self._shape.output_item_done_carries_arguments else "",
+                "status": "completed",
+            },
+        }
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._created
+        for output_index, call in enumerate(_PARALLEL_CALLS):
+            for event in self.call_events(output_index, *call):
+                yield f"data: {json.dumps(event)}\n\n".encode()
+        if self._hangs_before_completing:
+            await asyncio.Event().wait()
+        yield _RESPONSE_COMPLETED
+
+
+def _delta(chunk: Mapping[str, object], key: str) -> object:
+    delta: Final = chunk["delta"]
+    assert isinstance(delta, Mapping)
+    return delta[key]
+
+
+def _streamed_tool_uses(provider_stream: _ToolCallProviderStream) -> tuple[tuple[str, str, str | None], ...]:
+    async def _run() -> list[Mapping[str, object]]:
+        upstream: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=provider_stream),
+            model="m",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_that_records_failures(_FailureRecorder()),
+        )
+        return [chunk async for chunk in AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m")]
+
+    events: Final = tuple(
+        _BLOCK_EVENT.validate_python(chunk) for chunk in asyncio.run(_run()) if chunk["type"] in _BLOCK_EVENT_TYPES
+    )
+    return tuple(
+        (event.content_block.id, event.content_block.name, _input_before_block_stop(events, event.index))
+        for event in events
+        if isinstance(event, _BlockStart)
+    )
+
+
+class _ToolUseBlock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: str
+    name: str
+
+
+class _BlockStart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_start"]
+    index: int
+    content_block: _ToolUseBlock
+
+
+class _InputJsonDelta(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    partial_json: str
+
+
+class _BlockDelta(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_delta"]
+    index: int
+    delta: _InputJsonDelta
+
+
+class _BlockStop(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    type: Literal["content_block_stop"]
+    index: int
+
+
+_BlockEvent = Annotated[_BlockStart | _BlockDelta | _BlockStop, Field(discriminator="type")]
+_BLOCK_EVENT: Final[TypeAdapter[_BlockEvent]] = TypeAdapter(_BlockEvent)
+_BLOCK_EVENT_TYPES: Final = frozenset({"content_block_start", "content_block_delta", "content_block_stop"})
+
+
+def _input_before_block_stop(events: tuple[_BlockEvent, ...], index: int) -> str | None:
+    stop: Final = next(
+        (pos for pos, event in enumerate(events) if isinstance(event, _BlockStop) and event.index == index), None
+    )
+    if stop is None:
+        return None
+    return "".join(
+        event.delta.partial_json for event in events[:stop] if isinstance(event, _BlockDelta) and event.index == index
+    )
+
+
+def _no_deltas(arguments: str) -> tuple[str, ...]:
+    return ()
+
+
+def _one_empty_delta(arguments: str) -> tuple[str, ...]:
+    return ("",)
+
+
+@pytest.mark.parametrize(
+    ("shape", "split_arguments"),
+    [
+        (_ToolCallStreamShape(), _no_deltas),
+        (_ToolCallStreamShape(sends_arguments_done=False), _no_deltas),
+        (_ToolCallStreamShape(output_item_done_carries_arguments=False), _no_deltas),
+        (_ToolCallStreamShape(output_item_done_carries_arguments=False), _one_empty_delta),
+        (_ToolCallStreamShape(), _halves),
+        (_ToolCallStreamShape(sends_arguments_done=False), _halves),
+        (_ToolCallStreamShape(deltas_carry_item_id=False), _halves),
+    ],
+    ids=[
+        "done_events_only",
+        "output_item_done_only",
+        "arguments_done_only",
+        "empty_delta_then_arguments_done",
+        "deltas_then_done_events",
+        "deltas_then_output_item_done",
+        "deltas_without_item_id",
+    ],
+)
+def test_each_parallel_tool_use_streams_its_arguments_exactly_once(
+    shape: _ToolCallStreamShape, split_arguments: Callable[[str], tuple[str, ...]]
+):
+    tool_uses: Final = _streamed_tool_uses(_ToolCallProviderStream(shape, split_arguments))
+
+    assert tool_uses == tuple((call_id, name, arguments) for _, call_id, name, arguments in _PARALLEL_CALLS)
+
+
+_CREATED_TOOL_RESPONSE_EVENT: Final[Mapping[str, object]] = {
+    "type": "response.created",
+    "sequence_number": 0,
+    "response": {
+        "id": "resp_tools",
+        "object": "response",
+        "created_at": 1700000000.0,
+        "model": "gpt-5.4-nano",
+        "status": "in_progress",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+    },
+}
+
+
+async def _read_until_blocks_close(sse: AnthropicResponsesSSEByteStream, open_blocks: int) -> None:
+    if open_blocks == 0:
+        return
+    frame: Final = await sse.__anext__()
+    await _read_until_blocks_close(sse, open_blocks - (b'"content_block_stop"' in frame))
+
+
+def _output_tokens_billed_on_disconnect(
+    shape: _ToolCallStreamShape, split_arguments: Callable[[str], tuple[str, ...]]
+) -> int | None:
+    async def _disconnect_after_the_tool_calls() -> int | None:
+        upstream: Final = ResponsesAPIStreamingIterator(
+            response=httpx.Response(
+                200,
+                stream=_ToolCallProviderStream(
+                    shape,
+                    split_arguments,
+                    created=f"data: {json.dumps(_CREATED_TOOL_RESPONSE_EVENT)}\n\n".encode(),
+                    hangs_before_completing=True,
+                ),
+            ),
+            model="gpt-5.4-nano",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            logging_obj=_logging_obj_that_records_failures(_FailureRecorder()),
+            request_data={"model": "gpt-5.4-nano", "input": "read the notes and list the files"},
+            custom_llm_provider="openai",
+        )
+        sse: Final = AnthropicResponsesStreamWrapper(responses_stream=upstream, model="m").async_anthropic_sse_wrapper()
+        await _read_until_blocks_close(sse, len(_PARALLEL_CALLS))
+        partial: Final = sse.partial_response_on_disconnect()
+        await sse.aclose()
+        return partial.response.usage.output_tokens if partial is not None and partial.response.usage else None
+
+    return asyncio.run(_disconnect_after_the_tool_calls())
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        _ToolCallStreamShape(),
+        _ToolCallStreamShape(sends_arguments_done=False),
+        _ToolCallStreamShape(output_item_done_carries_arguments=False),
+    ],
+    ids=["done_events_only", "output_item_done_only", "arguments_done_only"],
+)
+def test_a_disconnect_after_done_only_tool_calls_bills_the_arguments_the_client_received(shape: _ToolCallStreamShape):
+    billed_for_done_only: Final = _output_tokens_billed_on_disconnect(shape, _no_deltas)
+    billed_for_deltas: Final = _output_tokens_billed_on_disconnect(_ToolCallStreamShape(), _halves)
+
+    assert billed_for_deltas
+    assert billed_for_done_only == billed_for_deltas
+
+
+def test_an_mcp_call_streams_as_its_tool_use_and_result_blocks_before_the_answer() -> None:
+    call: Final = {
+        "type": "mcp_call",
+        "id": "mcp_0abc",
+        "server_label": "docs",
+        "name": "read_wiki_structure",
+        "arguments": '{"repoName": "BerriAI/litellm"}',
+        "output": "1 Overview",
+        "error": None,
+    }
+
+    chunks: Final = _process_all(
+        [
+            {"type": "response.output_item.added", "item": {**call, "arguments": "", "output": None}},
+            {"type": "response.mcp_call_arguments.delta", "item_id": "mcp_0abc", "delta": '{"repoName"'},
+            {"type": "response.output_item.done", "item": call},
+            {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+            {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Overview"},
+            {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+        ]
+    )
+
+    assert chunks == [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "mcp_tool_use",
+                "id": "mcp_0abc",
+                "name": "read_wiki_structure",
+                "server_name": "docs",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"repoName": "BerriAI/litellm"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcp_0abc",
+                "is_error": False,
+                "content": [{"type": "text", "text": "1 Overview"}],
+            },
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Overview"}},
+        {"type": "content_block_stop", "index": 2},
+    ]
+
+
+class TestClientToolSearchStream:
+    @staticmethod
+    def _search_turn() -> list[object]:
+        done_item: Final = {
+            "type": "tool_search_call",
+            "id": "tsc_1",
+            "call_id": "call_search",
+            "execution": "client",
+            "arguments": {"query": "weather forecast"},
+            "status": "completed",
+        }
+        return [
+            {"type": "response.created"},
+            {
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "call_id": "call_search",
+                    "execution": "client",
+                    "arguments": {},
+                    "status": "in_progress",
+                },
+            },
+            {"type": "response.output_item.done", "item": done_item},
+            {"type": "response.completed", "response": SimpleNamespace(output=[done_item], status="completed")},
+        ]
+
+    @staticmethod
+    def _drain(events: list[object], tool_search_name: str | None) -> list[Mapping[str, object]]:
+        async def _gen() -> AsyncIterator[object]:
+            for event in events:
+                yield event
+
+        async def _run() -> list[Mapping[str, object]]:
+            wrapper: Final = AnthropicResponsesStreamWrapper(
+                responses_stream=_gen(), model="m", tool_search_name=tool_search_name
+            )
+            return [chunk async for chunk in wrapper]
+
+        return asyncio.run(_run())
+
+    def test_search_call_streams_as_one_search_tool_use_and_stops_for_the_tool(self):
+        chunks: Final = self._drain(self._search_turn(), "ToolSearch")
+
+        assert [c["content_block"] for c in chunks if c["type"] == "content_block_start"] == [
+            {"type": "tool_use", "id": "call_search", "name": "ToolSearch", "input": {}}
+        ]
+        streamed_input: Final = "".join(
+            str(_delta(c, "partial_json"))
+            for c in chunks
+            if c["type"] == "content_block_delta" and _delta(c, "type") == "input_json_delta"
+        )
+        assert json.loads(streamed_input) == {"query": "weather forecast"}
+        assert [c["type"] for c in chunks if c["type"] == "content_block_stop"] == ["content_block_stop"]
+        assert [_delta(c, "stop_reason") for c in chunks if c["type"] == "message_delta"] == ["tool_use"]
+
+    def test_search_call_is_not_a_tool_use_without_a_client_search_tool(self):
+        chunks: Final = self._drain(self._search_turn(), None)
+
+        assert not [c for c in chunks if c["type"] == "content_block_start"]
+        assert [_delta(c, "stop_reason") for c in chunks if c["type"] == "message_delta"] == ["end_turn"]

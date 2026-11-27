@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, CircleHelp, Lock } from "lucide-react";
@@ -84,7 +85,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   is_admin,
   editVectorStore,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const form = useZodForm(vectorStoreEditSchema, { defaultValues: EMPTY_VALUES });
   const [vectorStoreDetails, setVectorStoreDetails] = useState<VectorStore | null>(null);
   const [loadFailed, setLoadFailed] = useState<boolean>(false);
@@ -172,7 +173,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
 
   if (loadFailed) {
     return (
-      <div className="p-4 max-w-full">
+      <div className="max-w-full">
         <Button variant="ghost" className="mb-4" onClick={onClose}>
           <ArrowLeft />
           {t("vectorStores.info.back")}
@@ -193,7 +194,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   const showEditForm = isEditing && canEdit;
 
   return (
-    <div className="p-4 max-w-full">
+    <div className="max-w-full">
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button variant="ghost" className="mb-4" onClick={onClose}>
@@ -418,13 +419,17 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                     <div>
                       <p className="font-medium">{t("vectorStores.info.details.created")}</p>
                       <p>
-                        {vectorStoreDetails.created_at ? new Date(vectorStoreDetails.created_at).toLocaleString() : "-"}
+                        {vectorStoreDetails.created_at
+                          ? displayTimestamp(new Date(vectorStoreDetails.created_at), locale.language)
+                          : "-"}
                       </p>
                     </div>
                     <div>
                       <p className="font-medium">{t("vectorStores.info.details.lastUpdated")}</p>
                       <p>
-                        {vectorStoreDetails.updated_at ? new Date(vectorStoreDetails.updated_at).toLocaleString() : "-"}
+                        {vectorStoreDetails.updated_at
+                          ? displayTimestamp(new Date(vectorStoreDetails.updated_at), locale.language)
+                          : "-"}
                       </p>
                     </div>
                   </div>

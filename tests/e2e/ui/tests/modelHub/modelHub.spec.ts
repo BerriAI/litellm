@@ -2,12 +2,25 @@ import { test, expect } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
+import { readBack } from "../../helpers/roundTrip";
 import { masterKey, uniqueSuffix } from "../../helpers/traffic";
 
 test.describe("AI Hub (internal admin view)", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  test("Make models public via the multi-step modal", async ({ page }) => {
+  test("Make models public via the multi-step modal", async ({ page, request }) => {
+    const endpoint = "/model_group/make_public";
+    const { data: catalog } = await readBack<{ data: { model_group: string; is_public_model_group?: boolean }[] }>(
+      page,
+      "/model_group/info",
+    );
+    const original = catalog.filter((model) => model.is_public_model_group).map((model) => model.model_group);
+    const bodies: unknown[] = [];
+    page.on("request", (sent) => {
+      if (sent.method() === "POST" && new URL(sent.url()).pathname === endpoint) {
+        bodies.push(sent.postDataJSON());
+      }
+    });
     await navigateToPage(page, Page.ModelHubTable);
 
     // Open the "Select Models to Make Public" modal
@@ -31,12 +44,25 @@ test.describe("AI Hub (internal admin view)", () => {
     await next.click();
     await expect(modal.getByText("Confirm Making Models Public")).toBeVisible({ timeout: 5_000 });
 
-    // Submit
-    await modal.getByRole("button", { name: "Make Public" }).click();
-
-    await expect(page.getByText(/Successfully made .* model group\(s\) public/i).first()).toBeVisible({
-      timeout: 15_000,
-    });
+    try {
+      // Submit
+      const [saved] = await Promise.all([
+        page.waitForResponse((res) => new URL(res.url()).pathname === endpoint && res.request().method() === "POST"),
+        modal.getByRole("button", { name: "Make Public" }).click(),
+      ]);
+      expect(saved.ok()).toBe(true);
+      await expect(page.getByText(/Successfully made .* model group\(s\) public/i).first()).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(modal).toBeHidden();
+      expect(bodies).toEqual([{ model_groups: catalog.map((model) => model.model_group) }]);
+    } finally {
+      const restored = await request.post(endpoint, {
+        headers: { Authorization: `Bearer ${masterKey()}` },
+        data: { model_groups: original },
+      });
+      expect(restored.ok(), `Restore model visibility: HTTP ${restored.status()}`).toBe(true);
+    }
   });
 
   test("AI Hub tab list renders Model Hub, Agent Hub, MCP Hub and Skills Hub", async ({ page }) => {
@@ -70,7 +96,7 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
     await expect(page.getByRole("tab")).toHaveCount(2);
     await page.getByRole("tab", { name: "Skills Hub", exact: true }).click();
     await expect(
-      page.getByRole("textbox", { name: "Search skills, tags, or people…", exact: true }),
+      page.getByRole("textbox", { name: "Search skills, tags, or user IDs…", exact: true }),
     ).toBeVisible();
   });
 
@@ -100,7 +126,7 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
       await dismissFeedbackPopup(page);
       await page.getByRole("checkbox", { name: domain, exact: true }).check();
       await page
-        .getByRole("textbox", { name: "Search skills, tags, or people…", exact: true })
+        .getByRole("textbox", { name: "Search skills, tags, or user IDs…", exact: true })
         .fill(skillName);
       await page.getByRole("link").filter({ hasText: skillName }).click();
 

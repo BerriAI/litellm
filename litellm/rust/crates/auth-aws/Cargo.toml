@@ -16,22 +16,25 @@ litellm-secret-value.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 sha2.workspace = true
+chrono.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 url.workspace = true
 veil.workspace = true
 
-aws-config = { version = "1.9.0", default-features = false, features = ["rustls", "rt-tokio", "credentials-process"] }
+aws-config = { version = "1.9.0", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
 aws-credential-types = { version = "1.3.0", features = ["hardcoded-credentials"] }
-aws-sdk-sts = { version = "1.108.0", default-features = false, features = ["rustls", "rt-tokio"] }
+aws-sdk-sts = { version = "1.108.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sigv4 = "1.5.1"
 aws-types = "1.4.0"
+aws-runtime = { version = "1.9.4", default-features = false }
 aws-smithy-runtime-api = "1.13.0"
 
 [dev-dependencies]
 litellm-secrets.workspace = true
 aws-smithy-types = "1.6.4"
-aws-runtime = { version = "1.9.4", default-features = false }
 rstest.workspace = true
+tempfile = "3"
 litellm-http = { workspace = true, features = ["test-support"] }
 bytes.workspace = true
 futures-util.workspace = true

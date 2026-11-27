@@ -85,7 +85,7 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
     ) -> "HttpxBinaryResponseContent":
         """
         Process output - not applicable for text-to-speech.

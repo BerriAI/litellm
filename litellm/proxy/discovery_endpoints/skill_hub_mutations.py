@@ -27,7 +27,7 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_a
 from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
-from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.hooks.parallel_request_limiter_v3 import ParallelRequestLimiterHook, charge_skill_hub_publish
 from litellm.repositories.plugin_publication import resolve_plugin_version
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 
@@ -74,23 +74,13 @@ async def archive_writer(caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_
     if error is not None:
         raise HTTPException(error.status, error.message)
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+    if not isinstance(limiter, ParallelRequestLimiterHook):
         raise HTTPException(503, "Skills Hub publishing requires the default v3 rate limiter")
     key_identity: Final = caller.api_key or caller.token
     identity: Final = (
         f"user:{caller.user_id}" if caller.user_id else f"key:{key_identity}" if key_identity else "local-admin"
     )
-    result: Final = await limiter.atomic_check_and_increment_by_n(
-        descriptors=[
-            {
-                "key": "skill_hub_publish",
-                "value": hashlib.sha256(identity.encode()).hexdigest(),
-                "rate_limit": {"requests_per_unit": 10, "window_size": 60},
-            }
-        ],
-        increments=[{"requests": 1}],
-        parent_otel_span=caller.parent_otel_span,
-    )
+    result: Final = await charge_skill_hub_publish(limiter, hashlib.sha256(identity.encode()).hexdigest())
     if result["overall_code"] == "OVER_LIMIT":
         raise HTTPException(
             429, "Skills Hub allows 10 uploads or imports per minute per user", headers={"Retry-After": "60"}

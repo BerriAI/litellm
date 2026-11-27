@@ -15,7 +15,7 @@ class KrakenAccessTokenDetector(RegexBasedDetector):
         return "Kraken Access Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Kraken Access Token
             re.compile(

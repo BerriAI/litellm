@@ -1,5 +1,7 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useState } from "react";
 import { useQuery, type QueryKey } from "@tanstack/react-query";
+import { Controller } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import {
@@ -15,9 +17,13 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable/useUrlTableState";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toSkillReviewPayload } from "./skill-review/mapper";
+import { skillReviewSchema } from "./skill-review/schema";
 import SkillScanPanel from "./SkillScanPanel";
 import { toast } from "@/lib/toast";
 import AddPluginForm from "./add_plugin_form";
+import { useUserIdentityLookup, userIdentityLabel } from "@/app/(dashboard)/hooks/users/useUsers";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -28,7 +34,18 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const METADATA_FIELDS = ["name", "version", "description", "source", "keywords", "domain", "namespace"] as const;
+const METADATA_FIELDS = [
+  "name",
+  "version",
+  "description",
+  "source",
+  "author",
+  "category",
+  "homepage",
+  "keywords",
+  "domain",
+  "namespace",
+] as const;
 
 const displayValue = (value: unknown): string => {
   if (value === null || value === undefined || value === "") return "";
@@ -60,15 +77,23 @@ function SubmissionStatus({ status }: { status: SkillSubmission["status"] }) {
   );
 }
 
-function SubmissionSummary({ submission }: { submission: SkillSubmission }) {
-  const { t } = useTranslation();
+function SubmissionSummary({
+  submission,
+  scope,
+}: {
+  submission: SkillSubmission;
+  scope: Pick<SubmissionReviewProps, "accessToken" | "userRole" | "isViewOnly">;
+}) {
+  const { t, i18n: locale } = useTranslation();
+  const users = useUserIdentityLookup([submission.submitted_by, submission.reviewed_by], scope);
+  const reviewed = submission.status === "approved" || submission.status === "rejected";
   return (
     <>
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <SubmissionStatus status={submission.status} />
         <span>{t(`skills.submissions.operation.${submission.operation}`)}</span>
-        <span className="text-muted-foreground">
-          {t("skills.submissions.submittedBy", { name: submission.submitted_by })}
+        <span className="text-muted-foreground" title={submission.submitted_by}>
+          {t("skills.submissions.submittedBy", { name: userIdentityLabel(submission.submitted_by, users) })}
         </span>
       </div>
       {submission.status === "pending_review" && (
@@ -79,11 +104,11 @@ function SubmissionSummary({ submission }: { submission: SkillSubmission }) {
           {t("skills.submissions.rejectionReason", { reason: submission.rejection_reason })}
         </p>
       )}
-      {submission.reviewed_at && (
-        <p className="text-sm text-muted-foreground">
-          {t("skills.submissions.reviewedBy", {
-            name: submission.reviewed_by,
-            date: new Date(submission.reviewed_at).toLocaleString(),
+      {submission.reviewed_at && reviewed && (
+        <p className="text-sm text-muted-foreground" title={submission.reviewed_by ?? undefined}>
+          {t(submission.status === "approved" ? "skills.submissions.approvedBy" : "skills.submissions.rejectedBy", {
+            name: userIdentityLabel(submission.reviewed_by, users),
+            date: displayTimestamp(new Date(submission.reviewed_at), locale.language),
           })}
         </p>
       )}
@@ -145,7 +170,7 @@ function SubmissionComparison({
           </tbody>
         </table>
       </div>
-      {submission.has_archive && submission.proposal.agent_skill && (
+      {submission.has_archive && (
         <Button variant="outline" onClick={onDownload} disabled={downloading}>
           {t(downloading ? "skills.submissions.downloading" : "skills.submissions.download")}
         </Button>
@@ -155,6 +180,8 @@ function SubmissionComparison({
 }
 
 interface SubmissionReviewProps {
+  userRole: string;
+  isViewOnly: boolean;
   id: string;
   accessToken: string;
   queryScope: QueryKey;
@@ -165,6 +192,8 @@ interface SubmissionReviewProps {
 }
 
 function SubmissionReview({
+  userRole,
+  isViewOnly,
   id,
   accessToken,
   queryScope,
@@ -174,7 +203,7 @@ function SubmissionReview({
   onChanged,
 }: SubmissionReviewProps) {
   const { t } = useTranslation();
-  const [reason, setReason] = useState("");
+  const { control, getValues } = useZodForm(skillReviewSchema, { defaultValues: { reason: "" } });
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -195,10 +224,12 @@ function SubmissionReview({
     setBusy(true);
     setError(null);
     try {
-      await reviewSkillSubmission(accessToken, id, action, {
-        expected_revision: submission.revision ?? 0,
-        ...(action === "reject" ? { reason: reason.trim() || null } : {}),
-      });
+      await reviewSkillSubmission(
+        accessToken,
+        id,
+        action,
+        toSkillReviewPayload(skillReviewSchema.parse(getValues()), action, submission.revision),
+      );
       onClose();
       await onChanged();
       toast.success(t(action === "approve" ? "skills.submissions.approved" : "skills.submissions.rejected"));
@@ -257,7 +288,7 @@ function SubmissionReview({
           )}
           {submission && (
             <>
-              <SubmissionSummary submission={submission} />
+              <SubmissionSummary submission={submission} scope={{ accessToken, userRole, isViewOnly }} />
               <SubmissionComparison
                 submission={submission}
                 current={current}
@@ -287,12 +318,18 @@ function SubmissionReview({
                   <label htmlFor="skill-rejection-reason" className="text-sm font-medium">
                     {t("skills.submissions.reasonLabel")}
                   </label>
-                  <Textarea
-                    id="skill-rejection-reason"
-                    value={reason}
-                    maxLength={2000}
-                    onChange={(event) => setReason(event.target.value)}
-                    disabled={busy}
+                  <Controller
+                    control={control}
+                    name="reason"
+                    render={({ field }) => (
+                      <Textarea
+                        id="skill-rejection-reason"
+                        value={field.value}
+                        maxLength={2000}
+                        onChange={(event) => field.onChange(event.target.value)}
+                        disabled={busy}
+                      />
+                    )}
                   />
                   <div className="flex justify-end gap-2">
                     <Button variant="destructive" onClick={() => void review("reject")} disabled={actionsDisabled}>
@@ -349,6 +386,8 @@ function SubmissionReview({
 }
 
 interface SkillSubmissionsProps {
+  userRole: string;
+  isViewOnly: boolean;
   accessToken: string;
   queryScope: QueryKey;
   canReview: boolean;
@@ -358,6 +397,8 @@ interface SkillSubmissionsProps {
 }
 
 export default function SkillSubmissions({
+  userRole,
+  isViewOnly,
   accessToken,
   queryScope,
   canReview,
@@ -365,7 +406,7 @@ export default function SkillSubmissions({
   adminView,
   onChanged,
 }: SkillSubmissionsProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { pagination, onPaginationChange } = useUrlTableState(SUBMISSION_TABLE_STATE);
   const { pageIndex, pageSize } = pagination;
@@ -373,6 +414,10 @@ export default function SkillSubmissions({
     queryKey: [...queryScope, "submissions", pageIndex, pageSize],
     queryFn: () => listSkillSubmissions(accessToken, { limit: pageSize, offset: pageIndex * pageSize }),
   });
+  const users = useUserIdentityLookup(
+    submissions.data?.submissions.flatMap((submission) => [submission.submitted_by, submission.reviewed_by]) ?? [],
+    { accessToken, userRole, isViewOnly },
+  );
   const isEmpty = submissions.isSuccess && submissions.data.submissions.length === 0;
   const changePage = (page: number) => {
     setSelectedId(null);
@@ -409,9 +454,9 @@ export default function SkillSubmissions({
                 </span>
               </div>
               <p className="text-sm text-muted-foreground">{submission.proposal.description}</p>
-              <p className="text-xs text-muted-foreground">
-                {t("skills.submissions.submittedBy", { name: submission.submitted_by })} ·{" "}
-                {new Date(submission.created_at).toLocaleString()}
+              <p className="text-xs text-muted-foreground" title={submission.submitted_by}>
+                {t("skills.submissions.submittedBy", { name: userIdentityLabel(submission.submitted_by, users) })} ·{" "}
+                {displayTimestamp(new Date(submission.created_at), locale.language)}
               </p>
               {submission.rejection_reason && (
                 <p className="text-sm text-destructive">
@@ -448,6 +493,8 @@ export default function SkillSubmissions({
       </div>
       {selectedId && (
         <SubmissionReview
+          userRole={userRole}
+          isViewOnly={isViewOnly}
           key={selectedId}
           id={selectedId}
           accessToken={accessToken}

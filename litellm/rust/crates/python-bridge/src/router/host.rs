@@ -5,7 +5,7 @@
 //! The driver polls the call future with a no-op waker while the call's exchange is bound to the
 //! current thread, so a host future finds its exchange without the router passing it through.
 //!
-//! The routing cache is a host operation too: [`StepCache`] parks every [`RouterCache`] op as a
+//! The routing cache is a host operation too: [`PythonRouterCache`] parks every [`RouterCache`] op as a
 //! `cache` step, and Python answers it from the router's stores, so Python and Rust read and write
 //! the same cooldowns, fail counters and usage. A step names the state it touches, never a Redis
 //! key: the keys are the stores'.
@@ -20,14 +20,14 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
+use litellm_model_catalog::bedrock_base_model;
 use litellm_router_core::{
-    Attempt, AttemptError, Blocked, BuildAsk, BuildPath, Built, CallbackFiltered, Deployment,
-    Error, HealthState, Host, Outcomes, Output, Payload, PreRoute, PreRouted, Provided, Randomness,
-    RouterCache, RouterEvent, RouterRequest, RouterResponse, RoutingContext, SecretRef,
-    SelectStage, ThreadRandomness, UsageCounts, UsageWindow, build::BuiltDeployment,
-    health::CooldownValue, host::ModelInfoLookup, model_info::MergedModelInfo,
-    precall::PreCallFacts,
+    Attempt, AttemptError, AttemptFailure, Blocked, BuildAsk, BuildPath, Built, CallbackFiltered,
+    Deployment, Error, HealthState, LimitCounter, Outcomes, PreRoute, PreRouted, Provided,
+    Randomness, RegistryHost, RouterCache, RouterEvent, RouterHost, RouterResponse, RoutingContext,
+    SecretRef, SelectStage, Served, ThreadRandomness, UsageCounts, UsageWindow,
+    build::BuiltDeployment, health::CooldownValue, host::ModelInfoLookup,
+    model_info::MergedModelInfo, precall::PreCallFacts, shape::AttemptShape,
 };
 use pyo3::{PyResult, Python, types::PyAnyMethods};
 use serde_json::{Map, Value};
@@ -259,6 +259,9 @@ pub(crate) enum HostCall {
         scope: u32,
         max_retries: u32,
         model_group_size: usize,
+        shape: AttemptShape,
+        refused_ids: Vec<String>,
+        provider_refused_window: bool,
     },
     Sleep {
         seconds: f64,
@@ -463,7 +466,7 @@ impl HostCallResponse {
 #[derive(Debug)]
 pub(crate) enum Finish {
     /// `start`: the call's response.
-    Call(RouterResponse),
+    Call(RouterResponse<()>),
     /// `select`: the deployment picked and the model group it serves.
     Selected {
         deployment_id: String,
@@ -623,7 +626,7 @@ fn serialize_amount<S: serde::Serializer>(amount: &f64, serializer: S) -> Result
 }
 
 /// The host's cache: every op is a `cache` step Python answers from the router's stores.
-pub(crate) struct StepCache;
+pub(crate) struct PythonRouterCache;
 
 async fn cache_step(call: CacheCall) -> CacheOutcome {
     let HostCallResponse::Cache(outcome) = call_host(HostCall::Cache(call)).await else {
@@ -660,8 +663,7 @@ async fn values(call: CacheCall) -> Result<Vec<Option<Value>>, litellm_cache::Er
     Ok(values)
 }
 
-#[async_trait]
-impl RouterCache for StepCache {
+impl RouterCache for PythonRouterCache {
     async fn cooldowns(
         &self,
         ids: &[String],
@@ -764,6 +766,31 @@ impl RouterCache for StepCache {
     async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
         stored(CacheCall::CountFailure { id: id.to_owned() }).await
     }
+
+    /// Python's `ModelRateLimitingCheck` counts the model rate limits on this host.
+    async fn limit_usage(
+        &self,
+        _counter: &LimitCounter,
+        _limit: f64,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        Ok(None)
+    }
+
+    async fn add_limit_usage(
+        &self,
+        _counter: &LimitCounter,
+        _amount: i64,
+        _ttl: Duration,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        Ok(None)
+    }
+
+    async fn add_limit_usages(
+        &self,
+        _increments: &[(LimitCounter, i64, Duration)],
+    ) -> Result<Option<Vec<f64>>, litellm_cache::Error> {
+        Ok(None)
+    }
 }
 
 /// A deployment as Python spells a `model_list` entry, with its id in `model_info`.
@@ -830,11 +857,23 @@ impl Randomness for PythonRandomness {
 }
 
 /// The [`Host`] every `RouterCoreHandle` router runs on.
-pub(crate) struct StepHost;
+pub(crate) struct PythonRouterHost;
 
-#[async_trait]
-impl Host for StepHost {
-    async fn invoke(&self, attempt: &Attempt) -> Result<Output, AttemptError> {
+impl RouterHost for PythonRouterHost {
+    /// Python keeps the response and the exception of every attempt it ran.
+    type Response = ();
+    type Failure = ();
+    type Cache = PythonRouterCache;
+
+    fn provider_model_id<'a>(&self, model_id: &'a str, provider: &str) -> &'a str {
+        if provider.starts_with("bedrock") {
+            bedrock_base_model(model_id)
+        } else {
+            model_id
+        }
+    }
+
+    async fn attempt(&self, attempt: &Attempt) -> Result<Served<()>, AttemptFailure<()>> {
         let call = HostCall::Attempt {
             deployment_id: attempt.deployment.id.clone(),
             deployment: deployment_record(&attempt.deployment),
@@ -854,6 +893,9 @@ impl Host for StepHost {
             scope: attempt.scope,
             max_retries: attempt.max_retries,
             model_group_size: attempt.model_group_size,
+            shape: AttemptShape::of(attempt),
+            refused_ids: attempt.refused_ids.clone(),
+            provider_refused_window: attempt.provider_refused_window,
         };
         let (result, blocked, deferred, tracks_usage) = match call_host(call).await {
             HostCallResponse::Attempt(result) => (result, None, false, None),
@@ -865,13 +907,14 @@ impl Host for StepHost {
             } => (Ok(total_tokens), blocked, deferred, tracks_usage),
             _ => unreachable!("{CHECKED}"),
         };
-        result.map(|total_tokens| Output {
-            value: Payload(Arc::new(())),
-            total_tokens,
-            blocked,
-            deferred,
-            tracks_usage,
-        })
+        result
+            .map(|total_tokens| Served {
+                blocked,
+                deferred,
+                tracks_usage,
+                ..Served::new((), total_tokens)
+            })
+            .map_err(|facts| AttemptFailure::Failed { facts, raised: () })
     }
 
     async fn select(
@@ -1012,18 +1055,14 @@ impl Host for StepHost {
         let HostCallResponse::Filtered(result) = call_host(call).await else {
             unreachable!("{CHECKED}");
         };
-        let (ids, preferred) = result.map_err(Error::Attempt)?;
+        let (ids, preferred) = result.map_err(Error::from)?;
         Ok(CallbackFiltered {
             kept: answered_by_id(&candidates, &ids),
             preferred,
         })
     }
 
-    async fn allow_fallback(
-        &self,
-        _request: &RouterRequest,
-        target: &str,
-    ) -> Result<bool, AttemptError> {
+    async fn allow_fallback(&self, target: &str) -> Result<bool, AttemptError> {
         let call = HostCall::AllowFallback {
             target: target.to_owned(),
         };
@@ -1076,6 +1115,7 @@ impl Host for StepHost {
                 | RouterEvent::RetryLogged { .. }
                 | RouterEvent::RetryPolicyRaised { .. }
                 | RouterEvent::RetryCountRaised { .. }
+                | RouterEvent::ContextWindowRaised { .. }
                 | RouterEvent::FallbackDone { .. }
                 | RouterEvent::Blocked { .. }
                 | RouterEvent::CooldownSet { .. }
@@ -1091,10 +1131,12 @@ impl Host for StepHost {
         });
     }
 
-    fn cache(&self) -> Arc<dyn RouterCache> {
-        Arc::new(StepCache)
+    fn cache(&self) -> &PythonRouterCache {
+        &PythonRouterCache
     }
+}
 
+impl RegistryHost for PythonRouterHost {
     async fn secrets(&self, index: usize, refs: &[SecretRef]) -> Result<Vec<Value>, Error> {
         let HostCallResponse::Secrets(values) = call_host(HostCall::Secrets {
             index,
@@ -1240,7 +1282,7 @@ mod tests {
     use futures_util::FutureExt;
     use litellm_router_core::{
         FailureKind, InMemoryRouterCache, Op, Router, RouterConfig, RouterDynamicConfig,
-        SeededRandomness,
+        RouterRequest, SeededRandomness,
     };
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
@@ -1250,7 +1292,7 @@ mod tests {
     fn router(config: Value, dynamic: Value) -> Router {
         let config: RouterConfig = serde_json::from_value(config).unwrap();
         let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
-        Router::builder(config, dynamic, Arc::new(StepHost))
+        Router::builder(config, dynamic)
             .randomness(Arc::new(SeededRandomness::new(7)))
             .build()
             .unwrap()
@@ -1268,9 +1310,10 @@ mod tests {
         };
         Driver::new(async move {
             router
-                .call(Op::from("acompletion"), request)
+                .call(&PythonRouterHost, Op::from("acompletion"), request)
                 .await
                 .map(Finish::Call)
+                .map_err(|ended| ended.error)
         })
     }
 
@@ -1545,6 +1588,15 @@ mod tests {
             matches!(&step, Step::HostCall(HostCall::Attempt { deployment_id, fallback_depth: 1, .. }) if deployment_id == "b1"),
             "expected the fallback attempt, got {step:?}"
         );
+        let Step::HostCall(HostCall::Attempt { shape, .. }) = &step else {
+            unreachable!()
+        };
+        assert_eq!(
+            shape.fallback_model_group.as_deref(),
+            Some("backup"),
+            "the hop routes its target in the metadata"
+        );
+        assert!(shape.is_fallback && shape.drops_mock_timeout);
         let Step::Done(Finish::Call(response)) =
             store.resume(&mut driver, Some(HostCallResponse::Attempt(Ok(3))))
         else {
@@ -1718,7 +1770,7 @@ mod tests {
         };
         let mut store = Store::default();
         let mut driver = Driver::new(async move {
-            pair.select(&Op::from("acompletion"), &request)
+            pair.select(&PythonRouterHost, &Op::from("acompletion"), &request)
                 .await
                 .map(|deployment| Finish::Selected {
                     deployment_id: deployment.id.clone(),

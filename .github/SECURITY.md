@@ -61,6 +61,29 @@ To qualify for a bounty, reports must include clear reproduction steps, a reprod
 
 - All commits run through Github's CodeQL checking
 
+### Release Signing
+
+Every release published since November 15, 2026, starting with `v1.111.0-dev.3`, is signed with keyless [cosign](https://docs.sigstore.dev/cosign/overview/). This includes patch releases on older lines and the Helm chart at `ghcr.io/berriai/litellm/chart/litellm`. There is no signing key. Each release run gets a short-lived certificate from Sigstore bound to our release workflow, and the signature is recorded in the public Rekor transparency log. Verify a release with:
+
+```bash
+cosign verify \
+  --certificate-identity https://github.com/BerriAI/project-releaser/.github/workflows/release.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/berriai/litellm:<release-tag>
+```
+
+`cosign verify --key` does not work on these releases.
+
+Releases published before November 15, 2026 keep their key signature. Verify them with the `cosign.pub` from the commit that introduced the key. Releases published from October 24, 2026 on use the key from commit [`e82a3c6`](https://github.com/BerriAI/litellm/commit/e82a3c646908ba0a6ee0beddc4310d7a6cac4065), whose `cosign.pub` has the SHA-256 fingerprint `e3fe3e08c44b16407fe0b37c43b4f8b603b3a0f4ee74c29e647bc022d762c2c0`:
+
+```bash
+cosign verify \
+  --key https://raw.githubusercontent.com/BerriAI/litellm/e82a3c646908ba0a6ee0beddc4310d7a6cac4065/cosign.pub \
+  ghcr.io/berriai/litellm:<release-tag>
+```
+
+Earlier releases use the previous key from commit [`0112e53`](https://github.com/BerriAI/litellm/commit/0112e53046018d726492c814b3644b7d376029d0), at `https://raw.githubusercontent.com/BerriAI/litellm/0112e53046018d726492c814b3644b7d376029d0/cosign.pub`. Trust a signature from the previous key only on an image published before `v1.107.0` on October 21, 2026, as explained in the [incident post](https://docs.litellm.ai/blog/security-incident-oct-21-2026). [Discussion #48242](https://github.com/BerriAI/litellm/discussions/48242) lists which releases are signed with which key.
+
 ### Self-hosted Instances LiteLLM
 
 - **No data or telemetry is stored on LiteLLM Servers when you self host**

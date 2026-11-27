@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -24,16 +24,16 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
+        response_format: Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -44,7 +44,7 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "frequency_penalty",
             "logit_bias",

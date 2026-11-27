@@ -5,6 +5,10 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Literal, cast
 
+from pydantic import TypeAdapter
+
+_METRIC_LABELS: Final = TypeAdapter(Sequence[object])
+
 
 def sanitize_prometheus_label_name(label: str) -> str:
     """
@@ -229,6 +233,8 @@ class UserAPIKeyLabelNames(Enum):
     STREAM = "stream"
     ORG_ID = "org_id"
     ORG_ALIAS = "org_alias"
+    CUSTOMER_ORG_ID = "customer_org_id"
+    CUSTOMER_ORG_ALIAS = "customer_org_alias"
     MCP_TOOL_NAME = "mcp_tool_name"
     MCP_SERVER_NAME = "mcp_server_name"
     SERVICE_TIER = "service_tier"
@@ -725,6 +731,10 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.CUSTOMER_ORG_ID.value,
+        UserAPIKeyLabelNames.CUSTOMER_ORG_ALIAS.value,
         UserAPIKeyLabelNames.PRIORITY.value,
     )
 
@@ -928,7 +938,7 @@ class PrometheusMetricLabels:
     litellm_provider_cache_creation_input_tokens_metric = _cache_metric_labels
 
     # Metrics whose emission paths supply org context (used by get_labels)
-    _org_label_metrics: ClassVar[frozenset] = frozenset(
+    _org_label_metrics: ClassVar[frozenset[str]] = frozenset(
         {
             "litellm_llm_api_latency_metric",
             "litellm_llm_api_time_to_first_token_metric",
@@ -1006,7 +1016,7 @@ class PrometheusMetricLabels:
 
         default_labels: Final = _resolve_deployment_and_latency_caller_identity_labels(
             metric_name=label_name,
-            labels=getattr(PrometheusMetricLabels, label_name),
+            labels=_METRIC_LABELS.validate_python(getattr(PrometheusMetricLabels, label_name)),
         )
         custom_labels: Final = []
 
@@ -1125,6 +1135,8 @@ class UserAPIKeyLabelValues:
     stream: str | None = None
     org_id: str | None = None
     org_alias: str | None = None
+    customer_org_id: str | None = None
+    customer_org_alias: str | None = None
     mcp_tool_name: str | None = None
     mcp_server_name: str | None = None
     service_tier: str | None = None
@@ -1144,7 +1156,7 @@ class UserAPIKeyLabelValues:
             else:
                 merged[f.name] = f.default
 
-        for k, v in kwargs.items():
+        for k, v in dict[str, object](kwargs).items():
             if k in field_names:
                 merged[k] = v
                 continue
@@ -1201,17 +1213,17 @@ class PrometheusSettings:
 class NoOpMetric:
     """A no-op metric that has the same interface as prometheus metrics but does nothing"""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: object, **kwargs: object) -> None:
         pass
 
-    def labels(self, *args, **kwargs):
+    def labels(self, *args: object, **kwargs: object):
         return self
 
-    def inc(self, *args, **kwargs) -> None:
+    def inc(self, *args: object, **kwargs: object) -> None:
         pass
 
-    def set(self, *args, **kwargs) -> None:
+    def set(self, *args: object, **kwargs: object) -> None:
         pass
 
-    def observe(self, *args, **kwargs) -> None:
+    def observe(self, *args: object, **kwargs: object) -> None:
         pass

@@ -94,10 +94,24 @@ def test_token_redaction_masks_known_token_shapes(token: str) -> None:
             "-----BEGIN PRIVATE KEY-----\nREDACTED",
         ),
         ("-----BEGIN BAD-----\n-----END PRIVATE KEY-----", "-----BEGIN BAD-----\n-----END PRIVATE KEY-----"),
+        (
+            "eyJa-sk-short-----BEGIN PRIVATE KEY-----x-----END PRIVATE KEY-----",
+            "eyJa-sk-shortREDACTED",
+        ),
     ),
 )
 def test_token_redaction_preserves_matching_rules(text: str, expected: str) -> None:
     assert redact_tokens(text) == expected
+
+
+@pytest.mark.parametrize("character", ("é", "²", "\u0301", "\U00014153", "\u1c89"))
+def test_token_boundaries_follow_python_unicode_version(character: str) -> None:
+    token: Final = "ghp_" + "A" * 36
+    key: Final = "AKIA" + "A" * 16
+    expected_token: Final = token if character.isalnum() else "REDACTED"
+    expected_key: Final = key if character.isalnum() else "REDACTED"
+    assert redact_tokens(character + token) == character + expected_token
+    assert redact_tokens(key + character) == expected_key + character
 
 
 @pytest.mark.parametrize(
@@ -120,6 +134,29 @@ def test_token_redaction_preserves_matching_rules(text: str, expected: str) -> N
 def test_failed_jwt_header_does_not_hide_other_tokens(content: str, expected: str) -> None:
     prefix: Final = "eyJa-"
     assert redact_tokens(prefix + content) == prefix + expected
+
+
+@pytest.mark.parametrize("suffix", ("", "..signature", ".body."))
+def test_failed_jwt_run_masks_each_embedded_bounded_key(suffix: str) -> None:
+    run: Final = "eyJaaaaaaaaaa-AKIA" + "A" * 16 + "-"
+    expected: Final = "eyJaaaaaaaaaa-REDACTED-"
+    assert redact_tokens(run * 24_000 + suffix) == expected * 24_000 + suffix
+
+
+@pytest.mark.parametrize(
+    "text, replacement, expected",
+    (
+        ("\u0301sk-" + "a" * 20, "hidden", "\u0301hidden"),
+        ("²sk-" + "a" * 20, "hidden", "²sk-" + "a" * 20),
+        ("\ud800sk-" + "a" * 20, "hidden", "\ud800hidden"),
+        ("sk-" + "a" * 20, r"\n", "\n"),
+        ("sk-" + "a" * 20, "", ""),
+    ),
+)
+def test_token_redaction_preserves_unicode_and_replacement_semantics(
+    text: str, replacement: str, expected: str
+) -> None:
+    assert redact_tokens(text, replacement) == expected
 
 
 @pytest.fixture(autouse=True)
@@ -176,6 +213,80 @@ def test_diagnostic_redaction_policy_matches_across_backends(monkeypatch: pytest
     assert redact_string("GET /v1?api_key=abcdefgh12345&page=2") == "GET /v1?REDACTED&page=2"
     assert redact_structured_value("db_url", "postgresql://reader@example.org/database") == "REDACTED"
     assert redact_internal_details("failed at /etc/service/keys on db.internal") == "failed at REDACTED on REDACTED"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_an_mcp_authorization_token_is_redacted_by_its_key_name(monkeypatch: pytest.MonkeyPatch, native: bool) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    body: Final = '{"mcp_servers": [{"name": "docs", "authorization_token": "opaque-mcp-credential"}]}'
+
+    assert redact_string(body) == '{"mcp_servers": [{"name": "docs", "REDACTED"}]}'
+    assert redact_structured_value("authorization_token", "opaque-mcp-credential") == "REDACTED"
+    assert redact_structured_value("authorization_note", "opaque-mcp-credential") == "opaque-mcp-credential"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_a_responses_mcp_tool_authorization_is_redacted_by_its_key_name(
+    monkeypatch: pytest.MonkeyPatch, native: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    json_body: Final = '{"tools": [{"type": "mcp", "server_label": "docs", "authorization": "opaque-mcp-credential"}]}'
+    curl_body: Final = "-d '{'tools': [{'type': 'mcp', 'authorization': 'opaque-mcp-credential'}]}'"
+    masked_header: Final = "-H 'Authorization: Bearer sk-p****abcd'"
+
+    assert redact_string(json_body) == '{"tools": [{"type": "mcp", "server_label": "docs", "REDACTED"}]}'
+    assert redact_string(curl_body) == "-d '{'tools': [{'type': 'mcp', 'REDACTED'}]}'"
+    assert redact_string(masked_header) == masked_header
+    assert redact_structured_value("authorization", "opaque-mcp-credential") == "REDACTED"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+@pytest.mark.parametrize(
+    "body",
+    ('{"requires_authorization": true, "x_authorization": "on"}', '{"authorization": null}', "{'authorization': None}"),
+)
+def test_an_authorization_key_inside_another_name_or_holding_a_literal_is_kept(
+    monkeypatch: pytest.MonkeyPatch, native: bool, body: str
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+
+    assert redact_string(body) == body
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+@pytest.mark.parametrize(
+    "credential", ("null-opaque-mcp-credential", "false.opaque-mcp-credential", "None:opaque-mcp-credential")
+)
+def test_an_authorization_value_that_only_starts_with_a_literal_is_redacted(
+    monkeypatch: pytest.MonkeyPatch, native: bool, credential: str
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+
+    assert redact_string(f'{{"authorization": "{credential}"}}') == '{"REDACTED"}'
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+@pytest.mark.parametrize("masked", ("Bearer sk-p****abcd", "Bearer sk-***", "sk-p****abcd"))
+def test_an_authorization_value_litellm_already_masked_keeps_its_hint(
+    monkeypatch: pytest.MonkeyPatch, native: bool, masked: str
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    json_header: Final = f'{{"Authorization": "{masked}"}}'
+
+    assert redact_structured_value("Authorization", masked) == masked
+    assert redact_string(json_header) == json_header
+    assert redact_structured_value("authorization", "Bearer opaque-mcp-credential") == "REDACTED"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+@pytest.mark.parametrize("scheme", ("Bearer", "Basic", "bearer"))
+def test_a_value_with_an_auth_scheme_is_redacted_whole_under_a_secret_key_name(
+    monkeypatch: pytest.MonkeyPatch, native: bool, scheme: str
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    line: Final = f'data: "authorization_token": "{scheme} opaque-mcp-credential", "name": "docs"'
+
+    assert redact_string(line) == 'data: "REDACTED", "name": "docs"'
 
 
 @pytest.mark.parametrize(

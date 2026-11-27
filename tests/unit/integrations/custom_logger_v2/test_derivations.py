@@ -21,6 +21,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_model_group_from_litellm_kwargs,  # pyright: ignore[reportUnknownVariableType]  # the helper takes an untyped dict
 )
 from litellm.proxy.hooks import dynamic_rate_limiter_v3
+from litellm.types.llms.openai import ResponseAPIUsage
 from litellm.types.integrations.custom_logger_v2 import (
     AgentPolicy,
     AttemptTiming,
@@ -28,6 +29,7 @@ from litellm.types.integrations.custom_logger_v2 import (
     BudgetPlanCounter,
     BudgetReservation,
     Cost,
+    CustomerScope,
     Deployment,
     EstimatedOutputTokens,
     GuardrailEntry,
@@ -774,6 +776,15 @@ def test_usage_keeps_each_source_apart() -> None:
     )
 
 
+def test_usage_reads_a_responses_api_calls_tokens_like_the_cost_calculator() -> None:
+    result: Final = {"usage": ResponseAPIUsage(input_tokens=5, output_tokens=7, total_tokens=12)}
+
+    usage: Final = derivations.usage(HookArgs(request={}, result=result))
+
+    assert usage is not None
+    assert usage.response == UsageRecord(prompt_tokens=5, completion_tokens=7, total_tokens=12), usage
+
+
 def test_the_payload_copy_is_shallow_so_a_later_top_level_write_does_not_reach_it() -> None:
     nested: Final[dict[str, object]] = {"a": 1}
     payload: Final[dict[str, object]] = {"id": "log-1", "metadata": nested}
@@ -1110,7 +1121,7 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
             hash_error="unhashable type: 'list'",
         ),
     )
-    assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False))
+    assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False), cost_finalized=False)
     assert timing is not None
     assert (timing.queue_seconds, timing.overhead_ms) == ("slow", "slow")
     assert state == RateLimitState(
@@ -1323,6 +1334,13 @@ _MODEL_GROUP_REQUESTS: Final = (
     pytest.param({"litellm_params": {"metadata": "g"}}, id="metadata_not_a_mapping"),
     pytest.param({"litellm_params": {"metadata": []}}, id="falsy_metadata"),
     pytest.param({}, id="no_params"),
+    pytest.param(
+        {
+            "call_type": "_arealtime",
+            "litellm_params": {"metadata": {"user_api_key": "k"}, "litellm_metadata": {"model_group": "lg"}},
+        },
+        id="realtime_session",
+    ),
 )
 
 
@@ -1527,3 +1545,46 @@ def test_key_limits_carry_the_agent_policy_limits_the_limiter_reads_raw() -> Non
         ),
     )
     assert derivations.key_limits(HookArgs(auth=_auth())) == KeyLimits(estimated_output_tokens=EstimatedOutputTokens())
+
+
+@pytest.mark.parametrize("borrowing", (False, True))
+def test_the_customer_hierarchy_reaches_the_key_records(borrowing: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+    from litellm.types.utils import ModelLimitBorrowingConfig, PriorityReservationSettings
+
+    monkeypatch.setattr(
+        litellm,
+        "priority_reservation_settings",
+        PriorityReservationSettings(
+            model_limit_borrowing_config=ModelLimitBorrowingConfig(
+                borrow_idle_capacity=["customer_organization"] if borrowing else []
+            )
+        ),
+    )
+    auth: Final = _auth()
+    auth.customer_hierarchy = CustomerHierarchyAuth(
+        customer_org_id="org-1",
+        customer_member_id="member-1",
+        scopes=(
+            CustomerScopeAuth(key="customer_org", entity_id="org-1", rpm_limit=6, model_tpm_limit={"gpt-4o": 240}),
+            CustomerScopeAuth(key="customer_member", entity_id="member-1", tpm_limit=400, spend=1.5),
+        ),
+    )
+    args: Final = HookArgs(auth=auth, request={"model": "gpt-4o"})
+
+    identity: Final = derivations.key_identity(args)
+    limits: Final = derivations.key_limits(args)
+
+    assert identity is not None and limits is not None
+    assert (identity.customer_org_id, identity.customer_team_id, identity.customer_member_id) == (
+        "org-1",
+        None,
+        "member-1",
+    )
+    assert limits.customer_scopes == (
+        CustomerScope(
+            key="customer_org", entity_id="org-1", rpm_limit=6, model_tpm_limit={"gpt-4o": 240}, borrows=borrowing
+        ),
+        CustomerScope(key="customer_member", entity_id="member-1", tpm_limit=400, borrows=False),
+    )
+    assert derivations.key_limits(HookArgs(auth=_auth())).customer_scopes is None  # pyright: ignore[reportOptionalMemberAccess]  # an auth always derives limits

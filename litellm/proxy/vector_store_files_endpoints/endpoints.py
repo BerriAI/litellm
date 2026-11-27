@@ -1,5 +1,5 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, cast
@@ -26,10 +26,10 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     authorize_model_for_key,
     caller_may_use_model,
+    caller_may_use_team_model,
     carries_explicit_credentials,
     explicit_request_credentials,
     get_credentials_for_model,
-    get_team_provider_deployment,
     handle_model_based_routing,
     managed_file_copy_on_deployment,
     managed_file_ids_for_provider_file_ids,
@@ -133,7 +133,7 @@ class _ManagedFileCopy:
 _PROBE_ARGUMENTS: Final = frozenset(
     {"vector_store_id", "file_id", "extra_headers", "timeout", "custom_llm_provider", "no-log"}
 )
-_EXTRA_HEADERS: Final = TypeAdapter(dict[str, str] | None)
+_EXTRA_HEADERS: Final[TypeAdapter[dict[str, str] | None]] = TypeAdapter(dict[str, str] | None)
 
 
 async def _store_lacks_file(
@@ -175,9 +175,7 @@ async def _caller_team_copy_of_managed_file(
 ) -> _ManagedFileCopy | None:
     if provider is None:
         return None
-    team_deployment: Final = await team_deployment_the_caller_may_use(
-        get_team_provider_deployment(llm_router, user_api_key_dict, provider.value), llm_router, user_api_key_dict
-    )
+    team_deployment: Final = await team_deployment_the_caller_may_use(llm_router, user_api_key_dict, provider.value)
     provider_file_id: Final = await managed_file_copy_on_deployment(
         file_id, team_deployment, managed_files_obj, user_api_key_dict.parent_otel_span
     )
@@ -212,6 +210,36 @@ def _keys_a_pinned_call_drops(data: Mapping[str, object]) -> frozenset[str]:
     return frozenset({"custom_llm_provider", *_CALLER_DESTINATION_KEYS})
 
 
+def _deployment_provider(deployment: Deployment) -> str:
+    model: Final = deployment.litellm_params.model
+    return deployment.litellm_params.custom_llm_provider or (
+        model.split("/", 1)[0] if "/" in model else LlmProviders.OPENAI.value
+    )
+
+
+async def _caller_may_use_deployment_by(
+    model_name: str,
+    deployment: Deployment,
+    llm_router: Optional["Router"],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    if deployment.model_info.team_id is None:
+        return await caller_may_use_model(model_name, llm_router, user_api_key_dict)
+    return await caller_may_use_team_model(model_name, _deployment_provider(deployment), llm_router, user_api_key_dict)
+
+
+async def _caller_may_use_credentials_of(
+    model_name: str,
+    team_id: str | None,
+    llm_router: "Router",
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    deployment: Final = llm_router.registry().credentials(model_name, form="deployment", team_id=team_id)
+    return deployment is not None and await _caller_may_use_deployment_by(
+        model_name, deployment, llm_router, user_api_key_dict
+    )
+
+
 def _public_model_name_reaching(llm_router: "Router", deployment: Deployment, team_id: str | None) -> str | None:
     public_model_name: Final = deployment.model_info.team_public_model_name or deployment.model_name
     reachable_ids: Final = frozenset(
@@ -224,14 +252,14 @@ def _public_model_name_reaching(llm_router: "Router", deployment: Deployment, te
 
 
 async def _update_request_data_with_managed_file_id(
-    data: dict,
+    data: dict[str, object],
     file_id: str,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
     managed_files_obj: object | None,
     llm_router: Optional["Router"] = None,
     managed_vector_store: LiteLLM_ManagedVectorStore | None = None,
-) -> tuple[dict, str | None]:
+) -> tuple[dict[str, object], str | None]:
     """
     Update request data with model routing information from managed file ID.
 
@@ -311,8 +339,9 @@ async def _update_request_data_with_managed_file_id(
                 if raw_vector_store_id is not None
                 and stored_deployment is not None
                 and stored_deployment.model_info.team_id in (None, user_api_key_dict.team_id)
-                and await caller_may_use_model(
+                and await _caller_may_use_deployment_by(
                     stored_deployment.model_info.team_public_model_name or stored_deployment.model_name,
+                    stored_deployment,
                     llm_router,
                     user_api_key_dict,
                 )
@@ -424,7 +453,7 @@ async def _update_request_data_with_managed_file_id(
     return data, None
 
 
-def _replace_file_id_in_response(response, original_file_id: str):
+def _replace_file_id_in_response(response, original_file_id: str) -> object:
     """
     Replace the provider file ID in the response with the original managed file ID.
 
@@ -457,6 +486,21 @@ def _replace_file_id_in_response(response, original_file_id: str):
     return response
 
 
+_TEAM_MODEL_SENTINELS: Final = frozenset({"all-team-models", "all-proxy-models", "no-default-models"})
+
+
+def _team_model_names(team_models: Sequence[object]) -> tuple[str, ...]:
+    return tuple(model_name for model_name in team_models if isinstance(model_name, str))
+
+
+def _credentials_provider(credentials: Mapping[str, object]) -> object:
+    provider: Final = credentials.get("custom_llm_provider")
+    model: Final = credentials.get("model")
+    if provider is None and isinstance(model, str) and "/" in model:
+        return model.split("/", 1)[0]
+    return provider
+
+
 async def _authorize_model_routing_hint(
     *,
     model: str,
@@ -469,11 +513,11 @@ async def _authorize_model_routing_hint(
 
 
 async def _update_request_data_with_model_routing_hint(
-    data: dict,
+    data: dict[str, object],
     request: Request,
     llm_router: Optional["Router"] = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-) -> dict:
+) -> dict[str, object]:
     if data.get("api_key") is not None or data.get("api_base") is not None:
         return data
 
@@ -519,40 +563,36 @@ async def _update_request_data_with_model_routing_hint(
     if not isinstance(team_models, list):
         return data
 
-    model_names_to_check: Final = []
-    for model_name in team_models:
-        if not isinstance(model_name, str) or model_name in {
-            "all-team-models",
-            "all-proxy-models",
-            "no-default-models",
-        }:
-            continue
-        model_names_to_check.append(model_name)
+    model_names_to_check: Final = tuple(
+        model_name for model_name in _team_model_names(team_models) if model_name not in _TEAM_MODEL_SENTINELS
+    )
 
-    openai_credentials = None
-    for model_name in model_names_to_check:
-        credentials = llm_router.registry().credentials(model_name, form="with_provider", team_id=caller_team_id)
-        if credentials is None:
-            continue
-
-        provider = credentials.get("custom_llm_provider")
-        model = credentials.get("model")
-        if provider is None and isinstance(model, str) and "/" in model:
-            provider = model.split("/", 1)[0]
-        if provider != LlmProviders.OPENAI.value:
-            continue
-
+    team_model_credentials: Final = tuple(
+        (model_name, llm_router.registry().credentials(model_name, form="with_provider", team_id=caller_team_id))
+        for model_name in model_names_to_check
+    )
+    openai_team_models: Final = tuple(
+        (model_name, team_credentials)
+        for model_name, team_credentials in team_model_credentials
+        if team_credentials is not None and _credentials_provider(team_credentials) == LlmProviders.OPENAI.value
+    )
+    usable_openai_credentials: Final = tuple(
+        [
+            team_credentials
+            for model_name, team_credentials in openai_team_models
+            if await _caller_may_use_credentials_of(model_name, caller_team_id, llm_router, user_api_key_dict)
+        ]
+    )
+    if len(usable_openai_credentials) > 1:
+        return data
+    if usable_openai_credentials:
+        prepare_data_with_credentials(data=data, credentials=usable_openai_credentials[0])
+    elif openai_team_models:
         await _authorize_model_routing_hint(
-            model=model_name,
+            model=openai_team_models[0][0],
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
         )
-        if openai_credentials is not None:
-            return data
-        openai_credentials = credentials
-
-    if openai_credentials is not None:
-        prepare_data_with_credentials(data=data, credentials=openai_credentials)
     elif len(model_names_to_check) == 1:
         await _authorize_model_routing_hint(
             model=model_names_to_check[0],
@@ -565,12 +605,12 @@ async def _update_request_data_with_model_routing_hint(
 
 
 def _update_request_data_with_litellm_managed_vector_store_registry(
-    data: dict,
+    data: dict[str, object],
     vector_store_id: str,
     llm_router: Optional["Router"] = None,
     managed_vector_store: LiteLLM_ManagedVectorStore | None = None,
     should_lookup_registry: bool = True,
-) -> dict:
+) -> dict[str, object]:
     """
     Update request data with model routing information from managed vector store.
 
@@ -661,7 +701,7 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
 async def _resolve_provider(
     *,
-    data: dict,
+    data: dict[str, object],
     request: Request,
 ) -> LlmProviders | None:
     provider = (
@@ -844,7 +884,7 @@ async def vector_store_file_list(
     )
 
     query_params: Final = _with_provider_file_id_cursors(request.query_params)
-    data: dict[str, str | None] = {"vector_store_id": vector_store_id}
+    data: dict[str, object] = {"vector_store_id": vector_store_id}
     data.update(query_params)
     data["vector_store_id"] = vector_store_id
     managed_vector_store: Final = await assert_user_can_access_vector_store_id(
@@ -951,7 +991,7 @@ async def vector_store_file_retrieve(
         version,
     )
 
-    data: dict[str, str] = {
+    data: dict[str, object] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
@@ -1059,7 +1099,7 @@ async def vector_store_file_content(
         version,
     )
 
-    data: dict[str, str] = {
+    data: dict[str, object] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }
@@ -1278,7 +1318,7 @@ async def vector_store_file_delete(
         version,
     )
 
-    data: dict[str, str] = {
+    data: dict[str, object] = {
         "vector_store_id": vector_store_id,
         "file_id": file_id,
     }

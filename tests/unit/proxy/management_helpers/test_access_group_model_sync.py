@@ -32,9 +32,7 @@ def _routed_prisma_client(deployment_count: int, writer_unavailable: bool = Fals
 
 def _access_group_updates(writer_inner):
     return [
-        call
-        for call in writer_inner.query_raw.await_args_list
-        if call.args[0].startswith('UPDATE "LiteLLM_AccessGroupTable"')
+        call for call in writer_inner.query_raw.await_args_list if 'UPDATE "LiteLLM_AccessGroupTable"' in call.args[0]
     ]
 
 

@@ -15,7 +15,7 @@ class AlgoliaApiKeyDetector(RegexBasedDetector):
         return "Algolia API Key"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             re.compile(r"""(?i)\b((LTAI)[a-z0-9]{20})(?:['|\"|\n|\r|\s|\x60|;]|$)"""),
         ]

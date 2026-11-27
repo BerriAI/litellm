@@ -187,7 +187,7 @@ def model_label(model: str, config_dir: Path) -> str:
     listed: Final = as_mapping(load_json(raw)).get("models")
     if not isinstance(listed, list):
         return bare
-    entries: Final = tuple(as_mapping(entry) for entry in listed)
+    entries: Final = tuple(map(as_mapping, listed))
     return next(
         (
             printable(entry.get("display_name"))

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -23,14 +24,17 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
     with image files and prompt.
     """
 
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseImageEditConfig contract
+        return [param for param in super().get_supported_openai_params(model) if param != "markup"]
+
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate Azure AI Foundry environment and set up authentication
         Uses the Api-Key header format, or an Entra ID / OAuth bearer token when no key is set
@@ -48,7 +52,7 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Constructs a complete URL for Azure AI Foundry image edits API request.

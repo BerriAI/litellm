@@ -1,3 +1,5 @@
+import ClassifierMaxOutputTokensInput from "./ClassifierMaxOutputTokensInput";
+import HeuristicFirstContextLimitField from "./HeuristicFirstContextLimitField";
 import ClassifierPrimarySettings from "./ClassifierPrimarySettings";
 import { AutoRouterAllowanceNote } from "./AutoRouterAvailability";
 import { transitionClassifierType } from "./classifier_type_transition";
@@ -41,7 +43,6 @@ import {
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_RUBRIC,
-  ClassificationRubric,
   effectiveTierDisplayLabel,
   heuristicScoringRole,
   heuristicTuningType,
@@ -316,18 +317,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     });
   };
 
-  const handleClassificationRubricChange = (classificationRubric: ClassificationRubric) => {
-    onChange({
-      ...value,
-      classifier_llm_config: {
-        ...value.classifier_llm_config,
-        model: value.classifier_llm_config?.model ?? "",
-        timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
-        classification_rubric: classificationRubric,
-      },
-    });
-  };
-
   const handleClassifierSystemPromptChange = (systemPrompt: string | undefined) => {
     onChange({
       ...value,
@@ -519,6 +508,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
+      {showSelection && classifierType === "heuristic_first" && (
+        <HeuristicFirstContextLimitField
+          value={value.heuristic_first_max_context_tokens}
+          onChange={(limit) => onChange({ ...value, heuristic_first_max_context_tokens: limit })}
+        />
+      )}
+
       {showSelection && classifierType === "hybrid" && (
         <div className="mt-4 space-y-2">
           <Label htmlFor={HYBRID_BOUNDARY_MARGIN_ID} className="block font-semibold">
@@ -586,6 +582,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               {t("addModel.classificationMethodConfig.timeout.help")}
             </span>
           </div>
+          <ClassifierMaxOutputTokensInput
+            value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
+            onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}
+          />
           <ClassifierCircuitBreakerConfig
             value={value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS }}
             onChange={(classifier_llm_config) => onChange({ ...value, classifier_llm_config })}

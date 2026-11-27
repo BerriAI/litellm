@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable, Sized
+from collections.abc import Sequence, Sized
 from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
@@ -15,6 +15,8 @@ from .transformation import OobaboogaConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+    from litellm.types.llms.openai import AllMessageValues
 
 oobabooga_config: Final = OobaboogaConfig()
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -28,18 +30,18 @@ def _json_len(value: object) -> int:
 
 def completion(
     model: str,
-    messages: list,
+    messages: "list[AllMessageValues]",
     api_base: str | None,
     model_response: ModelResponse,
-    print_verbose: Callable,
-    encoding,
-    api_key,
-    logging_obj,
+    print_verbose: object,
+    encoding: "Tokenizer | None",
+    api_key: str | None,
+    logging_obj: "LiteLLMLoggingObj",
     optional_params: dict,
     litellm_params: dict,
-    custom_prompt_dict={},
-    logger_fn=None,
-    default_max_tokens_to_sample=None,
+    custom_prompt_dict: object = {},
+    logger_fn: object = None,
+    default_max_tokens_to_sample: object = None,
 ):
     headers: Final = oobabooga_config.validate_environment(
         api_key=api_key,
@@ -102,13 +104,13 @@ def completion(
 
 def embedding(
     model: str,
-    input: list,
+    input: Sequence[object],
     model_response: EmbeddingResponse,
     api_key: str | None,
     api_base: str | None,
     logging_obj: "LiteLLMLoggingObj",
     optional_params: dict,
-    encoding=None,
+    encoding: object = None,
 ):
     # Create completion URL
     if model.startswith(("http://", "https://")):

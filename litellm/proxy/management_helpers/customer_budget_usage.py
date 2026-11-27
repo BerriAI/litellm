@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING, Final, TypeVar
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeKey
+from litellm.types.proxy.auth.customer_hierarchy import (
+    CustomerScopeKey,
+    app_budget_limits,
+)
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
     CustomerBudgetUsage,
@@ -20,7 +23,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy.spend_tracking.budget_reservation import BudgetCounter
 
-Entity: Final = TypeVar("Entity", Organization, Team, CustomerMember)
+Entity = TypeVar("Entity", Organization, Team, CustomerMember)
 
 
 def _identity(entity: Organization | Team | CustomerMember) -> tuple[CustomerScopeKey, str, Budget | None]:
@@ -101,3 +104,40 @@ async def customer_budget_usage(
         )
         for entity, identity, entity_windows in zip(entities, identities, counters, strict=True)
     )
+
+
+async def app_budget_usage(
+    scope_key: CustomerScopeKey,
+    entity_id: str,
+    budget: Budget | None,
+    lifetime_spend: float,
+    table: TableActions["LiteLLM_BudgetWindowSpend"],
+    now: datetime,
+    settings: BudgetResetSettings,
+) -> tuple[CustomerBudgetUsage, ...]:
+    from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
+
+    counters: Final = customer_window_counters(
+        scope_key,
+        entity_id,
+        app_budget_limits(budget),
+        now=now,
+        reset_settings=settings,
+    )
+    rows: Final = (
+        await find_many_in(table, "entity_id", (entity_id,), where={"entity_type": scope_key}) if counters else ()
+    )
+    by_window: Final = {(row.entity_type, row.entity_id, row.window_duration): row for row in rows}
+    scalar: Final = (
+        (
+            CustomerBudgetUsage(
+                source="scalar",
+                budget_duration=None,
+                max_budget=budget.max_budget,
+                spend=lifetime_spend,
+            ),
+        )
+        if budget is not None and budget.max_budget is not None and budget.budget_duration is None
+        else ()
+    )
+    return (*scalar, *_usage(counters, by_window))

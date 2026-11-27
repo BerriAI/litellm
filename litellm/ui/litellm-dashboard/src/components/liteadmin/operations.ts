@@ -1,5 +1,6 @@
 import { zodFunction } from "openai/helpers/zod";
 import { z } from "zod";
+import { v4 as uuidv4 } from "uuid";
 import { apiClient } from "@/components/networking";
 import i18n from "@/i18n/i18n";
 import { ApiError } from "@/lib/http/client";
@@ -7,6 +8,7 @@ import type { components } from "@/lib/http/schema";
 import { generatedKey, projectToolResult, type ResultKind } from "./toolResults";
 import {
   buildUsageChart,
+  formatUsageChartToolContext,
   usageChartRequestSchema,
   usageChartSource,
   type UsageChart,
@@ -73,11 +75,14 @@ const userFields = {
 };
 const object = <Shape extends z.ZodRawShape>(shape: Shape) => z.strictObject(shape);
 const dated = <Shape extends z.ZodRawShape>(shape: Shape) =>
-  object({ start_date: z.iso.date(), end_date: z.iso.date(), ...shape }).refine((value: Record<string, unknown>) => {
-    if (typeof value.start_date !== "string" || typeof value.end_date !== "string") return false;
-    const days = (Date.parse(value.end_date) - Date.parse(value.start_date)) / 86_400_000;
-    return days >= 0 && days <= 366;
-  }, "Choose an ordered date range of at most 366 days.");
+  object({ start_date: z.string().regex(z.regexes.date), end_date: z.string().regex(z.regexes.date), ...shape }).refine(
+    (value: Record<string, unknown>) => {
+      if (typeof value.start_date !== "string" || typeof value.end_date !== "string") return false;
+      const days = (Date.parse(value.end_date) - Date.parse(value.start_date)) / 86_400_000;
+      return days >= 0 && days <= 366;
+    },
+    "Choose an ordered date range of at most 366 days.",
+  );
 
 const keysListFields = {
   page,
@@ -141,7 +146,7 @@ export function createLiteAdminOperations(context: OperationContext) {
       if (!chart)
         return { success: false, message: "No recorded data is available for this chart. Explain that in text." };
       context.onChart(chart);
-      return { success: true, chart };
+      return { success: true, chart: { ...chart, ...formatUsageChartToolContext(chart) } };
     },
   };
   const renderChart = zodFunction(chartDefinition);
@@ -165,7 +170,7 @@ export function createLiteAdminOperations(context: OperationContext) {
             mode === "read"
               ? undefined
               : {
-                  id: crypto.randomUUID(),
+                  id: uuidv4(),
                   name,
                   title,
                   arguments: {
@@ -208,11 +213,11 @@ export function createLiteAdminOperations(context: OperationContext) {
           const key = name === "key_create" || name === "user_create" ? generatedKey(outcome.value) : undefined;
           if (action) context.onResult(action, { status: "completed", ...(key ? { key } : {}) });
           const result = projectToolResult(kind, outcome.value, [context.accessToken, ...(key ? [key] : [])]);
-          let reportScope: "Gateway usage" | "All teams" | "All tags" = "Gateway usage";
-          if (name === "get_team_usage_data") reportScope = "All teams";
-          if (name === "get_tag_usage_data") reportScope = "All tags";
+          let reportScope: "gateway" | "allTeams" | "allTags" = "gateway";
+          if (name === "get_team_usage_data") reportScope = "allTeams";
+          if (name === "get_tag_usage_data") reportScope = "allTags";
           const source = kind === "usage" ? usageChartSource(result, args, context.access, reportScope) : undefined;
-          const sourceId = source ? crypto.randomUUID() : undefined;
+          const sourceId = source ? uuidv4() : undefined;
           if (source && sourceId) usageSources.set(sourceId, source);
           return {
             operation: name,
@@ -282,7 +287,7 @@ export function createLiteAdminOperations(context: OperationContext) {
   if (context.access.mode === "usage") return usageOperations;
 
   return [
-    operation("read", "key")("keys_list", "List virtual keys", object(keysListFields), (a) =>
+    operation("read", "key")("keys_list", "List Virtual Keys", object(keysListFields), (a) =>
       apiClient.get<unknown>("/key/list", {
         ...auth,
         query: {
@@ -295,32 +300,32 @@ export function createLiteAdminOperations(context: OperationContext) {
         },
       }),
     ),
-    operation("read", "key")("key_info", "View a virtual key", object({ key: hash }), (a) =>
+    operation("read", "key")("key_info", "View a Virtual Key", object({ key: hash }), (a) =>
       apiClient.get<unknown>("/key/info", { ...auth, query: a }),
     ),
-    operation("write", "key")("key_create", "Create a virtual key", object(keyFields), (a) =>
+    operation("write", "key")("key_create", "Create a Virtual Key", object(keyFields), (a) =>
       apiClient.post<unknown>("/key/generate", { ...auth, body: a satisfies Partial<Schemas["GenerateKeyRequest"]> }),
     ),
-    operation("write", "key")("key_update", "Update a virtual key", object({ key: hash, ...keyFields }), (a) =>
+    operation("write", "key")("key_update", "Update a Virtual Key", object({ key: hash, ...keyFields }), (a) =>
       apiClient.post<unknown>("/key/update", { ...auth, body: a satisfies Partial<Schemas["UpdateKeyRequest"]> }),
     ),
     operation("write", "key", { team_id: null })(
       "key_detach_from_team",
-      "Remove a virtual key from its team without deleting the key",
+      "Remove a Virtual Key from its team without deleting the key",
       object({ key: hash }),
       (a) =>
         apiClient.post<unknown>("/key/update", { ...auth, body: a satisfies Partial<Schemas["UpdateKeyRequest"]> }),
     ),
     operation("delete", "key")(
       "key_delete",
-      "Delete virtual keys",
+      "Delete Virtual Keys",
       object({ keys: z.array(hash).min(1).max(20) }),
       (a) => apiClient.post<unknown>("/key/delete", { ...auth, body: a satisfies Schemas["KeyRequest"] }),
     ),
-    operation("write", "key")("key_block", "Block a virtual key", object({ key: hash }), (a) =>
+    operation("write", "key")("key_block", "Block a Virtual Key", object({ key: hash }), (a) =>
       apiClient.post<unknown>("/key/block", { ...auth, body: a satisfies Schemas["BlockKeyRequest"] }),
     ),
-    operation("write", "key")("key_unblock", "Unblock a virtual key", object({ key: hash }), (a) =>
+    operation("write", "key")("key_unblock", "Unblock a Virtual Key", object({ key: hash }), (a) =>
       apiClient.post<unknown>("/key/unblock", { ...auth, body: a satisfies Schemas["BlockKeyRequest"] }),
     ),
     operation("read", "team")("teams_list", "List teams", object(teamsListFields), (a) =>

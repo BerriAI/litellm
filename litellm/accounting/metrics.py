@@ -1,6 +1,7 @@
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cache
 from typing import TYPE_CHECKING, Final
 
 from litellm.repositories.accounting_delivery_repository import DeliveryBacklog, DeliveryStorage
@@ -19,6 +20,7 @@ class _Instruments:
     table_bytes: "Gauge"
 
 
+@cache
 def _instruments() -> _Instruments | None:
     try:
         # prometheus-client ships only in the proxy-runtime extra, so a plain litellm[proxy] install lands here
@@ -43,23 +45,22 @@ def _instruments() -> _Instruments | None:
     )
 
 
-_INSTRUMENTS: Final = _instruments()
-
-
 def record_backlog(backlog: DeliveryBacklog, seconds: float) -> None:
-    if _INSTRUMENTS is None:
+    instruments: Final = _instruments()
+    if instruments is None:
         return
-    _INSTRUMENTS.pending.set(backlog.pending_count)
-    _INSTRUMENTS.parked.set(backlog.parked_count)
-    _INSTRUMENTS.oldest.set(max(0.0, backlog.oldest_pending_seconds))
-    _INSTRUMENTS.batch_time.observe(seconds)
+    instruments.pending.set(backlog.pending_count)
+    instruments.parked.set(backlog.parked_count)
+    instruments.oldest.set(max(0.0, backlog.oldest_pending_seconds))
+    instruments.batch_time.observe(seconds)
 
 
 def record_storage(storage: DeliveryStorage) -> None:
-    if _INSTRUMENTS is None:
+    instruments: Final = _instruments()
+    if instruments is None:
         return
-    _INSTRUMENTS.batch_count.set(storage.batch_count)
-    _INSTRUMENTS.table_bytes.set(storage.table_bytes)
+    instruments.batch_count.set(storage.batch_count)
+    instruments.table_bytes.set(storage.table_bytes)
 
 
 class Cadence:

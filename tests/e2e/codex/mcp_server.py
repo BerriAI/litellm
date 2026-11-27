@@ -9,7 +9,7 @@ from mcp.server.mcpserver import MCPServer
 server: Final = MCPServer("vault")
 
 
-@server.tool()
+@server.tool(name=os.environ.get("TOOL_NAME"))
 def read_secret() -> str:
     """Return the current secret value."""
     return Path(os.environ["SECRET_FILE"]).read_text()

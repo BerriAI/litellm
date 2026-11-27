@@ -1,20 +1,33 @@
 "use client";
 
-import { useMemo } from "react";
-import { parseAsString, parseAsInteger, useQueryStates } from "nuqs";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { parseAsString, parseAsInteger, parseAsNumberLiteral, useQueryStates } from "nuqs";
+import { DataTablePagination } from "@/components/shared/DataTable";
 import { useTranslation } from "react-i18next";
 import { Search } from "lucide-react";
-import { formatCompact, formatUsd } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { cn } from "@/lib/cva.config";
 import type { CustomerHierarchyUsage } from "./customerUsageApi";
-import CustomerBudgetSpend, { CustomerBudgetWindow } from "./CustomerBudgetSpend";
-import { customerBudgetPeriod, customerBudgetStatus, customerBudgetUsage } from "./customerBudgetUsage";
+import {
+  CustomerSpendCells,
+  CustomerSpendHeaders,
+  CustomerSpendIdentity,
+  CustomerSpendTier,
+} from "./CustomerSpendCells";
+import { compareCustomerBudgets, customerBudgetSortParser } from "./customerBudgetUsage";
+import { CustomerBudgetSortHeader } from "./CustomerBudgetColumn";
+import { customerUsageTotals, EMPTY_CUSTOMER_USAGE } from "./customerUsageTotals";
+import CustomerTokenTotal from "./CustomerTokenTotal";
+import CustomerEntityBudgetDialog from "./CustomerEntityBudgetDialog";
 
-const MEMBER_TABLE_PARSERS = { memberSearch: parseAsString.withDefault(""), memberPage: parseAsInteger.withDefault(1) };
-const PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = [5, 10, 25];
+const MEMBER_TABLE_PARSERS = {
+  memberSearch: parseAsString.withDefault(""),
+  memberPage: parseAsInteger.withDefault(1),
+  memberPageSize: parseAsNumberLiteral(PAGE_SIZE_OPTIONS).withDefault(5),
+  budgetSort: customerBudgetSortParser,
+};
 export default function CustomerMemberSpend({
   data,
   onMemberClick,
@@ -23,8 +36,10 @@ export default function CustomerMemberSpend({
   onMemberClick: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  const [editingMember, setEditingMember] = useState<string | null>(null);
   const [table, setTable] = useQueryStates(MEMBER_TABLE_PARSERS);
   const search = table.memberSearch;
+  const tokenTotals = useMemo(() => customerUsageTotals(data.memberResults), [data.memberResults]);
   const usage = useMemo(() => new Map(data.monthlyMembers.map((member) => [member.id, member])), [data.monthlyMembers]);
   const yearlyUsage = useMemo(
     () => new Map(data.yearlyMembers.map((member) => [member.id, member.spend])),
@@ -35,20 +50,24 @@ export default function CustomerMemberSpend({
       data.memberBudgets
         .filter((member) => member.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
         .map((member) => ({ ...member, monthlyUsage: usage.get(member.id) }))
-        .sort((a, b) => (b.monthlyUsage?.spend ?? 0) - (a.monthlyUsage?.spend ?? 0) || a.label.localeCompare(b.label)),
-    [data.memberBudgets, search, usage],
+        .sort((a, b) =>
+          table.budgetSort
+            ? compareCustomerBudgets(a, b, table.budgetSort === "budget_desc")
+            : (b.monthlyUsage?.spend ?? 0) - (a.monthlyUsage?.spend ?? 0) || a.label.localeCompare(b.label),
+        ),
+    [data.memberBudgets, search, usage, table.budgetSort],
   );
 
-  const lastPage = Math.max(1, Math.ceil(members.length / PAGE_SIZE));
+  const pageSize = table.memberPageSize;
+  const lastPage = Math.max(1, Math.ceil(members.length / pageSize));
   const page = Math.max(1, Math.min(table.memberPage, lastPage));
-  const start = (page - 1) * PAGE_SIZE;
+  const start = (page - 1) * pageSize;
   return (
     <section className="border-b pb-6" aria-label={t("customerPortal.analytics.memberSpend")}>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-medium tracking-tight">{t("customerPortal.analytics.memberSpend")}</h2>
-          <p className="mt-1 text-xs text-muted-foreground">{t("customerPortal.analytics.memberSpendHint")}</p>
-        </div>
+        <h2 className="text-base font-medium tracking-tight">
+          {t(data.member ? "customerPortal.analytics.memberSpend" : "customerPortal.analytics.topMembers")}
+        </h2>
         <div className="relative w-full sm:w-56">
           <Search aria-hidden="true" className="absolute top-2.5 left-3 size-3.5 text-muted-foreground" />
           <Input
@@ -60,167 +79,82 @@ export default function CustomerMemberSpend({
           />
         </div>
       </div>
-      <Table aria-label={t("customerPortal.analytics.memberSpend")}>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="pl-0">{t("customerPortal.analytics.member")}</TableHead>
-            <TableHead className="min-w-72">{t("customerPortal.analytics.monthlySpend")}</TableHead>
-            <TableHead className="text-right">{t("customerPortal.analytics.yearlySpend")}</TableHead>
-            <TableHead className="text-right">{t("customerPortal.analytics.customerSpendShare")}</TableHead>
-            <TableHead className="text-right">{t("customerPortal.analytics.tokens")}</TableHead>
-            <TableHead className="pr-0 text-right">{t("customerPortal.analytics.status")}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {members.slice(start, start + PAGE_SIZE).map((member) => {
-            const monthlySpend = member.monthlyUsage?.spend ?? 0;
-            const budgets = customerBudgetUsage(member);
-            const monthlyBudgets = budgets.filter(
-              (budget) => customerBudgetPeriod(budget.budget_duration) === "monthly",
-            );
-            const yearlyBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "yearly");
-            const otherBudgets = budgets.filter((budget) => customerBudgetPeriod(budget.budget_duration) === "other");
-            const yearlySpend = yearlyUsage.get(member.id) ?? 0;
-            const spendShare =
-              data.monthlyOrganizationSpend > 0 ? (monthlySpend / data.monthlyOrganizationSpend) * 100 : 0;
-            const sharePercentage = Math.max(0, Math.min(100, spendShare));
-            const shareLabel = t("format.number", {
-              val: spendShare / 100,
-              style: "percent",
-              maximumFractionDigits: 1,
-            });
-            const status = customerBudgetStatus(budgets);
-            const atLimit = status === "customerPortal.analytics.reachedLimit";
-            return (
+      <div className="overflow-hidden rounded-lg border">
+        <Table aria-label={t("customerPortal.analytics.memberSpend")}>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="px-4">{t("customerPortal.analytics.member")}</TableHead>
+              <TableHead className="px-4">{t("customerPortal.budgetEditor.group")}</TableHead>
+              <CustomerSpendHeaders usageLayout>
+                <CustomerBudgetSortHeader
+                  sort={table.budgetSort}
+                  onSort={() =>
+                    void setTable(
+                      {
+                        budgetSort: table.budgetSort === "budget_asc" ? "budget_desc" : "budget_asc",
+                        memberPage: null,
+                      },
+                      { history: "push" },
+                    )
+                  }
+                />
+              </CustomerSpendHeaders>
+              <TableHead className="px-4 text-right">{t("apps.actions")}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {members.slice(start, start + pageSize).map((member) => (
               <TableRow key={member.id}>
-                <TableCell className="py-4 pl-0">
-                  <div className="flex items-center gap-3">
-                    <span
-                      aria-hidden="true"
-                      className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium"
-                    >
-                      {member.label
-                        .split(/\s+/)
-                        .slice(0, 2)
-                        .map((part) => part.charAt(0))
-                        .join("")
-                        .toLocaleUpperCase()}
-                    </span>
-                    <div className="min-w-0">
-                      <button
-                        type="button"
-                        className="block text-left font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
-                        onClick={() => onMemberClick(member.id)}
-                      >
-                        {member.label}
-                      </button>
-                      <span className="block font-mono text-[11px] text-muted-foreground">{member.id}</span>
-                    </div>
-                  </div>
+                <TableCell className="px-4 py-5">
+                  <CustomerSpendIdentity entity={member} onClick={() => onMemberClick(member.id)} usageLayout />
                 </TableCell>
-                <TableCell className="pr-6">
-                  <div className="space-y-3">
-                    {monthlyBudgets.map((budget) => (
-                      <CustomerBudgetWindow key={budget.source} budget={budget} showReset={monthlyBudgets.length > 1} />
-                    ))}
-                    {monthlyBudgets.length === 0 && (
-                      <CustomerBudgetSpend
-                        spend={monthlySpend}
-                        limit={null}
-                        label={t("customerPortal.analytics.monthlySpend")}
-                        noLimitLabel={t("customerPortal.analytics.noMonthlyLimit")}
-                      />
-                    )}
-                    {otherBudgets.map((budget) => (
-                      <div key={budget.source} className="space-y-1 text-xs text-muted-foreground">
-                        <span>
-                          {t("customerPortal.analytics.budgetPeriod")}
-                          {budget.budget_duration && ` (${budget.budget_duration})`}
-                        </span>
-                        <CustomerBudgetWindow budget={budget} />
-                      </div>
-                    ))}
-                  </div>
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  <div className="space-y-2">
-                    {yearlyBudgets.map((budget) => (
-                      <CustomerBudgetWindow key={budget.source} budget={budget} showReset={yearlyBudgets.length > 1} />
-                    ))}
-                    {yearlyBudgets.length === 0 &&
-                      `${formatUsd(yearlySpend)} / ${t("customerPortal.analytics.noYearlyLimit")}`}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div
-                    role="meter"
-                    aria-label={t("customerPortal.analytics.customerSpendShare")}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={sharePercentage}
-                    aria-valuetext={shareLabel}
-                    title={shareLabel}
-                    className="ml-auto h-2.5 w-24 overflow-hidden rounded-full bg-muted"
+                <CustomerSpendTier entity={member} />
+                <CustomerSpendCells
+                  entity={member}
+                  monthlySpend={member.monthlyUsage?.spend ?? 0}
+                  yearlySpend={yearlyUsage.get(member.id) ?? 0}
+                  tokens={member.monthlyUsage?.tokens ?? 0}
+                  organizationSpend={data.monthlyOrganizationSpend}
+                  usageLayout
+                  tokenContent={<CustomerTokenTotal usage={tokenTotals.get(member.id) ?? EMPTY_CUSTOMER_USAGE} />}
+                />
+                <TableCell className="px-4 text-right">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    aria-label={t("customerPortal.budgetEditor.memberAction", { name: member.label })}
+                    onClick={() => setEditingMember(member.id)}
                   >
-                    <div
-                      className="h-full rounded-full bg-primary"
-                      style={{ width: `${sharePercentage}%`, opacity: 0.3 + sharePercentage * 0.007 }}
-                    />
-                  </div>
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatCompact(member.monthlyUsage?.tokens ?? 0)}
-                </TableCell>
-                <TableCell className="pr-0 text-right">
-                  <span
-                    className={cn(
-                      "inline-flex rounded-full bg-muted px-2 py-0.5 text-xs",
-                      atLimit && "bg-destructive/10 text-destructive",
-                    )}
-                  >
-                    {t(status)}
-                  </span>
+                    {t("customerPortal.hierarchy.edit")}
+                  </Button>
                 </TableCell>
               </TableRow>
-            );
-          })}
-          {members.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
-                {t(search ? "customerPortal.analytics.noMatches" : "customerPortal.analytics.noMembers")}
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
-      {members.length > PAGE_SIZE && (
-        <div className="mt-3 flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
-          <span>
-            {t("customerPortal.analytics.pagination", {
-              from: start + 1,
-              to: Math.min(start + PAGE_SIZE, members.length),
-              total: members.length,
-            })}
-          </span>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={page === 1}
-              onClick={() => void setTable({ memberPage: page - 1 })}
-            >
-              {t("customerPortal.analytics.previous")}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={page === lastPage}
-              onClick={() => void setTable({ memberPage: page + 1 })}
-            >
-              {t("customerPortal.analytics.next")}
-            </Button>
-          </div>
-        </div>
+            ))}
+            {members.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
+                  {t(search ? "customerPortal.analytics.noMatches" : "customerPortal.analytics.noMembers")}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+        <DataTablePagination
+          className="justify-end border-t px-4 py-3"
+          page={page - 1}
+          pageSize={pageSize}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
+          rowCount={members.length}
+          onPageChange={(index) => void setTable({ memberPage: index + 1 })}
+          onPageSizeChange={(size) => void setTable({ memberPageSize: size, memberPage: null })}
+        />
+      </div>
+      {editingMember && (
+        <CustomerEntityBudgetDialog
+          memberId={editingMember}
+          organizationId={data.organization.id}
+          onClose={() => setEditingMember(null)}
+        />
       )}
     </section>
   );

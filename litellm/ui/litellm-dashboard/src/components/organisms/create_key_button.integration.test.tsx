@@ -16,10 +16,18 @@ const state = vi.hoisted(() => ({
   can: {} as Record<string, boolean>,
   uiSettings: {} as Record<string, unknown>,
   tags: {} as Record<string, { name: string }>,
-  teams: [] as { team_id: string; team_alias: string; models: string[]; organization_id?: string }[],
+  teams: [] as {
+    team_id: string;
+    team_alias: string;
+    models: string[];
+    organization_id?: string;
+    members_with_roles?: { user_id: string; user_email?: string | null; role: string }[];
+    team_member_permissions?: string[];
+  }[],
   organizations: [] as { organization_id: string; organization_alias: string }[],
   accessGroups: [] as { access_group_id: string; access_group_name: string }[],
-  projects: [] as { project_id: string; project_alias: string; team_id?: string; models?: string[] }[],
+  projects: [] as { project_id: string; project_alias: string; team_id?: string | null; models?: string[] }[],
+  lensServiceError: false,
 }));
 
 vi.mock("@/lib/toast", () => ({
@@ -131,6 +139,7 @@ const SECTIONS = {
 
 const ALL_CLOSED_PAYLOAD = {
   organization_id: undefined,
+  project_id: undefined,
   team_id: null,
   key_alias: "contract-key",
   models: [],
@@ -238,6 +247,7 @@ describe("CreateKey", () => {
     state.organizations = [];
     state.projects = [];
     state.accessGroups = [];
+    state.lensServiceError = false;
     vi.mocked(keyCreateCall).mockClear().mockResolvedValue({ key: "sk-created", soft_budget: null });
     vi.mocked(keyCreateServiceAccountCall)
       .mockClear()
@@ -250,7 +260,11 @@ describe("CreateKey", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.includes("/lens/service")) {
+          if (state.lensServiceError) return Response.json({ error: "Unavailable" }, { status: 503 });
+          return Response.json({ configured: true });
+        }
         if (url.includes("openapi.json")) {
           return { ok: true, status: 200, json: async () => OPENAPI_SCHEMA } as unknown as Response;
         }
@@ -261,6 +275,71 @@ describe("CreateKey", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  describe("Lens tracing", () => {
+    it("keeps creation available without an override when Lens status cannot be loaded", async () => {
+      state.lensServiceError = true;
+      await openModal();
+      expect(await screen.findByText("Unknown")).toBeInTheDocument();
+      expect(screen.getByText("Lens connection status is unavailable")).toBeInTheDocument();
+      expect(screen.queryByText("Off", { exact: true })).not.toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: "Lens" })).toHaveAttribute("aria-disabled", "true");
+      await nameTheKey();
+      expect(screen.getByRole("button", { name: /^create key$/i })).toBeEnabled();
+      await submit();
+      const payload = await createdPayload();
+      expect(JSON.parse(String(payload.metadata))).not.toHaveProperty("lens_enabled");
+    });
+
+    it("starts on for a configured gateway without sending a key override", async () => {
+      await openModal();
+      const toggle = screen.getByRole("switch", { name: "Lens" });
+      await waitFor(() => expect(toggle).not.toHaveAttribute("aria-disabled", "true"));
+      expect(toggle).toBeChecked();
+      expect(screen.getByText("Tracing")).toBeInTheDocument();
+      await nameTheKey();
+      await submit();
+      const payload = await createdPayload();
+      expect(JSON.parse(String(payload.metadata))).not.toHaveProperty("lens_enabled");
+    });
+
+    it("stores an explicit opt-out in a new key's metadata", async () => {
+      await openModal();
+      const toggle = screen.getByRole("switch", { name: "Lens" });
+      await waitFor(() => expect(toggle).not.toHaveAttribute("aria-disabled", "true"));
+      await userEvent.click(toggle);
+      await nameTheKey();
+      await submit();
+      const payload = await createdPayload();
+      expect(JSON.parse(String(payload.metadata))).toHaveProperty("lens_enabled", false);
+    });
+
+    it("follows a disabled team without creating an accidental true override", async () => {
+      const team: Team = {
+        team_id: "lens-disabled-team",
+        team_alias: "Disabled team",
+        metadata: { lens_enabled: false },
+        models: [],
+        max_budget: null,
+        budget_duration: null,
+        tpm_limit: null,
+        rpm_limit: null,
+        organization_id: "",
+        created_at: "",
+        keys: [],
+        members_with_roles: [],
+        spend: 0,
+      };
+      await openModal({ team, teams: [team] });
+      const toggle = screen.getByRole("switch", { name: "Lens" });
+      await waitFor(() => expect(toggle).not.toHaveAttribute("aria-disabled", "true"));
+      expect(toggle).not.toBeChecked();
+      await nameTheKey();
+      await submit();
+      const payload = await createdPayload();
+      expect(JSON.parse(String(payload.metadata))).not.toHaveProperty("lens_enabled");
+    });
   });
 
   describe("submit payload contract", () => {
@@ -539,15 +618,6 @@ describe("CreateKey", () => {
       expect(payload).toHaveProperty("guardrails");
     });
 
-    it("adds project_id only when the projects UI is enabled", async () => {
-      state.uiSettings = { enable_projects_ui: true };
-      await openModal();
-      await nameTheKey();
-      await submit();
-
-      expect(await createdPayload()).toStrictEqual({ ...ALL_CLOSED_PAYLOAD, project_id: undefined });
-    });
-
     it("keeps disable_global_guardrails out of the payload while the switch is off", async () => {
       await openModal();
       await nameTheKey();
@@ -666,12 +736,145 @@ describe("CreateKey", () => {
       expect(await createdPayload()).toMatchObject({ key_alias: "wire-alias", team_id: "team-1" });
     });
 
+    it("offers a team member only the teams where they are allowed to create keys", async () => {
+      state.authorized = { ...state.authorized, userRole: "Internal User" };
+      const membership = (role: string) => [{ user_id: state.authorized.userId, user_email: null, role }];
+      state.teams = [
+        {
+          team_id: "team-allowed",
+          team_alias: "Keys Allowed",
+          models: [],
+          members_with_roles: membership("user"),
+          team_member_permissions: ["/key/generate"],
+        },
+        {
+          team_id: "team-blocked",
+          team_alias: "Keys Blocked",
+          models: [],
+          members_with_roles: membership("user"),
+          team_member_permissions: ["/key/info"],
+        },
+        {
+          team_id: "team-administered",
+          team_alias: "Team I Administer",
+          models: [],
+          members_with_roles: membership("admin"),
+          team_member_permissions: [],
+        },
+      ];
+      await openModal({ teams: state.teams as unknown as Team[] });
+      await userEvent.click(await screen.findByLabelText("Team"));
+
+      expect(await screen.findByRole("option", { name: /Keys Allowed/ })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /Team I Administer/ })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /Keys Blocked/ })).not.toBeInTheDocument();
+    });
+
     it("sends team_id as an explicit null when no team is chosen", async () => {
       await openModal();
       await nameTheKey();
       await submit();
 
       expect(await createdPayload()).toHaveProperty("team_id", null);
+    });
+
+    it("offers service-account-only teams for service-account owners", async () => {
+      state.authorized = { ...state.authorized, userRole: "Internal User" };
+      state.teams = [
+        {
+          team_id: "service-team",
+          team_alias: "Service Team",
+          models: [],
+          members_with_roles: [{ user_id: state.authorized.userId, role: "user" }],
+          team_member_permissions: ["/key/service-account/generate"],
+        },
+        {
+          team_id: "personal-team",
+          team_alias: "Personal Team",
+          models: [],
+          members_with_roles: [{ user_id: state.authorized.userId, role: "user" }],
+          team_member_permissions: ["/key/generate"],
+        },
+      ];
+      await openModal({ team: state.teams[1] as Team, teams: state.teams as Team[] });
+      await userEvent.click(screen.getByRole("radio", { name: "Service Account" }));
+      expect(screen.getByLabelText("Team")).toHaveValue("");
+      await userEvent.click(await screen.findByLabelText("Team"));
+      expect(screen.queryByRole("option", { name: /Personal Team/ })).not.toBeInTheDocument();
+      await userEvent.click(await screen.findByRole("option", { name: /Service Team/ }));
+      await userEvent.click(screen.getByRole("radio", { name: "You" }));
+      expect(screen.getByLabelText("Team")).toHaveValue("");
+      await userEvent.click(screen.getByRole("radio", { name: "Service Account" }));
+      await userEvent.click(screen.getByLabelText("Team"));
+      await userEvent.click(await screen.findByRole("option", { name: /Service Team/ }));
+      fireEvent.change(await screen.findByLabelText(/Service Account ID/), { target: { value: "svc-only" } });
+      await submit();
+
+      await waitFor(() => expect(vi.mocked(keyCreateServiceAccountCall)).toHaveBeenCalled());
+      expect(vi.mocked(keyCreateServiceAccountCall).mock.calls[0][1]).toMatchObject({ team_id: "service-team" });
+    });
+
+    it("offers projects for a selected team outside the parent's team page", async () => {
+      state.authorized = { ...state.authorized, userRole: "Internal User" };
+      state.teams = [
+        {
+          team_id: "team-later-page",
+          team_alias: "Later Team",
+          models: [],
+          members_with_roles: [{ user_id: state.authorized.userId, role: "user" }],
+          team_member_permissions: ["/key/generate"],
+        },
+      ];
+      state.projects = [
+        { project_id: "project-later-page", project_alias: "Later Project", team_id: "team-later-page" },
+      ];
+      await openModal({ teams: [] });
+      await userEvent.click(await screen.findByLabelText("Team"));
+      await userEvent.click(await screen.findByRole("option", { name: /Later Team/ }));
+      await userEvent.click(await screen.findByLabelText("Project"));
+      await userEvent.click(await screen.findByRole("option", { name: /Later Project/ }));
+      await nameTheKey();
+      await submit();
+
+      expect(await createdPayload()).toMatchObject({ team_id: "team-later-page", project_id: "project-later-page" });
+    });
+
+    it("offers a proxy admin projects outside the parent's team page", async () => {
+      state.projects = [{ project_id: "project-remote", project_alias: "Remote Project", team_id: "team-remote" }];
+      await openModal({ teams: [] });
+      await userEvent.click(await screen.findByLabelText("Project"));
+      await userEvent.click(await screen.findByRole("option", { name: /Remote Project/ }));
+      await nameTheKey();
+      await submit();
+
+      expect(await createdPayload()).toMatchObject({ team_id: "team-remote", project_id: "project-remote" });
+    });
+
+    it("does not select an ineligible team through a project", async () => {
+      state.authorized = { ...state.authorized, userRole: "Internal User" };
+      state.teams = [
+        {
+          team_id: "team-blocked",
+          team_alias: "Keys Blocked",
+          models: [],
+          members_with_roles: [{ user_id: state.authorized.userId, role: "user" }],
+          team_member_permissions: [],
+        },
+      ];
+      state.projects = [
+        { project_id: "project-blocked", project_alias: "Blocked Project", team_id: "team-blocked" },
+        { project_id: "project-missing", project_alias: "Missing Team Project", team_id: "team-missing" },
+        { project_id: "project-unowned", project_alias: "Unowned Project", team_id: null },
+      ];
+      await openModal({ teams: state.teams as unknown as Team[] });
+      await userEvent.click(await screen.findByLabelText("Project"));
+      expect(screen.queryByRole("option", { name: /Blocked Project/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /Missing Team Project/ })).not.toBeInTheDocument();
+      await userEvent.click(await screen.findByRole("option", { name: /Unowned Project/ }));
+      await nameTheKey();
+      await submit();
+
+      expect(await createdPayload()).toMatchObject({ team_id: null, project_id: "project-unowned" });
     });
 
     it.fails(
@@ -883,6 +1086,57 @@ describe("CreateKey", () => {
   });
 
   describe("deep link prefill", () => {
+    it("prefills a team using the requested service-account owner permission", async () => {
+      state.authorized = { ...state.authorized, userRole: "Internal User" };
+      state.teams = [
+        {
+          team_id: "service-team",
+          team_alias: "Service Team",
+          models: [],
+          members_with_roles: [{ user_id: state.authorized.userId, role: "user" }],
+          team_member_permissions: ["/key/service-account/generate"],
+        },
+      ];
+      renderCreateKey({
+        teams: state.teams as Team[],
+        autoOpenCreate: true,
+        prefillData: { owned_by: "service_account", team_id: "service-team" },
+      });
+
+      expect(await screen.findByLabelText("Team")).toHaveValue("Service Team");
+      fireEvent.change(await screen.findByLabelText(/Service Account ID/), { target: { value: "svc-prefill" } });
+      await submit();
+
+      await waitFor(() => expect(vi.mocked(keyCreateServiceAccountCall)).toHaveBeenCalled());
+      expect(vi.mocked(keyCreateServiceAccountCall).mock.calls[0][1]).toMatchObject({ team_id: "service-team" });
+    });
+
+    it.each(["initial team", "deep link"])("ignores an ineligible team supplied through %s", async (source) => {
+      state.authorized = { ...state.authorized, userRole: "Internal User" };
+      const blockedTeam = {
+        team_id: "team-blocked",
+        team_alias: "Keys Blocked",
+        models: [],
+        members_with_roles: [{ user_id: state.authorized.userId, user_email: null, role: "user" }],
+        team_member_permissions: [],
+      };
+      state.teams = [blockedTeam];
+      renderCreateKey({
+        team: source === "initial team" ? (blockedTeam as Team) : null,
+        teams: [blockedTeam as Team],
+        autoOpenCreate: true,
+        prefillData: {
+          key_alias: "without-blocked-team",
+          ...(source === "deep link" ? { team_id: blockedTeam.team_id } : {}),
+        },
+      });
+
+      expect(await screen.findByLabelText("Team")).toHaveValue("");
+      await submit();
+
+      expect((await createdPayload()).team_id).toBeNull();
+    });
+
     it("prefills the key alias", async () => {
       renderCreateKey({ autoOpenCreate: true, prefillData: { key_alias: "prefilled-key" } });
 
@@ -986,7 +1240,6 @@ describe("CreateKey", () => {
     });
 
     it("discards the old project and team when the organization changes", async () => {
-      state.uiSettings = { enable_projects_ui: true };
       state.organizations = [
         { organization_id: "scope-silver", organization_alias: "Silver" },
         { organization_id: "scope-copper", organization_alias: "Copper" },
@@ -1373,6 +1626,23 @@ describe("CreateKey", () => {
   });
 
   describe("writers outside the submit path", () => {
+    it("shows an SSO owner's alias without changing the submitted user ID", async () => {
+      const userId = "abc301ea-49c0-47c9-aee2-53b86a550582";
+      vi.mocked(userFilterUICall).mockResolvedValue([
+        { user_id: userId, user_email: null, user_alias: "Acme Developer" },
+      ]);
+
+      await openModal();
+      await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
+      await nameTheKey();
+
+      await userEvent.type(await userSearchInput(), userId.slice(0, 8));
+      await userEvent.click(await screen.findByRole("option", { name: `Acme Developer (${userId})` }));
+      await submit();
+
+      expect((await createdPayload()).user_id).toBe(userId);
+    });
+
     it("lets the selected user win over the search text typed into the same field", async () => {
       vi.mocked(userFilterUICall).mockResolvedValue([
         { user_id: "u-77", user_email: "alice@example.com" },

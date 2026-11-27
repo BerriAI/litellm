@@ -5,7 +5,7 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 """
 
 import copy
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
@@ -18,7 +18,7 @@ from typing import (
     cast,  # noqa: TID251  # caller chat messages go to chat inference translation as-is
 )
 
-from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
@@ -31,12 +31,16 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
+    carries_fallback_block,
     carries_signed_compaction_block,
     context_management_betas,
     context_management_with_edits,
     is_claude_model_target,
+    json_message_without_provider_specific_fields,
     merge_anthropic_beta_headers,
+    strip_unsigned_thinking_from_anthropic_messages,
     tools_without_custom_field,
+    verifies_claude_thinking_signatures,
 )
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -48,6 +52,7 @@ if TYPE_CHECKING:
     from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
+_COUNT_OPTION: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _COUNTED_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 _TRANSFORMED_REQUEST: Final = TypeAdapter(dict[str, object])
 _DROPPED_PATHS: Final = TypeAdapter(tuple[object, ...])
@@ -182,6 +187,16 @@ def _is_contentless_chat_turn(message: Mapping[str, object]) -> bool:
 
 def _needs_chat_translation(translate_contentless_turns: bool, message: Mapping[str, object]) -> bool:
     return (translate_contentless_turns and _is_contentless_chat_turn(message)) or not _is_plain_message(message)
+
+
+def _is_system_role(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "system"
+
+
+def _counts_blank_text_as_chat_sends_it(messages: Sequence[Mapping[str, object]]) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.factory import carries_empty_text
+
+    return any(map(carries_empty_text, messages)) and not any(map(_has_non_chat_user_block, messages))
 
 
 def _is_chat_tool(tool: Mapping[str, object]) -> bool:
@@ -326,6 +341,18 @@ def _translated_chat_request(
     )
 
 
+def _fields_with_system_lifted(
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> AnthropicCountFields:
+    request: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(
+        {"messages": messages, "system": system, **({"tools": tools} if tools else {})}
+    )
+    conversation, lifted = _lift_leading_system(request["messages"], request.get("system"))
+    return AnthropicCountFields(messages=conversation, system=lifted, tools=request.get("tools"), options={})
+
+
 def _message_problem(index: int, message: Mapping[str, object]) -> str | None:
     if "role" not in message:
         return f"Message {index} must have a 'role' field"
@@ -366,16 +393,21 @@ def anthropic_fields_for_chat_tool_use(
     tools: Sequence[Mapping[str, object]] | None,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
+    messages_are_converse_turns: bool = False,
     *,
     translate_contentless_turns: bool = True,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     counted_tools: Final = tools or ()
-    if (
+    lifts_system: Final = messages_are_converse_turns and any(map(_is_system_role, messages))
+    counts_untranslated: Final = (
         not chat_params
         and not any(map(_needs_tool_translation, counted_tools))
         and not any(map(partial(_needs_chat_translation, translate_contentless_turns), messages))
-    ):
-        return None
+        and (messages_are_converse_turns or not _counts_blank_text_as_chat_sends_it(messages))
+        and not (lifts_system and all(map(_is_system_role, messages)))
+    )
+    if counts_untranslated:
+        return _fields_with_system_lifted(messages, system, tools) if lifts_system else None
     untranslatable: Final = _untranslatable_input(messages, counted_tools)
     if untranslatable is not None:
         return untranslatable
@@ -417,19 +449,26 @@ def _max_output_tokens(model: str, custom_llm_provider: str | None) -> int:
     )
 
 
+def _json_options(options: Mapping[str, object]) -> Iterator[tuple[str, JsonValue]]:
+    for name, value in options.items():
+        try:
+            yield name, _COUNT_OPTION.validate_python(value)
+        except ValidationError:
+            continue
+
+
 def without_dropped_paths(options: Mapping[str, JsonValue], additional_drop_params: object) -> Mapping[str, JsonValue]:
-    return _COUNT_REQUEST.validate_python(
-        delete_nested_values(
-            options,
-            (
-                path
-                for path in _DROPPED_PATHS.validate_python(
-                    additional_drop_params if isinstance(additional_drop_params, (list, tuple)) else ()
-                )
-                if isinstance(path, str)
-            ),
-        )
+    kept: Final = delete_nested_values(
+        options,
+        (
+            path
+            for path in _DROPPED_PATHS.validate_python(
+                additional_drop_params if isinstance(additional_drop_params, (list, tuple)) else ()
+            )
+            if isinstance(path, str)
+        ),
     )
+    return dict(_json_options(kept))
 
 
 def messages_count_options(
@@ -478,13 +517,21 @@ async def anthropic_count_fields(
     messages_format: TokenCountMessagesFormat,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
+    messages_are_converse_turns: bool = False,
     *,
     translate_contentless_turns: bool = True,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     if messages_format != "openai":
         return None
     return await asyncify(anthropic_fields_for_chat_tool_use)(
-        model, messages, system, tools, translator, chat_params, translate_contentless_turns=translate_contentless_turns
+        model,
+        messages,
+        system,
+        tools,
+        translator,
+        chat_params,
+        messages_are_converse_turns,
+        translate_contentless_turns=translate_contentless_turns,
     )
 
 
@@ -523,6 +570,8 @@ class AnthropicCountTokensConfig:
         optional_params: Mapping[str, JsonValue] | None = None,
         context_management: JsonValue = None,
         drop_params: bool = False,
+        custom_llm_provider: str = "anthropic",
+        api_base: str | None = None,
     ) -> dict[str, JsonValue]:  # mutable-ok: provider transport requires JSON dictionaries
         """
         Transform request to Anthropic CountTokens format.
@@ -531,7 +580,13 @@ class AnthropicCountTokensConfig:
         system-role messages is counted through ``system``, the only place count_tokens accepts it.
         """
         options: Final[Mapping[str, JsonValue]] = optional_params or MappingProxyType({})
-        counted_messages, counted_system = _lift_leading_system(messages, system)
+        replayed_messages: Final[Sequence[Mapping[str, JsonValue]]] = (
+            strip_unsigned_thinking_from_anthropic_messages(messages)
+            if verifies_claude_thinking_signatures(custom_llm_provider, model, api_base)
+            else messages
+        )
+        sent_messages: Final = tuple(map(json_message_without_provider_specific_fields, replayed_messages))
+        counted_messages, counted_system = _lift_leading_system(sent_messages, system)
         return _COUNT_REQUEST.validate_python(
             MappingProxyType(
                 {
@@ -578,15 +633,22 @@ class AnthropicCountTokensConfig:
         bearer for ``ANTHROPIC_AUTH_TOKEN`` and for sk-ant-oat tokens, whose mandatory oauth beta
         merges with the token-counting beta instead of replacing it. A history that carries a
         signed compaction block also needs the compaction beta, or Anthropic rejects the block
-        as an unknown content type, and ``context_management`` edits need the betas inference sends."""
+        as an unknown content type. A history that echoes a fallback block needs the fallback beta
+        the same way, and ``context_management`` edits need the betas inference sends."""
         compaction_betas: Final = (
             (ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value,)
             if carries_signed_compaction_block(messages)
             else ()
         )
+        fallback_betas: Final = (
+            (ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value,)
+            if carries_fallback_block(messages)
+            else ()
+        )
         request_betas: Final = (
             ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
             *compaction_betas,
+            *fallback_betas,
             *context_management_betas(context_management),
             *AnthropicModelInfo().thinking_betas(thinking),
         )

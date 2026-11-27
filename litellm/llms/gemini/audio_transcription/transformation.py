@@ -62,7 +62,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: BaseAudioTranscriptionConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseAudioTranscriptionConfig signature
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
         accepted: Final = tuple((k, v) for k, v in non_default_params.items() if k in supported_params)
         return dict((*optional_params.items(), *accepted))
@@ -71,7 +71,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | Headers,  # mutable-ok: base signature and BaseLLMException take dict | Headers
+        headers: dict[str, object] | Headers,  # mutable-ok: base signature and BaseLLMException take dict | Headers
     ) -> BaseLLMException:
         return GeminiError(status_code=status_code, message=error_message, headers=headers)
 
@@ -84,7 +84,7 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: BaseAudioTranscriptionConfig signature
+    ) -> dict[str, str]:  # mutable-ok: BaseAudioTranscriptionConfig signature
         resolved_api_key: Final = GeminiModelInfo.get_api_key(api_key)
         if not resolved_api_key:
             raise GeminiError(

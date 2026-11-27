@@ -19,9 +19,11 @@ import litellm
 from litellm import Router
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.redis.stores.connection import RedisStores
 from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
@@ -431,12 +433,12 @@ async def test_usage_based_routing_refuses_the_next_websocket_turn_before_the_fi
 ):
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-early", tpm=30)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-early")
-    await admit_turn()
+    await admit_turn({})
 
     await record_turn(_open_websocket_turn(routed, "ws-tpm-v2-early-turn").litellm_params, 35)
 
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-early"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -447,7 +449,7 @@ async def test_websocket_turn_counted_before_its_logging_is_not_counted_again_wh
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-once", tpm=69)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-once")
     opened: Final = await _usage_now(router, "ws-tpm-v2-once")
-    await admit_turn()
+    await admit_turn({})
     first_turn: Final = _open_websocket_turn(routed, "ws-tpm-v2-once-first")
 
     await record_turn(first_turn.litellm_params, 35)
@@ -455,10 +457,10 @@ async def test_websocket_turn_counted_before_its_logging_is_not_counted_again_wh
     await _complete_35_token_turn(first_turn)
 
     assert await _usage_after(router, "ws-tpm-v2-once", opened) == (35, 1)
-    await admit_turn()
+    await admit_turn({})
     await record_turn(_open_websocket_turn(routed, "ws-tpm-v2-once-second").litellm_params, 35)
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-once"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -512,15 +514,15 @@ async def test_usage_based_routing_counts_a_websocket_turn_whose_early_count_fai
         ),
     )
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-count-fails")
-    await admit_turn()
+    await admit_turn({})
     turn: Final = _open_websocket_turn(routed, "ws-tpm-v2-count-fails-turn")
 
     await record_turn(turn.litellm_params, 35)
-    await admit_turn()
+    await admit_turn({})
     await _complete_35_token_turn(turn)
 
     with pytest.raises(litellm.RateLimitError, match="ws-tpm-v2-count-fails"):
-        await admit_turn()
+        await admit_turn({})
 
 
 @pytest.mark.asyncio
@@ -585,7 +587,7 @@ async def test_websocket_turn_not_attributed_to_a_deployment_does_not_throttle_t
     router: Final = _usage_based_routing_router(monkeypatch, "ws-tpm-v2-unrouted", tpm=30)
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-unrouted")
     opened: Final = await _usage_now(router, "ws-tpm-v2-unrouted")
-    await admit_turn()
+    await admit_turn({})
     turn: Final = _open_websocket_turn(
         {**routed, "litellm_metadata": {"model_group": "ws-tpm-v2-unrouted", **deployment_metadata}},
         "ws-tpm-v2-unrouted-turn",
@@ -593,7 +595,7 @@ async def test_websocket_turn_not_attributed_to_a_deployment_does_not_throttle_t
 
     await record_turn(turn.litellm_params, 35)
 
-    await admit_turn()
+    await admit_turn({})
     assert (await _usage_after(router, "ws-tpm-v2-unrouted", opened))[0] == 0
 
 
@@ -1116,6 +1118,227 @@ async def test_acompletion_wildcard_route_headers_and_counter_use_resolved_deplo
     assert headers["x-ratelimit-remaining-tokens"] == 1000 - total_tokens
     assert headers["x-ratelimit-remaining-requests"] == 99
     assert await router.get_model_group_usage("openai/gpt-5-mini") == (total_tokens, 1)
+
+
+def _image_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{name}.invalid/v1",
+                },
+                "model_info": {"id": name},
+            }
+            for name in ("refuser", "backup")
+        ],
+        fallbacks=[{"refuser": ["backup"]}],
+        num_retries=0,
+    )
+
+
+async def _backup_usage_after_serving(request: dict[str, object]) -> tuple[int | None, int | None]:
+    router: Final = _image_router()
+    refusal: Final = {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}
+    served: Final = {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}]}}
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://refuser.invalid").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "candidates": [refusal],
+                        "usageMetadata": {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110},
+                    },
+                )
+            )
+            upstream.post(url__startswith="https://backup.invalid").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "candidates": [served],
+                        "usageMetadata": {"promptTokenCount": 200, "candidatesTokenCount": 100, "totalTokenCount": 300},
+                    },
+                )
+            )
+            await router.aimage_generation(**request)
+            await asyncio.sleep(0)
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+        return await router.get_model_group_usage("backup")
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+async def test_a_fallback_serving_a_refused_image_counts_the_same_model_group_usage_as_serving_it_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="refuser",
+        prompt="a single small red dot",
+        litellm_call_id="image-refused-then-served-by-a-fallback",
+    )
+
+    assert await _backup_usage_after_serving({**request, "litellm_logging_obj": logging_obj}) == await (
+        _backup_usage_after_serving({"model": "backup", "prompt": "a single small red dot"})
+    )
+
+
+async def _refusing_fallback_usage(request: dict[str, object]) -> tuple[int | None, int | None]:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{name}.invalid/v1",
+                },
+                "model_info": {"id": name},
+            }
+            for name in ("outage", "refuser")
+        ],
+        fallbacks=[{"outage": ["refuser"]}],
+        num_retries=0,
+    )
+    refusal: Final = {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://outage.invalid").mock(
+                return_value=httpx.Response(500, json={"error": {"code": 500, "message": "scripted outage"}})
+            )
+            upstream.post(url__startswith="https://refuser.invalid").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "candidates": [refusal],
+                        "usageMetadata": {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110},
+                    },
+                )
+            )
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                await router.aimage_generation(**request)
+            await asyncio.sleep(0)
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+        return await router.get_model_group_usage("refuser")
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+async def test_a_refusing_fallback_counts_the_same_model_group_usage_on_a_shared_logging_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="outage",
+        prompt="a single small red dot",
+        litellm_call_id="image-refused-by-a-fallback-on-a-shared-logging-object",
+    )
+
+    assert await _refusing_fallback_usage({**request, "litellm_logging_obj": logging_obj}) == await (
+        _refusing_fallback_usage({"model": "outage", "prompt": "a single small red dot"})
+    )
+
+
+async def _multi_image_refusing_fallback_usage(
+    request: dict[str, object], answers: tuple[tuple[dict[str, object], int], ...]
+) -> tuple[int | None, int | None]:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{name}.invalid/v1",
+                },
+                "model_info": {"id": name},
+            }
+            for name in ("outage", "refuser")
+        ],
+        fallbacks=[{"outage": ["refuser"]}],
+        num_retries=0,
+    )
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://outage.invalid").mock(
+                return_value=httpx.Response(500, json={"error": {"code": 500, "message": "scripted outage"}})
+            )
+            upstream.post(url__startswith="https://refuser.invalid").mock(
+                side_effect=[
+                    httpx.Response(
+                        200,
+                        json={
+                            "candidates": [answer],
+                            "usageMetadata": {"promptTokenCount": tokens, "totalTokenCount": tokens},
+                        },
+                    )
+                    for answer, tokens in answers
+                ]
+            )
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                await router.aimage_generation(**request, n=len(answers))
+            await asyncio.sleep(0)
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+        return await router.get_model_group_usage("refuser")
+    finally:
+        router.discard()
+
+
+_BILLED_REFUSAL: Final = {"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+@pytest.mark.parametrize("shared_logging_object", [True, False])
+@pytest.mark.parametrize(
+    "answers, billed_tokens",
+    [
+        pytest.param(((_BILLED_REFUSAL, 600), (_BILLED_REFUSAL, 500)), 1100, id="two_billed_refusals"),
+        pytest.param(
+            (
+                ({"finishReason": "IMAGE_RECITATION", "content": {"role": "model"}}, 600),
+                ({"finishReason": "NO_IMAGE"}, 500),
+            ),
+            500,
+            id="a_free_refusal_beside_a_billed_answer",
+        ),
+    ],
+)
+async def test_every_billed_answer_of_a_refusing_multi_image_fallback_counts_toward_its_model_group_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    shared_logging_object: bool,
+    answers: tuple[tuple[dict[str, object], int], ...],
+    billed_tokens: int,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="outage",
+        prompt="a single small red dot",
+        litellm_call_id="multi-image-refused-by-a-fallback",
+    )
+    shared: Final = {**request, "litellm_logging_obj": logging_obj}
+    unshared: Final = {"model": "outage", "prompt": "a single small red dot"}
+
+    assert await _multi_image_refusing_fallback_usage(shared if shared_logging_object else unshared, answers) == (
+        billed_tokens,
+        1,
+    )
 
 
 @pytest.mark.asyncio
@@ -2107,6 +2330,61 @@ def test_handle_clientside_credential_with_deployment_model_name(model_list):
         pytest.fail(f"Failed with deployment model_name: {e}")
 
     print("✓ _handle_clientside_credential test passed!")
+
+
+class _UrlRecordingClient(AsyncHTTPHandler):
+    urls: tuple[str, ...] = ()
+
+    async def post(self, url: str, *args: object, **kwargs: object) -> httpx.Response:
+        self.urls = (*self.urls, url)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "us.openai.gpt-6.1-sol",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+
+@pytest.mark.parametrize(
+    "caller_params",
+    [
+        {"api_base": "https://caller.example.com/openai/v1/chat/completions"},
+        {"api_base": "https://caller.example.com"},
+        {"api_base": None},
+        {},
+    ],
+)
+@pytest.mark.asyncio
+async def test_caller_api_base_does_not_move_a_deployment_pinned_to_a_bedrock_runtime_endpoint(
+    caller_params: dict[str, str | None],
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {
+                    "model": "bedrock/us.openai.gpt-6.1-sol",
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_bedrock_runtime_endpoint": "https://runtime.example.com",
+                },
+            }
+        ]
+    )
+    client: Final = _UrlRecordingClient()
+
+    await router.acompletion(
+        model="gpt", messages=[{"role": "user", "content": "hi"}], client=client, num_retries=0, **caller_params
+    )
+
+    assert client.urls == ("https://runtime.example.com/openai/v1/chat/completions",)
 
 
 def test_resolve_model_name_from_model_id():

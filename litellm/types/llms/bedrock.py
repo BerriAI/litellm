@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -17,9 +17,20 @@ class CachePointBlock(TypedDict, total=False):
     ttl: str
 
 
+class GuardrailConverseTextBlock(TypedDict, total=False):
+    text: str
+
+
+class GuardrailConverseContentBlock(TypedDict, total=False):
+    """Content block for selective guardrail evaluation in Bedrock Converse API"""
+
+    text: GuardrailConverseTextBlock
+
+
 class SystemContentBlock(TypedDict, total=False):
     text: str
     cachePoint: CachePointBlock
+    guardContent: ReadOnly[GuardrailConverseContentBlock]
 
 
 class S3Location(TypedDict):
@@ -118,16 +129,6 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
 
 class BedrockConverseGptReasoningEffortBlock(TypedDict):
     effort: ReadOnly[str]
-
-
-class GuardrailConverseTextBlock(TypedDict, total=False):
-    text: str
-
-
-class GuardrailConverseContentBlock(TypedDict, total=False):
-    """Content block for selective guardrail evaluation in Bedrock Converse API"""
-
-    text: GuardrailConverseTextBlock
 
 
 class CitationWebLocationBlock(TypedDict, total=False):
@@ -271,11 +272,17 @@ class ConverseResponseBlock(TypedDict, total=False):
     serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
 
 
-class ToolJsonSchemaBlock(TypedDict, total=False):
-    type: Literal["object"]
-    properties: dict
-    required: list[str]
-    additionalProperties: bool
+ToolJsonSchemaBlock: Final = TypedDict(
+    "ToolJsonSchemaBlock",
+    {
+        "type": ReadOnly[Literal["object"]],
+        "properties": ReadOnly[dict],
+        "required": ReadOnly[list[str]],
+        "additionalProperties": ReadOnly[bool],
+        "$defs": ReadOnly[Mapping[str, object]],
+    },
+    total=False,
+)
 
 
 class ToolInputSchemaBlock(TypedDict):
@@ -320,14 +327,21 @@ class BedrockToolSpec(dict):
         strict: bool | None,
         supports_strict_tools: bool,
     ) -> None:
+        additional_properties: Final = parameters.get("additionalProperties")
+        defs: Final = parameters.get("$defs")
+        strict_fields: Final[ToolJsonSchemaBlock] = (
+            {"additionalProperties": additional_properties}
+            if supports_strict_tools and additional_properties is not None
+            else {}
+        )
+        defs_fields: Final[ToolJsonSchemaBlock] = {"$defs": defs} if isinstance(defs, dict) else {}
         json_schema: Final[ToolJsonSchemaBlock] = {
             "type": parameters["type"],
             "properties": parameters.get("properties", {}),
             "required": parameters.get("required", []),
+            **strict_fields,
+            **defs_fields,
         }
-        additional_properties: Final = parameters.get("additionalProperties")
-        if supports_strict_tools and additional_properties is not None:
-            json_schema["additionalProperties"] = additional_properties
 
         tool_spec: Final[ToolSpecBlock] = {
             "inputSchema": {"json": json_schema},
@@ -469,6 +483,9 @@ class Document(TypedDict):
     snippet: str
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 class ServerSentEvent:
     def __init__(
         self,
@@ -502,8 +519,8 @@ class ServerSentEvent:
     def data(self) -> str:
         return self._data
 
-    def json(self) -> Any:
-        return json.loads(self.data)
+    def json(self) -> object:
+        return _DECODED_JSON.validate_python(json.loads(self.data))
 
     @override
     def __repr__(self) -> str:

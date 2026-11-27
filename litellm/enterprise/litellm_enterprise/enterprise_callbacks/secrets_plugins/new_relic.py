@@ -15,7 +15,7 @@ class NewRelicDetector(RegexBasedDetector):
         return "New Relic API Secrets"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # New Relic ingest browser API token
             re.compile(

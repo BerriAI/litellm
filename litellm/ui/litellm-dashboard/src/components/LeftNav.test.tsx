@@ -1,0 +1,927 @@
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../tests/test-utils";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
+import { PluginModeProvider } from "@/contexts/PluginModeContext";
+import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
+import LeftNav, { menuGroups, getBreadcrumb } from "./LeftNav";
+
+const Sidebar = ({ collapsed = false, ...props }: ComponentProps<typeof LeftNav> & { collapsed?: boolean }) => (
+  <SidebarProvider defaultOpen={!collapsed}>
+    <LeftNav {...props} />
+  </SidebarProvider>
+);
+
+const CloseOnBreakpointChange = () => {
+  useCloseMobileSidebarOn();
+  return null;
+};
+
+const PhoneShell = ({ railCollapsed = false }: { railCollapsed?: boolean }) => (
+  <SidebarProvider defaultOpen={!railCollapsed}>
+    <CloseOnBreakpointChange />
+    <SidebarTrigger />
+    <LeftNav />
+  </SidebarProvider>
+);
+
+vi.mock("../utils/roles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils/roles")>();
+  return {
+    ...actual,
+    all_admin_roles: ["admin", "admin_viewer"],
+    old_admin_roles: ["admin", "admin_viewer"],
+    internalUserRoles: ["internal"],
+    rolesWithWriteAccess: ["admin", "internal"],
+    rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
+    isAdminRole: (role: string) => role === "admin" || role === "admin_viewer",
+    isProxyAdminRole: (role: string) => role === "admin",
+    isUserTeamAdminForAnyTeam: actual.isUserTeamAdminForAnyTeam,
+  };
+});
+
+const navState = vi.hoisted(() => ({ pathname: "/ui/api-keys" }));
+const health = vi.hoisted(() => ({ version: undefined as string | undefined }));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => navState.pathname,
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
+const { mockUseAuthorized, mockUseOrganizations, mockUseTeams } = vi.hoisted(() => {
+  const mockUseAuthorized = vi.fn(() => ({
+    userId: "test-user-id",
+    accessToken: "test-access-token",
+    userRole: "admin",
+    isViewOnly: false,
+    token: "test-token",
+    userEmail: "test@example.com",
+    premiumUser: false,
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  }));
+
+  const mockUseOrganizations = vi.fn(() => ({
+    data: [],
+    isLoading: false,
+    error: null,
+  }));
+
+  const mockUseTeams = vi.fn(() => ({
+    data: [] as Array<{ members_with_roles: Array<{ user_id: string; role: string }> }>,
+    isLoading: false,
+    error: null,
+  }));
+
+  return { mockUseAuthorized, mockUseOrganizations, mockUseTeams };
+});
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: mockUseAuthorized,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: mockUseOrganizations,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: mockUseTeams,
+}));
+
+const uiConfig = vi.hoisted(() => ({ data: { admin_ui_disabled: false, use_si_terminology: false } }));
+
+vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
+  return {
+    useUIConfig: () => ({
+      data: uiConfig.data,
+      isLoading: false,
+    }),
+  };
+});
+
+// The redesigned sidebar reads the custom logo from ThemeContext; the test tree
+// has no ThemeProvider, so stub the hook.
+const unbrandedTheme = () => ({
+  logoUrl: null as string | null,
+  logoUrlDark: null as string | null,
+  faviconUrl: null as string | null,
+  setLogoUrl: vi.fn(),
+  setLogoUrlDark: vi.fn(),
+  setFaviconUrl: vi.fn(),
+});
+let mockUseThemeImpl = unbrandedTheme;
+vi.mock("@/contexts/ThemeContext", () => ({
+  useTheme: () => mockUseThemeImpl(),
+}));
+
+// Version tag + logout target come from network hooks; keep them inert in unit tests.
+vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
+  useHealthReadinessDetails: () => ({ data: health.version ? { litellm_version: health.version } : undefined }),
+}));
+vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({
+  useLogout: () => vi.fn(),
+}));
+
+const collectNavKeys = (): string[] =>
+  menuGroups.flatMap((group) => group.items.flatMap((item) => [item.key, ...(item.children ?? []).map((c) => c.key)]));
+
+// Every place a page id appears in the nav, as "GROUP" for a top-level item or
+// "GROUP > parentKey" for a child.
+const placementsOf = (page: string): string[] =>
+  menuGroups.flatMap((group) => [
+    ...group.items.filter((item) => item.page === page).map(() => group.groupLabel),
+    ...group.items.flatMap((item) =>
+      (item.children ?? []).filter((child) => child.page === page).map(() => `${group.groupLabel} > ${item.key}`),
+    ),
+  ]);
+
+const teamAdminAuthorization = {
+  userId: "team-admin-user-id",
+  accessToken: "test-access-token",
+  userRole: "internal",
+  isViewOnly: false,
+  token: "test-token",
+  userEmail: "teamadmin@example.com",
+  premiumUser: false,
+  disabledPersonalKeyCreation: false,
+  showSSOBanner: false,
+};
+
+const teamMemberAuthorization = {
+  userId: "team-member-user-id",
+  accessToken: "test-access-token",
+  userRole: "internal",
+  isViewOnly: false,
+  token: "test-token",
+  userEmail: "teamuser@example.com",
+  premiumUser: false,
+  disabledPersonalKeyCreation: false,
+  showSSOBanner: false,
+};
+
+describe("Sidebar (leftnav)", () => {
+  const defaultProps = {
+    collapsed: false,
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    mockUseAuthorized.mockReset();
+    mockUseOrganizations.mockReset();
+    mockUseTeams.mockReset();
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    });
+    mockUseThemeImpl = unbrandedTheme;
+    navState.pathname = "/ui/api-keys";
+    health.version = undefined;
+    uiConfig.data = { admin_ui_disabled: false, use_si_terminology: false };
+    localStorage.removeItem("litellm_plugin_mode");
+  });
+
+  it("uses SI terminology in section and page labels when the proxy asks for it", () => {
+    uiConfig.data = { admin_ui_disabled: false, use_si_terminology: true };
+    renderWithProviders(
+      <TerminologyProvider>
+        <Sidebar {...defaultProps} />
+      </TerminologyProvider>,
+    );
+
+    expect(screen.getByText("SI GATEWAY")).toBeInTheDocument();
+    expect(screen.getByText("SI Hub")).toBeInTheDocument();
+    expect(screen.queryByText("AI Hub")).not.toBeInTheDocument();
+  });
+
+  it("should link the logo to the UI home route rather than the proxy origin", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: /litellm home/i })).toHaveAttribute("href", "/ui");
+  });
+
+  it("should make customer organizations reachable from the Customer Management sidebar", () => {
+    localStorage.setItem("litellm_plugin_mode", "customer-portal");
+    navState.pathname = "/ui/customers/manage";
+    renderWithProviders(
+      <PluginModeProvider>
+        <Sidebar {...defaultProps} />
+      </PluginModeProvider>,
+    );
+    expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("href", "/ui/customers");
+    expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("data-active");
+    expect(screen.getByRole("link", { name: "Budget groups" })).toHaveAttribute("href", "/ui/customers/settings");
+    expect(getBreadcrumb("/ui/customers/settings")).toEqual({ section: "Customer Management", title: "Budget groups" });
+    expect(screen.queryByRole("link", { name: "End users" })).not.toBeInTheDocument();
+  });
+
+  it.each(["/ui/app-groups/", "/app-groups"])("opens app groups in Customer Management at %s", (pathname) => {
+    localStorage.setItem("litellm_plugin_mode", "customer-portal");
+    navState.pathname = pathname;
+    renderWithProviders(
+      <PluginModeProvider>
+        <Sidebar {...defaultProps} />
+      </PluginModeProvider>,
+    );
+    expect(screen.getByRole("link", { name: "App groups" })).toHaveAttribute("href", "/ui/app-groups");
+    expect(screen.getByRole("link", { name: "App groups" })).toHaveAttribute("data-active");
+    expect(screen.getByRole("link", { name: "Applications" })).not.toHaveAttribute("data-active", "true");
+    expect(getBreadcrumb(pathname)).toEqual({ section: "Customer Management", title: "App groups" });
+  });
+
+  it("pairs the logo with a dark-mode variant that swaps on the dark class", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+    const classesOf = (el: Element) => new Set(el.className.split(/\s+/));
+
+    const lightSrc = light.getAttribute("src") ?? "";
+    expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image$/));
+    expect(dark).toHaveAttribute("src", `${lightSrc}?theme=dark`);
+    expect(classesOf(light).has("dark:hidden")).toBe(true);
+    expect(classesOf(light).has("hidden")).toBe(false);
+    expect(classesOf(dark).has("hidden")).toBe(true);
+    expect(classesOf(dark).has("dark:block")).toBe(true);
+  });
+
+  const collapsedLogos = () => {
+    const home = within(screen.getByRole("link", { name: /litellm home/i }));
+    return {
+      light: home.getByRole("img", { name: "LiteLLM" }),
+      dark: home.getByRole("presentation", { hidden: true }),
+    };
+  };
+
+  it("requests the bundled monogram for both themes when collapsed", () => {
+    renderWithProviders(<Sidebar collapsed />);
+
+    const { light, dark } = collapsedLogos();
+
+    expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image\?variant=monogram$/));
+    expect(dark).toHaveAttribute("src", expect.stringMatching(/\/get_image\?theme=dark&variant=monogram$/));
+  });
+
+  it("keeps a configured custom logo when collapsed instead of the LiteLLM monogram", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/logo-dark.png",
+    });
+    renderWithProviders(<Sidebar collapsed />);
+
+    const { light, dark } = collapsedLogos();
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo-dark.png");
+  });
+
+  it("prefers a configured dark logo over the light one in dark mode", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/logo-dark.png",
+    });
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo-dark.png");
+  });
+
+  it("reuses the light custom logo in dark mode when no dark one is configured", () => {
+    mockUseThemeImpl = () => ({ ...unbrandedTheme(), logoUrl: "https://cdn.example.com/logo.png" });
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+  });
+
+  it("falls back to the light logo when a configured dark logo fails to load", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/gone.png",
+    });
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/gone.png");
+
+    fireEvent.error(dark);
+
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+  });
+
+  it("renders all top-level (non-nested) tabs for admin", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const topLevelLabels = [
+      "Home",
+      "Virtual Keys",
+      "Playground",
+      "Model Management",
+      "Agentic",
+      "MCP Servers",
+      "Guardrails",
+      "Policies",
+      "Tools",
+      "Usage",
+      "Logs",
+      "Guardrails Monitor",
+      "Teams",
+      "Internal Users",
+      "Organizations",
+      "Access Groups",
+      "Budgets",
+      "AI Hub",
+      "Experimental",
+      "Settings",
+    ];
+
+    topLevelLabels.forEach((label) => {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    });
+  });
+
+  it("expands a nested tab to reveal its children (Tools > Search Tools)", async () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.queryByText("Search Tools")).not.toBeInTheDocument();
+    act(() => {
+      fireEvent.click(screen.getByText("Tools"));
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Search Tools")).toBeInTheDocument();
+    });
+  });
+  it("reports whether a nested tab is expanded", async () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const toggle = screen.getByText("Tools").closest("button")!;
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+    await waitFor(() => {
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+    });
+  });
+
+  it("keeps Router Settings as a single Settings child", () => {
+    // Router Settings is admin-only, so getAvailablePages() filters it out entirely and the
+    // page_utils duplicate-key guard cannot see it. Walk menuGroups directly, otherwise a
+    // stray duplicate placement ships silently.
+    expect(placementsOf("router-settings")).toEqual(["SETTINGS > settings"]);
+  });
+
+  it("has no duplicate keys among all menu items and their children", () => {
+    // React keys must be unique across the whole nav config, otherwise the
+    // active-item highlight and group expansion collide.
+    const keys = collectNavKeys();
+    const duplicates = keys.filter((key, i) => keys.indexOf(key) !== i);
+    expect(duplicates).toEqual([]);
+  });
+
+  describe("Admin Viewer parity", () => {
+    // Admin Viewer follows a "read parity with Proxy Admin, no writes, no
+    // cost-incurring actions" rule. The session hook presents the viewer as
+    // an admin (`userRole: "admin"`) with `isViewOnly: true`; Playground
+    // stays hidden (incurs LLM cost) via the isViewOnly flag, while every
+    // admin page (Models + Endpoints, Agents, Logs, ...) is visible read-only.
+    const adminViewerAuth = {
+      userId: "admin-viewer-user-id",
+      accessToken: "test-access-token",
+      userRole: "admin",
+      isViewOnly: true,
+      token: "test-token",
+      userEmail: "viewer@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+
+    it("hides the admin-only Customer Management pages from an Admin Viewer with no app grant", () => {
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
+      localStorage.setItem("litellm_plugin_mode", "customer-portal");
+      renderWithProviders(
+        <PluginModeProvider>
+          <Sidebar {...defaultProps} />
+        </PluginModeProvider>,
+      );
+      expect(screen.queryByRole("link", { name: "Customer organizations" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Applications" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "App groups" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Settings" })).not.toBeInTheDocument();
+    });
+
+    it("hides Playground from Admin Viewer (cost-incurring action)", () => {
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.queryByText("Playground")).not.toBeInTheDocument();
+    });
+
+    it("shows Model Management to Admin Viewer (read-only)", () => {
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Model Management")).toBeInTheDocument();
+    });
+
+    it("shows Agents (under Agentic) to Admin Viewer (read-only)", async () => {
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      // Agents is now nested under the "Agentic" submenu — expand parent
+      // first to render the children, then assert Agents is visible.
+      act(() => {
+        fireEvent.click(screen.getByText("Agentic"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Agents")).toBeInTheDocument();
+      });
+    });
+
+    it("shows Logs to Admin Viewer", () => {
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Logs")).toBeInTheDocument();
+    });
+  });
+
+  describe("capability-gated Tools children", () => {
+    const internalAuth = {
+      userId: "internal-user-id",
+      accessToken: "test-access-token",
+      userRole: "internal",
+      isViewOnly: false,
+      token: "test-token",
+      userEmail: "internal@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+
+    afterEach(() => {
+      mockUseAuthorized.mockReset();
+    });
+
+    it("should hide Tool Policies from internal users while keeping other Tools children", async () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Tools"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Search Tools")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Tool Policies")).not.toBeInTheDocument();
+    });
+
+    it("should show Tool Policies to admins", async () => {
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Tools"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Tool Policies")).toBeInTheDocument();
+      });
+    });
+
+    it("should hide the Policies entry from internal users while keeping Guardrails", () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      expect(screen.getByText("Guardrails")).toBeInTheDocument();
+      expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+    });
+
+    it("should hide the Prompts entry from internal users while keeping other Experimental children", async () => {
+      mockUseAuthorized.mockReturnValue(internalAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Experimental"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("API Playground")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Prompts")).not.toBeInTheDocument();
+    });
+  });
+
+  // Workflow Runs, Memory and Guardrails Monitor render a shell and then 401
+  // for every non-proxy-admin role, because their page-load routes sit outside
+  // internal_user_routes / self_managed_routes. Cost Optimization does not:
+  // its primary call is /user/daily/activity, which every role may make, so
+  // the entry stays and only its proxy-wide tabs are gated inside the page.
+  describe("capability-gated pages whose data is proxy-admin-only", () => {
+    const authFor = (userRole: string) => ({
+      userId: "some-user-id",
+      accessToken: "test-access-token",
+      userRole,
+      isViewOnly: false,
+      token: "test-token",
+      userEmail: "someone@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    afterEach(() => {
+      mockUseAuthorized.mockReset();
+    });
+
+    it("hides Workflow Runs and Memory from an internal user under Agentic", async () => {
+      mockUseAuthorized.mockReturnValue(authFor("internal"));
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Agentic"));
+      });
+      // Liveness gate: the sibling Agents child stays visible to this role, so
+      // the absences below mean the gate fired, not that the group never opened.
+      await waitFor(() => {
+        expect(screen.getByText("Agents")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Workflow Runs")).not.toBeInTheDocument();
+      expect(screen.queryByText("Memory")).not.toBeInTheDocument();
+    });
+
+    // An org admin's session role is "Org Admin", which no capability list
+    // carries, and the proxy denies these routes to org admins too because
+    // `_user_is_org_admin` needs an organization_id the page-load GET never sends.
+    // Agents is already out of reach for this role, so gating the other two
+    // empties the Agentic group entirely and the parent must go with it rather
+    // than degrade into a leaf link to the non-route `?page=agentic`.
+    it("drops the whole Agentic group for an org admin once its last child is gated", () => {
+      mockUseAuthorized.mockReturnValue(authFor("org_admin"));
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      // Liveness gate: Logs carries no role list, so it proves the sidebar rendered.
+      expect(screen.getByText("Logs")).toBeInTheDocument();
+      expect(screen.queryByText("Agentic")).not.toBeInTheDocument();
+      expect(screen.queryByText("Workflow Runs")).not.toBeInTheDocument();
+      expect(screen.queryByText("Memory")).not.toBeInTheDocument();
+    });
+
+    it("keeps the Agentic group for an internal user, who can still see Agents", () => {
+      mockUseAuthorized.mockReturnValue(authFor("internal"));
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      expect(screen.getByText("Agentic")).toBeInTheDocument();
+    });
+
+    it("shows Workflow Runs and Memory to admins", async () => {
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      act(() => {
+        fireEvent.click(screen.getByText("Agentic"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Workflow Runs")).toBeInTheDocument();
+      });
+      expect(screen.getByText("Memory")).toBeInTheDocument();
+    });
+
+    it("hides Guardrails Monitor from an internal user while keeping Usage and Cost Optimization", () => {
+      mockUseAuthorized.mockReturnValue(authFor("internal"));
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      expect(screen.queryByText("Guardrails Monitor")).not.toBeInTheDocument();
+      expect(screen.getByText("Usage")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Lens Beta" })).toHaveAttribute("href", "/ui/lens");
+      expect(screen.getByText("Cost Optimization")).toBeInTheDocument();
+    });
+
+    it("shows Guardrails Monitor to admins", () => {
+      renderWithProviders(<Sidebar {...defaultProps} />);
+
+      expect(screen.getByText("Guardrails Monitor")).toBeInTheDocument();
+    });
+  });
+
+  it("should show Organizations tab for organization admins", () => {
+    mockUseAuthorized.mockReturnValue({
+      userId: "org-admin-user-id",
+      accessToken: "test-access-token",
+      userRole: "viewer",
+      isViewOnly: false,
+      token: "test-token",
+      userEmail: "orgadmin@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    mockUseOrganizations.mockReturnValue({
+      data: [
+        {
+          organization_id: "org-1",
+          organization_name: "Test Organization",
+          spend: 0,
+          max_budget: null,
+          models: [],
+          tpm_limit: null,
+          rpm_limit: null,
+          members: [
+            {
+              user_id: "org-admin-user-id",
+              user_role: "org_admin",
+            },
+          ],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    } as any);
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByText("Organizations")).toBeInTheDocument();
+  });
+
+  it("shows Projects to an internal user who administers a team", () => {
+    mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
+    mockUseTeams.mockReturnValue({
+      data: [
+        {
+          members_with_roles: [{ user_id: "team-admin-user-id", role: "admin" }],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: /Projects/ })).toBeInTheDocument();
+  });
+
+  it("hides Projects from an internal user who is not a team admin", () => {
+    mockUseAuthorized.mockReturnValue(teamMemberAuthorization);
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])("links internal users to Skills with read-only=%s", (isViewOnly) => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, isViewOnly });
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: "Skills Hub" })).toHaveAttribute("href", "/ui/skills");
+  });
+
+  it.each([
+    { allowlist: ["teams"], visible: false },
+    { allowlist: ["teams", "projects"], visible: true },
+  ])("applies the internal-user page allowlist $allowlist to Projects for team admins", ({ allowlist, visible }) => {
+    mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
+    mockUseTeams.mockReturnValue({
+      data: [
+        {
+          members_with_roles: [{ user_id: "team-admin-user-id", role: "admin" }],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithProviders(<Sidebar {...defaultProps} enabledPagesInternalUsers={allowlist} />);
+
+    expect(screen.queryByRole("link", { name: /Projects/ }) !== null).toBe(visible);
+  });
+
+  it("shows Projects to a user whose global role is org admin", () => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, userRole: "Org Admin" });
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: /Projects/ })).toHaveAttribute("href", "/ui/projects");
+  });
+
+  it.each([false, true])("keeps workspace and Chat discovery available with collapsed=%s", async (collapsed) => {
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar collapsed={collapsed} />);
+    await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
+    expect(await screen.findByRole("menuitem", { name: /^Chat / })).toBeVisible();
+  });
+
+  it("marks the nav item for the current route active", () => {
+    navState.pathname = "/ui/logs";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Logs" })).toHaveAttribute("data-active");
+    expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
+  });
+
+  it("closes the mobile drawer after following any link in it, including the page already open", async () => {
+    vi.stubGlobal("innerWidth", 390);
+    navState.pathname = "/ui/api-keys";
+    health.version = "1.2.3";
+    renderWithProviders(<PhoneShell />);
+    for (const page of ["Virtual Keys", "Playground", "v1.2.3"]) {
+      fireEvent.click(await screen.findByRole("button", { name: "Toggle Sidebar" }));
+      fireEvent.click(within(await screen.findByRole("dialog", { name: "Sidebar" })).getByRole("link", { name: page }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
+    }
+  });
+
+  it("shows the full nav in the phone drawer when the desktop rail was left collapsed", async () => {
+    vi.stubGlobal("innerWidth", 390);
+    navState.pathname = "/ui/search-tools";
+    renderWithProviders(<PhoneShell railCollapsed />);
+    fireEvent.click(await screen.findByRole("button", { name: "Toggle Sidebar" }));
+    const drawer = await screen.findByRole("dialog", { name: "Sidebar" });
+    expect(within(drawer).getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+    const tools = within(drawer).getByRole("button", { name: "Tools" });
+    expect(tools).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(tools);
+    expect(tools).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps the phone drawer closed after the window widens to desktop and narrows again", async () => {
+    const breakpointListeners = new Set<() => void>();
+    vi.stubGlobal("matchMedia", (media: string) => ({
+      matches: false,
+      media,
+      addEventListener: (_: string, listener: () => void) => breakpointListeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => breakpointListeners.delete(listener),
+    }));
+    const resizeTo = async (width: number) => {
+      vi.stubGlobal("innerWidth", width);
+      await act(async () => breakpointListeners.forEach((listener) => listener()));
+    };
+    vi.stubGlobal("innerWidth", 390);
+    renderWithProviders(<PhoneShell />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Toggle Sidebar" }));
+    expect(await screen.findByRole("dialog", { name: "Sidebar" })).toBeInTheDocument();
+    await resizeTo(1200);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
+    await resizeTo(390);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 300)));
+    expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Toggle Sidebar" })).toBeInTheDocument();
+  });
+
+  it("marks Home active at the dashboard root", () => {
+    navState.pathname = "/ui/";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("data-active");
+  });
+
+  it("does not highlight Home when the Aria workspace is active", () => {
+    navState.pathname = "/ui/aria";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
+  });
+
+  it.each(["/ui/lens", "/ui/lens/"])("shows only the workspace switcher, no gateway pages, at %s", (pathname) => {
+    navState.pathname = pathname;
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("button", { name: "Switch workspace, current: Lens" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Virtual Keys" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
+    expect(screen.queryByText("AI Gateway")).not.toBeInTheDocument();
+  });
+
+  it("expands the parent group of the current nested route and marks the child active", () => {
+    navState.pathname = "/ui/search-tools";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Search Tools" })).toHaveAttribute("data-active");
+    expect(screen.getByRole("button", { name: "Tools" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("links every leaf to its path route, including the ids that differ from their route", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    act(() => {
+      fireEvent.click(screen.getByText("Experimental"));
+    });
+
+    const expectHref = (label: string, href: string) =>
+      expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
+    expectHref("Virtual Keys", "/ui/api-keys");
+    expectHref("Playground", "/ui/playground");
+    expectHref("Model Management", "/ui/models-and-endpoints");
+    expectHref("Usage", "/ui/usage");
+    expectHref("Alerts", "/ui/alerts");
+  });
+
+  it("never links a leaf to the legacy ?page= switch", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    for (const group of ["Agentic", "Tools", "Experimental", "Settings"]) {
+      act(() => {
+        fireEvent.click(screen.getByText(group));
+      });
+    }
+    const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href") ?? "");
+    expect(hrefs.filter((href) => href.includes("page="))).toHaveLength(0);
+    expect(hrefs.filter((href) => href.startsWith("/ui/")).length).toBeGreaterThan(30);
+  });
+
+  it("exposes the sidebar as a complementary landmark", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(within(screen.getByRole("complementary")).getByRole("link", { name: "Virtual Keys" })).toBeInTheDocument();
+  });
+
+  it("expands the rail and opens the group when a group is chosen while collapsed", async () => {
+    renderWithProviders(<Sidebar {...defaultProps} collapsed />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    expect(await screen.findByRole("link", { name: "Search Tools" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps items reachable by name and icon when collapsed to the rail", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} collapsed />);
+    expect(container.querySelector('[data-slot="sidebar"]')).toHaveAttribute("data-collapsible", "icon");
+    const link = screen.getByRole("link", { name: "Virtual Keys" });
+    expect(link.querySelector("svg")).not.toBeNull();
+  });
+
+  it("shows Projects without a Beta badge", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/ui/projects");
+  });
+
+  it("shows Cost Optimization without a Beta badge", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const costOptimization = container.querySelector('a[href*="cost-optimization"]');
+    expect(costOptimization).not.toBeNull();
+    expect(costOptimization!).toHaveTextContent("Cost Optimization");
+    expect(costOptimization!).not.toHaveTextContent("Beta");
+  });
+
+  it("shows Projects to an org admin without a Beta badge", () => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, userRole: "Org Admin" });
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const projects = screen.getByRole("link", { name: "Projects" });
+    expect(projects).toHaveAttribute("href", "/ui/projects");
+    expect(projects).not.toHaveTextContent("Beta");
+  });
+
+  it.each([
+    ["Cost Optimization", "/ui/cost-optimization"],
+    ["Projects", "/ui/projects"],
+  ])("titles the collapsed-rail link for %s without its badge text", (name, href) => {
+    renderWithProviders(<Sidebar {...defaultProps} collapsed />);
+    expect(screen.getByTitle(name)).toHaveAttribute("href", href);
+  });
+
+  it("leaves expanded-rail links untitled", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.queryByTitle("Cost Optimization")).not.toBeInTheDocument();
+  });
+});
+
+describe("getBreadcrumb", () => {
+  it("should identify the customer organizations list and its hierarchy routes", () => {
+    expect(getBreadcrumb("/ui/customers/usage")).toEqual({
+      section: "Customer Management",
+      title: "Customer organizations",
+    });
+    expect(getBreadcrumb("/ui/customers/manage")).toEqual({
+      section: "Customer Management",
+      title: "Customer organizations",
+    });
+    expect(getBreadcrumb("/ui/customers/")).toEqual({
+      section: "Customer Management",
+      title: "Customer organizations",
+    });
+  });
+  it("resolves a top-level route to its section + title", () => {
+    expect(getBreadcrumb("/ui/api-keys")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
+    expect(getBreadcrumb("/ui/logs")).toEqual({ section: "Observability", title: "Logs" });
+  });
+
+  it("resolves routes whose segment differs from the sidebar page id", () => {
+    expect(getBreadcrumb("/ui/models-and-endpoints")).toEqual({ section: "AI Gateway", title: "Model Management" });
+    expect(getBreadcrumb("/ui/usage")).toEqual({ section: "Observability", title: "Usage" });
+  });
+
+  it("titles the dashboard root as Home", () => {
+    expect(getBreadcrumb("/ui/")).toEqual({ section: "AI Gateway", title: "Home" });
+  });
+
+  it("resolves a nested child route to its parent section", () => {
+    expect(getBreadcrumb("/ui/search-tools/")).toEqual({ section: "AI Gateway", title: "Search Tools" });
+  });
+
+  it("resolves router-settings under the Settings section", () => {
+    expect(getBreadcrumb("/ui/router-settings")).toEqual({ section: "Settings", title: "Router Settings" });
+  });
+
+  it("falls back to a prettified title with no section for unknown routes", () => {
+    expect(getBreadcrumb("/ui/some-unknown-page")).toEqual({ section: null, title: "Some Unknown Page" });
+  });
+});

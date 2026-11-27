@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, overload
 
 from litellm.litellm_core_utils.url_utils import ensure_api_route
@@ -75,8 +75,8 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """

@@ -1,6 +1,9 @@
-import type { ParseKeys } from "i18next";
+import { Bell } from "lucide-react";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
+import type { ParseKeys, TFunction } from "i18next";
 import React, { useEffect, useState } from "react";
-import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
+import { Controller, FormProvider, useFormContext } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
 
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
@@ -25,6 +28,7 @@ import MSTeamsSettings from "./MSTeamsSettings";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
 import { useUrlTab } from "@/hooks/useUrlTab";
+import { useZodForm } from "@/lib/forms/useZodForm";
 
 import AlertingSettings from "./alerting/alerting_settings";
 import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
@@ -37,6 +41,13 @@ import {
   setCallbacksCall,
 } from "./networking";
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
+import { callbackToForm, callbackToPayload, slackToPayload } from "./Settings/LoggingAndAlerts/LoggingCallbacks/mapper";
+import { callbackSchema, slackSchema } from "./Settings/LoggingAndAlerts/LoggingCallbacks/schema";
+import type {
+  AlertType,
+  CallbackFormValues,
+  SlackFormValues,
+} from "./Settings/LoggingAndAlerts/LoggingCallbacks/schema";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
 
@@ -49,7 +60,6 @@ interface SettingsPageProps {
   premiumUser: boolean;
 }
 
-type CallbackFormValues = Record<string, string>;
 const SETTINGS_TABS = [
   "logging-callbacks",
   "cloudzero-cost-tracking",
@@ -74,6 +84,9 @@ interface DynamicParamsFieldsProps {
   selectedCallback: string | null;
 }
 
+const callbackFieldLabel = (param: string, uiName?: string) =>
+  uiName || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+
 const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callbackConfigs, selectedCallback }) => {
   const { t } = useTranslation();
   const { register, control, formState } = useFormContext<CallbackFormValues>();
@@ -89,16 +102,12 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
       {params.map((param) => {
         const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
         const paramType = paramConfig.type || DEFAULT_DYNAMIC_PARAM_TYPE;
-        const fieldLabel = paramConfig.ui_name || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
-        const isRequired = paramConfig.required || false;
+        const fieldLabel = callbackFieldLabel(param, paramConfig.ui_name);
         const selectOptions: string[] = Array.isArray(paramConfig.options) ? paramConfig.options : [];
         const isSelect = paramType === "select" && selectOptions.length > 0;
         const isBoolean = paramType === "boolean";
         const fieldId = `${fieldIdPrefix}-${param}`;
-        const validationRules = isRequired
-          ? { required: t("loggingAndAlerts.loggingCallbacks.params.required", { field: fieldLabel.toLowerCase() }) }
-          : undefined;
-        const registration = isSelect || isBoolean ? undefined : register(param, validationRules);
+        const registration = isSelect || isBoolean ? undefined : register(param);
 
         return (
           <Field key={param} className="mb-4">
@@ -109,11 +118,10 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
               <Controller
                 control={control}
                 name={param}
-                rules={validationRules}
                 render={({ field }) => (
                   <Select
                     items={selectOptions.map((option) => ({ label: option, value: option }))}
-                    value={field.value || null}
+                    value={(field.value as string | undefined) || null}
                     onValueChange={(selected: string | null) => field.onChange(selected ?? "")}
                   >
                     <SelectTrigger id={fieldId} className="w-full" onBlur={field.onBlur}>
@@ -141,7 +149,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
                 render={({ field }) => (
                   <Switch
                     id={fieldId}
-                    checked={/^(true|1)$/i.test(String(field.value ?? ""))}
+                    checked={/^(true|1)$/i.test(String(field.value ?? paramConfig.default ?? ""))}
                     onCheckedChange={(checked: boolean) => field.onChange(String(checked))}
                     onBlur={field.onBlur}
                   />
@@ -192,6 +200,7 @@ interface CallbackConfigOption {
   id: string;
   displayName: string;
   logo?: string | null;
+  dynamic_params?: Record<string, { type?: string; ui_name?: string; required?: boolean; default?: unknown }>;
 }
 
 // Shared component for rendering callback selector
@@ -217,7 +226,6 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
     <Controller
       control={control}
       name="callback"
-      rules={disabled ? undefined : { required: t("loggingAndAlerts.loggingCallbacks.selector.required") }}
       render={({ field, fieldState }) => (
         <Field>
           <FieldLabel htmlFor={inputId}>{t("loggingAndAlerts.loggingCallbacks.selector.label")}</FieldLabel>
@@ -273,18 +281,6 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
 const CALLBACK_CONFIG_ALIASES: Record<string, string> = { s3_v2: "s3" };
 const CALLBACK_UNSUPPORTED_PARAMS: Record<string, readonly string[]> = { s3: ["s3_partition_granularity"] };
 
-interface DynamicParamConfig {
-  type?: string;
-  ui_name?: string;
-  required?: boolean;
-  options?: string[];
-}
-
-interface CallbackConfigWithParams {
-  id: string;
-  dynamic_params?: Record<string, DynamicParamConfig>;
-}
-
 const findCallbackConfig = <T extends { id: string }>(
   callbackConfigs: readonly T[],
   callbackName: string | null,
@@ -315,15 +311,22 @@ const getDynamicParamsForCallback = (
   return fallbackVariables ? Object.keys(fallbackVariables) : [];
 };
 
-// Shared helper function to build callback payload
-const buildCallbackPayload = (formValues: Record<string, any>, callbackName: string) => {
-  return {
-    environment_variables: Object.fromEntries(Object.entries(formValues).filter(([, value]) => value !== undefined)),
-    litellm_settings: {
-      success_callback: [callbackName],
-    },
-  };
-};
+const requiredCallbackFields = (params: string[], config: CallbackConfigOption | undefined, t: TFunction) =>
+  Object.fromEntries(
+    params.flatMap((param) => {
+      const field = config?.dynamic_params?.[param];
+      return field?.required && field.type !== "boolean"
+        ? [
+            [
+              param,
+              t("loggingAndAlerts.loggingCallbacks.params.required", {
+                field: callbackFieldLabel(param, field.ui_name).toLowerCase(),
+              }),
+            ],
+          ]
+        : [];
+    }),
+  );
 
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [activeTab, setActiveTab] = useUrlTab(SETTINGS_TABS, "logging-callbacks");
@@ -331,12 +334,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [isLoadingCallbacks, setIsLoadingCallbacks] = useState(true);
   const [alerts, setAlerts] = useState<any[]>([]);
-  const addForm = useForm<CallbackFormValues>({ shouldUnregister: true });
-  const editForm = useForm<CallbackFormValues>({ shouldUnregister: true });
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
   const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
   const [alertToWebhooks, setAlertToWebhooks] = useState<Record<string, string>>({});
-  const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
+  const slackForm = useZodForm(slackSchema, { defaultValues: { activeAlerts: [] } });
+  const { setValue: setSlackValue } = slackForm;
+  const activeAlerts = slackForm.watch("activeAlerts");
 
   const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
   const [callbackConfigs, setCallbackConfigs] = useState<any[]>([]);
@@ -361,6 +364,24 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [isAddingCallback, setIsAddingCallback] = useState(false);
   const [isDeletingCallback, setIsDeletingCallback] = useState(false);
 
+  const addConfig = findCallbackConfig(callbackConfigs, selectedCallback);
+  const editConfig = findCallbackConfig(callbackConfigs, selectedEditCallback?.name ?? null);
+  const editParams = getDynamicParamsForCallback(
+    selectedEditCallback?.name ?? null,
+    callbackConfigs,
+    selectedEditCallback?.variables,
+  );
+  const addForm = useZodForm(
+    callbackSchema({
+      callback: t("loggingAndAlerts.loggingCallbacks.selector.required"),
+      ...requiredCallbackFields(selectedCallbackParams, addConfig, t),
+    }),
+    { shouldUnregister: true },
+  );
+  const editForm = useZodForm(callbackSchema(requiredCallbackFields(editParams, editConfig, t)), {
+    shouldUnregister: true,
+  });
+
   useEffect(() => {
     if (!accessToken) {
       return;
@@ -383,33 +404,22 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         callbackConfigs,
         selectedEditCallback.variables,
       );
-      const fieldNameFor = (variable: string) =>
-        params.find((param) => param.toUpperCase() === variable.toUpperCase()) ?? variable;
       const callbackConfig = findCallbackConfig(callbackConfigs, selectedEditCallback.name);
-      const normalized = Object.fromEntries(
-        Object.entries(selectedEditCallback.variables || {}).flatMap(([key, value]) => {
-          const fieldName = fieldNameFor(key);
-          if (value == null && callbackConfig?.dynamic_params?.[fieldName]?.type === "select") {
-            return [];
-          }
-          return [[fieldName, value ?? ""]];
-        }),
+      editForm.reset(
+        callbackToForm(selectedEditCallback.name, selectedEditCallback.variables || {}, params, callbackConfig),
       );
-      editForm.reset({
-        ...normalized,
-        callback: selectedEditCallback.name,
-      });
     }
   }, [showEditCallback, selectedEditCallback, editForm, callbackConfigs]);
 
-  const handleSwitchChange = (alertName: string) => {
-    if (activeAlerts.includes(alertName)) {
-      setActiveAlerts(activeAlerts.filter((alert) => alert !== alertName));
-    } else {
-      setActiveAlerts([...activeAlerts, alertName]);
-    }
+  const handleSwitchChange = (alertName: AlertType) => {
+    setSlackValue(
+      "activeAlerts",
+      activeAlerts.includes(alertName)
+        ? activeAlerts.filter((alert) => alert !== alertName)
+        : [...activeAlerts, alertName],
+    );
   };
-  const alerts_to_UI_NAME: Record<string, ParseKeys> = {
+  const alerts_to_UI_NAME = {
     llm_exceptions: "loggingAndAlerts.alertTypes.labels.llmExceptions",
     llm_too_slow: "loggingAndAlerts.alertTypes.labels.llmTooSlow",
     llm_requests_hanging: "loggingAndAlerts.alertTypes.labels.llmRequestsHanging",
@@ -422,7 +432,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     region_outage_alerts: "loggingAndAlerts.alertTypes.labels.regionOutageAlerts",
     model_deprecation_warnings: "loggingAndAlerts.alertTypes.labels.modelDeprecationWarnings",
     performance_alerts: "loggingAndAlerts.alertTypes.labels.performanceAlerts",
-  };
+  } satisfies Partial<Record<AlertType, ParseKeys>>;
+  const slackAlertTypes = Object.keys(alerts_to_UI_NAME) as (keyof typeof alerts_to_UI_NAME)[];
 
   useEffect(() => {
     const fetchCallbacks = async () => {
@@ -442,7 +453,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
 
             let active_alerts = _alert_info.active_alerts;
-            setActiveAlerts(active_alerts);
+            setSlackValue("activeAlerts", active_alerts);
             setCatchAllWebhookURL(catch_all_webhook);
             setAlertToWebhooks(_alert_info.alerts_to_webhook);
           }
@@ -454,14 +465,14 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       }
     };
     fetchCallbacks();
-  }, [accessToken, userRole, userID]);
+  }, [accessToken, userRole, userID, setSlackValue]);
 
-  const isAlertOn = (alertName: string) => {
+  const isAlertOn = (alertName: AlertType) => {
     return activeAlerts && activeAlerts.includes(alertName);
   };
 
   // Shared handler for callback form submission
-  const handleCallbackSubmit = async (formValues: Record<string, any>, callbackName: string, isEdit: boolean) => {
+  const handleCallbackSubmit = async (formValues: CallbackFormValues, callbackName: string, isEdit: boolean) => {
     if (!accessToken) {
       return;
     }
@@ -472,7 +483,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setIsAddingCallback(true);
     }
 
-    const payload = buildCallbackPayload(formValues, callbackName);
+    const payload = callbackToPayload(formValues, callbackName);
 
     try {
       await setCallbacksCall(accessToken, payload);
@@ -509,16 +520,16 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     }
   };
 
-  const updateCallbackCall = async (formValues: Record<string, any>) => {
+  const updateCallbackCall = async (formValues: CallbackFormValues) => {
     if (!selectedEditCallback) {
       return;
     }
     await handleCallbackSubmit(formValues, selectedEditCallback.name, true);
   };
 
-  const addNewCallbackCall = async (formValues: Record<string, any>) => {
-    const new_callback = formValues?.callback;
-    if (!new_callback) {
+  const addNewCallbackCall = async (formValues: CallbackFormValues) => {
+    const new_callback = formValues.callback;
+    if (typeof new_callback !== "string" || !new_callback) {
       return;
     }
     await handleCallbackSubmit(formValues, new_callback, false);
@@ -547,24 +558,29 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     editForm.reset();
   };
 
-  const handleSaveAlerts = async () => {
+  const bindSlackWebhook = (key: AlertType) => {
+    const syncValue = (input: HTMLInputElement) => {
+      if (slackForm.getValues(key) !== input.value) {
+        setSlackValue(key, input.value);
+      }
+    };
+    const handleInput = (event: React.FormEvent<HTMLInputElement>) => syncValue(event.currentTarget);
+    return {
+      name: key,
+      onInput: handleInput,
+      onChange: handleInput,
+      ref(input: HTMLInputElement | null) {
+        if (input) syncValue(input);
+      },
+    };
+  };
+
+  const handleSaveAlerts = async (values: SlackFormValues) => {
     if (!accessToken) {
       return;
     }
 
-    const updatedAlertToWebhooks: Record<string, string> = {};
-    Object.entries(alerts_to_UI_NAME).forEach(([key, value]) => {
-      const webhookInput = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
-      const newWebhookValue = webhookInput?.value || "";
-      updatedAlertToWebhooks[key] = newWebhookValue;
-    });
-
-    const payload = {
-      general_settings: {
-        alert_to_webhook_url: updatedAlertToWebhooks,
-        alert_types: activeAlerts,
-      },
-    };
+    const payload = slackToPayload(values, slackAlertTypes);
 
     try {
       await setCallbacksCall(accessToken, payload);
@@ -610,10 +626,17 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   }
 
   return (
-    <div className="mx-4">
-      <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTab)}>
-          <TabsList variant="line">
+    <>
+      <PageContent>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Bell />
+            {t("shell.nav.items.loggingAndAlerts")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("shell.pageDescriptions.loggingAndAlerts")}</PageHeaderDescription>
+        </PageHeader>
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTab)} className="gap-6">
+          <TabsList variant="line" className="max-w-full justify-start overflow-x-auto">
             <TabsTrigger value="logging-callbacks">{t("loggingAndAlerts.page.tabs.loggingCallbacks")}</TabsTrigger>
             <TabsTrigger value="cloudzero-cost-tracking">{t("loggingAndAlerts.page.tabs.cloudZero")}</TabsTrigger>
             <TabsTrigger value="alerting-types">{t("loggingAndAlerts.page.tabs.alertingTypes")}</TabsTrigger>
@@ -669,7 +692,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 </TableHeader>
 
                 <TableBody>
-                  {Object.entries(alerts_to_UI_NAME).map(([key, value], index) => (
+                  {slackAlertTypes.map((key, index) => (
                     <TableRow key={index}>
                       <TableCell>
                         {key == "region_outage_alerts" ? (
@@ -697,24 +720,20 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                         )}
                       </TableCell>
                       <TableCell className="whitespace-normal break-words">
-                        <p>{t(value)}</p>
+                        <p>{t(alerts_to_UI_NAME[key])}</p>
                       </TableCell>
                       <TableCell>
                         <Input
-                          name={key}
+                          {...bindSlackWebhook(key)}
                           type="password"
-                          defaultValue={
-                            alertToWebhooks && alertToWebhooks[key]
-                              ? alertToWebhooks[key]
-                              : (catchAllWebhookURL as string)
-                          }
+                          defaultValue={alertToWebhooks?.[key] || catchAllWebhookURL}
                         />
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-              <Button size="xs" className="mt-2" onClick={handleSaveAlerts}>
+              <Button size="xs" className="mt-2" onClick={slackForm.handleSubmit(handleSaveAlerts)}>
                 {t("loggingAndAlerts.alertTypes.saveChanges")}
               </Button>
 
@@ -743,7 +762,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             <MSTeamsSettings accessToken={accessToken} userID={userID} userRole={userRole} alerts={alerts} />
           </TabsContent>
         </Tabs>
-      </div>
+      </PageContent>
 
       <Dialog open={showAddCallbacksModal} onOpenChange={(open) => !open && closeAddCallbackModal()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
@@ -806,11 +825,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   />
 
                   <DynamicParamsFields
-                    params={getDynamicParamsForCallback(
-                      selectedEditCallback.name,
-                      callbackConfigs,
-                      selectedEditCallback.variables,
-                    )}
+                    params={editParams}
                     callbackConfigs={callbackConfigs}
                     selectedCallback={selectedEditCallback.name}
                   />
@@ -851,7 +866,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         onOk={confirmDeleteCallback}
         confirmLoading={isDeletingCallback}
       />
-    </div>
+    </>
   );
 };
 

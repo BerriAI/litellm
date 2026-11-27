@@ -11,10 +11,10 @@ import re
 import threading
 import weakref
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar
 from urllib.parse import urlparse
 
 import litellm
@@ -104,6 +104,7 @@ class _VertexCredentialsObject(Protocol):
 
 
 _VertexCredentialCacheKey = tuple[str | None, str | None]
+_HeaderValue = TypeVar("_HeaderValue")
 _KEY_FILE_VERSION_SEPARATOR: Final = "\0"
 
 
@@ -157,7 +158,7 @@ class VertexBase:
         self._async_refresh_locks: dict[_VertexCredentialCacheKey, asyncio.Lock] = {}
         self._async_refresh_lock_refcounts: dict[_VertexCredentialCacheKey, int] = {}
         # Tracks in-flight background refresh tasks to avoid duplicate refreshes.
-        self._background_refresh_tasks: dict[_VertexCredentialCacheKey, asyncio.Task] = {}
+        self._background_refresh_tasks: dict[_VertexCredentialCacheKey, asyncio.Task[None]] = {}
         self._sync_token_flights: weakref.WeakValueDictionary[_VertexCredentialCacheKey, Future[tuple[str, str]]] = (
             weakref.WeakValueDictionary()
         )
@@ -283,7 +284,9 @@ class VertexBase:
             )
 
     # Google Auth Helpers -- extracted for mocking purposes in tests
-    def _credentials_from_identity_pool(self, json_obj, scopes) -> _VertexCredentialsObject:
+    def _credentials_from_identity_pool(
+        self, json_obj: Mapping[str, object], scopes: Sequence[str]
+    ) -> _VertexCredentialsObject:
         try:
             from google.auth import identity_pool
         except ImportError:
@@ -294,7 +297,9 @@ class VertexBase:
             creds = creds.with_scopes(scopes)
         return creds
 
-    def _credentials_from_pluggable(self, json_obj, scopes) -> _VertexCredentialsObject:
+    def _credentials_from_pluggable(
+        self, json_obj: Mapping[str, object], scopes: Sequence[str]
+    ) -> _VertexCredentialsObject:
         try:
             from google.auth import pluggable
         except ImportError:
@@ -305,7 +310,9 @@ class VertexBase:
             creds = creds.with_scopes(scopes)
         return creds
 
-    def _credentials_from_identity_pool_with_aws(self, json_obj, scopes) -> _VertexCredentialsObject:
+    def _credentials_from_identity_pool_with_aws(
+        self, json_obj: Mapping[str, object], scopes: Sequence[str]
+    ) -> _VertexCredentialsObject:
         try:
             from google.auth import aws
         except ImportError:
@@ -316,7 +323,9 @@ class VertexBase:
             creds = creds.with_scopes(scopes)
         return creds
 
-    def _credentials_from_authorized_user(self, json_obj, scopes) -> _VertexCredentialsObject:
+    def _credentials_from_authorized_user(
+        self, json_obj: Mapping[str, object], scopes: Sequence[str]
+    ) -> _VertexCredentialsObject:
         try:
             import google.oauth2.credentials
         except ImportError:
@@ -324,7 +333,9 @@ class VertexBase:
 
         return google.oauth2.credentials.Credentials.from_authorized_user_info(json_obj, scopes=scopes)
 
-    def _credentials_from_service_account(self, json_obj, scopes) -> _VertexCredentialsObject:
+    def _credentials_from_service_account(
+        self, json_obj: Mapping[str, object], scopes: Sequence[str]
+    ) -> _VertexCredentialsObject:
         try:
             import google.oauth2.service_account
         except ImportError:
@@ -332,7 +343,7 @@ class VertexBase:
 
         return google.oauth2.service_account.Credentials.from_service_account_info(json_obj, scopes=scopes)
 
-    def _credentials_from_default_auth(self, scopes) -> tuple[_VertexCredentialsObject, str | None]:
+    def _credentials_from_default_auth(self, scopes: Sequence[str]) -> tuple[_VertexCredentialsObject, str | None]:
         try:
             import google.auth as google_auth
         except ImportError:
@@ -1312,8 +1323,10 @@ class VertexBase:
     ) -> tuple[str, str]:
         return await self._ensure_access_token_async(credentials, project_id, custom_llm_provider)
 
-    def set_headers(self, auth_header: str | None, extra_headers: dict | None) -> dict:
-        headers: Final = {
+    def set_headers(
+        self, auth_header: str | None, extra_headers: Mapping[str, _HeaderValue] | None
+    ) -> dict[str, _HeaderValue | str]:
+        headers: Final[dict[str, _HeaderValue | str]] = {
             "Content-Type": "application/json",
         }
         if auth_header is not None:

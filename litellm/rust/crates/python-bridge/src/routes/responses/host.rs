@@ -103,6 +103,7 @@ fn id_scope(
 impl PythonBinding for ResponsesPythonHost {
     type Protocol = Responses;
     type Failure = PyErr;
+    type Decoded = ResponsesCall;
 
     fn decode_request(
         &mut self,

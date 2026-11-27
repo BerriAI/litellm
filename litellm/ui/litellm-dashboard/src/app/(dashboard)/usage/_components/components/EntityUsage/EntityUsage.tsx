@@ -12,6 +12,7 @@ import {
 } from "./entityUsageSummary";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { hasCapability, type Capability } from "@/utils/capabilities";
+import { hasProxyWideSpendView } from "@/utils/roles";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { Bot, Boxes, ChevronDown, ChevronRight, ExternalLink, Info, KeyRound, Layers, Server } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -152,7 +153,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   selectedEntities: selectedTags,
   onSelectedEntitiesChange: setSelectedTags,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { teams } = useTeams();
   const teamList = useMemo(() => teams ?? [], [teams]);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
@@ -349,14 +350,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     8,
   );
 
-  const getFilterLabel = (entityType: string) => {
-    return t("usage.entityUsage.filterLabel", { entity: entityType });
-  };
-
-  const getFilterPlaceholder = (entityType: string) => {
-    return t("usage.entityUsage.filterPlaceholder", { entity: entityType });
-  };
-
   const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
     team: <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />,
     customer: <CustomerMultiSelect value={selectedTags} onChange={setSelectedTags} />,
@@ -369,7 +362,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
   const filterSlot = entityFilterSlots[entityType];
 
-  const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
+  const entityTitle = t(`usage.entityLabels.title.${entityType}`);
+  const entityLabel = t(`usage.entityLabels.inline.${entityType}`);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
   const showPtuHours = entityType === "team" && hasPtuHours(spendData.metadata);
   const userSpendTeamIds = useMemo(
@@ -380,18 +374,18 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [selectedTags, teams],
   );
   const providerSpend = useMemo(() => getProviderSpend(spendData.results), [spendData.results]);
-  const dailyTrend = useMemo(() => dailyTotals(spendData.results), [spendData.results]);
+  const dailyTrend = useMemo(() => dailyTotals(spendData.results, i18n.language), [spendData.results, i18n.language]);
   const stackFlatCost = showFlatCost && breakdown.metric === "spend";
   const chartSeries = useMemo(() => {
     const series = stackFlatCost ? withFlatCost(dailySeries, spendData.results, t) : dailySeries;
-    return bucketSeries(series, granularity);
-  }, [stackFlatCost, dailySeries, spendData.results, granularity, t]);
+    return bucketSeries(series, granularity, i18n.language, t);
+  }, [stackFlatCost, dailySeries, spendData.results, granularity, i18n.language, t]);
   const chartTotals = useMemo(() => bucketTotals(chartSeries), [chartSeries]);
 
   const entityBreakdownColumns = useMemo<ColumnDef<EntityMetricWithMetadata>[]>(
     () => [
       {
-        header: capitalizedEntityLabel,
+        header: entityTitle,
         accessorKey: "metadata.alias",
         meta: QUIET_HEADER,
         cell: ({ row }) => <span className="font-medium text-foreground">{row.original.metadata.alias}</span>,
@@ -427,7 +421,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         cell: ({ row }) => row.original.metrics.total_tokens.toLocaleString(),
       },
     ],
-    [capitalizedEntityLabel, maxEntitySpend, t],
+    [entityTitle, maxEntitySpend, t],
   );
 
   const chev = "size-3 text-muted-foreground";
@@ -493,7 +487,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     <div className="grid gap-3">
       <section className="grid gap-2">
         <h2 className="text-sm font-medium text-foreground">
-          {t("usage.entityUsage.spendOverview", { entity: capitalizedEntityLabel })}
+          {t("usage.entityUsage.spendOverview", { entity: entityTitle })}
         </h2>
         <div
           className={cn(
@@ -581,13 +575,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
       <Panel
         icon={Layers}
-        title={t("usage.entityUsage.spendPerEntity", { entity: capitalizedEntityLabel })}
+        title={t("usage.entityUsage.spendPerEntity", { entity: entityTitle })}
         action={
           <a
             href="https://docs.litellm.ai/docs/proxy/cost_tracking"
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
           >
-            {t("usage.entityUsage.trackCostPer", { entity: entityType })}
+            {t("usage.entityUsage.trackCostPer", { entity: entityLabel })}
             <ExternalLink aria-hidden="true" className="size-3" />
           </a>
         }
@@ -597,7 +591,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           data={entityRows}
           getRowId={(row) => row.metadata.id}
           maxBodyHeight={280}
-          noDataMessage={t("usage.entityUsage.noSpendData", { entity: entityType })}
+          noDataMessage={t("usage.entityUsage.noSpendData", { entity: entityLabel })}
           size="compact"
         />
       </Panel>
@@ -717,19 +711,20 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         <UsageExportHeader
           dateValue={dateValue}
           entityType={entityType}
-          onExport={(exportType, format) =>
+          onExport={(exportType, format, includeMetadata) =>
             request
-              ? api.exportRows(request, exportType, format)
+              ? api.exportRows(request, exportType, format, includeMetadata)
               : Promise.reject(new Error("Select a date range to export"))
           }
           showFilters={filterSlot === undefined && entityList !== null}
           filterSlot={filterSlot}
-          filterLabel={getFilterLabel(entityType)}
-          filterPlaceholder={getFilterPlaceholder(entityType)}
+          filterLabel={t("usage.entityUsage.filterLabel", { entity: entityLabel })}
+          filterPlaceholder={t("usage.entityUsage.filterPlaceholder", { entity: entityLabel })}
           selectedFilters={selectedTags}
           onFiltersChange={setSelectedTags}
           filterOptions={getAllTags() || undefined}
           teams={teamList}
+          canIncludeMetadata={hasProxyWideSpendView(userRole)}
         />
       </div>
       <Tabs defaultValue={tabs[0].key} className="gap-3">

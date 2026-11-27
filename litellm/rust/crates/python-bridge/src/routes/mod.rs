@@ -138,7 +138,7 @@ fn call_hooks(
     operation: LoggingOperation,
     call: &NativeCall<'_>,
     asynchronous: bool,
-) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
+) -> PyResult<(Py<PyDict>, LegacyLogging)> {
     let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
     let arguments = call.arguments(py);
     Ok((
@@ -154,11 +154,7 @@ fn execution_steps(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
 fn run_public_call<H, M>(
     py: Python<'_>,
     arguments: Py<PyDict>,
-    start: impl FnOnce(
-        Python<'_>,
-        &Bound<'_, PyDict>,
-        <H::Protocol as Protocol>::Request,
-    ) -> PyResult<M>
+    start: impl FnOnce(Python<'_>, &Bound<'_, PyDict>, H::Decoded) -> PyResult<M>
     + Send
     + Sync
     + 'static,
@@ -185,11 +181,7 @@ where
 fn run_public_call_after_policy<H, M>(
     py: Python<'_>,
     arguments: Py<PyDict>,
-    start: impl FnOnce(
-        Python<'_>,
-        &Bound<'_, PyDict>,
-        <H::Protocol as Protocol>::Request,
-    ) -> PyResult<M>
+    start: impl FnOnce(Python<'_>, &Bound<'_, PyDict>, H::Decoded) -> PyResult<M>
     + Send
     + Sync
     + 'static,

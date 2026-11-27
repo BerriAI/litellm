@@ -53,6 +53,7 @@ class ChatCountRequest:
 @dataclass(frozen=True, slots=True)
 class ChatCountBridgeError:
     message: str
+    param: str | None = None
 
 
 def _plain(item: object) -> object:
@@ -125,6 +126,11 @@ def _caller_input(responses_request: Mapping[str, object]) -> ResponseInputParam
     )
 
 
+def _request_input(responses_request: Mapping[str, object]) -> str | ResponseInputParam | None:
+    responses_input: Final = responses_request.get("input")
+    return responses_input if isinstance(responses_input, str) else _caller_input(responses_request)
+
+
 def _with_emulated_file_search(responses_request: Mapping[str, object]) -> Mapping[str, object]:
     tools: Final = responses_request.get("tools")
     if tools is None:
@@ -143,6 +149,8 @@ async def _with_previous_turns(
     responses_request: Mapping[str, object],
     policy: DropPolicy,
     session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None,
+    base_model: str | None,
+    user_continue_message: object,
 ) -> Mapping[str, object]:
     previous_response_id: Final = responses_request.get("previous_response_id")
     if not isinstance(previous_response_id, str) or not previous_response_id:
@@ -153,9 +161,14 @@ async def _with_previous_turns(
         litellm_completion_request={**chat_body, "model": model, "custom_llm_provider": custom_llm_provider},
         instructions=instructions if isinstance(instructions, str) else None,
         session_lookup=session_lookup,
-        request_kwargs={"drop_params": policy.drop_params},
+        request_kwargs={
+            "drop_params": policy.drop_params,
+            "base_model": base_model,
+            "user_continue_message": user_continue_message,
+        },
         previous_response_client_ids=previous_response_client_ids(previous_response_id, responses_request),
         input_replaces_history=holds_compaction_summary(responses_request.get("input")),
+        request_input=_request_input(responses_request),
     )
 
 
@@ -187,6 +200,8 @@ async def chat_count_request(
     responses_request: Mapping[str, object],
     policy: DropPolicy,
     session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
+    base_model: str | None = None,
+    user_continue_message: object = None,
     deployment_params: Mapping[str, object] = MappingProxyType({}),
 ) -> ChatCountRequest | ChatCountBridgeError | None:
     """The chat request Responses inference sends a provider with no native Responses API, or None
@@ -199,22 +214,24 @@ async def chat_count_request(
     ):
         return None
     try:
+        hoisted_request: Final = with_additional_tools_hoisted(
+            {**responses_request, "model": model}, drop_params=policy.drop_params
+        )
         chat_body: Final = await _with_previous_turns(
             responses_batch_body_to_chat_body(
-                _with_compaction_as_summary_text(
-                    _with_emulated_file_search(
-                        with_additional_tools_hoisted(responses_request, drop_params=policy.drop_params)
-                    )
-                ),
+                _with_compaction_as_summary_text(_with_emulated_file_search(hoisted_request)),
                 custom_llm_provider,
                 policy.drop_params,
                 caller_input=_caller_input(responses_request),
+                base_model=base_model,
             ),
             model,
             custom_llm_provider,
-            responses_request,
+            hoisted_request,
             policy,
             session_lookup,
+            base_model,
+            user_continue_message,
         )
         tools: Final = (
             () if "tools" in policy.additional_drop_params else tuple(map(_unmarked, _mappings(chat_body.get("tools"))))
@@ -227,6 +244,6 @@ async def chat_count_request(
             ),
         )
     except BadRequestError as e:
-        return ChatCountBridgeError(message=str(e.message))
+        return ChatCountBridgeError(message=str(e.message), param=e.param)
     except (ValidationError, ValueError, KeyError) as e:
         return ChatCountBridgeError(message=f"Invalid request for token counting: {e}")

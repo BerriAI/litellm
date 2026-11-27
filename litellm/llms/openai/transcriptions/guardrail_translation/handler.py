@@ -32,7 +32,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: dict,
+        data: Mapping[str, object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> Mapping[str, object]:
@@ -60,7 +60,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> "TranscriptionResponse":
         """
         Process output transcription by applying guardrails to transcribed text.

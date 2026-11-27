@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { v4 as uuidv4 } from "uuid";
 import { toast } from "@/lib/toast";
 import {
   buildMcpOAuthAuthorizeUrl,
@@ -199,7 +200,7 @@ export const useMcpOAuthFlow = ({
 
       const verifier = generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
-      const state = crypto.randomUUID();
+      const state = uuidv4();
 
       const client = registeredClient ?? getRegisteredOAuthClient(credentials);
       const scopeString = Array.isArray(credentials.scopes)

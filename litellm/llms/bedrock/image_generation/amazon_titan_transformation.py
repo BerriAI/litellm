@@ -80,14 +80,14 @@ class AmazonTitanImageGenerationConfig:
         return cls._is_titan_model(model)
 
     @classmethod
-    def get_supported_openai_params(cls, model: str | None = None) -> list:
+    def get_supported_openai_params(cls, model: str | None = None) -> list[str]:
         return ["size", "n", "quality"]
 
     @classmethod
     def map_openai_params(
         cls,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
     ):
         image_generation_config: Final[dict[str, object]] = {}
         for k, v in non_default_params.items():
@@ -149,7 +149,7 @@ class AmazonTitanImageGenerationConfig:
         model: str,
         image_response: ImageResponse,
         size: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> float:
         model_info: Final = get_model_info(model=model)
         output_cost_per_image: Final = model_info.get("output_cost_per_image") or 0.0

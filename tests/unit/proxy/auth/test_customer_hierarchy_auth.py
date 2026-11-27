@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,19 +11,22 @@ import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.caching.dual_cache import DualCache
 from litellm.models.budget import BudgetLimit
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth, ProxyException
 from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_MEMBER_ID_HEADER,
     CUSTOMER_ORG_ALIAS_HEADER,
     CUSTOMER_TEAM_ID_HEADER,
     AmbiguousOrganizationAlias,
+    CustomerBudgetExceededError,
+    CustomerIdentityHeaderNames,
+    check_customer_hierarchy_access,
     check_customer_hierarchy_budget,
     check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
     check_customer_hierarchy_windows,
     customer_hierarchy_from_member_row,
     customer_identity_from_headers,
-    customer_member_id_from_headers,
+    customer_identity_from_request,
     forget_customer_organization_aliases,
     get_customer_hierarchy,
     get_customer_organization_hierarchy,
@@ -370,7 +373,9 @@ def test_model_access_requires_every_level_with_an_allowlist_to_permit_the_model
 def test_member_header_is_read_case_insensitively_and_blank_values_are_ignored(
     headers: Mapping[str, object] | None, expected: str | None
 ) -> None:
-    assert customer_member_id_from_headers(headers) == expected
+    assert customer_identity_from_headers(headers) == (
+        CustomerRequestIdentity(customer_member_id=expected) if expected is not None else None
+    )
 
 
 class _MemberTable:
@@ -618,6 +623,147 @@ def test_the_request_identity_is_read_from_both_customer_headers(
     headers: Mapping[str, object] | None, expected: CustomerRequestIdentity | None
 ) -> None:
     assert customer_identity_from_headers(headers) == expected
+
+
+_HEADER_IDENTITY: Final = CustomerRequestIdentity(
+    customer_org_alias="header-org", customer_member_id="header-member", customer_team_id="header-team"
+)
+_CUSTOMER_HEADERS: Final = MappingProxyType(
+    {
+        CUSTOMER_ORG_ALIAS_HEADER: "header-org",
+        CUSTOMER_MEMBER_ID_HEADER: "header-member",
+        CUSTOMER_TEAM_ID_HEADER: "header-team",
+    }
+)
+_CUSTOMER_CLAIM_SETTINGS: Final = LiteLLM_JWTAuth(
+    customer_org_alias_jwt_field="customer.org",
+    customer_member_id_jwt_field="customer.member",
+    customer_team_id_jwt_field="customer.team",
+)
+
+
+@pytest.mark.parametrize(
+    "claims, expected",
+    [
+        (
+            {"customer": {"org": "jwt-org", "member": "jwt-member", "team": "jwt-team"}},
+            CustomerRequestIdentity(
+                customer_org_alias="jwt-org", customer_member_id="jwt-member", customer_team_id="jwt-team"
+            ),
+        ),
+        (
+            {"customer": {"member": "jwt-member"}},
+            CustomerRequestIdentity(customer_org_alias=None, customer_member_id="jwt-member", customer_team_id=None),
+        ),
+        ({}, None),
+        ({"customer": {"org": None, "member": "", "team": []}}, None),
+        (None, _HEADER_IDENTITY),
+    ],
+)
+def test_mapped_customer_claims_ignore_every_customer_header_on_a_verified_jwt(
+    claims: Mapping[str, object] | None, expected: CustomerRequestIdentity | None
+) -> None:
+    assert customer_identity_from_request(_CUSTOMER_HEADERS, claims, _CUSTOMER_CLAIM_SETTINGS) == expected
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        LiteLLM_JWTAuth(),
+        LiteLLM_JWTAuth(issuers=[JWTIssuerConfig(issuer="https://issuer.test", audience="litellm")]),
+    ],
+)
+def test_a_jwt_proxy_without_customer_claim_mappings_keeps_reading_customer_headers(
+    settings: LiteLLM_JWTAuth,
+) -> None:
+    assert customer_identity_from_request(_CUSTOMER_HEADERS, {"sub": "user"}, settings) == _HEADER_IDENTITY
+
+
+@pytest.mark.parametrize(
+    ("jwt_settings", "claims", "expected"),
+    [
+        (
+            LiteLLM_JWTAuth(team_id_jwt_field="client_id"),
+            {"client_id": "app"},
+            CustomerRequestIdentity(customer_org_alias="tenant", customer_member_id="external-user"),
+        ),
+        (
+            LiteLLM_JWTAuth(team_id_jwt_field="client_id", customer_org_alias_jwt_field="org"),
+            {"client_id": "app", "org": "signed-tenant"},
+            CustomerRequestIdentity(customer_org_alias="signed-tenant"),
+        ),
+        (
+            LiteLLM_JWTAuth(team_id_jwt_field="client_id", customer_org_alias_jwt_field="org"),
+            {"client_id": "app"},
+            None,
+        ),
+    ],
+)
+def test_jwt_app_with_custom_customer_headers_respects_claim_precedence(
+    jwt_settings: LiteLLM_JWTAuth, claims: Mapping[str, object], expected: CustomerRequestIdentity | None
+) -> None:
+    identity: Final = customer_identity_from_request(
+        {
+            "x-tenant-id": " tenant ",
+            "X-User-ID": "external-user",
+            CUSTOMER_ORG_ALIAS_HEADER: "other-org",
+            CUSTOMER_MEMBER_ID_HEADER: "other-member",
+        },
+        claims,
+        jwt_settings,
+        names=CustomerIdentityHeaderNames.from_settings(
+            {"customer_org_alias_header": "X-Tenant-ID", "customer_member_id_header": "X-User-ID"}
+        ),
+    )
+    assert identity == expected
+
+
+def test_configured_customer_header_does_not_fall_back_to_the_standard_header() -> None:
+    assert customer_identity_from_request(
+        {CUSTOMER_ORG_ALIAS_HEADER: "org", CUSTOMER_MEMBER_ID_HEADER: "member"},
+        None,
+        LiteLLM_JWTAuth(),
+        names=CustomerIdentityHeaderNames.from_settings({"customer_member_id_header": "X-User-ID"}),
+    ) == CustomerRequestIdentity(customer_org_alias="org")
+
+
+def test_an_issuer_specific_customer_mapping_alone_stops_header_fallback() -> None:
+    settings: Final = LiteLLM_JWTAuth(
+        issuers=[
+            JWTIssuerConfig(issuer="https://issuer.test", audience="litellm", customer_member_id_jwt_field="member")
+        ]
+    )
+    assert (
+        customer_identity_from_request(_CUSTOMER_HEADERS, {"_litellm_jwt_issuer": "https://issuer.test"}, settings)
+        is None
+    )
+
+
+@pytest.mark.parametrize("claims", [None, {}, {"unmapped": "customer"}])
+def test_no_customer_claim_or_header_leaves_customer_tracking_off(claims: Mapping[str, object] | None) -> None:
+    assert customer_identity_from_request(None, claims, LiteLLM_JWTAuth()) is None
+
+
+def test_issuer_normalized_customer_claims_override_global_claim_paths() -> None:
+    settings: Final = LiteLLM_JWTAuth(
+        customer_org_alias_jwt_field="global.org",
+        customer_member_id_jwt_field="global.member",
+        customer_team_id_jwt_field="global.team",
+        issuers=[JWTIssuerConfig(issuer="https://issuer.test", audience="litellm")],
+    )
+    assert customer_identity_from_request(
+        None,
+        {
+            "_litellm_jwt_issuer": "https://issuer.test",
+            "_litellm_customer_org_alias": "issuer-org",
+            "_litellm_customer_member_id": "issuer-member",
+            "_litellm_customer_team_id": "issuer-team",
+            "global": {"org": "other-org", "member": "other-member", "team": "other-team"},
+        },
+        settings,
+    ) == CustomerRequestIdentity(
+        customer_org_alias="issuer-org", customer_member_id="issuer-member", customer_team_id="issuer-team"
+    )
 
 
 @pytest.mark.asyncio
@@ -894,6 +1040,80 @@ async def test_either_customer_cap_blocks_while_the_other_has_capacity(exhausted
     assert error.value.entity_id == member.entity_id
     assert error.value.current_cost == exhausted.max_budget
     assert exhausted_duration in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_window_is_rejected_with_the_reading_of_every_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hierarchy: Final = customer_hierarchy_from_member_row(
+        _row(
+            template={
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": "12mo", "max_budget": 100},
+                ]
+            }
+        ),
+        NOW,
+    )
+    store: Final = FakeSpendCounters().store()
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    member: Final = hierarchy.scopes[-1]
+    monthly, yearly = customer_window_counters(member.key, member.entity_id, member.budget_limits, now=NOW)
+    await store.set(monthly.counter_key, 10.0)
+    await store.set(yearly.counter_key, 25.0)
+
+    with pytest.raises(CustomerBudgetExceededError) as rejected:
+        await check_customer_hierarchy_access(hierarchy, None, None, "/v1/chat/completions", now=NOW)
+
+    assert [
+        (window.budget_duration, window.spend, window.max_budget, window.reset_at)
+        for window in rejected.value.customer_hierarchy.scopes[-1].budget_window_usage
+    ] == [("1mo", 10.0, 10.0, monthly.reset_at), ("12mo", 25.0, 100.0, yearly.reset_at)]
+    assert monthly.reset_at is not None and yearly.reset_at is not None
+
+    await store.set(monthly.counter_key, 3.0)
+    admitted: Final = await check_customer_hierarchy_access(hierarchy, None, None, "/v1/chat/completions", now=NOW)
+    assert [(window.budget_duration, window.spend) for window in admitted.scopes[-1].budget_window_usage] == [
+        ("1mo", 3.0),
+        ("12mo", 25.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_cap_is_refused_as_a_budget_error_when_a_later_window_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hierarchy: Final = customer_hierarchy_from_member_row(
+        _row(
+            template={
+                "budget_limits": [
+                    {"budget_duration": "1mo", "max_budget": 10},
+                    {"budget_duration": "12mo", "max_budget": 100},
+                ]
+            }
+        ),
+        NOW,
+    )
+    store: Final = FakeSpendCounters().store()
+    monkeypatch.setattr(ps, "spend_counter_store", store)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    member: Final = hierarchy.scopes[-1]
+    monthly, _ = customer_window_counters(member.key, member.entity_id, member.budget_limits, now=NOW)
+    await store.set(monthly.counter_key, 10.0)
+
+    with pytest.raises(CustomerBudgetExceededError) as rejected:
+        await check_customer_hierarchy_access(hierarchy, None, None, "/v1/chat/completions", now=NOW)
+    assert [window.budget_duration for window in rejected.value.customer_hierarchy.scopes[-1].budget_window_usage] == [
+        "1mo"
+    ]
+
+    await store.set(monthly.counter_key, 3.0)
+    with pytest.raises(ProxyException) as unavailable:
+        await check_customer_hierarchy_access(hierarchy, None, None, "/v1/chat/completions", now=NOW)
+    assert unavailable.value.code == "503"
 
 
 @pytest.mark.asyncio

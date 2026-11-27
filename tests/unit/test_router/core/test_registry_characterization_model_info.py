@@ -4,6 +4,7 @@ limits/mode/display name/service tiers/listing info, group usage this minute, re
 the rate limit headers ``set_response_headers`` attaches.
 """
 
+from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
 
 import pytest
@@ -37,8 +38,17 @@ def _usage_core(make_core: MakeCore) -> RouterCore:
     )
 
 
-def _minute() -> str:
-    return get_utc_datetime().strftime("%H-%M")
+def _minutes_a_read_can_land_in() -> tuple[str, str]:
+    now: Final = get_utc_datetime()
+    return now.strftime("%H-%M"), (now + timedelta(minutes=1)).strftime("%H-%M")
+
+
+@pytest.fixture
+def fixed_minute(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Usage is counted per wall-clock minute, so a count and its read share one pinned minute."""
+    now: Final = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr("litellm.router_rust.surface.legacy_members.get_utc_datetime", lambda: now)
+    monkeypatch.setattr("litellm.router_rust.surface.model_info.get_utc_datetime", lambda: now)
 
 
 async def _serve(core: RouterCore, deployment_id: str, model: str, total_tokens: int) -> None:
@@ -51,7 +61,8 @@ async def _serve(core: RouterCore, deployment_id: str, model: str, total_tokens:
 
 async def _count(core: RouterCore, kind: Literal["itpm", "otpm"], deployment_id: str, model: str, value: int) -> None:
     usage: Final = core._usage  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the store the core counts io tokens in
-    usage.set_local(UsageCounter("global_router", deployment_id, model, _minute(), kind), value)
+    for minute in _minutes_a_read_can_land_in():
+        usage.set_local(UsageCounter("global_router", deployment_id, model, minute, kind), value)
 
 
 # -- model group info -----------------------------------------------------------------------------
@@ -475,6 +486,7 @@ async def test_group_usage_is_none_until_something_is_counted(make_core: MakeCor
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("fixed_minute")
 async def test_group_usage_sums_each_deployments_counters_for_this_minute(make_core: MakeCore) -> None:
     core = _usage_core(make_core)
     await _serve(core, "a", "openai/gpt-4o", 30)
@@ -486,6 +498,7 @@ async def test_group_usage_sums_each_deployments_counters_for_this_minute(make_c
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("fixed_minute")
 async def test_group_usage_follows_deployments_added_and_removed_after_a_read(make_core: MakeCore) -> None:
     core = _usage_core(make_core)
     await _serve(core, "a", "openai/gpt-4o", 30)
@@ -509,6 +522,7 @@ async def test_io_token_usage_sums_input_and_output_counters(make_core: MakeCore
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("fixed_minute")
 async def test_remaining_usage_is_each_limit_minus_this_minutes_usage(make_core: MakeCore) -> None:
     core = _usage_core(make_core)
     await _serve(core, "a", "openai/gpt-4o", 30)
@@ -555,6 +569,7 @@ async def test_an_unknown_usage_kind_raises(make_core: MakeCore) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("fixed_minute")
 async def test_response_headers_name_the_group_and_its_remaining_limits(make_core: MakeCore) -> None:
     core = _usage_core(make_core)
     await _serve(core, "a", "openai/gpt-4o", 30)

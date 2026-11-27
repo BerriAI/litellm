@@ -46,6 +46,13 @@
     "streamed",
     "sent"
   ],
+  "record_route_cost": [
+    "logger",
+    "receipt",
+    "service_tier",
+    "data_residency",
+    "vertex_location"
+  ],
   "retried_request": [
     "logger",
     "logged_body",
@@ -159,6 +166,8 @@
     "endpoint_type",
     "request_body",
     "chunks",
-    "error"
+    "error",
+    "head",
+    "detached"
   ]
 }

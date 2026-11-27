@@ -26,9 +26,12 @@ from fastapi import Request
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import IdJagRequestingApp
-from litellm.proxy.auth.handle_jwt import ID_JAG_TYP, AssertionRejection, JWTHandler
+from litellm.proxy.auth import jwt as proxy_jwt
+from litellm.proxy.auth.core import TEAM_HEADER, proxy_settings
+from litellm.proxy.auth.jwt import ID_JAG_TYP, AssertionRejection
 from litellm.proxy.mcp_server.gateway_dcr_flow import (
     AssertionIdentity,
     ConsentTeam,
@@ -44,7 +47,6 @@ from litellm.proxy.mcp_server.oauth_utils import proxy_base_url_from_env
 
 ID_JAG_REQUIRED_CLAIMS: Final = ("iss", "sub", "aud", "exp", "iat", "jti", "client_id")
 REJECTED_ASSERTION: Final = "assertion was rejected"
-TEAM_HEADER: Final = "x-litellm-team-id"
 _INACTIVE_SUBJECT: Final = frozenset(("no_active_key", "unresolvable"))
 _REPLAY_KEY_PREFIX: Final = "mcp_gateway_dcr:id_jag:"
 SCOPE_MCP: Final = "litellm:mcp"
@@ -72,7 +74,7 @@ def granted_scope(claim: object, *, mcp_resource: bool) -> GrantedScope | Subjec
     MCP routes whatever the claim says: ``litellm:llm`` cannot be granted and is refused."""
     if claim is not None and not isinstance(claim, str):
         return SubjectTokenRefusal(error="invalid_scope", description=_SCOPE_DESCRIPTION)
-    requested: Final = frozenset(claim.split()) if claim else frozenset()
+    requested: Final = frozenset(claim.split()) if claim else frozenset[str]()
     if not requested <= SCOPE_ROUTE_GROUPS.keys():
         return SubjectTokenRefusal(error="invalid_scope", description=_SCOPE_DESCRIPTION)
     if mcp_resource:
@@ -88,7 +90,7 @@ def granted_scope(claim: object, *, mcp_resource: bool) -> GrantedScope | Subjec
 def names_mcp_resource(aud: object, base_url: str | None) -> bool:
     """Whether the verified ``aud`` names only the MCP resource, ``{base}/mcp``, and not the
     authorization server itself (the bare origin)."""
-    audiences: Final = frozenset((aud,) if isinstance(aud, str) else aud if isinstance(aud, list) else ())
+    audiences: Final = frozenset[object]((aud,) if isinstance(aud, str) else as_object_list(aud) or ())
     return base_url is not None and f"{base_url}/mcp" in audiences and base_url not in audiences
 
 
@@ -205,7 +207,7 @@ class IdJagPrerequisites:
 
 def read_id_jag_prerequisites() -> IdJagPrerequisites:
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # rebound after startup, so read them per call
-        jwt_handler,
+        litellm_jwtauth,
         redis_usage_cache,
     )
 
@@ -217,14 +219,8 @@ def read_id_jag_prerequisites() -> IdJagPrerequisites:
         maps_jwts_to_virtual_keys=shared.maps_jwts_to_virtual_keys,
         shared_replay_store=redis_usage_cache is not None,
         base_url=proxy_base_url_from_env(),
-        requesting_apps=_requesting_apps(jwt_handler),
+        requesting_apps=tuple(litellm_jwtauth.id_jag_requesting_apps or ()),
     )
-
-
-def _requesting_apps(jwt_handler: JWTHandler) -> tuple[IdJagRequestingApp, ...]:
-    if not hasattr(jwt_handler, "litellm_jwtauth"):
-        return ()
-    return tuple(jwt_handler.litellm_jwtauth.id_jag_requesting_apps or ())
 
 
 def jwt_bearer_available() -> bool:
@@ -239,7 +235,7 @@ def gateway_audiences(base_url: str | None) -> tuple[str, ...]:
 
 class DecodeAssertion(Protocol):
     """Injected signature and claim verification ``(assertion, audience, required_claims)``:
-    ``JWTHandler.decode_trusted_assertion`` in production, which returns the verified claims,
+    ``proxy_jwt.verify_assertion`` in production, which returns the verified claims,
     a rejection, or raises when the gateway could not reach the issuer's keys."""
 
     def __call__(
@@ -248,7 +244,7 @@ class DecodeAssertion(Protocol):
 
 
 class ClaimReader(Protocol):
-    """The JWT auth user mapping as ``JWTHandler`` exposes it: the litellm user id and email the
+    """The JWT auth user mapping as ``proxy_jwt.ClaimReading`` exposes it: the litellm user id and email the
     verified claims name through ``user_id_jwt_field`` and ``user_email_jwt_field``."""
 
     def get_user_id(self, token: dict[str, object], default_value: str | None) -> str | None: ...
@@ -400,14 +396,14 @@ async def redeem_id_jag_assertion(
         lookup_consent_teams_from_database,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # rebound after startup, so read them per call
-        jwt_handler,
+        litellm_jwtauth,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
     resolve_subject: Final = subject_resolver(
-        _claim_reader(jwt_handler),
+        proxy_jwt.ClaimReading(litellm_jwtauth),
         proxy_user_lookup(
             partial(
                 get_user_object,
@@ -421,6 +417,7 @@ async def redeem_id_jag_assertion(
         lookup_consent_teams_from_database,
     )
     prerequisites: Final = read_id_jag_prerequisites()
+    settings: Final = proxy_settings()
     return await identity_from_id_jag(
         AssertionRedemption(
             assertion=assertion,
@@ -430,16 +427,12 @@ async def redeem_id_jag_assertion(
             team_id=request.headers.get(TEAM_HEADER),
             audiences=gateway_audiences(prerequisites.base_url),
             now=datetime.now(timezone.utc).timestamp(),
-            leeway_seconds=jwt_handler.leeway,
+            leeway_seconds=settings.jwt_leeway_seconds,
         ),
         prerequisites=prerequisites,
-        decode=jwt_handler.decode_trusted_assertion,
+        decode=partial(proxy_jwt.verify_assertion, settings),
         resolve_subject=resolve_subject,
     )
-
-
-def _claim_reader(handler: ClaimReader) -> ClaimReader:
-    return handler
 
 
 async def identity_from_id_jag(

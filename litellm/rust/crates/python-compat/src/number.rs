@@ -1,6 +1,21 @@
+//! Python number semantics: `int()` and `float()` parsing of text, Neumaier-compensated float
+//! sums, and the float and duration forms the proxy reads from settings.
+
 use std::{str::FromStr, time::Duration};
 
 use num_bigint::BigInt;
+use serde::{Deserialize, Serialize, Serializer};
+
+use crate::{
+    format::fixed,
+    repr::{float_repr, str_repr},
+};
+
+/// `round(value, ndigits)` for a finite `float`: the exact binary value rounded half to even at
+/// `ndigits` decimals, read back as the nearest float.
+pub fn round(value: f64, ndigits: usize) -> f64 {
+    fixed(value, ndigits).parse().unwrap_or(value)
+}
 
 /// `int(text)` in base 10, or `None` where Python raises `ValueError`.
 pub fn int(text: &str) -> Option<BigInt> {
@@ -42,6 +57,100 @@ pub fn float(text: &str) -> Option<f64> {
     parse(text)
 }
 
+/// `sum(values)` over floats: CPython 3.12+ adds them with Neumaier compensation, so the
+/// result can differ from a plain left fold in the last bit.
+pub fn sum(values: impl IntoIterator<Item = f64>) -> f64 {
+    let mut total = 0.0_f64;
+    let mut compensation = 0.0_f64;
+    for value in values {
+        let next = total + value;
+        if total.abs() >= value.abs() {
+            compensation += (total - next) + value;
+        } else {
+            compensation += (value - next) + total;
+        }
+        total = next;
+    }
+    if compensation != 0.0 && compensation.is_finite() {
+        total += compensation;
+    }
+    total
+}
+
+/// Why [`int_of`] or [`float_of`] refused a value. Messages are CPython's, except
+/// [`ConversionError::TooBig`], where Python would build a big int instead.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ConversionError {
+    /// `ValueError` from `int(text)`; holds the text's `repr`.
+    #[error("invalid literal for int() with base 10: {0}")]
+    IntLiteral(String),
+    /// `ValueError` from `float(text)`; holds the text's `repr`.
+    #[error("could not convert string to float: {0}")]
+    FloatLiteral(String),
+    /// `ValueError` from `int(nan)`.
+    #[error("cannot convert float NaN to integer")]
+    NotANumber,
+    /// `OverflowError` from `int(inf)`.
+    #[error("cannot convert float infinity to integer")]
+    Infinite,
+    /// An integer outside `i64`; holds its `str`.
+    #[error("{0} does not fit in a 64-bit int")]
+    TooBig(String),
+    /// `TypeError` from `int(value)`; holds the value's type name.
+    #[error("int() argument must be a string, a bytes-like object or a real number, not '{0}'")]
+    IntType(&'static str),
+    /// `TypeError` from `float(value)`; holds the value's type name.
+    #[error("float() argument must be a string or a real number, not '{0}'")]
+    FloatType(&'static str),
+}
+
+/// `int(value)` of a float as an `i64`: truncated toward zero, refusing NaN and infinity.
+pub fn float_to_int(value: f64) -> Result<i64, ConversionError> {
+    if value.is_nan() {
+        return Err(ConversionError::NotANumber);
+    }
+    if value.is_infinite() {
+        return Err(ConversionError::Infinite);
+    }
+    let truncated = value.trunc();
+    if !(-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&truncated) {
+        return Err(ConversionError::TooBig(float_repr(value)));
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    Ok(truncated as i64)
+}
+
+/// `int(value)` of what `json.loads` returns, as an `i64`.
+pub fn int_of(value: &serde_json::Value) -> Result<i64, ConversionError> {
+    match value {
+        serde_json::Value::Number(number) => match number.as_i64() {
+            Some(int) => Ok(int),
+            None => match number.as_u64() {
+                Some(big) => Err(ConversionError::TooBig(big.to_string())),
+                None => float_to_int(number.as_f64().unwrap_or(f64::NAN)),
+            },
+        },
+        serde_json::Value::Bool(flag) => Ok(i64::from(*flag)),
+        serde_json::Value::String(text) => {
+            let parsed = int(text).ok_or_else(|| ConversionError::IntLiteral(str_repr(text)))?;
+            i64::try_from(&parsed).map_err(|_| ConversionError::TooBig(parsed.to_string()))
+        }
+        other => Err(ConversionError::IntType(crate::json::type_name(other))),
+    }
+}
+
+/// `float(value)` of what `json.loads` returns.
+pub fn float_of(value: &serde_json::Value) -> Result<f64, ConversionError> {
+    match value {
+        serde_json::Value::Number(number) => Ok(number.as_f64().unwrap_or(f64::NAN)),
+        serde_json::Value::Bool(flag) => Ok(f64::from(u8::from(*flag))),
+        serde_json::Value::String(text) => {
+            float(text).ok_or_else(|| ConversionError::FloatLiteral(str_repr(text)))
+        }
+        other => Err(ConversionError::FloatType(crate::json::type_name(other))),
+    }
+}
+
 /// Why [`seconds`] refused a value, as `int(value)` would. Messages are CPython's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SecondsError {
@@ -59,6 +168,47 @@ pub fn seconds(value: f64) -> Result<Duration, SecondsError> {
         value if value.is_nan() => Err(SecondsError::NotANumber),
         value if value.is_infinite() => Err(SecondsError::Overflow),
         value => Duration::try_from_secs_f64(value.max(0.0)).map_err(|_| SecondsError::Overflow),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(untagged)]
+/// A Python `int` or `float`, kept apart so it prints as `str(value)` does.
+pub enum PyNumber {
+    Int(i64),
+    Float(f64),
+}
+
+impl PyNumber {
+    /// `float(value)`.
+    pub fn value(self) -> f64 {
+        match self {
+            #[allow(clippy::cast_precision_loss)]
+            Self::Int(value) => value as f64,
+            Self::Float(value) => value,
+        }
+    }
+
+    /// `str(value)`.
+    pub fn text(self) -> String {
+        match self {
+            Self::Int(value) => value.to_string(),
+            Self::Float(value) => float_repr(value),
+        }
+    }
+
+    /// `format(value, f".{precision}f")`.
+    pub fn fixed(self, precision: usize) -> String {
+        fixed(self.value(), precision)
+    }
+}
+
+impl Serialize for PyNumber {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Int(value) => serializer.serialize_i64(*value),
+            Self::Float(value) => serializer.serialize_f64(*value),
+        }
     }
 }
 
@@ -85,7 +235,7 @@ mod tests {
 
     use std::time::Duration;
 
-    use super::{SecondsError, float, hex_int, int, seconds};
+    use super::{SecondsError, float, hex_int, int, round, seconds};
 
     // Expected values are CPython 3.14 int(text)
     #[rstest]
@@ -174,5 +324,15 @@ mod tests {
         #[case] expected: Result<Duration, SecondsError>,
     ) {
         assert_eq!(seconds(value), expected);
+    }
+
+    // Expected values are CPython 3.14 round(value, 4)
+    #[rstest]
+    #[case::fewer_digits_than_kept(1.5, 1.5)]
+    #[case::rounded_down(12.345_678, 12.3457)]
+    #[case::a_decimal_tie_stored_above_it(2.675_05, 2.6751)]
+    #[case::negative(-0.000_04, -0.0)]
+    fn round_keeps_ndigits_as_python_does(#[case] value: f64, #[case] expected: f64) {
+        assert_eq!(round(value, 4).to_bits(), expected.to_bits());
     }
 }

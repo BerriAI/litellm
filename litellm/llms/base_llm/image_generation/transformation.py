@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -27,11 +28,11 @@ class BaseImageGenerationConfig(ABC):
     @abstractmethod
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     def get_complete_url(
@@ -39,8 +40,8 @@ class BaseImageGenerationConfig(ABC):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -57,8 +58,8 @@ class BaseImageGenerationConfig(ABC):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -75,8 +76,8 @@ class BaseImageGenerationConfig(ABC):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict,
     ) -> dict[str, object]:  # mutable-ok: inherited contract
         raise NotImplementedError(
@@ -89,9 +90,9 @@ class BaseImageGenerationConfig(ABC):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -125,6 +126,14 @@ class BaseImageGenerationConfig(ABC):
             api_key=api_key,
             json_mode=json_mode,
         )
+
+    def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
+        """
+        Number of identical upstream requests the handler sends and merges into one response.
+
+        Override for providers that return one image per call, so a caller's `n` still yields `n` images.
+        """
+        return 1
 
     def use_multipart_form_data(self) -> bool:
         """

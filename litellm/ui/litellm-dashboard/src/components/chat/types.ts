@@ -80,6 +80,7 @@ export type AssistantMessageUpdate = Partial<
 export interface Conversation {
   id: string;
   title: string;
+  hasCustomTitle?: boolean;
   model: string;
   messages: ChatMessage[];
   mcpServerNames: string[];

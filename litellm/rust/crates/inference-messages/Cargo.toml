@@ -6,37 +6,49 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-call-scope.workspace = true
+litellm-env.workspace = true
 litellm-secret-value.workspace = true
 bytes.workspace = true
 flate2 = { workspace = true, features = ["zlib-rs"] }
 futures-util.workspace = true
 http.workspace = true
+jiff = { version = "0.2.37", default-features = false, features = ["std"] }
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-auth-aws.workspace = true
+litellm-cache.workspace = true
 litellm-cache-response.workspace = true
 litellm-core-utils.workspace = true
+litellm-cost.workspace = true
+litellm-framer = { workspace = true, features = ["sse"] }
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-inference.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
+litellm-python-compat.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
+litellm-redaction.workspace = true
 litellm-tracing.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 tokio.workspace = true
+tokio-util = { version = "0.7", features = ["codec"] }
 tracing.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
+litellm-cost = { workspace = true, features = ["serde", "test-support"] }
 litellm-error.workspace = true
-litellm-framer = { workspace = true, features = ["sse"] }
-litellm-cache.workspace = true
+litellm-auth-gcp = { workspace = true, features = ["test-support"] }
 litellm-cache-memory.workspace = true
 litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-inference-testing.workspace = true
+regex.workspace = true
 rstest.workspace = true
 thiserror.workspace = true
+tokio-util = { version = "0.7", features = ["codec"] }
 wiremock.workspace = true

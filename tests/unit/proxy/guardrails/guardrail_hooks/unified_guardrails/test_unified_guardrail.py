@@ -48,6 +48,7 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 from litellm.proxy.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
+from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.responses.main import build_web_search_call
@@ -941,9 +942,12 @@ class _StreamingTextGuardrail(CustomGuardrail):
     exercise the streaming underflow guard.
     """
 
-    def __init__(self, *, holdback_schedule=None, shrink_to=None, shrink_after=0, sampling_rate=1):
+    def __init__(
+        self, *, holdback_schedule=None, shrink_to=None, shrink_after=0, sampling_rate=1, hold_tool_calls=False
+    ):
         super().__init__(guardrail_name="streaming-text-guardrail")
         self.streaming_transform_mode = "incremental_diff"
+        self.streaming_hold_tool_calls = hold_tool_calls
         self.streaming_sampling_rate = sampling_rate
         self.streaming_end_of_stream_only = False
         self.guardrail_config = {}
@@ -1056,6 +1060,49 @@ class TestStreamingTransform:
         assert streamed == full.upper()
         # No raw lowercase content leaked onto the wire.
         assert "hello" not in streamed
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("hold_tool_calls", [False, True])
+    @pytest.mark.parametrize("first_chunk_is_tool_call", [False, True])
+    async def test_incremental_diff_keeps_the_vllm_prompt_fields_on_the_first_chunk_it_sends(
+        self, first_chunk_is_tool_call: bool, hold_tool_calls: bool
+    ):
+        """vLLM puts its prompt fields on the first raw chunk only, and incremental_diff withholds that chunk"""
+        prompt_fields: Final = {"prompt_token_ids": [151644, 872], "prompt_text": "<|im_start|>user\nSay hi."}
+        tool_call_chunk: Final = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                )
+            ],
+        )
+        first_chunk: Final = tool_call_chunk if first_chunk_is_tool_call else _stream_chunk("hello ")
+        chunks: Final = [
+            first_chunk.model_copy(update=prompt_fields),
+            tool_call_chunk,
+            _stream_chunk("world"),
+            _stream_chunk("", finish_reason="stop"),
+        ]
+
+        out: Final = await _drive_stream(
+            UnifiedLLMGuardrails(), _StreamingTextGuardrail(hold_tool_calls=hold_tool_calls), chunks
+        )
+        sent: Final = [json.loads(item.model_dump_json()) for item in out]
+
+        assert {field: sent[0].get(field) for field in prompt_fields} == prompt_fields
+        assert not any(set(prompt_fields) & set(later) for later in sent[1:])
+        assert "".join(_delta_text(item) for item in out).endswith("WORLD")
 
     @pytest.mark.asyncio
     async def test_incremental_diff_holdback_boundary(self):
@@ -1315,9 +1362,9 @@ class TestStreamingTransform:
             [server_chunk, _stream_chunk("done", finish_reason="stop")],
         )
 
-        delivered: Final = (
-            [getattr(item.choices[0].delta, "provider_specific_fields", None) for item in out if item.choices]
-        )
+        delivered: Final = [
+            getattr(item.choices[0].delta, "provider_specific_fields", None) for item in out if item.choices
+        ]
         assert server_fields in delivered
         assert "".join(_delta_text(item) for item in out) == "DONE"
 
@@ -3252,6 +3299,39 @@ class TestTranslationMappingsAreReadLive:
         assert not [
             name for name, value in vars(unified_module).items() if isinstance(value, dict) and CallTypes.aocr in value
         ]
+
+
+@pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.asyncio
+async def test_input_guardrails_preserve_routing_tags_and_existing_metadata(
+    monkeypatch: pytest.MonkeyPatch, hook: str, metadata_key: str
+) -> None:
+    _patch_translation_mappings(monkeypatch, {CallTypes.acompletion: OpenAIChatCompletionsHandler})
+    guardrail: Final = RecordingGuardrail()
+    metadata: Final = {"tags": ["region-b"], "inherited_tags": [], "user_api_key_user_id": "request-user"}
+    data: Final = {
+        "guardrail_to_apply": guardrail,
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        metadata_key: metadata,
+    }
+    user_api_key_dict: Final = UserAPIKeyAuth(user_id="auth-user", user_email="auth@example.com")
+
+    if hook == "async_pre_call_hook":
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=CallTypes.acompletion.value
+        )
+    else:
+        await UnifiedLLMGuardrails().async_moderation_hook(
+            data=data, user_api_key_dict=user_api_key_dict, call_type=CallTypes.acompletion.value
+        )
+
+    assert len(guardrail.apply_calls) == 1
+    assert guardrail.apply_calls[0]["inputs"]["texts"] == ["hello"]
+    assert get_tags_from_request_kwargs(data) == ["region-b"]
+    assert data[metadata_key] is metadata
+    assert metadata["user_api_key_user_id"] == "request-user"
 
 
 class AttachmentScanningGuardrail(RecordingGuardrail):

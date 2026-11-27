@@ -11,7 +11,7 @@ class YandexDetector(RegexBasedDetector):
         return "Yandex Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Yandex Access Token
             re.compile(

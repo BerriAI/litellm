@@ -2,17 +2,15 @@
 
 import _hashlib
 import asyncio
-import copy
 import hashlib
 import importlib
-import inspect
 import logging
 import os
 import sys
 import tempfile
-import warnings
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from types import ModuleType
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,6 +22,7 @@ from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError
 
 import litellm
+import litellm.proxy.auth.user_api_key_auth
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.fips import enforce_fips_mode
@@ -36,6 +35,9 @@ from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_budgets_enabled
+from tests.unit.proxy.rust_auth_stores import audit_log_store, rust_auth_stores  # noqa: F401  # fixtures
+from tests._module_state import collect_flushable_caches, flush_caches, restore_mutable_state, snapshot_mutable_state
 
 
 class StubClientNotConnectedError(ClientNotConnectedError):
@@ -56,104 +58,9 @@ def disconnected_prisma() -> DisconnectedPrisma:
     return DisconnectedPrisma()
 
 
-# Top-level assignments of these types are the ones importlib.reload(litellm)
-# would have effectively reset. We snapshot them at conftest import time and
-# deep-copy the snapshot back before every test.
-_SNAPSHOT_TYPES = (list, dict, set, tuple, str, int, float, bool, bytes)
-
-
-def _snapshot_mutable_state(module):
-    """Capture a per-module snapshot of primitive and collection attributes."""
-    snapshot = {}
-    for attr in list(vars(module)):
-        if attr.startswith("_"):
-            continue
-        try:
-            value = getattr(module, attr)
-        except Exception as exc:
-            warnings.warn(
-                f"conftest: could not read {module.__name__}.{attr} during snapshot: {exc}",
-                stacklevel=2,
-            )
-            continue
-        if value is None or isinstance(value, _SNAPSHOT_TYPES):
-            try:
-                snapshot[attr] = _restored_value(value)
-            except Exception as exc:
-                warnings.warn(
-                    f"conftest: could not snapshot {module.__name__}.{attr}: {exc}",
-                    stacklevel=2,
-                )
-    return snapshot
-
-
-_MUTABLE_CONTAINERS = (list, dict, set, bytearray)
-
-
-def _holds_mutable_container(value) -> bool:
-    if isinstance(value, _MUTABLE_CONTAINERS):
-        return True
-    if isinstance(value, tuple):
-        return any(_holds_mutable_container(element) for element in value)
-    return False
-
-
-def _restored_value(value):
-    return copy.deepcopy(value) if _holds_mutable_container(value) else value
-
-
-def _restore_mutable_state(module, snapshot):
-    for attr, default in snapshot.items():
-        try:
-            setattr(module, attr, _restored_value(default))
-        except Exception as exc:
-            warnings.warn(
-                f"conftest: could not restore {module.__name__}.{attr}: {exc}",
-                stacklevel=2,
-            )
-
-
-def _collect_flushable_caches():
-    """Return (module, attr) pairs whose values expose flush_cache()."""
-    targets = []
-    for module in (litellm, litellm.proxy.proxy_server):
-        for attr in list(vars(module)):
-            if attr.startswith("_"):
-                continue
-            try:
-                value = getattr(module, attr)
-            except Exception:
-                continue
-            # Only instances — a class reference has an unbound flush_cache
-            # that can't be called without a self argument.
-            if inspect.isclass(value) or inspect.ismodule(value):
-                continue
-            if callable(getattr(value, "flush_cache", None)):
-                targets.append((module, attr))
-    return targets
-
-
-def _flush_caches(targets):
-    for module, attr in targets:
-        try:
-            value = getattr(module, attr)
-        except Exception:
-            continue
-        flush = getattr(value, "flush_cache", None)
-        if callable(flush):
-            try:
-                flush()
-            except Exception as exc:
-                warnings.warn(
-                    f"conftest: flush_cache failed on {module.__name__}.{attr}: {exc}",
-                    stacklevel=2,
-                )
-
-
-# Snapshot once at conftest import — these are the "clean" module states.
-_LITELLM_STATE = _snapshot_mutable_state(litellm)
-_PROXY_SERVER_STATE = _snapshot_mutable_state(litellm.proxy.proxy_server)
-_FLUSHABLE_CACHES = _collect_flushable_caches()
+_LITELLM_STATE: Final = snapshot_mutable_state(litellm)
+_PROXY_SERVER_STATE: Final = snapshot_mutable_state(litellm.proxy.proxy_server)
+_FLUSHABLE_CACHES: Final = collect_flushable_caches((litellm, litellm.proxy.proxy_server))
 _PROXY_APP_LIFESPAN: Final = litellm.proxy.proxy_server.app.router.lifespan_context
 
 
@@ -176,15 +83,15 @@ def setup_and_teardown():
 
     What is NOT reset:
       - Class instances without flush_cache() (e.g. ProxyLogging,
-        JWTHandler, FastAPI routers, loggers). If a test mutates such an
+        LiteLLM_JWTAuth, FastAPI routers, loggers). If a test mutates such an
         instance in-place (setattr on the instance, appending to one of
         its internal lists, etc.), the mutation will leak into later tests.
         Use pytest's monkeypatch.setattr() or a local fixture for those
         cases — don't rely on this autouse fixture to undo them.
     """
-    _restore_mutable_state(litellm, _LITELLM_STATE)
-    _restore_mutable_state(litellm.proxy.proxy_server, _PROXY_SERVER_STATE)
-    _flush_caches(_FLUSHABLE_CACHES)
+    restore_mutable_state(litellm, _LITELLM_STATE)
+    restore_mutable_state(litellm.proxy.proxy_server, _PROXY_SERVER_STATE)
+    flush_caches(_FLUSHABLE_CACHES)
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
@@ -244,6 +151,11 @@ def pytest_runtest_teardown(item, nextitem):
             setattr(proxy_server, name, snapshot[name])
         elif name in vars(proxy_server):
             delattr(proxy_server, name)
+
+
+@pytest.fixture
+def native_budgets_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    yield from native_budgets_enabled(monkeypatch)
 
 
 @pytest.fixture
@@ -472,6 +384,79 @@ def fresh_agent_read_through(monkeypatch):
     return read_through
 
 
+@pytest.fixture
+def fresh_vector_store_read_throughs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.common_utils import registry_read_through
+
+    index_table_reload: Final = registry_read_through.ThrottledTableReload(
+        reload=registry_read_through._reload_vector_store_indexes
+    )
+    store_read_through: Final = registry_read_through.RegistryReadThrough(
+        resync=registry_read_through._resync_vector_stores,
+        is_loaded=registry_read_through._vector_store_is_loaded,
+    )
+    monkeypatch.setattr(registry_read_through, "vector_store_index_table_reload", index_table_reload)
+    monkeypatch.setattr(registry_read_through, "vector_store_registry_read_through", store_read_through)
+    monkeypatch.setattr(litellm, "vector_store_index_registry", None)
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+
+
+class FakeVectorStoreIndexRow:
+    def __init__(self, index_name: str, vector_store_name: str = "config-vector-store") -> None:
+        self.index_name: Final = index_name
+        self.vector_store_name: Final = vector_store_name
+
+    def model_dump(self) -> dict[str, object]:
+        return dict(self)
+
+    def __iter__(self) -> Iterator[tuple[str, object]]:
+        return iter(
+            {
+                "id": f"{self.index_name}-id",
+                "index_name": self.index_name,
+                "litellm_params": {"vector_store_index": "physical-index", "vector_store_name": self.vector_store_name},
+                "index_info": None,
+                "created_at": None,
+                "created_by": None,
+                "updated_at": None,
+                "updated_by": None,
+            }.items()
+        )
+
+
+class FakeVectorStoreRow:
+    def __init__(
+        self,
+        vector_store_name: str,
+        custom_llm_provider: str,
+        litellm_params: dict[str, str],
+        vector_store_id: str | None = None,
+        created_at: datetime | None = None,
+    ) -> None:
+        self.vector_store_name: Final = vector_store_name
+        self.custom_llm_provider: Final = custom_llm_provider
+        self.litellm_params: Final = litellm_params
+        self.vector_store_id: Final = vector_store_id or f"{vector_store_name}-id"
+        self.created_at: Final = created_at
+
+    def __iter__(self) -> Iterator[tuple[str, object]]:
+        return iter(
+            {
+                "vector_store_id": self.vector_store_id,
+                "custom_llm_provider": self.custom_llm_provider,
+                "vector_store_name": self.vector_store_name,
+                "vector_store_description": None,
+                "vector_store_metadata": None,
+                "created_at": self.created_at,
+                "updated_at": None,
+                "litellm_credential_name": None,
+                "litellm_params": dict(self.litellm_params),
+                "team_id": None,
+                "user_id": None,
+            }.items()
+        )
+
+
 TOKEN_COUNT_LOG_FIELDS: Final = (
     "litellm_call_id",
     "request_model",
@@ -526,13 +511,15 @@ def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
 def fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
     monkeypatch.setattr(_hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported")))
-    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils._KBKDF_PROPERTIES", None)
+    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils._FIPS_PROPERTIES", None)
 
 
 @pytest.fixture
 def fips_mode(fips_openssl: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr("litellm.proxy.common_utils.fips.cryptography_enforces_fips", lambda: True)
-    enforce_fips_mode({"fips_mode": True})
+    with monkeypatch.context() as boot:
+        boot.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
+        enforce_fips_mode({"fips_mode": True})
     yield
     enforce_fips_mode({})
 
@@ -588,3 +575,12 @@ def import_without_redis_installed(monkeypatch: pytest.MonkeyPatch) -> Callable[
         return importlib.import_module(module_name)
 
     return _import
+
+
+@pytest.fixture(autouse=True)
+def _forget_email_in_use_checks() -> Iterator[None]:
+    from litellm.proxy.auth import auth_checks
+
+    auth_checks.email_in_use_checked_at.clear()
+    yield
+    auth_checks.email_in_use_checked_at.clear()

@@ -1,23 +1,25 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SpanErrorPage",
+  "type": "object",
   "properties": {
+    "span_id": {
+      "type": "string"
+    },
     "message": {
       "type": "string"
+    },
+    "total_chars": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "maximum": 18446744073709551615
     },
     "next_cursor": {
       "type": [
         "string",
         "null"
       ]
-    },
-    "span_id": {
-      "type": "string"
-    },
-    "total_chars": {
-      "format": "uint64",
-      "maximum": 18446744073709551615,
-      "minimum": 0,
-      "type": "integer"
     }
   },
   "required": [
@@ -25,7 +27,5 @@
     "message",
     "total_chars",
     "next_cursor"
-  ],
-  "title": "SpanErrorPage",
-  "type": "object"
+  ]
 }

@@ -1,3 +1,5 @@
+import { displayDate } from "@/i18n/displayDate";
+import { availableRoleDisplayLabel } from "@/utils/roles";
 import React, { useState, useEffect } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -53,13 +55,8 @@ interface UISettings {
   SSO_ENABLED: boolean;
 }
 
-const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
-  accessToken,
-  teams,
-  possibleUIRoles,
-  onUsersCreated,
-}) => {
-  const { t } = useTranslation();
+const BulkCreateUsersButton = ({ accessToken, teams, possibleUIRoles, onUsersCreated }: BulkCreateUsersProps) => {
+  const { t, i18n: locale } = useTranslation();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [parsedData, setParsedData] = useState<UserData[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -482,6 +479,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
 
   const onLinkCopied = () => toast.success(t("users.bulkCreate.toasts.linkCopied"));
 
+  const label = (role: string) => availableRoleDisplayLabel(role, possibleUIRoles?.[role]?.ui_label);
   const renderStatusCell = (record: UserData) => {
     if (!record.isValid) {
       return (
@@ -657,7 +655,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                             <span className={`block text-xs ${fileError ? "text-destructive" : "text-info"}`}>
                               {t("users.bulkCreate.upload.fileMeta", {
                                 size: (selectedFile.size / 1024).toFixed(1),
-                                date: new Date().toLocaleDateString(),
+                                date: displayDate(new Date(), locale.language),
                               })}
                             </span>
                           </div>
@@ -836,7 +834,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                           <TableRow key={record.rowNumber} className={!record.isValid ? "bg-destructive/10" : ""}>
                             <TableCell>{record.rowNumber}</TableCell>
                             <TableCell className="whitespace-normal break-words">{record.user_email}</TableCell>
-                            <TableCell className="whitespace-normal break-words">{record.user_role}</TableCell>
+                            <TableCell className="whitespace-normal break-words">{label(record.user_role)}</TableCell>
                             <TableCell className="whitespace-normal break-words">{record.teams}</TableCell>
                             <TableCell className={NUMERIC_CELL_CLASS}>{record.max_budget}</TableCell>
                             <TableCell className="whitespace-normal break-words">{renderStatusCell(record)}</TableCell>

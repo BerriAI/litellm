@@ -1,10 +1,12 @@
-import asyncio, importlib, litellm, pytest
+import asyncio, importlib, json, litellm, pytest
 import respx
 from httpx import Response
 from typing import Final
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 
 from litellm.llms.bedrock.common_utils import (
+    bedrock_converse_resolves_tool_schema_defs,
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     NativeOutputFallback,
@@ -17,6 +19,7 @@ from litellm.llms.bedrock.common_utils import (
     get_bedrock_base_model,
     get_bedrock_cross_region_inference_regions,
     is_bedrock_native_output_rejection,
+    normalize_json_schema_custom_types_to_object,
     strip_bedrock_routing_prefix,
     strip_bedrock_throughput_suffix,
     without_bedrock_native_output_opt_in,
@@ -457,6 +460,33 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
     assert bedrock_converse_supports_parallel_tool_use_config(regional) is True
 
 
+@pytest.mark.parametrize(
+    ("model", "entry_key", "flag", "expected"),
+    [
+        ("us.amazon.nova-defs-test", "us.amazon.nova-defs-test", True, True),
+        ("us.anthropic.claude-defs-test", "us.anthropic.claude-defs-test", False, False),
+        ("eu.amazon.nova-defs-test", "amazon.nova-defs-test", True, True),
+    ],
+)
+def test_bedrock_converse_resolves_tool_schema_defs_reads_the_cost_map_flag_before_the_name(
+    monkeypatch: pytest.MonkeyPatch, model: str, entry_key: str, flag: bool, expected: bool
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost, entry_key, {"litellm_provider": "bedrock_converse", "supports_tool_schema_defs": flag}
+    )
+
+    assert bedrock_converse_resolves_tool_schema_defs(model) is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"), [("ca.anthropic.claude-unlisted-test", True), ("ca.amazon.nova-unlisted-test", False)]
+)
+def test_bedrock_converse_resolves_tool_schema_defs_falls_back_to_the_name_for_an_unlisted_model(
+    model: str, expected: bool
+) -> None:
+    assert bedrock_converse_resolves_tool_schema_defs(model) is expected
+
+
 def test_deprecated_is_claude_4_5_on_bedrock_warns_and_matches_new_name(monkeypatch):
     import litellm
     from litellm.llms.bedrock.common_utils import (
@@ -481,17 +511,50 @@ def test_deprecated_is_claude_4_5_on_bedrock_warns_and_matches_new_name(monkeypa
     ("entry", "expected"),
     [
         pytest.param(
-            {"supports_prompt_caching": True, "supports_prompt_cache_breakpoint": False},
+            {"supports_prompt_caching": True, "supports_bedrock_converse_cache_point": False},
             False,
             id="priced-cached-tokens-but-rejects-the-explicit-marker",
         ),
         pytest.param(
-            {"supports_prompt_caching": False, "supports_prompt_cache_breakpoint": True},
+            {"supports_prompt_caching": False, "supports_bedrock_converse_cache_point": True},
             True,
             id="explicit-marker-flag-wins-over-the-caching-flag",
         ),
         pytest.param({"supports_prompt_caching": True}, True, id="caching-flag-alone-keeps-emitting"),
         pytest.param({"supports_prompt_caching": False}, False, id="no-caching-and-no-marker-flag"),
+        pytest.param(
+            {"supports_prompt_caching": True, "supports_bedrock_converse_cache_point": None},
+            True,
+            id="null-marker-flag-falls-back-to-the-caching-flag",
+        ),
+        pytest.param(
+            {"supports_prompt_caching": True, "supports_prompt_cache_breakpoint": False},
+            True,
+            id="openai-breakpoint-opt-out-keeps-cache-points",
+        ),
+        pytest.param(
+            {"supports_prompt_caching": False, "supports_prompt_cache_breakpoint": True},
+            False,
+            id="openai-breakpoint-opt-in-does-not-add-cache-points",
+        ),
+        pytest.param(
+            {
+                "supports_prompt_caching": True,
+                "supports_bedrock_converse_cache_point": False,
+                "supports_prompt_cache_breakpoint": True,
+            },
+            False,
+            id="marker-opt-out-beats-openai-breakpoint-opt-in",
+        ),
+        pytest.param(
+            {
+                "supports_prompt_caching": False,
+                "supports_bedrock_converse_cache_point": True,
+                "supports_prompt_cache_breakpoint": False,
+            },
+            True,
+            id="marker-opt-in-beats-openai-breakpoint-opt-out",
+        ),
     ],
 )
 def test_bedrock_model_accepts_cache_points_prefers_the_explicit_breakpoint_flag(monkeypatch, entry, expected):
@@ -505,7 +568,21 @@ def test_bedrock_model_accepts_cache_points_prefers_the_explicit_breakpoint_flag
     assert bedrock_model_accepts_cache_points(f"us.{base}") is expected
 
 
-@pytest.mark.parametrize("model", ["moonshotai.kimi-k3", "us.moonshotai.kimi-k3", "global.moonshotai.kimi-k3"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "moonshotai.kimi-k3",
+        "us.moonshotai.kimi-k3",
+        "global.moonshotai.kimi-k3",
+        "in.moonshotai.kimi-k3",
+        "bedrock/us-gov-west-1/moonshotai.kimi-k3",
+        "bedrock/us-gov-east-1/moonshotai.kimi-k3",
+        "moonshotai.kimi-k3.1",
+        "us.moonshotai.kimi-k3.1",
+        "global.moonshotai.kimi-k3.1",
+        "in.moonshotai.kimi-k3.1",
+    ],
+)
 def test_kimi_k3_keeps_cached_token_pricing_while_refusing_converse_cache_points(model, local_model_cost_map):
     import litellm
     from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
@@ -515,6 +592,22 @@ def test_kimi_k3_keeps_cached_token_pricing_while_refusing_converse_cache_points
     assert litellm.model_cost[model]["cache_read_input_token_cost"] > 0
 
 
+def test_a_catalog_cache_point_opt_out_keeps_the_old_flag_for_older_clients_reading_the_remote_catalog(
+    local_model_cost_map: None,
+) -> None:
+    opted_out: Final = tuple(
+        (key, entry["litellm_provider"])
+        for key, entry in litellm.model_cost.items()
+        if entry.get("supports_bedrock_converse_cache_point") is False and entry.get("supports_prompt_caching") is True
+    )
+
+    assert opted_out
+    assert {
+        key: litellm.get_model_info(model=key, custom_llm_provider=provider)["supports_prompt_cache_breakpoint"]
+        for key, provider in opted_out
+    } == dict.fromkeys((key for key, _ in opted_out), False)
+
+
 def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_model_cost_map):
     from litellm import Router
     from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
@@ -522,21 +615,27 @@ def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_mode
     flagged_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/flagged"
     unflagged_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unflagged"
     converse_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/converse"
+    openai_flagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/openai-flagged"
     Router(
         model_list=[
             {
                 "model_name": "kimi-k3-profile-converse",
                 "litellm_params": {"model": f"bedrock/converse/{converse_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": False},
+                "model_info": {"supports_bedrock_converse_cache_point": False},
             },
             {
                 "model_name": "kimi-k3-profile",
                 "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": False},
+                "model_info": {"supports_bedrock_converse_cache_point": False},
             },
             {
                 "model_name": "kimi-k3-profile-unflagged",
                 "litellm_params": {"model": f"bedrock/{unflagged_arn}", "aws_region_name": "us-east-1"},
+            },
+            {
+                "model_name": "claude-profile-openai-flagged",
+                "litellm_params": {"model": f"bedrock/{openai_flagged_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": False, "supports_prompt_caching": False},
             },
         ]
     )
@@ -544,6 +643,7 @@ def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_mode
     assert bedrock_model_accepts_cache_points(flagged_arn) is False
     assert bedrock_model_accepts_cache_points(converse_arn) is False
     assert bedrock_model_accepts_cache_points(unflagged_arn) is True
+    assert bedrock_model_accepts_cache_points(openai_flagged_arn) is True
 
 
 _CONVERSE_REPLY: Final = {
@@ -621,7 +721,7 @@ async def test_a_bedrock_deployment_sends_cache_points_by_its_own_flag_not_a_sib
     converse: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/converse").mock(
         return_value=Response(200, json=_CONVERSE_REPLY)
     )
-    flags: Final = {flagged: {"supports_prompt_cache_breakpoint": declared}}
+    flags: Final = {flagged: {"supports_bedrock_converse_cache_point": declared}}
     registration_order: Final = ("flagless", flagged) if flagless_registers_first else (flagged, "flagless")
     router: Final = Router(
         model_list=[
@@ -665,7 +765,7 @@ async def test_a_routed_bedrock_deployment_sends_cache_points_when_register_mode
     converse: Final = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/moonshotai.kimi-k3/converse"
     ).mock(return_value=Response(200, json=_CONVERSE_REPLY))
-    litellm.register_model({"bedrock/moonshotai.kimi-k3": {"supports_prompt_cache_breakpoint": True}})
+    litellm.register_model({"bedrock/moonshotai.kimi-k3": {"supports_bedrock_converse_cache_point": True}})
     router: Final = Router(
         model_list=[
             {
@@ -688,6 +788,165 @@ async def test_a_routed_bedrock_deployment_sends_cache_points_when_register_mode
     )
 
     assert b"cachePoint" in converse.calls.last.request.content
+
+
+class _ConverseSections(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    system: JsonValue
+    messages: JsonValue
+    toolConfig: JsonValue
+
+
+@pytest.mark.parametrize(
+    ("model_info", "sends_cache_points"),
+    [
+        pytest.param({}, True, id="unset"),
+        pytest.param({"supports_prompt_cache_breakpoint": False}, True, id="openai-breakpoint-opt-out"),
+        pytest.param({"supports_bedrock_converse_cache_point": None}, True, id="null-cache-point-flag"),
+        pytest.param({"supports_bedrock_converse_cache_point": False}, False, id="cache-point-opt-out"),
+        pytest.param(
+            {"supports_bedrock_converse_cache_point": False, "supports_prompt_cache_breakpoint": True},
+            False,
+            id="cache-point-opt-out-beats-openai-breakpoint-opt-in",
+        ),
+    ],
+)
+async def test_a_bedrock_claude_deployment_places_cache_points_by_the_cache_point_flag_alone(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    model_info: dict[str, object],
+    sends_cache_points: bool,
+) -> None:
+    from litellm import Router
+
+    model: Final = "us.anthropic.claude-sonnet-5-5"
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    converse: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/converse").mock(
+        return_value=Response(200, json=_CONVERSE_REPLY)
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": f"bedrock/{model}",
+                    "aws_access_key_id": "bedrock-test-key",
+                    "aws_secret_access_key": "bedrock-test-secret",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"id": "claude-id", **model_info},
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(
+        model="claude",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "stable", "cache_control": _CACHE_MARK}]},
+            {"role": "user", "content": [{"type": "text", "text": "Weather in Paris?", "cache_control": _CACHE_MARK}]},
+        ],
+        tools=[_MARKED_WEATHER_TOOL],
+    )
+
+    sent: Final = _ConverseSections.model_validate_json(converse.calls.last.request.content)
+    sections: Final = {"system": sent.system, "messages": sent.messages, "tools": sent.toolConfig}
+    assert {name: "cachePoint" in json.dumps(section) for name, section in sections.items()} == dict.fromkeys(
+        sections, sends_cache_points
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info", "expected"),
+    [
+        pytest.param(
+            "moonshotai.kimi-k3", {"supports_prompt_cache_breakpoint": True}, False, id="kimi-openai-breakpoint-opt-in"
+        ),
+        pytest.param(
+            "us.moonshotai.kimi-k3.1",
+            {"supports_bedrock_converse_cache_point": True},
+            True,
+            id="kimi-cache-point-opt-in",
+        ),
+        pytest.param(
+            "openai.gpt-oss-120b-1:0",
+            {"supports_bedrock_converse_cache_point": True, "supports_prompt_caching": True},
+            False,
+            id="openai-family-never-takes-cache-points",
+        ),
+    ],
+)
+def test_a_deployments_cache_point_flag_decides_within_the_catalog_and_openai_family_limits(
+    model: str, model_info: dict[str, object], expected: bool, local_model_cost_map: None
+) -> None:
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    assert bedrock_model_accepts_cache_points(model, model_info={"id": "qa-deployment", **model_info}) is expected
+
+
+@pytest.fixture
+def fresh_migration_warnings() -> Iterator[None]:
+    from litellm.llms.bedrock.common_utils import _warn_legacy_cache_point_flag
+
+    _warn_legacy_cache_point_flag.cache_clear()
+    yield
+    _warn_legacy_cache_point_flag.cache_clear()
+
+
+_MIGRATING_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/migrating"
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info", "accepts", "warnings"),
+    [
+        pytest.param(
+            _MIGRATING_ARN, {"supports_prompt_cache_breakpoint": False}, True, 1, id="openai-breakpoint-flag-alone"
+        ),
+        pytest.param(
+            _MIGRATING_ARN,
+            {"supports_prompt_cache_breakpoint": False, "supports_bedrock_converse_cache_point": True},
+            True,
+            0,
+            id="cache-point-flag-settles-it",
+        ),
+        pytest.param(_MIGRATING_ARN, {}, True, 0, id="no-flags"),
+        pytest.param(
+            "moonshotai.kimi-k3",
+            {"supports_prompt_cache_breakpoint": True},
+            False,
+            1,
+            id="old-opt-in-under-a-catalog-opt-out",
+        ),
+        pytest.param("moonshotai.kimi-k3", {}, False, 0, id="catalog-opt-out-alone"),
+    ],
+)
+def test_a_bedrock_deployment_still_on_the_openai_breakpoint_flag_is_warned_once_to_migrate(
+    model: str,
+    model_info: dict[str, object],
+    accepts: bool,
+    warnings: int,
+    caplog: pytest.LogCaptureFixture,
+    local_model_cost_map: None,
+    fresh_migration_warnings: None,
+) -> None:
+    import logging
+
+    from litellm._logging import verbose_logger
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    caplog.set_level(logging.WARNING, logger=verbose_logger.name)
+    deployment: Final = {"id": "qa-deployment", **model_info}
+
+    assert [bedrock_model_accepts_cache_points(model, model_info=deployment) for _ in range(2)] == [accepts, accepts]
+    migration_warnings: Final = [
+        record.getMessage()
+        for record in caplog.records
+        if "supports_bedrock_converse_cache_point" in record.getMessage()
+    ]
+    assert len(migration_warnings) == warnings
+    assert all(model in message for message in migration_warnings)
 
 
 @pytest.mark.parametrize(
@@ -2379,7 +2638,7 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
     [
         ("us.anthropic.claude-opus-4-8", None, False),
         ("global.anthropic.claude-sonnet-5", None, False),
-        ("us-gov.anthropic.claude-opus-4-8", None, False),
+        ("us-gov.anthropic.claude-opus-4-8", None, True),
         ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
         ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}, False),
         ("us.anthropic.claude-sonnet-4-6", {"supports_bedrock_native_structured_output": True}, False),
@@ -2532,3 +2791,27 @@ def test_bedrock_strict_tools_fallback_retries_only_when_the_request_sent_strict
     fallback: Final = bedrock_strict_tools_fallback(model, {"tools": tools}, litellm_params)
 
     assert (fallback is not None) == sent_strict
+
+
+def test_normalize_json_schema_custom_types_to_object_reaches_subschemas_under_defs():
+    def tool_schema(custom_type: str) -> dict[str, object]:
+        return {
+            "type": custom_type,
+            "properties": {"args": {"type": "array", "items": {"type": custom_type}}},
+            "additionalProperties": {"type": custom_type},
+            "anyOf": [{"type": custom_type}, {"type": "string"}],
+        }
+
+    schema: Final = {
+        "type": "custom",
+        "properties": {"tool": {"$ref": "#/$defs/Tool"}},
+        "$defs": {"Tool": tool_schema("custom")},
+    }
+
+    normalize_json_schema_custom_types_to_object(schema)
+
+    assert schema == {
+        "type": "object",
+        "properties": {"tool": {"$ref": "#/$defs/Tool"}},
+        "$defs": {"Tool": tool_schema("object")},
+    }

@@ -15,6 +15,7 @@ import time
 from http.cookies import SimpleCookie
 
 import pytest
+import time_machine
 from fastapi import HTTPException, Request
 
 pytest.importorskip("onelogin", reason="python3-saml (saml extra) is required for SAML SSO tests")
@@ -643,6 +644,7 @@ async def test_sp_metadata_contains_acs_and_entity_id(saml_env):
     assert "AssertionConsumerService" in metadata
 
 
+@time_machine.travel("2026-07-15T10:17:00Z", tick=False)
 def test_replay_guard_ttl_tracks_assertion_validity():
     class _Auth:
         def __init__(self, not_on_or_after):
@@ -654,7 +656,7 @@ def test_replay_guard_ttl_tracks_assertion_validity():
     now = int(time.time())
 
     long_lived = SAMLAuthHandler._replay_guard_ttl(_Auth(now + 7200))
-    assert long_lived >= 7200
+    assert long_lived == 7200
 
     short_lived = SAMLAuthHandler._replay_guard_ttl(_Auth(now + 60))
     assert short_lived == _SAML_REPLAY_GUARD_DEFAULT_TTL_SECONDS

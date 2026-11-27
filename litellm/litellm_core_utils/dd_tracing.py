@@ -5,7 +5,7 @@ If the ddtrace package is not installed, the tracer will be a no-op.
 """
 
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
 
 from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.secret_managers.main import get_secret_bool
@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from ddtrace.trace import Tracer as DD_TRACER
 else:
     DD_TRACER = Any
+
+_F = TypeVar("_F")
 
 
 class _TagStrSpan(Protocol):
@@ -30,7 +32,7 @@ class NullSpan:
     def __enter__(self):
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: object):
         pass
 
     def finish(self):
@@ -38,7 +40,7 @@ class NullSpan:
 
 
 @contextmanager
-def null_tracer(name, **kwargs):
+def null_tracer(name: object, **kwargs: object):
     """Context manager that yields a no-op span."""
     yield NullSpan()
 
@@ -46,16 +48,16 @@ def null_tracer(name, **kwargs):
 class NullTracer:
     """A no-op tracer implementation."""
 
-    def trace(self, name, **kwargs):
+    def trace(self, name: object, **kwargs: object):
         return NullSpan()
 
-    def wrap(self, name=None, **kwargs):
+    def wrap(self, name: object = None, **kwargs: object):
         # If called with no arguments (as @tracer.wrap())
         if callable(name):
             return name
 
         # If called with arguments (as @tracer.wrap(name="something"))
-        def decorator(f):
+        def decorator(f: _F) -> _F:
             return f
 
         return decorator

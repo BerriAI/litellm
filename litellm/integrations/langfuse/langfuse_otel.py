@@ -1,12 +1,20 @@
 import base64
 import json
 import os
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
 from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
+from opentelemetry import context as otel_context
 from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.sdk import trace as sdk_trace
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from pydantic import TypeAdapter
 
 import litellm
@@ -69,6 +77,9 @@ class _Gettable(Protocol):
     def get(self, key: str, default: object = None) -> object: ...
 
 
+_NOTHING: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def _as_gettable(value: object) -> _Gettable | None:
     return value if isinstance(value, _Gettable) else None
 
@@ -105,9 +116,9 @@ def _parent_of(span: object) -> trace.SpanContext | None:
 
 
 def _litellm_proxy_span(kwargs: Mapping[str, object]) -> trace.Span | None:
-    litellm_params: Final = _as_gettable(kwargs.get("litellm_params")) or {}
+    litellm_params: Final = _as_gettable(kwargs.get("litellm_params")) or _NOTHING
     carried: Final = (
-        (_as_gettable(litellm_params.get(key)) or {}).get("litellm_parent_otel_span")
+        (_as_gettable(litellm_params.get(key)) or _NOTHING).get("litellm_parent_otel_span")
         for key in ("metadata", "litellm_metadata")
     )
     return next(
@@ -120,18 +131,156 @@ def _litellm_proxy_span(kwargs: Mapping[str, object]) -> trace.Span | None:
     )
 
 
+def _is_litellm_request_root(span: trace.Span, kwargs: Mapping[str, object]) -> bool:
+    """Whether ``span`` is the request span another OTel logger started for a request that continued no trace,
+    which is LiteLLM's own trace and not one the caller chose."""
+    return span is _litellm_proxy_span(kwargs) and _parent_of(span) is None
+
+
 def _starts_its_own_trace(span: object, kwargs: Mapping[str, object]) -> bool:
     if span is trace.get_current_span():
         return False
     parent: Final = _parent_of(span)
     if parent is None:
         return True
+    anchor: Final = _caller_trace_anchor(kwargs)
+    if anchor is not None and (anchor[0].trace_id, anchor[0].span_id) == (parent.trace_id, parent.span_id):
+        return not anchor[1]
     proxy_span: Final = _litellm_proxy_span(kwargs)
     return (
         proxy_span is not None
         and _parent_of(proxy_span) is None
         and proxy_span.get_span_context().span_id == parent.span_id
     )
+
+
+_NOT_NAMED: Final = uuid.uuid4().hex
+
+
+def _named_trace(litellm_params: _Gettable, metadata_key: str) -> tuple[str, bool] | None:
+    """The trace id the caller named in one of the request's metadata objects, and whether it is an
+    ``existing_trace_id``. A trace id the proxy copied from a session header is not one the caller named."""
+    from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
+
+    proxy_server_request: Final = litellm_params.get("proxy_server_request")
+    metadata: Final = langfuse_trace_metadata(litellm_params.get(metadata_key), proxy_server_request)
+    named: Final = langfuse_trace_id(metadata, None, None, _NOT_NAMED, proxy_server_request)
+    if not isinstance(named, str) or not named or named == _NOT_NAMED:
+        return None
+    return named, metadata.get("existing_trace_id") is not None
+
+
+def _caller_trace_anchor(kwargs: Mapping[str, object]) -> tuple[trace.SpanContext, bool] | None:
+    """The parent a call hangs under so that it lands in the trace the caller named in ``metadata`` or
+    ``litellm_metadata`` (or a ``langfuse_*`` header), and whether the caller named it with ``existing_trace_id``.
+    A UUID or 32 hex characters are used as they are and anything else is hashed, as the ``langfuse`` callback does.
+    The parent is never exported and its span id follows from the trace id, so every call of the trace hangs under
+    the same one and goes out as one of the trace's roots, while a call joining with ``existing_trace_id`` stays
+    under its own and so never becomes a root. A trace id the proxy copied from a session header is not one the
+    caller named, so each of that session's calls keeps its own trace."""
+    from litellm.integrations.langfuse.trace_id import resolve_trace_id
+
+    litellm_params: Final = _as_gettable(kwargs.get("litellm_params"))
+    if litellm_params is None:
+        return None
+    caller_trace: Final = next(
+        filter(None, (_named_trace(litellm_params, key) for key in ("metadata", "litellm_metadata"))),
+        None,
+    )
+    if caller_trace is None:
+        return None
+    trace_id: Final = int(resolve_trace_id(caller_trace[0]), 16)
+    if trace_id == 0:
+        return None
+    anchor: Final = trace.SpanContext(
+        trace_id=trace_id,
+        span_id=_anchor_span_id(trace_id, joins=caller_trace[1]),
+        is_remote=False,
+        trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+    )
+    return anchor, caller_trace[1]
+
+
+def _anchor_span_id(trace_id: int, joins: bool) -> int:
+    digest: Final = sha256(trace_id.to_bytes(16, "big") + (b"existing_trace_id" if joins else b"")).digest()
+    return int.from_bytes(digest[:8], "big") or 1
+
+
+def _as_trace_root(span: ReadableSpan) -> ReadableSpan:
+    context: Final = span.context
+    parent: Final = span.parent
+    if context is None or parent is None or parent.span_id != _anchor_span_id(context.trace_id, joins=False):
+        return span
+    return _TraceRoot(span, context)
+
+
+class _TraceRoot(ReadableSpan):
+    """``inner`` with no parent, reporting the dropped counts ``inner`` reports."""
+
+    def __init__(self, inner: ReadableSpan, context: trace.SpanContext) -> None:
+        super().__init__(
+            name=inner.name,
+            context=context,
+            parent=None,
+            resource=inner.resource,
+            attributes=inner.attributes,
+            events=inner.events,
+            links=inner.links,
+            kind=inner.kind,
+            status=inner.status,
+            start_time=inner.start_time,
+            end_time=inner.end_time,
+            instrumentation_scope=inner.instrumentation_scope,
+        )
+        self._dropped_counts: Final = (inner.dropped_attributes, inner.dropped_events, inner.dropped_links)
+
+    @property
+    def dropped_attributes(self) -> int:
+        return self._dropped_counts[0]
+
+    @property
+    def dropped_events(self) -> int:
+        return self._dropped_counts[1]
+
+    @property
+    def dropped_links(self) -> int:
+        return self._dropped_counts[2]
+
+
+@dataclass(frozen=True, slots=True)
+class _RequestTraceLink:
+    """The request trace another OTel logger keeps a call in, for the call hung under its named trace's anchor."""
+
+    anchor_span_id: int
+    request_span: trace.SpanContext
+
+
+_REQUEST_TRACE_LINK: Final = otel_context.create_key("litellm-langfuse-otel-request-trace-link")
+
+
+class _NamedTraceRoots(SpanProcessor):
+    """Exports a call that hangs under its named trace's anchor as a root of that trace, since the anchor itself is
+    never exported and Langfuse takes a trace's input and output from its root. A call another OTel logger also keeps
+    in the request's own trace is linked to it there."""
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self.inner: Final = inner
+
+    def on_start(self, span: sdk_trace.Span, parent_context: Context | None = None) -> None:
+        link: Final = otel_context.get_value(_REQUEST_TRACE_LINK, parent_context)
+        parent: Final = span.parent
+        if isinstance(link, _RequestTraceLink) and parent is not None and parent.span_id == link.anchor_span_id:
+            span.add_link(link.request_span)
+        self.inner.on_start(span, parent_context=parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self.inner.on_end(_as_trace_root(span))
+
+    def shutdown(self) -> None:
+        self.inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self.inner.force_flush(timeout_millis)
 
 
 def _a_destination_records_the_call(kwargs: Mapping[str, object]) -> bool:
@@ -154,8 +303,14 @@ def _a_destination_carries_the_trace() -> bool:
     return ExporterOwner.LANGFUSE_OTEL in destination_backends()
 
 
+def _refused_on_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    from litellm.integrations.otel.presets.destinations import langfuse_tenant_host_refused_by_otel_v2
+
+    return langfuse_tenant_host_refused_by_otel_v2(params)
+
+
 class LangfuseOtelLogger(OpenTelemetry):
-    def __init__(self, config=None, *args, **kwargs):
+    def __init__(self, config: OpenTelemetryConfig | None = None, *args: object, **kwargs):
         # Prevent LangfuseOtelLogger from modifying global environment variables by constructing config manually
         # and passing it to the parent OpenTelemetry class
         if config is None:
@@ -163,7 +318,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         super().__init__(config=config, *args, **kwargs)
 
     @staticmethod
-    def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
+    def set_langfuse_otel_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object):
         """
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
@@ -178,7 +333,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
 
     @staticmethod
-    def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict:
+    def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict[str, object]:
         """
         Extracts Langfuse metadata from the standard LiteLLM kwargs structure.
 
@@ -207,7 +362,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         return metadata
 
     @staticmethod
-    def _set_metadata_attributes(span: Span, metadata: dict):
+    def _set_metadata_attributes(span: Span, metadata: Mapping[str, object]):
         """Helper to set metadata attributes from mapping."""
         from litellm.integrations.arize._utils import safe_set_attribute
 
@@ -514,7 +669,7 @@ class LangfuseOtelLogger(OpenTelemetry):
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
-    ) -> dict | None:
+    ) -> dict[str, str] | None:
         """
         Construct dynamic Langfuse headers from standard callback dynamic params
 
@@ -523,11 +678,15 @@ class LangfuseOtelLogger(OpenTelemetry):
         Returns:
             dict: A dictionary of dynamic Langfuse headers
         """
-        dynamic_headers: Final = {}
+        dynamic_headers: Final[dict[str, str]] = {}
 
         dynamic_langfuse_public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         dynamic_langfuse_secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")
-        if dynamic_langfuse_public_key and dynamic_langfuse_secret_key:
+        if (
+            dynamic_langfuse_public_key
+            and dynamic_langfuse_secret_key
+            and not _refused_on_otel_v2(standard_callback_dynamic_params)
+        ):
             auth_header: Final = LangfuseOtelLogger._get_langfuse_authorization_header(
                 public_key=dynamic_langfuse_public_key,
                 secret_key=dynamic_langfuse_secret_key,
@@ -549,7 +708,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")
-        if not public_key or not secret_key:
+        if not public_key or not secret_key or _refused_on_otel_v2(standard_callback_dynamic_params):
             return None
 
         langfuse_host: Final = standard_callback_dynamic_params.get("langfuse_host") or self._get_langfuse_otel_host()
@@ -559,10 +718,36 @@ class LangfuseOtelLogger(OpenTelemetry):
             langfuse_host=langfuse_host,
         )
 
+    def _get_span_context(
+        self, kwargs: Mapping[str, object], default_span: Span | None = None
+    ) -> tuple[Context, Span] | tuple[Context | None, None]:
+        inherited: Final = super()._get_span_context(kwargs, default_span=default_span)
+        parent: Final = inherited[1] if inherited[1] is not None else trace.get_current_span(inherited[0])
+        if parent.get_span_context().is_valid and not _is_litellm_request_root(parent, kwargs):
+            return inherited
+        anchor: Final = _caller_trace_anchor(kwargs)
+        if anchor is None:
+            return inherited
+        anchored: Final = trace.set_span_in_context(trace.NonRecordingSpan(anchor[0]), inherited[0])
+        request_span: Final = parent.get_span_context()
+        if not request_span.is_valid:
+            return anchored, None
+        link: Final = _RequestTraceLink(anchor[0].span_id, request_span)
+        return otel_context.set_value(_REQUEST_TRACE_LINK, link, anchored), None
+
+    def _get_span_processor(
+        self,
+        dynamic_headers: Mapping[str, str] | None = None,
+        config_override: OpenTelemetryConfig | None = None,
+    ) -> SpanProcessor:
+        return _NamedTraceRoots(
+            super()._get_span_processor(dynamic_headers=dynamic_headers, config_override=config_override)
+        )
+
     def create_litellm_proxy_request_started_span(
         self,
         start_time: datetime,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> Span | None:
         """
         Override to prevent creating empty proxy request spans.
@@ -596,12 +781,12 @@ class LangfuseOtelLogger(OpenTelemetry):
                 request_data, original_exception, user_api_key_dict, traceback_str
             )
 
-    async def async_service_success_hook(self, *args, **kwargs):
+    async def async_service_success_hook(self, *args: object, **kwargs: object):
         """
         Langfuse should not receive service success logs.
         """
 
-    async def async_service_failure_hook(self, *args, **kwargs):
+    async def async_service_failure_hook(self, *args: object, **kwargs: object):
         """
         Langfuse should not receive service failure logs.
         """
