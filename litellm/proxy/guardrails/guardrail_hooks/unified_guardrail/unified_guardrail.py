@@ -1158,7 +1158,6 @@ class UnifiedLLMGuardrails(CustomLogger):
     ) -> tuple[object, ...]:
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-        originals: Final = tuple(copy.deepcopy(ended_responses[:buffered_count]))
         try:
             await endpoint_translation.process_output_streaming_response(
                 responses_so_far=ended_responses,
@@ -1169,12 +1168,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 deliver_ended_stream_rewrites=True,
             )
         except UndeliverableStreamRewrite as undeliverable:
-            verbose_proxy_logger.warning(
-                "UnifiedLLMGuardrails: discarding undeliverable stream rewrite for %s: %s",
-                guardrail_to_apply.guardrail_name,
-                undeliverable.reason,
-            )
-            return originals
+            raise HTTPException(status_code=500, detail="Could not deliver the guardrail rewrite.") from undeliverable
         return tuple(ended_responses[:buffered_count])
 
     @staticmethod

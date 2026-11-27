@@ -15,6 +15,7 @@ from collections.abc import AsyncGenerator, Mapping
 from typing import Any, Final, List, Literal, Optional
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.exceptions import GuardrailRaisedException
@@ -781,24 +782,23 @@ async def test_buffered_mode_delivers_rewritten_anthropic_tool_use_and_text_chun
 
 
 @pytest.mark.asyncio
-async def test_buffered_mode_falls_back_to_original_chunks_when_rewrite_is_undeliverable() -> None:
+async def test_buffered_mode_withholds_every_chunk_when_rewrite_is_undeliverable() -> None:
     guardrail: Final = _RewritingGuardrail(guardrail_name="buffered-undeliverable", event_hook="post_call")
     guardrail.streaming_buffer_until_moderated = True
 
     async def unplaceable_responses_stream() -> AsyncGenerator[Mapping[str, object], None]:
         yield {"type": "response.output_text.delta", "delta": f"raw {ORIGINAL_MARKER}"}
 
-    collected: Final = [
-        chunk
-        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/responses"),
-            response=unplaceable_responses_stream(),
-            request_data={
-                "input": "hi",
-                "guardrail_to_apply": guardrail,
-                "metadata": {"guardrails": [guardrail.guardrail_name]},
-            },
-        )
-    ]
-
-    assert collected == [{"type": "response.output_text.delta", "delta": f"raw {ORIGINAL_MARKER}"}]
+    stream: Final = UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/responses"),
+        response=unplaceable_responses_stream(),
+        request_data={
+            "input": "hi",
+            "guardrail_to_apply": guardrail,
+            "metadata": {"guardrails": [guardrail.guardrail_name]},
+        },
+    )
+    with pytest.raises(HTTPException) as failure:
+        await anext(stream)
+    assert failure.value.status_code == 500
+    assert ORIGINAL_MARKER not in str(failure.value.detail)

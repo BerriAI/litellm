@@ -2149,7 +2149,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return anthropic_sse_chunks_rewritten(chunks, blocks, masked_blocks, masked_error_data)
 
     @staticmethod
-    def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:
+    def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: Mapping[str, str]) -> bytes:
         try:
             text: Final = chunk.decode("utf-8")
         except UnicodeDecodeError:
@@ -2205,6 +2205,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if isinstance(arguments, str) and arguments:
                 _write_item_field(output_item, "arguments", _unmask_exact_pii_json(arguments, pii_tokens))
 
+    def _unmask_standalone_responses_event(self, event: object, pii_tokens: Mapping[str, str]) -> None:
+        event_type: Final = stream_item_field(event, "type")
+        if event_type in ("response.completed", "response.incomplete"):
+            self._unmask_responses_api_completed_chunk(event, pii_tokens)
+        elif event_type == "response.function_call_arguments.delta":
+            delta: Final = stream_item_field(event, "delta")
+            if isinstance(delta, str):
+                try:
+                    json.loads(delta)
+                except (ValueError, RecursionError):
+                    return
+                _write_item_field(event, "delta", _unmask_exact_pii_json(delta, pii_tokens))
+
     async def _unmask_responses_stream(
         self,
         first_event: object,
@@ -2215,47 +2228,33 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-        events: Final = [first_event, *[event async for event in rest]]
+        chunks: Final = [
+            self._unmask_sse_bytes_chunk(chunk, pii_tokens) if isinstance(chunk, bytes) else chunk
+            async for chunk in _prepended(first_event, rest)
+        ]
+        events: Final = [chunk for chunk in chunks if _is_responses_stream_item(chunk)]
         if len(events) == 1 and stream_item_field(events[0], "type") in (
             "response.completed",
             "response.incomplete",
+            "response.function_call_arguments.delta",
         ):
-            self._unmask_responses_api_completed_chunk(events[0], pii_tokens)
-            return tuple(events)
-        originals: Final = tuple(copy.deepcopy(events))
+            self._unmask_standalone_responses_event(events[0], pii_tokens)
+            return tuple(chunks)
+        rewritten: Final = copy.deepcopy(events)
         guardrail: Final[CustomGuardrail] = self if self._callback_role != "scan" else _ResponsesRestoreGuardrail(self)
         try:
             await OpenAIResponsesHandler().process_output_streaming_response(
-                responses_so_far=events,
+                responses_so_far=rewritten,
                 guardrail_to_apply=guardrail,
                 request_data=request_data,
                 deliver_ended_stream_rewrites=True,
             )
         except UndeliverableStreamRewrite:
-            for event in originals:
-                if stream_item_field(event, "type") in ("response.completed", "response.incomplete"):
-                    self._unmask_responses_api_completed_chunk(event, pii_tokens)
-            return originals
-        return tuple(events)
-
-    @staticmethod
-    def _can_unmask_responses_stream(
-        remaining_chunks: Sequence[ModelResponseStream],
-        saw_non_chat_chunk: bool,
-        pii_tokens: Mapping[str, str],
-        chunk: object,
-    ) -> bool:
-        if remaining_chunks or saw_non_chat_chunk:
-            return False
-        if not pii_tokens:
-            return False
-        return _is_responses_stream_item(chunk)
-
-    def _prepare_non_chat_chunk(self, chunk: object, pii_tokens: Mapping[str, str]) -> object:
-        chunk_type: Final = getattr(chunk, "type", None)
-        if chunk_type in ("response.completed", "response.incomplete") and pii_tokens:
-            self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
-        return chunk
+            for event in events:
+                self._unmask_standalone_responses_event(event, pii_tokens)
+            return tuple(chunks)
+        restored: Final = iter(rewritten)
+        return tuple(next(restored) if _is_responses_stream_item(chunk) else chunk for chunk in chunks)
 
     async def _stream_pii_unmasking(
         self,
@@ -2284,19 +2283,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
                     yield self._unmask_sse_bytes_chunk(chunk, pii_tokens) if pii_tokens else chunk
-                elif self._can_unmask_responses_stream(remaining_chunks, saw_non_chat_chunk, pii_tokens, chunk):
-                    for event in await self._unmask_responses_stream(chunk, stream, request_data, pii_tokens):
-                        yield event
-                    return
                 else:
-                    # /v1/responses events: unmask response.completed text in-place.
-                    # A mixed stream can't be reassembled, so flush buffered chat
-                    # chunks in order before passthrough instead of dropping them.
                     for buffered_chunk in remaining_chunks:
                         yield buffered_chunk
                     remaining_chunks.clear()
+                    if _is_responses_stream_item(chunk):
+                        for event in await self._unmask_responses_stream(chunk, stream, request_data, pii_tokens):
+                            yield event
+                        return
                     saw_non_chat_chunk = True
-                    yield self._prepare_non_chat_chunk(chunk, pii_tokens)
+                    yield chunk
 
             if saw_non_chat_chunk or not remaining_chunks:
                 return

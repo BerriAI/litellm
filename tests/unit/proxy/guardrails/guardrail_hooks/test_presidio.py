@@ -71,6 +71,7 @@ from litellm.types.utils import (
     Choices,
     Delta,
     Function,
+    GenericGuardrailAPIInputs,
     Message,
     ModelResponse,
     StreamingChoices,
@@ -5114,51 +5115,44 @@ async def test_output_parse_pii_streaming_responses_completed_event_unmasked(
 
 
 @pytest.mark.asyncio
-async def test_output_parse_pii_streaming_mixed_chunks_flushes_buffered(
-    mock_user_api_key,
-):
-    """
-    Regression test: when output_parse_pii=True and a stream mixes buffered
-    ModelResponseStream chunks with a /v1/responses event, the buffered chat
-    chunks must still be forwarded (in order) instead of being dropped at the
-    saw_non_chat_chunk early return.
-    """
-    guardrail = OPTIONAL_PresidioPIIMasking(
-        mock_testing=True,
-        output_parse_pii=True,
-    )
-
-    class FakeResponsesEvent:
-        def __init__(self, event_type: str):
-            self.type = event_type
-
-    model_chunk = ModelResponseStream(
-        id="chatcmpl-mixed-unmask-1",
-        choices=[],
-        created=1,
-        model="gpt-4",
-        object="chat.completion.chunk",
-        system_fingerprint=None,
-    )
-    response_completed = FakeResponsesEvent("response.completed")
-
-    async def mock_stream():
-        yield model_chunk
-        yield response_completed
-
-    collected = []
-    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=mock_user_api_key,
-        response=mock_stream(),
-        request_data={
-            "metadata": {
-                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
-            }
+@pytest.mark.parametrize("terminal_type", ("response.completed", "response.incomplete"))
+async def test_mixed_responses_stream_restores_arguments_and_terminal_text(
+    mock_user_api_key: UserAPIKeyAuth, terminal_type: str
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    chat: Final = ModelResponseStream(choices=[])
+    token: Final = "<PERSON_1>"
+    original: Final = 'Jane "Q"'
+    arguments: Final = json.dumps({"name": token})
+    terminal: Final = {
+        "type": terminal_type,
+        "response": {
+            "output": [
+                {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": arguments},
+                {"type": "message", "content": [{"type": "output_text", "text": token}]},
+            ]
         },
-    ):
-        collected.append(chunk)
+    }
 
-    assert collected == [model_chunk, response_completed]
+    async def upstream() -> AsyncIterator[object]:
+        yield chat
+        yield {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": arguments}
+        yield terminal
+
+    first, delta, ended = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=upstream(),
+            request_data={"metadata": {"pii_tokens": {token: original}}},
+        )
+    ]
+    assert first is chat
+    assert json.loads(delta["delta"]) == {"name": original}
+    tool, message = ended["response"]["output"]
+    assert ended["type"] == terminal_type
+    assert json.loads(tool["arguments"]) == {"name": original}
+    assert message["content"][0]["text"] == original
 
 
 @pytest.mark.asyncio
@@ -7951,8 +7945,10 @@ async def test_reversible_presidio_restores_responses_completed_event_tool_call_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("interleave_chat", (False, True))
 async def test_reversible_presidio_restores_full_responses_stream_tool_call_events(
     mock_user_api_key: UserAPIKeyAuth,
+    interleave_chat: bool,
 ) -> None:
     guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True, _callback_role="restore")
     masked_args: Final = '{"name": "<PERSON_1>"}'
@@ -8009,9 +8005,17 @@ async def test_reversible_presidio_restores_full_responses_stream_tool_call_even
         ResponseCompletedEvent(type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=response_envelope),
     )
 
+    chat: Final = ModelResponseStream(choices=[])
+
     async def upstream() -> AsyncIterator[object]:
+        if interleave_chat:
+            yield chat
         for event in events:
             yield event
+            if interleave_chat and isinstance(event, FunctionCallArgumentsDeltaEvent):
+                yield chat
+        if interleave_chat:
+            yield chat
 
     collected: Final = [
         chunk
@@ -8022,6 +8026,8 @@ async def test_reversible_presidio_restores_full_responses_stream_tool_call_even
         )
     ]
 
+    chat_positions: Final = tuple(index for index, chunk in enumerate(collected) if chunk is chat)
+    assert chat_positions == ((0, 4, 6, 10) if interleave_chat else ())
     deltas: Final = "".join(event.delta for event in collected if isinstance(event, FunctionCallArgumentsDeltaEvent))
     assert json.loads(deltas) == {"name": "Jane Doe"}
     done_event: Final = next(event for event in collected if isinstance(event, FunctionCallArgumentsDoneEvent))
