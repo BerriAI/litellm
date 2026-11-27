@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 
 import type { components } from "@/lib/http/schema";
 import type { KeySpendActivityRow } from "@/components/UsagePage/dailyActivityApi";
@@ -67,7 +68,7 @@ const dayWithModels = (date: string, models: Record<string, Partial<SpendMetrics
 });
 
 const renderWith = (results: DailyData[], overrides: Partial<DailyActivityRange> = {}) =>
-  render(
+  renderWithProviders(
     <CacheLeakageCard
       activity={{
         dateValue: {},

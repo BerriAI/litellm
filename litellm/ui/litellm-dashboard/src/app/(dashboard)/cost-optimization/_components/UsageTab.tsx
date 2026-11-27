@@ -1,5 +1,6 @@
 "use client";
 
+import { parseAsStringLiteral, useQueryState } from "nuqs";
 import React, { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -44,6 +45,9 @@ const EMPTY_TOOL_SPEND: ToolSpendResponse = {
 
 const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
 
+const SAVINGS_VIEWS: readonly SavingsAccumulation[] = ["cumulative", "per-interval"];
+const savingsViewParser = parseAsStringLiteral(SAVINGS_VIEWS).withDefault("cumulative");
+
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const { t } = useTranslation();
   const { dateValue, onDateChange, results, loading } = activity;
@@ -74,7 +78,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const toolSpend = toolSpendState?.key === rangeKey ? toolSpendState.data : null;
   const toolSpendLoading = toolSpendEnabled && toolSpend === null;
 
-  const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
+  const [accumulation, setAccumulation] = useQueryState("savings", savingsViewParser);
 
   const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results), [results]);
 
@@ -147,7 +151,12 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
             <CardDescription>{savingsSubtitle}</CardDescription>
             <CardAction className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
               <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
-              <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
+              <Tabs
+                value={accumulation}
+                onValueChange={(value) =>
+                  void setAccumulation(value === "per-interval" ? "per-interval" : "cumulative")
+                }
+              >
                 <TabsList>
                   <TabsTrigger value="cumulative">{t("costOptimization.usage.savings.cumulative")}</TabsTrigger>
                   <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>

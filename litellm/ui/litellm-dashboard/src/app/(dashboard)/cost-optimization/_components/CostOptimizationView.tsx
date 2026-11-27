@@ -6,6 +6,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { Info, PiggyBank } from "lucide-react";
 
 import useCan from "@/app/(dashboard)/hooks/useCan";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
 import { TabsContent } from "@/components/ui/tabs";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
@@ -14,6 +15,11 @@ import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
 import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import { useDailyActivityRange } from "./useDailyActivityRange";
+import { useVisitedUrlTabs } from "./useVisitedUrlTabs";
+
+const ALL_TABS = ["usage", "compression", "caching", "autorouter-usage"] as const;
+type CostOptimizationTab = (typeof ALL_TABS)[number];
+const UNPRIVILEGED_TABS: readonly CostOptimizationTab[] = ["usage"];
 
 interface CostOptimizationViewProps {
   accessToken: string | null;
@@ -25,18 +31,11 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   const { t } = useTranslation();
   const activity = useDailyActivityRange(accessToken, userId, userRole);
   const canViewProxyWideCostData = useCan("viewProxyWideCostData");
-  const [visitedTabs, setVisitedTabs] = React.useState<readonly string[]>(["usage"]);
-
-  const handleTabChange = (value: unknown) => {
-    if (typeof value !== "string") {
-      return;
-    }
-
-    setVisitedTabs((currentTabs) => (currentTabs.includes(value) ? currentTabs : [...currentTabs, value]));
-  };
+  const [tab, setTab] = useUrlTab(canViewProxyWideCostData ? ALL_TABS : UNPRIVILEGED_TABS, "usage");
+  const visitedTabs = useVisitedUrlTabs(tab);
 
   return (
-    <PageTabs defaultValue="usage" onValueChange={handleTabChange}>
+    <PageTabs value={tab} onValueChange={setTab}>
       <PageHeader>
         <PageHeaderTitle>
           <PiggyBank />
