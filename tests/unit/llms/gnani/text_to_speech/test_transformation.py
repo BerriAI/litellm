@@ -94,8 +94,8 @@ def test_provider_errors_keep_the_status_and_message(status: int, message: str, 
 @pytest.mark.parametrize(
     ("fields", "expected"),
     (
-        ({"stream": True}, "stream"),
-        ({"stream_format": "sse"}, "complete audio"),
+        ({"extra_body": {"stream": True}}, "top-level"),
+        ({"stream_format": "sse"}, "binary audio"),
         ({"response_format": "flac"}, "format"),
         ({"response_format": "wav", "audio_config": {"container": "mp3"}}, "conflicts"),
         ({"extra_headers": {"x-api-key-id": "other"}}, "api_key"),

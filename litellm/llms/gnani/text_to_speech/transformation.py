@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
 
@@ -52,6 +52,8 @@ def _speed(model: str, speed: object) -> object:
 
 
 class GnaniTextToSpeechConfig(BaseTextToSpeechConfig):
+    endpoint: ClassVar[str] = "inference"
+
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base contract returns a list
         return ["voice", "response_format", "speed"]
 
@@ -75,12 +77,14 @@ class GnaniTextToSpeechConfig(BaseTextToSpeechConfig):
                 message="Gnani does not support instructions.", model=model, llm_provider="gnani"
             )
         extra: Final = as_str_mapping(caller.get("extra_body")) or {}
-        if (
-            extra.get("stream_format", caller.get("stream_format")) not in (None, "audio")
-            or extra.get("stream") is True
+        if extra.get("stream") is True or extra.get("stream_format", caller.get("stream_format")) not in (
+            None,
+            "audio",
         ):
             raise UnsupportedParamsError(
-                message="Gnani REST speech supports only complete audio responses.", model=model, llm_provider="gnani"
+                message="Gnani speech returns binary audio. Pass stream=True as a top-level speech parameter.",
+                model=model,
+                llm_provider="gnani",
             )
         speed: Final = optional_params.get("speed")
         return voice, {
@@ -104,9 +108,9 @@ class GnaniTextToSpeechConfig(BaseTextToSpeechConfig):
         return {**headers, "X-API-Key-ID": key, "Content-Type": "application/json"}
 
     def get_complete_url(self, model: str, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
-        return ensure_api_route(
-            api_base or get_secret_str("GNANI_API_BASE") or "https://api.vachana.ai", "api/v1/tts/inference"
-        )
+        base: Final = (api_base or get_secret_str("GNANI_API_BASE") or "https://api.vachana.ai").rstrip("/")
+        root: Final = base.removesuffix("/api/v1/tts/inference").removesuffix("/api/v1/tts/sse")
+        return ensure_api_route(root, f"api/v1/tts/{self.endpoint}")
 
     def transform_text_to_speech_request(
         self,

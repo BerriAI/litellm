@@ -9706,12 +9706,13 @@ def speech(
             stream=stream_audio,
         )
     elif custom_llm_provider in ("gnani", "gradium") and text_to_speech_provider_config is not None:
-        if custom_llm_provider == "gnani" and stream_audio:
-            raise litellm.UnsupportedParamsError(
-                message="Gnani REST speech returns complete audio. Omit stream or set it to false.",
-                model=model,
-                llm_provider=custom_llm_provider,
-            )
+        from litellm.llms.gnani.text_to_speech.streaming import GnaniStreamingTextToSpeechConfig
+
+        speech_config: Final = (
+            GnaniStreamingTextToSpeechConfig(_REQUEST_KWARGS_ADAPTER.validate_python(optional_params))
+            if custom_llm_provider == "gnani" and stream_audio
+            else text_to_speech_provider_config
+        )
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
         if api_key is not None:
@@ -9722,7 +9723,7 @@ def speech(
                 model=model,
                 input=input,
                 voice=voice if isinstance(voice, str) else None,
-                text_to_speech_provider_config=text_to_speech_provider_config,
+                text_to_speech_provider_config=speech_config,
                 text_to_speech_optional_params=optional_params,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params_dict,

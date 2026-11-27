@@ -271,3 +271,35 @@ class TestGnaniSpeech:
         with wave.open(io.BytesIO(response.content), "rb") as wav:
             assert wav.getframerate() == sample_rate
             assert wav.readframes(1)
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.GNANI,),
+            models=(GNANI_TIMBRE_V25, GNANI_TIMBRE_V3),
+            mode=Mode.STREAM,
+        )
+    )
+    @pytest.mark.parametrize(("timbre", "voice"), ((GNANI_TIMBRE_V25, "Nalini"), (GNANI_TIMBRE_V3, "Shivani")))
+    def test_receives_streamed_audio_with_a_scoped_key(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, timbre: str, voice: str
+    ) -> None:
+        alias: Final = f"e2e-gnani-stream-{unique_marker()}"
+        model_id: Final = proxy.create_model(alias, LiteLLMParamsBody(model=timbre, api_key="os.environ/GNANI_API_KEY"))
+        resources.defer(lambda: proxy.delete_model(model_id))
+        client: Final = sdk.openai(resources.key(models=[alias]))
+        with client.audio.speech.with_streaming_response.create(
+            model=alias,
+            voice=voice,
+            input="Today we will practice counting. First count the red apples. Now count the green apples.",
+            response_format="wav",
+            extra_body={"stream": True, "language": "en-IN"},
+        ) as response:
+            assert response_header(response.headers, "content-type") == "audio/wav"
+            chunks: Final = response.iter_bytes()
+            first: Final = next(chunks)
+            remaining: Final = b"".join(chunks)
+            assert first and remaining
+            with wave.open(io.BytesIO(first + remaining), "rb") as wav:
+                assert wav.readframes(1)

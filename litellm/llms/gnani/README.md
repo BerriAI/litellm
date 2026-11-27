@@ -50,3 +50,43 @@ REST synthesis returns the complete audio. The default format is MP3. Use `respo
 Timbre v2.5 accepts speeds from 0.85 through 1.15. LiteLLM also accepts `slow`, `medium` and `fast` for that model. Timbre v3.0 supports numeric speeds of 0.8, 1.0 and 1.2. Voices and language codes are validated by Gnani. [REST reference](https://docs.gnani.ai/api/TTS/tts-inference).
 
 To track estimated spend, set `model_info.input_cost_per_character` on the deployment to your contracted rate in USD. LiteLLM counts non-whitespace characters in the submitted text. Gnani returns audio without billing units, and the catalog leaves both model prices unset.
+
+## Streaming speech
+
+Set `stream=True` to receive binary audio as Gnani produces it. The SDK decodes each SSE event. Use `iter_bytes()` or `await result.aiter_bytes()` and close the response if playback stops early.
+
+```python
+from contextlib import aclosing, closing
+
+from litellm import aspeech, speech
+
+request = {
+    "model": "gnani/timbre-v3.0",
+    "voice": "Shivani",
+    "input": "नमस्ते! आज हम गणित सीखेंगे।",
+    "response_format": "pcm",
+    "stream": True,
+}
+with closing(speech(**request)) as result, open("lesson.pcm", "wb") as output:
+    for chunk in result.iter_bytes():
+        output.write(chunk)
+
+
+async def save_lesson():
+    async with aclosing(await aspeech(**request)) as result:
+        with open("lesson.pcm", "wb") as output:
+            async for chunk in await result.aiter_bytes():
+                output.write(chunk)
+```
+
+The proxy accepts the same `stream` flag at `/v1/audio/speech`. This example plays raw mono PCM as it arrives.
+
+```bash
+curl --fail --silent --show-error --no-buffer http://localhost:4000/v1/audio/speech \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gnani-timbre-v3","voice":"Shivani","input":"नमस्ते! आज हम गणित सीखेंगे।","response_format":"pcm","stream":true}' \
+  | ffplay -nodisp -autoexit -f s16le -ar 24000 -ch_layout mono -i pipe:0
+```
+
+PCM, WAV, MP3 and G.711 support incremental delivery. Gnani sends Ogg Opus in a single event at the end. An upstream error or disconnect before completion interrupts the audio stream. [Gnani streaming reference](https://docs.gnani.ai/api/TTS/tts-sse).
