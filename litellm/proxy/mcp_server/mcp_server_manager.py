@@ -4515,6 +4515,17 @@ class MCPServerManager:
         _write_user_env_vars_cache(user_id, server.server_id, values)
         return values
 
+    async def profile_token_failure(self, server: MCPServer, caller: UserAPIKeyAuth | None) -> str | None:
+        """The ``CredError`` tag that stops the profile's token being minted, or None when it mints."""
+        spec: Final = to_server_spec(server)
+        if spec is None:
+            return "misconfigured"
+        match await self._cred_provider.resolve_credentials(to_subject(caller, None), spec):
+            case Ok():
+                return None
+            case Error(error):
+                return error.tag
+
     async def preflight_token_exchange(
         self,
         server: MCPServer,
