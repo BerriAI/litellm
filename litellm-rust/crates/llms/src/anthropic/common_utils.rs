@@ -522,6 +522,56 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
         .collect()
 }
 
+fn is_advisor_block(block: &ContentBlock) -> bool {
+    (block.is_type(ContentBlockType::ServerToolUse) && block.name.as_deref() == Some("advisor"))
+        || block.is_type(ContentBlockType::AdvisorToolResult)
+}
+
+pub fn drop_unpaired_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
+    let stripped = strip_advisor_blocks(messages);
+    let unpaired = count_advisor_blocks(&stripped);
+    if unpaired == 0 {
+        return stripped;
+    }
+    litellm_tracing::warn!(
+        "Dropping {unpaired} advisor blocks from the message history (drop_params=True): their id is not a non-empty string or matches no other advisor block, so the provider would reject them."
+    );
+    drop_advisor_blocks(stripped)
+}
+
+fn count_advisor_blocks(messages: &[Message]) -> usize {
+    messages
+        .iter()
+        .map(|message| match &message.content {
+            MessageContent::Blocks(blocks) if message.role == "assistant" => blocks
+                .iter()
+                .filter(|block| is_advisor_block(block))
+                .count(),
+            _ => 0,
+        })
+        .sum()
+}
+
+fn drop_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
+    messages
+        .into_iter()
+        .map(|message| {
+            if message.role != "assistant" {
+                return message;
+            }
+            let MessageContent::Blocks(blocks) = &message.content else {
+                return message;
+            };
+            let kept: Vec<ContentBlock> = blocks
+                .iter()
+                .filter(|block| !is_advisor_block(block))
+                .cloned()
+                .collect();
+            message.with_blocks(kept)
+        })
+        .collect()
+}
+
 #[derive(Deserialize)]
 struct ReplayedWebSearchResult {
     #[serde(default)]

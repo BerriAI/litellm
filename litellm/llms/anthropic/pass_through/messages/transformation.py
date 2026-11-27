@@ -678,7 +678,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         _tools: Final = anthropic_messages_optional_request_params.get("tools") or []
         _has_advisor: Final = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _tools)
         if not _has_advisor:
-            messages = strip_advisor_blocks_from_messages(messages)
+            messages = strip_advisor_blocks_from_messages(
+                messages, drop_params=getattr(litellm_params, "drop_params", None)
+            )
 
         base_model: Final = getattr(litellm_params, "base_model", None)
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
