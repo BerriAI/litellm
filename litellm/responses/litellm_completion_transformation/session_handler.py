@@ -20,6 +20,10 @@ from litellm.litellm_core_utils.tool_fields import (
     with_tool_calls_named_as_declared,
 )
 from litellm.responses.additional_tools import hoist_additional_tools
+from litellm.responses.litellm_completion_transformation.provider_signed_state import (
+    holds_altered_provider_state,
+    without_altered_provider_state,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -60,6 +64,19 @@ _FAILED_TURN_STATUS: Final = "failure"
 
 def _is_a_failed_turn(spend_log: "SpendLogsPayload") -> bool:
     return "status" in spend_log and spend_log["status"] == _FAILED_TURN_STATUS
+
+
+def _stored_response(spend_log: Mapping[str, object]) -> object:
+    return spend_log.get("response", "{}")
+
+
+def _replayable(stored: object, spend_log: "SpendLogsPayload") -> object:
+    if holds_altered_provider_state(stored):
+        verbose_proxy_logger.warning(
+            "previous_response_id replay leaves out reasoning the stored turn %s holds cut",
+            spend_log.get("request_id"),
+        )
+    return without_altered_provider_state(stored)
 
 
 def _stored_request_tools(proxy_server_request: Mapping[str, object] | None) -> Mapping[str, object] | None:
@@ -228,7 +245,9 @@ class ResponsesSessionHandler:
         ############################################################
         if proxy_server_request_dict:
             _response_input_param: Final = _input_named_as_declared(
-                proxy_server_request_dict.get("input") or proxy_server_request_dict.get("messages"),
+                _replayable(
+                    proxy_server_request_dict.get("input") or proxy_server_request_dict.get("messages"), spend_log
+                ),
                 declared_tool_names,
             )
             if isinstance(_response_input_param, (str, list)):
@@ -257,7 +276,7 @@ class ResponsesSessionHandler:
         ############################################################
         # Add Output messages for this Spend Log
         ############################################################
-        _response_output: Final = spend_log.get("response", "{}")
+        _response_output: Final = _replayable(_stored_response(spend_log), spend_log)
         stored_responses_api_output: Final = _stored_responses_api_output(_response_output)
         if stored_responses_api_output is not None:
             chat_completion_message_history.extend(

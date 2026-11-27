@@ -45,7 +45,7 @@ from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_
 from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -55,6 +55,8 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.factory import is_same_tool_call
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.tool_fields import chat_member_name, qualified_member_name
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -65,6 +67,7 @@ from litellm.responses.bridge_check import (
     chat_target_accepts_reasoning_summary,
     empty_user_turn_for_model_turn_end,
 )
+from litellm.responses.litellm_completion_transformation.repeated_tool_calls import without_repeated_tool_calls
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -139,18 +142,25 @@ from .custom_tools import (
     validated_tool_search_execution,
     without_malformed_tool_flags,
 )
-from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
+from .reasoning_items import (
+    decode_thinking_blocks,
+    encode_thinking_blocks,
+    is_verifiable_thinking_block,
+    mint_reasoning_item_id,
+)
 from .tool_search import (
     CompletionRoute,
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
+    chat_config_builds_anthropic_request,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
     is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    provider_chat_config,
     request_runs_tool_search,
     route_runs_tool_search,
     tool_search_call_ids,
@@ -373,6 +383,36 @@ SessionMessage: TypeAlias = (
     | ChatCompletionResponseMessage
     | Message
 )
+
+
+def _made_with_signed_thinking(message: SessionMessage) -> bool:
+    blocks: Final = filter(None, map(as_str_mapping, parts_of(message_field(message, "thinking_blocks"))))
+    return any(map(is_verifiable_thinking_block, blocks))
+
+
+def _keeps_stored_arguments(target_checks_whole_conversation: bool, message: SessionMessage) -> bool:
+    return target_checks_whole_conversation or _made_with_signed_thinking(message)
+
+
+def _target_checks_whole_conversation(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    try:
+        chat_config: Final = provider_chat_config(model, custom_llm_provider)
+    except litellm.BadRequestError:
+        return False
+    return isinstance(chat_config, AmazonConverseConfig) or chat_config_builds_anthropic_request(chat_config)
+
+
+def _with_each_call_made_once(
+    messages: Sequence[SessionMessage], model: str, custom_llm_provider: str | None
+) -> Sequence[SessionMessage]:
+    return without_repeated_tool_calls(
+        messages,
+        keep_stored_arguments=partial(
+            _keeps_stored_arguments, _target_checks_whole_conversation(model, custom_llm_provider)
+        ),
+    )
 
 
 def _replayed_assistant_without_tool_search_uses(message: Mapping[str, object]) -> SessionMessage | None:
@@ -650,6 +690,13 @@ class ChatCompletionSession(TypedDict, total=False):
 
 
 ########### End of Initialize Classes used for Responses API  ###########
+
+
+def _answered_call_id(tool_call_id: str, call_ids: Sequence[str]) -> str | None:
+    if tool_call_id in call_ids:
+        return tool_call_id
+    same_call: Final = frozenset(call_id for call_id in call_ids if is_same_tool_call(call_id, tool_call_id))
+    return next(iter(same_call)) if len(same_call) == 1 else None
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -1170,7 +1217,8 @@ class LiteLLMCompletionResponsesConfig:
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools: Final = litellm_completion_request.get("tools") or []
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=combined_messages, tools=tools
+            messages=_with_each_call_made_once(combined_messages, model, provider),
+            tools=tools,
         )
 
         # Safety check: Ensure we don't end up with empty messages
@@ -1680,20 +1728,26 @@ class LiteLLMCompletionResponsesConfig:
         return []
 
     @staticmethod
-    def _check_tool_call_exists(tool_calls: Sequence[object], tool_call_id: str) -> bool:
-        """Check if a tool_call with the given ID exists in the list."""
-        for tool_call in tool_calls:
-            tool_call_id_to_check: object = None
-            if isinstance(tool_call, dict):
-                tool_call_id_to_check = _ANY_KEY_DICT_ADAPTER.validate_python(tool_call).get("id")
-            elif hasattr(tool_call, "id"):
-                tool_call_id_to_check = getattr(tool_call, "id", None)
-            if tool_call_id_to_check == tool_call_id:
-                return True
-        return False
+    def _tool_call_id(tool_call: object) -> object:
+        return (
+            _ANY_KEY_DICT_ADAPTER.validate_python(tool_call).get("id")
+            if isinstance(tool_call, dict)
+            else getattr(tool_call, "id", None)
+        )
 
     @staticmethod
-    def _reconstruct_tool_call_from_tools(tool_call_id: str, tools: Sequence[object]) -> dict[str, object] | None:
+    def _id_of_the_call_answered_by(tool_call_id: str, tool_calls: Sequence[object]) -> str | None:
+        return _answered_call_id(
+            tool_call_id,
+            tuple(
+                call_id
+                for call_id in map(LiteLLMCompletionResponsesConfig._tool_call_id, tool_calls)
+                if isinstance(call_id, str)
+            ),
+        )
+
+    @staticmethod
+    def _reconstruct_tool_call_from_tools(tool_call_id: str, tools: Sequence[object]) -> Mapping[str, object] | None:
         """Reconstruct a minimal tool_call definition from tools list."""
         for tool in tools:
             if isinstance(tool, dict):
@@ -1857,7 +1911,7 @@ class LiteLLMCompletionResponsesConfig:
             | ChatCompletionMessageToolCall
             | Message
         ] = list(copy.deepcopy(messages))
-        messages_to_remove: Final = []
+        messages_to_remove: Final[list[int]] = []
 
         # Count non-tool messages to avoid removing all messages
         # This prevents empty messages list when using previous_response_id without a database
@@ -1883,14 +1937,6 @@ class LiteLLMCompletionResponsesConfig:
                 tool_call_id = LiteLLMCompletionResponsesConfig._recover_tool_call_id_from_assistant(
                     prev_assistant, message
                 )
-                if tool_call_id:
-                    # Type-safe way to set tool_call_id on tool message
-                    if isinstance(message, dict):
-                        # Cast to dict to allow setting tool_call_id
-                        message_dict = cast(dict[str, object], message)
-                        message_dict["tool_call_id"] = tool_call_id
-                    elif hasattr(message, "tool_call_id"):
-                        setattr(message, "tool_call_id", tool_call_id)
 
             # Only remove messages with empty tool_call_id if we have other non-tool messages
             # This prevents ending up with an empty messages list when using previous_response_id
@@ -1911,7 +1957,13 @@ class LiteLLMCompletionResponsesConfig:
                 prev_assistant = fixed_messages[prev_assistant_idx]
                 tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(prev_assistant)
 
-                if not LiteLLMCompletionResponsesConfig._check_tool_call_exists(tool_calls, tool_call_id):
+                if (
+                    answered_call_id := LiteLLMCompletionResponsesConfig._id_of_the_call_answered_by(
+                        tool_call_id, tool_calls
+                    )
+                ) is not None:
+                    tool_call_id = answered_call_id
+                else:
                     _tool_use_definition: object = TOOL_CALLS_CACHE.get_cache(key=tool_call_id)
 
                     if not _tool_use_definition and tools:
@@ -1930,6 +1982,13 @@ class LiteLLMCompletionResponsesConfig:
                             len(tool_calls),
                         )
                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(prev_assistant, tool_call_chunk)
+
+            if tool_call_id != tool_call_id_raw:
+                if isinstance(message, dict):
+                    message_dict = cast(dict[str, object], message)
+                    message_dict["tool_call_id"] = tool_call_id
+                elif hasattr(message, "tool_call_id"):
+                    setattr(message, "tool_call_id", tool_call_id)
 
         # Remove messages with empty tool_call_id that couldn't be fixed
         for idx in reversed(messages_to_remove):

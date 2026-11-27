@@ -3,10 +3,10 @@ import json
 import os
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
-from functools import reduce
+from functools import partial, reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
@@ -34,16 +34,21 @@ from litellm.constants import (
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
+)
 from litellm.litellm_core_utils.classifier_logging import (
     CLASSIFIER_AUDIT_FIELDS,
     classifier_audit_fields,
     without_classifier_audit,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     get_litellm_metadata_from_kwargs,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
 )
+from litellm.litellm_core_utils.db_truncation import TRUNCATION_MARKER, truncated_for_db
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import (
@@ -64,6 +69,7 @@ from litellm.proxy._types import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token, query_raw_within_statement_timeout
+from litellm.responses.litellm_completion_transformation.provider_signed_state import is_provider_signed
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -86,18 +92,27 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-def _get_max_string_length_prompt_in_db() -> int:
+def _max_string_length_in_db(configured: str | None, default: int) -> int:
     """
-    Resolve prompt truncation threshold at runtime so values loaded later via
+    Resolve a truncation threshold at runtime so values loaded later via
     proxy config environment_variables are honored.
     """
-    max_length_str: Final = os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB")
-    if max_length_str is None:
-        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+    if configured is None:
+        return default
     try:
-        return int(max_length_str)
-    except (TypeError, ValueError):
-        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+        return int(configured)
+    except ValueError:
+        return default
+
+
+def _get_max_string_length_prompt_in_db() -> int:
+    return _max_string_length_in_db(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB"), DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB)
+
+
+def _get_max_string_length_provider_signed_in_db() -> int:
+    return _max_string_length_in_db(
+        os.getenv("MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB"), DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB
+    )
 
 
 def is_master_key(api_key: str | None, _master_key: str | None) -> bool:
@@ -475,10 +490,6 @@ def _looks_like_model_name(model: str) -> bool:
     return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
 
 
-_TRUNCATION_MARKER: Final = re.compile(
-    rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars\. "
-    rf"{re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}\) \.\.\."
-)
 _SCRUBBED_ERROR_TEXT_FIELDS: Final = frozenset(("error_message", "traceback"))
 
 
@@ -497,7 +508,7 @@ def _overlap_at_start(text: str, spelling: str) -> int:
 
 
 def _scrub_raw_model_split_by_truncation(text: str, spellings: tuple[str, ...]) -> str:
-    marker: Final = _TRUNCATION_MARKER.search(text)
+    marker: Final = TRUNCATION_MARKER.search(text)
     if marker is None:
         return text
     head: Final = text[: marker.start()]
@@ -1153,6 +1164,7 @@ _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
 _REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
 _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
+_RESPONSES_CALL_TYPES: Final = frozenset({"responses", "aresponses"})
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
@@ -1172,11 +1184,28 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
     )
 
 
+def _provider_signed_for_db(value: str, max_string_length_prompt_in_db: int) -> str:
+    return truncated_for_db(value, max(max_string_length_prompt_in_db, _get_max_string_length_provider_signed_in_db()))
+
+
+def _stored_whole(value: object, sanitized: Callable[[object], object], max_string_length_prompt_in_db: int) -> object:
+    if isinstance(value, str):
+        return _provider_signed_for_db(value, max_string_length_prompt_in_db)
+    items: Final = as_object_list(value)
+    if items is None:
+        return sanitized(value)
+    return [
+        _provider_signed_for_db(item, max_string_length_prompt_in_db) if isinstance(item, str) else sanitized(item)
+        for item in items
+    ]
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
+    keep_provider_signed_fields: bool = False,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -1187,11 +1216,6 @@ def _sanitize_request_body_for_spend_logs_payload(
     SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
     and logprobs.
     """
-    from litellm.constants import (
-        LITELLM_TRUNCATED_PAYLOAD_FIELD,
-        LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
-    )
-
     if visited is None:
         visited = set()
     if max_string_length_prompt_in_db is None:
@@ -1206,51 +1230,24 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
             return _sanitize_request_body_for_spend_logs_payload(
-                value, visited, max_string_length_prompt_in_db, mask_credentials
+                value, visited, max_string_length_prompt_in_db, mask_credentials, keep_provider_signed_fields
             )
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
-            if len(value) > max_string_length_prompt_in_db:
-                # Keep 35% from beginning and 65% from end (end is usually more important)
-                # This split ensures we keep more context from the end of conversations
-                start_ratio: Final = 0.35
-                end_ratio: Final = 0.65
-
-                # Calculate character distribution
-                start_chars: Final = int(max_string_length_prompt_in_db * start_ratio)
-                end_chars = int(max_string_length_prompt_in_db * end_ratio)
-
-                # Ensure we don't exceed the total limit
-                total_keep: Final = start_chars + end_chars
-                if total_keep > max_string_length_prompt_in_db:
-                    end_chars = max_string_length_prompt_in_db - start_chars
-
-                # If the string length is less than what we want to keep, just truncate normally
-                if len(value) <= max_string_length_prompt_in_db:
-                    return value
-
-                # Calculate how many characters are being skipped
-                skipped_chars: Final = len(value) - total_keep
-
-                # Build the truncated string: beginning + truncation marker + end
-                truncated_value: Final = (
-                    f"{value[:start_chars]}"
-                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
-                    f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
-                    f"{value[-end_chars:]}"
-                )
-                return truncated_value
-            return value
+            return truncated_for_db(value, max_string_length_prompt_in_db)
         return value
 
-    return {
-        k: REDACTED_BY_LITELM_STRING
-        if mask_credentials and _is_request_body_credential(k, v)
-        else _sanitize_value(v, mask_credentials and not _is_spend_log_content(request_body, k))
-        for k, v in request_body.items()
-        if k not in _SENSITIVE_REQUEST_BODY_KEYS
-    }
+    def _stored_value(key: str, value: object) -> object:
+        if mask_credentials and _is_request_body_credential(key, value):
+            return REDACTED_BY_LITELM_STRING
+        if keep_provider_signed_fields and is_provider_signed(request_body, key, value):
+            return _stored_whole(
+                value, partial(_sanitize_value, mask_credentials=mask_credentials), max_string_length_prompt_in_db
+            )
+        return _sanitize_value(value, mask_credentials and not _is_spend_log_content(request_body, key))
+
+    return {k: _stored_value(k, v) for k, v in request_body.items() if k not in _SENSITIVE_REQUEST_BODY_KEYS}
 
 
 # Quoted-key form: ``"input"`` / ``'messages'`` / ``"prompt"`` followed by
@@ -1658,7 +1655,7 @@ _OBJECT_LIST: Final = TypeAdapter(list[object])
 _IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
 _MAX_IP_ADDRESS_LENGTH: Final = len("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")
 _LONG_HEX_GROUP: Final = re.compile(r"[0-9A-Fa-f]{5,}")
-_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({_TRUNCATION_MARKER.pattern})")
+_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({TRUNCATION_MARKER.pattern})")
 _IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])")
 _IPV6_ADDRESS_CANDIDATE: Final = re.compile(
     r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"
@@ -1849,6 +1846,14 @@ def _get_vector_store_request_for_spend_logs_payload(
     return vector_store_request_metadata
 
 
+def _replayed_by_responses_bridge(standard_payload: Mapping[str, object] | None) -> bool:
+    """A `/v1/responses` turn served through the chat completions bridge logs a chat-shaped response."""
+    if standard_payload is None or standard_payload.get("call_type") not in _RESPONSES_CALL_TYPES:
+        return False
+    response: Final = standard_payload.get("response")
+    return isinstance(response, Mapping) and "choices" in response
+
+
 def _get_response_for_spend_logs_payload(
     payload: StandardLoggingPayload | None,
     kwargs: dict | None = None,
@@ -1867,24 +1872,26 @@ def _get_response_for_spend_logs_payload(
                 response_obj["tool_calls"] = realtime_tool_calls
 
         # Apply message redaction if turn_off_message_logging is enabled
-        if kwargs is not None:
-            from litellm.litellm_core_utils.redact_messages import (
-                perform_redaction,
-                should_redact_message_logging,
-            )
+        from litellm.litellm_core_utils.redact_messages import (
+            perform_redaction,
+            should_redact_message_logging,
+        )
 
-            litellm_params: Final = kwargs.get("litellm_params", {})
-            model_call_details: Final = {
-                "litellm_params": litellm_params,
+        redacted: Final = kwargs is not None and should_redact_message_logging(
+            model_call_details={
+                "litellm_params": kwargs.get("litellm_params", {}),
                 "standard_callback_dynamic_params": kwargs.get("standard_callback_dynamic_params"),
             }
+        )
+        # If redaction is enabled, convert to serializable dict before redacting
+        if redacted:
+            response_obj = _convert_to_json_serializable_dict(response_obj)
+            response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
-            # If redaction is enabled, convert to serializable dict before redacting
-            if should_redact_message_logging(model_call_details=model_call_details):
-                response_obj = _convert_to_json_serializable_dict(response_obj)
-                response_obj = perform_redaction(model_call_details={}, result=response_obj)
-
-        sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload({"response": response_obj})
+        sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload(
+            {"response": response_obj},
+            keep_provider_signed_fields=not redacted and _replayed_by_responses_bridge(payload),
+        )
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)
 
