@@ -2022,6 +2022,7 @@ def completion_cost(
                             else None
                         ),
                         prompt,
+                        custom_llm_provider,
                     )
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     audio_transcription_file_duration = _transcription_duration_for_cost(completion_response)
@@ -2465,8 +2466,12 @@ def response_cost_calculator(
         raise e
 
 
-def _speech_billed_characters(reported: object, prompt: str) -> int:
-    return reported if isinstance(reported, int) else litellm.utils.count_characters(text=prompt)
+def _speech_billed_characters(reported: object, prompt: str, custom_llm_provider: str | None) -> int:
+    if isinstance(reported, int):
+        return reported
+    if custom_llm_provider == LlmProviders.ELEVENLABS.value:
+        return len(prompt)
+    return litellm.utils.count_characters(text=prompt)
 
 
 def _video_input_image_cost(
