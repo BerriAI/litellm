@@ -328,10 +328,11 @@ class _FakeModalSandbox:
         self.exec = _FakeAio(self._exec)
         self.terminate = _FakeAio(lambda: record.__setitem__("terminated", True))
 
-    def _exec(self, *args: str):
+    def _exec(self, *args: str, text: bool = True):
         self.record["exec"] = args
-        stream = lambda text: types.SimpleNamespace(read=_FakeAio(lambda: text))  # noqa: E731  # tiny local factory
-        return types.SimpleNamespace(stdout=stream("out\n"), stderr=stream("err\n"), wait=_FakeAio(lambda: 3))
+        encoded = lambda raw: raw.decode() if text else raw  # noqa: E731  # tiny local factory
+        stream = lambda raw: types.SimpleNamespace(read=_FakeAio(lambda: encoded(raw)))  # noqa: E731  # tiny local factory
+        return types.SimpleNamespace(stdout=stream(b"out\xff\n"), stderr=stream(b"err\n"), wait=_FakeAio(lambda: 3))
 
 
 @pytest.mark.asyncio
@@ -367,7 +368,7 @@ async def test_modal_lifecycle_goes_through_the_sdk(monkeypatch):
     memory_request, memory_limit = record["create"]["memory"]
     assert cpu_request == cpu_limit and memory_request == memory_limit
     assert _run_locally(record["exec"][-1]).returncode == 3
-    assert (result.stdout, result.stderr, result.exit_code) == ("out\n", "err\n", 3)
+    assert (result.stdout, result.stderr, result.exit_code) == ("out\ufffd\n", "err\n", 3)
     assert deleted is True and record["terminated"] is True
     assert (await litellm.asandbox_cost(provider="modal", container=handle)).source == "estimate"
 

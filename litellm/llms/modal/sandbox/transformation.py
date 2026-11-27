@@ -26,11 +26,11 @@ _T_co = TypeVar("_T_co", covariant=True)
 
 
 class _Call(Protocol[_T_co]):
-    def aio(self, *args: str) -> Awaitable[_T_co]: ...
+    def aio(self, *args: str, text: bool = True) -> Awaitable[_T_co]: ...
 
 
 class _Stream(Protocol):
-    read: _Call[str]
+    read: _Call[bytes]
 
 
 class _Process(Protocol):
@@ -118,10 +118,12 @@ class ModalSandboxConfig(BaseSandboxConfig):
         **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> CodeExecutionResult:
         sandbox: Final = await self._sandbox(container, api_key)
-        process: Final = await sandbox.exec.aio("bash", "-c", shell_command(code, language))
+        process: Final = await sandbox.exec.aio("bash", "-c", shell_command(code, language), text=False)
         stdout: Final = await process.stdout.read.aio()
         stderr: Final = await process.stderr.read.aio()
-        return self._shell_result(stdout, stderr, await process.wait.aio())
+        return self._shell_result(
+            stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace"), await process.wait.aio()
+        )
 
     async def adelete_sandbox(
         self,

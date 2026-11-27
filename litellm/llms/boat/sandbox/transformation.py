@@ -26,6 +26,7 @@ from litellm.secret_managers.main import get_secret_str
 BOAT_API_BASE: Final = "https://boat.dev/api/v1"
 BOAT_DEFAULT_TYPE: Final = "small"
 DEFAULT_SANDBOX_TIMEOUT: Final = 300
+BOAT_COMMAND_TIMEOUT_SECONDS: Final = 600
 
 
 class _Sandbox(BaseModel):
@@ -120,7 +121,7 @@ class BoatSandboxConfig(BaseSandboxConfig):
         response: Final = await self._http(client).post(
             url=join_api_base(base, f"sandboxes/{sandbox_id}/commands"),
             headers={"Authorization": f"Bearer {key}"},
-            json={"command": shell_command(code, language)},
+            json={"command": shell_command(code, language), "timeoutSeconds": BOAT_COMMAND_TIMEOUT_SECONDS},
         )
         command: Final = _Command.model_validate(response.json())
         return self._shell_result(command.stdout, command.stderr, command.exitCode)
