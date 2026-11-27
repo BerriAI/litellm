@@ -1561,6 +1561,10 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if shutdown_billing_metrics_recorder is not None:
         shutdown_billing_metrics_recorder()
 
+    from litellm.proxy.shutdown.kafka import close_kafka_loggers
+
+    await close_kafka_loggers(GracefulShutdownManager.remaining(5.0))
+
     if "litellm.integrations.langfuse.langfuse_sdk" in sys.modules:
         try:
             from litellm.integrations.langfuse.langfuse_sdk import flush_langfuse_tracing

@@ -54,6 +54,7 @@ Documentation = "https://docs.litellm.ai"
 # sub-packages and the opentelemetry trio move in lockstep, and grpcio is
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
+kafka = ["confluent-kafka>=2.13.2,<3.0"]
 switchyard = ["nemo-switchyard==0.4.0a1"]
 proxy = [
     "audioop-lts>=0.2.2,<1; python_version >= '3.13'",
@@ -217,6 +218,7 @@ litellm-proxy = "litellm_cli.main:litellm_proxy_cli"
 
 [dependency-groups]
 dev = [
+    "confluent-kafka==2.16.1",
     "numpy>=1.26.0,<3.0",
     "diff-cover==9.7.2",
     "hypothesis==6.165.10",

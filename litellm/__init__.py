@@ -30,6 +30,7 @@ from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.litellm_core_utils.core_helpers import drop_params_env_flag, env_flag
 from litellm.types.integrations.pointfive import PointFiveInitParams
 from litellm.types.integrations.zerobus import ZerobusInitParams
+from litellm.types.integrations.kafka import KafkaInitParams
 from litellm._logging import (
     set_verbose,
     turn_on_debug,
@@ -140,6 +141,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "clickhouse",
     "pointfive",
     "zerobus",
+    "kafka",
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
@@ -437,6 +439,7 @@ datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
 pointfive_params: Optional[Union[PointFiveInitParams, Mapping[str, object]]] = None
 zerobus_params: Optional[Union[ZerobusInitParams, Mapping[str, object]]] = None
+kafka_params: KafkaInitParams | Mapping[str, object] | None = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
