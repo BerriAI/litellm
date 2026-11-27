@@ -1133,6 +1133,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "input_cost_per_token_above_128k_tokens": {"type": "number"},
             "input_cost_per_audio_token_batches": {"type": "number"},
             "input_cost_per_image_token_batches": {"type": "number"},
+            "input_cost_per_image_token_priority": {"type": "number"},
             "input_cost_per_token_batches": {"type": "number"},
             "input_cost_per_video_token_batches": {"type": "number"},
             "input_cost_per_token_cache_hit": {"type": "number"},
