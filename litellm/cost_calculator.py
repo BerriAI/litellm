@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.decisions_pricing import (
     is_decisions_call_type,
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.llm_cost_calc.per_request_pricing import per_request_price
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import (
     AdjustFacts,
     CallFacts,
@@ -2250,7 +2251,7 @@ def completion_cost(
         )
         custom_priced_request_model: Final = model if custom_pricing is True else None
         configured_cost_per_query: Final = (
-            _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
+            _configured_cost_per_query(litellm_logging_obj) if custom_pricing else None
         )
         base_model_provider: Final = (
             _base_model_pricing_provider(
@@ -2302,6 +2303,30 @@ def completion_cost(
         potential_model_names: Final = (
             raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
+
+        request_price: Final = per_request_price(call_type, configured_cost_per_query)
+        if request_price is not None:
+            return _adjusted_stored_cost(
+                original_cost=request_price,
+                prompt_cost=request_price,
+                completion_cost=0.0,
+                tool_cost=0.0,
+                additional_costs=None,
+                custom_llm_provider=custom_llm_provider,
+                pricing_provider=custom_llm_provider,
+                model=model,
+                discount_model=model,
+                region_name=region_name if isinstance(region_name, str) else None,
+                litellm_logging_obj=litellm_logging_obj,
+                usage=None,
+                service_tier=service_tier,
+                data_residency=data_residency,
+                vertex_location=None,
+                custom_cost_per_token=None,
+                bedrock_model_info=None,
+                api_base=None,
+                api_key=None,
+            )
 
         rust_priced: Final = (
             rust_priced_cost(
@@ -3004,7 +3029,7 @@ def _video_input_image_cost(
 _LOGGED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
-def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
+def _configured_cost_per_query(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
     logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
     if logged_params is None:
         return None
