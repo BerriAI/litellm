@@ -2601,6 +2601,154 @@ async def test_pass_through_request_streamed_response_is_owned_by_the_caller():
     assert streamed == upstream_body.replace(raw_id.encode(), managed_id.encode())
 
 
+_SERVER_ANTHROPIC_KEY: Final = {"x-api-key": "server-anthropic-key"}
+_PINNED_KEY_METADATA: Final = {"anthropic_user_profile_id": "uprof_key"}
+_PROXY_MASTER_KEY: Final = "sk-proxy-master"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_metadata", "route_headers", "inbound_headers", "forward_headers", "sent_profile_id"),
+    [
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"x-pass-anthropic-user-profile-id": "uprof_caller"},
+            False,
+            "uprof_key",
+            id="pin-replaces-x-pass-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"Anthropic-User-Profile-Id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="pin-replaces-forwarded-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"x-api-key": "caller-anthropic-key", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="route-credential-replaces-the-callers-so-the-pin-applies",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"api-key": "unrelated-caller-value", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="caller-credential-beside-the-route-credential-gets-the-pin",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"Authorization": "Bearer sk-test", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_key",
+            id="forwarded-proxy-key-is-no-caller-credential",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_ANTHROPIC_KEY,
+            {"x-litellm-api-key": _PROXY_MASTER_KEY, "api-key": _PROXY_MASTER_KEY, "anthropic-user-profile-id": "x"},
+            True,
+            "uprof_key",
+            id="forwarded-master-key-is-no-caller-credential",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            {},
+            {"x-api-key": "caller-anthropic-key", "anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_caller",
+            id="forwarded-caller-credential-keeps-its-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            {},
+            {"Authorization": "Bearer sk-ant-oat01-caller", "x-pass-anthropic-user-profile-id": "uprof_caller"},
+            True,
+            "uprof_caller",
+            id="forwarded-caller-oauth-keeps-its-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA, _SERVER_ANTHROPIC_KEY, {}, False, "uprof_key", id="claude-body-gets-the-pin-unasked"
+        ),
+        pytest.param(
+            {},
+            _SERVER_ANTHROPIC_KEY,
+            {"x-pass-anthropic-user-profile-id": "uprof_caller"},
+            False,
+            "uprof_caller",
+            id="no-pin",
+        ),
+    ],
+)
+async def test_pass_through_request_replaces_a_sent_profile_id_with_the_pin(
+    key_metadata: dict[str, str],
+    route_headers: dict[str, str],
+    inbound_headers: dict[str, str],
+    forward_headers: bool,
+    sent_profile_id: str | None,
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    captured: Final[dict[str, httpx.Headers]] = {}  # mutable-ok: the mock transport records the upstream headers
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["headers"] = upstream_request.headers
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    real_handler: Final = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": resolve_pass_through_request_timeout(None)},
+    )
+    cache_dict: Final = litellm.in_memory_llm_clients_cache.cache_dict
+    cache_key: Final = next(key for key, cached in cache_dict.items() if cached is real_handler)
+    fake_client: Final = httpx.AsyncClient(transport=httpx.MockTransport(transport_handler))
+    cache_dict[cache_key] = SimpleNamespace(client=fake_client)
+
+    proxy_logging: Final = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type, endpoint_type: data)
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    proxy_logging.get_proxy_hook = MagicMock(return_value=MagicMock())
+
+    request: Final = MagicMock(spec=Request)
+    request.method = "POST"
+    request.scope = {"path": "/internal/v1/messages", "endpoint": _configured_route_endpoint()}
+    request.url = MagicMock()
+    request.url.path = "/internal/v1/messages"
+    request.body = AsyncMock(return_value=b'{"model": "claude-sonnet-5-5"}')
+    request.headers = Headers({"content-type": "application/json", **inbound_headers})
+    request.query_params = QueryParams({})
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),  # test-quality-ok: read at call time
+            patch("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY),  # test-quality-ok: read at call time
+        ):
+            response: Final = await pass_through_request(
+                request=request,
+                target="http://internal-api.test/v1/messages",
+                custom_headers=dict(route_headers),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
+                forward_headers=forward_headers,
+            )
+    finally:
+        cache_dict[cache_key] = real_handler
+        await fake_client.aclose()
+
+    assert (response.status_code, captured["headers"].get_list("anthropic-user-profile-id")) == (
+        200,
+        [] if sent_profile_id is None else [sent_profile_id],
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_pass_through_endpoint():
     """
@@ -6245,6 +6393,22 @@ def _relay_client_request(method: str = "GET", headers: Mapping[str, str] | None
     return cast(Request, mock_request)
 
 
+def _configured_route_endpoint() -> Callable[[], None]:
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+
+    def configured_route_endpoint() -> None:
+        return None
+
+    setattr(configured_route_endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    return configured_route_endpoint
+
+
+def _configured_route_request(method: str = "GET", headers: Mapping[str, str] | None = None) -> Request:
+    request: Final = _relay_client_request(method=method, headers=headers)
+    request.scope = {"endpoint": _configured_route_endpoint()}
+    return request
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("span_source", ["auth_parent_span", "ambient_span"])
 async def test_pass_through_request_propagates_active_trace_context(span_source: str):
@@ -6343,6 +6507,250 @@ async def test_pass_through_request_without_caller_trace_headers_still_propagate
     propagated = get_current_span(TraceContextTextMapPropagator().extract(upstream_headers))
     assert propagated.get_span_context().span_id == span.get_span_context().span_id
     assert upstream_headers["anthropic-beta"] == "beta-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_route", "route_headers", "inbound_headers", "model", "custom_llm_provider", "sent_profile_id"),
+    [
+        pytest.param(
+            True, _SERVER_ANTHROPIC_KEY, {}, "claude-haiku-5-5", None, ["uprof_key"], id="claude-body-gets-the-pin"
+        ),
+        pytest.param(
+            True,
+            _SERVER_ANTHROPIC_KEY,
+            {},
+            "claude-unlisted-deployment",
+            None,
+            [],
+            id="unmapped-claude-name-gets-nothing",
+        ),
+        pytest.param(True, _SERVER_ANTHROPIC_KEY, {}, "gpt-5.5", None, [], id="other-model-gets-nothing"),
+        pytest.param(
+            True,
+            {},
+            {"x-api-key": "caller-anthropic-key"},
+            "claude-haiku-5-5",
+            None,
+            [],
+            id="caller-credential-gets-no-pin",
+        ),
+        pytest.param(
+            False,
+            _SERVER_ANTHROPIC_KEY,
+            {},
+            "claude-haiku-5-5",
+            "azure_ai",
+            ["uprof_key"],
+            id="foundry-route-gets-the-pin",
+        ),
+        pytest.param(
+            False,
+            {"Authorization": "Bearer server-openrouter-key"},
+            {},
+            "anthropic/claude-haiku-5-5",
+            "openrouter",
+            [],
+            id="vendor-route-gets-no-pin",
+        ),
+        pytest.param(
+            False,
+            {"Authorization": "Bearer server-openrouter-key"},
+            {"anthropic-user-profile-id": "uprof_caller"},
+            "anthropic/claude-haiku-5-5",
+            "openrouter",
+            ["uprof_caller"],
+            id="vendor-route-keeps-the-callers-id",
+        ),
+        pytest.param(
+            False,
+            {"Authorization": "Bearer server-mistral-key"},
+            {},
+            "claude-haiku-5-5",
+            None,
+            [],
+            id="built-in-route-without-a-provider-gets-no-pin",
+        ),
+        pytest.param(
+            False,
+            {"Authorization": "Bearer server-mistral-key"},
+            {"anthropic-user-profile-id": "uprof_caller"},
+            "claude-haiku-5-5",
+            None,
+            ["uprof_caller"],
+            id="built-in-route-without-a-provider-keeps-the-callers-id",
+        ),
+    ],
+)
+async def test_pass_through_request_adds_the_pin_to_a_claude_request_without_a_profile_id(
+    monkeypatch: pytest.MonkeyPatch,
+    configured_route: bool,
+    route_headers: dict[str, str],
+    inbound_headers: dict[str, str],
+    model: str,
+    custom_llm_provider: str | None,
+    sent_profile_id: list[str],
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY)
+    captured: Final[dict[str, httpx.Headers]] = {}  # mutable-ok: the mock transport records the upstream headers
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["headers"] = upstream_request.headers
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    body: Final = {"model": model, "max_tokens": 8}
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, body)
+            response: Final = await pass_through_request(
+                request=(_configured_route_request if configured_route else _relay_client_request)(
+                    method="POST", headers=inbound_headers
+                ),
+                target="http://internal-api.test/v1/messages",
+                custom_headers=dict(route_headers),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=_PINNED_KEY_METADATA),
+                forward_headers=True,
+                custom_body=body,
+                custom_llm_provider=custom_llm_provider,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert (response.status_code, captured["headers"].get_list("anthropic-user-profile-id")) == (
+        200,
+        sent_profile_id,
+    )
+
+
+_SERVER_MANTLE_KEY: Final = {"Authorization": "Bearer server-mantle-key"}
+_MANTLE_CLAUDE: Final = "anthropic.claude-opus-5-5"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_metadata", "route_headers", "inbound_headers", "body", "sent_body_profile_id"),
+    [
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_MANTLE_KEY,
+            {},
+            {"model": _MANTLE_CLAUDE, "user_profile_id": "uprof_caller"},
+            "uprof_key",
+            id="claude-body-id-gets-the-pin",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_MANTLE_KEY,
+            {},
+            {"model": "claude-unlisted-deployment", "user_profile_id": "uprof_caller"},
+            "uprof_caller",
+            id="unmapped-model-keeps-its-body-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_MANTLE_KEY,
+            {},
+            {"user_profile_id": "own-api-user-42"},
+            "own-api-user-42",
+            id="non-claude-api-keeps-its-own-user-profile-id",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            _SERVER_MANTLE_KEY,
+            {},
+            {"model": _MANTLE_CLAUDE},
+            None,
+            id="pin-adds-no-body-field",
+        ),
+        pytest.param(
+            _PINNED_KEY_METADATA,
+            {},
+            {"Authorization": "Bearer caller-mantle-key"},
+            {"model": _MANTLE_CLAUDE, "user_profile_id": "uprof_caller"},
+            "uprof_caller",
+            id="caller-credential-keeps-its-body-id",
+        ),
+        pytest.param(
+            {},
+            _SERVER_MANTLE_KEY,
+            {},
+            {"model": _MANTLE_CLAUDE, "user_profile_id": "uprof_caller"},
+            "uprof_caller",
+            id="no-pin-keeps-the-body-id",
+        ),
+    ],
+)
+async def test_pass_through_request_replaces_a_sent_body_profile_id_with_the_pin(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: dict[str, str],
+    route_headers: dict[str, str],
+    inbound_headers: dict[str, str],
+    body: dict[str, str],
+    sent_body_profile_id: str | None,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY)
+    captured: Final[dict[str, bytes]] = {}  # mutable-ok: the mock transport records the upstream body
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["body"] = upstream_request.content
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, body)
+            response: Final = await pass_through_request(
+                request=_configured_route_request(method="POST", headers=inbound_headers),
+                target="http://internal-api.test/anthropic/v1/messages",
+                custom_headers=dict(route_headers),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
+                forward_headers=True,
+                custom_body=body,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    upstream_body: Final = TypeAdapter(dict[str, object]).validate_json(captured["body"])
+    assert (response.status_code, upstream_body.get("user_profile_id")) == (200, sent_body_profile_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_metadata",
+    [pytest.param(_PINNED_KEY_METADATA, id="pinned-key"), pytest.param({}, id="unpinned-key")],
+)
+async def test_pass_through_request_fetches_no_model_config_for_a_caller_named_model(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: dict[str, str],
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _PROXY_MASTER_KEY)
+    body: Final = {"model": "huggingface/attacker/repo", "user_profile_id": "own-api-user-42"}
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        httpx.MockTransport(lambda upstream_request: httpx.Response(200, json={"ok": True}, request=upstream_request)),
+        timeout=None,
+    )
+    try:
+        with respx.mock(assert_all_called=False) as respx_mock, ExitStack() as stack:
+            hf_config: Final = respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(
+                json={"max_position_embeddings": 512}
+            )
+            _enter_relay_logging_mocks(stack, body)
+            response: Final = await pass_through_request(
+                request=_configured_route_request(method="POST", headers={}),
+                target="http://internal-api.test/v1/users",
+                custom_headers=dict(_SERVER_MANTLE_KEY),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
+                forward_headers=True,
+                custom_body=body,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert (response.status_code, hf_config.call_count) == (200, 0)
 
 
 @pytest.mark.asyncio

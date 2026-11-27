@@ -61,6 +61,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_provider_specific_headers import override_headers
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
@@ -527,6 +528,12 @@ def _unwrap_provider_error(error: Exception) -> Exception:
             return current
         current = current.__cause__
     return error
+
+
+def _merge_messages_header_sources(
+    *sources: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: passed on as the request's headers dict
+    return reduce(override_headers, (source or {} for source in sources), {})
 
 
 class BaseLLMHTTPHandler:
@@ -2300,6 +2307,7 @@ class BaseLLMHTTPHandler:
     ) -> AnthropicMessagesResponse | AsyncIterator:
         from litellm.litellm_core_utils.get_provider_specific_headers import (
             ProviderSpecificHeaderUtils,
+            deployment_base_model,
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -2314,21 +2322,20 @@ class BaseLLMHTTPHandler:
             litellm.types.utils.ProviderSpecificHeader | Sequence[litellm.types.utils.ProviderSpecificHeader] | None,
             kwargs.get("provider_specific_header", None),
         )
-        provider_specific_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            provider_specific_header=provider_specific_header,
-            custom_llm_provider=custom_llm_provider,
-        )
         forwarded_headers: Final = kwargs.get("headers", None)
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs: Final = kwargs.get("extra_headers", None)
-        # Merge all header sources: forwarded < extra_headers < provider_specific
-        merged_headers: Final = {}
-        if forwarded_headers:
-            merged_headers.update(forwarded_headers)
-        if extra_headers_from_kwargs:
-            merged_headers.update(extra_headers_from_kwargs)
-        if provider_specific_headers:
-            merged_headers.update(provider_specific_headers)
+        provider_specific_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=provider_specific_header,
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+            configured_headers=_merge_messages_header_sources(forwarded_headers, extra_headers_from_kwargs),
+            native_anthropic_messages=True,
+            base_model=deployment_base_model(kwargs, kwargs.get("model_info")),
+        )
+        merged_headers: Final = _merge_messages_header_sources(
+            forwarded_headers, extra_headers_from_kwargs, provider_specific_headers
+        )
         request_params: Final = reduce(
             delete_nested_value,
             litellm_params.get("additional_drop_params") or (),

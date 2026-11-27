@@ -19,10 +19,16 @@ class MantleCountTokensRequest(TypedDict):
     messages: ReadOnly[list[dict[str, JsonValue]]]
     system: ReadOnly[NotRequired[JsonValue]]
     tools: ReadOnly[NotRequired[list[dict[str, JsonValue]]]]
+    user_profile_id: ReadOnly[NotRequired[str]]
 
 
 _COUNT_REQUEST: Final = TypeAdapter(MantleCountTokensRequest)
 _COUNT_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _user_profile_fields(request: MantleCountTokensRequest) -> dict[str, str]:
+    profile_id: Final = request.get("user_profile_id")
+    return {"user_profile_id": profile_id} if profile_id else {}
 
 
 class BedrockMantleCountTokensHandler(BaseAWSLLM):
@@ -70,7 +76,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                 service_name="bedrock",
                 headers={"Content-Type": "application/json", "anthropic-version": MANTLE_ANTHROPIC_VERSION},
                 optional_params=litellm_params,
-                request_data=body,
+                request_data={**body, **_user_profile_fields(request)},
                 api_base=endpoint_url,
                 model=resolved_model,
                 api_key=api_key if isinstance(api_key, str) else None,

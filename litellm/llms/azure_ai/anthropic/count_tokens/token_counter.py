@@ -9,6 +9,7 @@ from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.count_tokens.transformation import user_profile_id_headers
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
@@ -36,6 +37,9 @@ def _missing_api_base_response(request_model: str, model_to_use: str) -> TokenCo
 
 class AzureAIAnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Azure AI Anthropic provider using the CountTokens API."""
+
+    def __init__(self, user_profile_id: str | None = None) -> None:
+        self.user_profile_headers: Final = user_profile_id_headers(user_profile_id)
 
     def should_use_token_counting_api(
         self,
@@ -101,6 +105,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 litellm_params=litellm_params,
                 tools=tools,
                 system=system,
+                extra_headers=self.user_profile_headers,
             )
 
             if result is not None:

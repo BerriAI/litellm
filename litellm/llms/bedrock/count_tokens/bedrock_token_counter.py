@@ -9,6 +9,7 @@ from typing import Any, Final
 from pydantic import JsonValue
 from typing_extensions import assert_never
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.common_utils import without_unrendered_blocks
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -59,6 +60,21 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
     )
 
 
+def _infers_on_mantle(litellm_params: Mapping[str, object]) -> bool:
+    from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+
+    deployment_model: Final = litellm_params.get("model")
+    if not isinstance(deployment_model, str):
+        return False
+    provider_hint: Final = litellm_params.get("custom_llm_provider")
+    model, provider, _, _ = litellm.get_llm_provider(
+        model=deployment_model, custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None
+    )
+    return isinstance(
+        litellm.ProviderConfigManager.get_provider_chat_config(model, LlmProviders(provider)), AmazonMantleConfig
+    )
+
+
 class BedrockTokenCounter(BaseTokenCounter):
     """Counts on the configured Bedrock endpoint, with Mantle retry when Runtime rejects a Claude model"""
 
@@ -67,10 +83,12 @@ class BedrockTokenCounter(BaseTokenCounter):
         runtime_handler: BedrockCountTokensHandler | None = None,
         mantle_handler: BedrockMantleCountTokensHandler | None = None,
         client: AsyncHTTPHandler | None = None,
+        user_profile_id: str | None = None,
     ) -> None:
         self._runtime_handler: Final = runtime_handler or BedrockCountTokensHandler()
         self._mantle_handler: Final = mantle_handler or BedrockMantleCountTokensHandler()
         self._client: Final = client
+        self._user_profile_id: Final = user_profile_id
 
     def should_use_token_counting_api(
         self,
@@ -127,19 +145,27 @@ class BedrockTokenCounter(BaseTokenCounter):
             **({"tools": tools} if tools else {}),
             **({"system": system} if system else {}),
         }
+        mantle_request: Final[dict[str, object]] = {
+            **request_data,
+            **(
+                {"user_profile_id": self._user_profile_id}
+                if self._user_profile_id and _infers_on_mantle(litellm_params)
+                else {}
+            ),
+        }
         use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
         resolved_model: Final = get_bedrock_base_model(model_to_use.removeprefix("bedrock_mantle/"))
 
         primary: Final = await self._count_with(
             self._mantle_handler if use_mantle else self._runtime_handler,
             MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE,
-            request_data,
+            mantle_request if use_mantle else request_data,
             litellm_params,
             resolved_model,
         )
         outcome: Final = (
             await self._count_with(
-                self._mantle_handler, MANTLE_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
+                self._mantle_handler, MANTLE_TOKENIZER_TYPE, mantle_request, litellm_params, resolved_model
             )
             if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
             else primary

@@ -149,6 +149,10 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
+        let headers = headers
+            .into_iter()
+            .filter(|(name, _)| !name.eq_ignore_ascii_case("anthropic-user-profile-id"))
+            .collect();
         if let Some(token) = bearer_token(api_key, env_lookup) {
             return Ok(ValidatedEnvironment {
                 headers,
@@ -683,5 +687,32 @@ mod tests {
             }
             (other, _) => panic!("unexpected auth {other:?}"),
         }
+    }
+
+    #[rstest]
+    #[case::lowercase("anthropic-user-profile-id", "uprof_bad")]
+    #[case::mixed_case("Anthropic-User-Profile-Id", "uprof_bad")]
+    #[case::empty("anthropic-user-profile-id", "")]
+    fn runtime_does_not_forward_user_profile_headers(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[values(None, Some("test-token"))] api_key: Option<&str>,
+    ) {
+        let validated = AmazonAnthropicClaudeMessagesConfig
+            .validate_environment(
+                vec![
+                    (name.into(), value.into()),
+                    ("x-other".into(), "keep".into()),
+                ],
+                api_key,
+                "anthropic.claude-3",
+                &LitellmParams::default(),
+                &|_| None,
+            )
+            .unwrap();
+        assert_eq!(
+            validated.headers,
+            vec![("x-other".to_string(), "keep".to_string())]
+        );
     }
 }

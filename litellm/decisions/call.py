@@ -13,7 +13,11 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
-from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    ProviderSpecificHeaderUtils,
+    deployment_base_model,
+    override_headers,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -492,15 +496,21 @@ def _provider_ir_request(
 
 
 def _outbound_headers(
-    extra_headers: Mapping[str, str] | None, custom_llm_provider: str, kwargs: Mapping[str, object]
+    extra_headers: Mapping[str, str] | None,
+    custom_llm_provider: str,
+    kwargs: Mapping[str, object],
+    model: str | None = None,
 ) -> Mapping[str, str]:
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
         provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(
             kwargs.get("provider_specific_header")
         ),
         custom_llm_provider=custom_llm_provider,
+        model=model,
+        configured_headers=extra_headers,
+        base_model=deployment_base_model(kwargs, kwargs.get("model_info")),
     )
-    return MappingProxyType({**(extra_headers or {}), **forwarded})
+    return MappingProxyType(override_headers(extra_headers or {}, forwarded))
 
 
 _LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
@@ -570,7 +580,7 @@ def prepare_call(
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
-        headers: Final = _outbound_headers(extra_headers, provider, kwargs)
+        headers: Final = _outbound_headers(extra_headers, provider, kwargs, upstream_model)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
         request: Final = _fields_without_unsupported_media(
             fields, provider_config, canonical_model, provider, kwargs

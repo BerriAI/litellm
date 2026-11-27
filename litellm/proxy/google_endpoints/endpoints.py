@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
@@ -10,7 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, Valid
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
 from litellm.proxy._types import ProxyException, TokenCountRequest
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    UserAPIKeyAuth,
+    request_client_anthropic_user_profile_id,
+    request_pinned_anthropic_user_profile_id,
+    user_api_key_auth,
+)
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     log_llm_api_exception,
@@ -268,7 +273,12 @@ async def google_stream_generate_content(
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountDetailsResponse,
 )
-async def google_count_tokens(request: Request, model_name: str):
+async def google_count_tokens(
+    request: Request,
+    model_name: str,
+    pinned_user_profile_id: Annotated[str | None, Depends(request_pinned_anthropic_user_profile_id)] = None,
+    client_user_profile_id: Annotated[str | None, Depends(request_client_anthropic_user_profile_id)] = None,
+):
     """
     ```json
     return {
@@ -284,7 +294,7 @@ async def google_count_tokens(request: Request, model_name: str):
     ```
     """
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body
-    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+    from litellm.proxy.proxy_server import count_request_tokens
 
     data: Final = await read_request_body(request=request)
     try:
@@ -298,7 +308,12 @@ async def google_count_tokens(request: Request, model_name: str):
         )
 
     try:
-        token_response: Final = await internal_token_counter(request=token_request, call_endpoint=True)
+        token_response: Final = await count_request_tokens(
+            request=token_request,
+            call_endpoint=True,
+            pinned_user_profile_id=pinned_user_profile_id,
+            client_user_profile_id=client_user_profile_id,
+        )
     except ProxyException as error:
         return _google_error_response(request, error)
     except HTTPException as error:

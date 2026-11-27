@@ -108,6 +108,10 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
+    override_headers,
+)
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    deployment_base_model as profile_gate_base_model,
 )
 from litellm.litellm_core_utils.health_check_utils import (
     _filter_model_params,
@@ -4275,6 +4279,7 @@ _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _RESPONSE_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CONFIGURED_HEADERS: Final = TypeAdapter(Mapping[str, object])
 _FORWARDED_HEADERS_ADAPTER: Final = TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None)
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
@@ -5810,13 +5815,22 @@ def completion(
             drop_params=drops_unsupported,
         )
 
-        if provider_specific_header is not None:
-            headers.update(
-                ProviderSpecificHeaderUtils.get_provider_specific_headers(
-                    provider_specific_header=provider_specific_header,
-                    custom_llm_provider=custom_llm_provider,
-                )
-            )
+        configured_headers: Final = _CONFIGURED_HEADERS.validate_python(headers)
+        headers = override_headers(  # rebind-ok: headers is this function's legacy mutable request headers
+            configured_headers,
+            ProviderSpecificHeaderUtils.get_provider_specific_headers(
+                provider_specific_header=provider_specific_header,
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+                configured_headers=configured_headers,
+                base_model=profile_gate_base_model(
+                    {"base_model": base_model if isinstance(base_model, str) else None},
+                    cast(  # cast-ok: widening the untyped model_info kwarg to object is always sound
+                        object, model_info
+                    ),
+                ),
+            ),
+        )
 
         if model_response is not None and hasattr(model_response, HIDDEN_PARAMS_ATTR):
             model_response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior

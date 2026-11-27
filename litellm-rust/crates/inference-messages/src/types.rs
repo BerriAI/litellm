@@ -128,6 +128,7 @@ mod tests {
                 "supports_output_config": true,
                 "supports_sampling_params": false,
                 "supports_speed": true,
+                "supports_anthropic_user_profile_id": true,
                 "effort_tiers": {"minimal": false, "low": true, "medium": true, "high": true, "xhigh": true, "max": false}
             },
             "drop_params": true,
@@ -152,6 +153,7 @@ mod tests {
                 supports_sampling_params: false,
                 supports_speed: true,
                 supports_mid_conversation_system: false,
+                supports_anthropic_user_profile_id: true,
                 effort_tiers: SupportedEffortTiers {
                     minimal: false,
                     low: true,

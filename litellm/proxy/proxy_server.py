@@ -94,6 +94,10 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
 )
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    deployment_base_model,
+    takes_anthropic_user_profile_id,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
@@ -442,6 +446,8 @@ from litellm.proxy.auth.password_policy import validate_password_not_breached, v
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # legacy module exports
     _fetch_global_spend_with_event_coordination,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     fetch_global_spend_with_event_coordination,
+    request_client_anthropic_user_profile_id,
+    request_pinned_anthropic_user_profile_id,
     user_api_key_auth,
     user_api_key_auth_accepted_websocket_for_model,
     user_api_key_auth_live_websocket,
@@ -665,7 +671,11 @@ from litellm.proxy.list_api.common import (
     problem_response,
     request_validation_problem,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    add_litellm_data_to_request,
+    anthropic_user_profile_id_in_headers,
+)
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
@@ -14281,6 +14291,49 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 
 
+def _counts_with_user_profile_id(deployment_litellm_params: Mapping[str, object], base_model: str | None) -> bool:
+    model: Final = deployment_litellm_params.get("model")
+    provider: Final = deployment_litellm_params.get("custom_llm_provider")
+    return takes_anthropic_user_profile_id(
+        model if isinstance(model, str) else None, provider if isinstance(provider, str) else None, base_model
+    )
+
+
+def _count_user_profile_id(
+    pinned_user_profile_id: str | None,
+    client_user_profile_id: str | None,
+    deployment_litellm_params: Mapping[str, object],
+    base_model: str | None,
+) -> str | None:
+    user_profile_id: Final = (
+        pinned_user_profile_id
+        or anthropic_user_profile_id_in_headers(deployment_litellm_params)
+        or client_user_profile_id
+    )
+    if not user_profile_id or not _counts_with_user_profile_id(deployment_litellm_params, base_model):
+        return None
+    return user_profile_id
+
+
+def _with_user_profile_id(counter: BaseTokenCounter | None, user_profile_id: str | None) -> BaseTokenCounter | None:
+    from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
+    from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
+    from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+
+    match counter:
+        case AnthropicTokenCounter() if user_profile_id:
+            return AnthropicTokenCounter(user_profile_id=user_profile_id)
+        case AzureAIAnthropicTokenCounter() if user_profile_id:
+            return AzureAIAnthropicTokenCounter(user_profile_id=user_profile_id)
+        case BedrockTokenCounter() if user_profile_id:
+            return BedrockTokenCounter(user_profile_id=user_profile_id)
+        case VertexAITokenCounter() if user_profile_id:
+            return VertexAITokenCounter(user_profile_id=user_profile_id)
+        case _:
+            return counter
+
+
 def _get_provider_token_counter(
     deployment: dict, model_to_use: str
 ) -> tuple[BaseTokenCounter | None, str | None, str | None]:
@@ -14396,6 +14449,7 @@ async def _provider_token_count(
     model_to_use: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
+    sends_user_profile_id: bool = False,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, using the token_count_model in its region when one is set.
 
@@ -14418,7 +14472,7 @@ async def _provider_token_count(
         return counted.model_copy(update={"count_source": "token_count_model", "model_used": count_model.model})
     failure: Final = (
         counted
-        if count_model is None or count_model.region is None
+        if count_model is None or count_model.region is None or (sends_user_profile_id and counted.status_code == 400)
         else counted.with_hint(
             f"This model counts tokens with {count_model.model} in {count_model.region}. "
             "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
@@ -14819,7 +14873,12 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountResponse,
 )
-async def token_counter(request: TokenCountRequest, call_endpoint: bool = False):
+async def token_counter(
+    request: TokenCountRequest,
+    call_endpoint: bool = False,
+    pinned_user_profile_id: Annotated[str | None, Depends(request_pinned_anthropic_user_profile_id)] = None,
+    client_user_profile_id: Annotated[str | None, Depends(request_client_anthropic_user_profile_id)] = None,
+):
     """
     Args:
         request: TokenCountRequest
@@ -14828,7 +14887,12 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     Returns:
         TokenCountResponse
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint)
+    return await count_request_tokens(
+        request=request,
+        call_endpoint=call_endpoint,
+        pinned_user_profile_id=pinned_user_profile_id,
+        client_user_profile_id=client_user_profile_id,
+    )
 
 
 def _deployment_for_messages_responses_count(
@@ -14861,6 +14925,8 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    pinned_user_profile_id: str | None = None,
+    client_user_profile_id: str | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14908,12 +14974,26 @@ async def count_request_tokens(
         deployment_region=partial(_deployment_aws_region, deployment_view),
     )
 
+    counted_deployment: Final[_TokenCountDeployment] = {} if deployment is None else deployment_view
+    counted_litellm_params: Final = counted_deployment.get("litellm_params", {})
+    counted_user_profile_id: Final = (
+        None
+        if deployment is None
+        else await asyncify(_count_user_profile_id)(
+            pinned_user_profile_id,
+            client_user_profile_id,
+            counted_litellm_params,
+            deployment_base_model(counted_litellm_params, counted_deployment.get("model_info")),
+        )
+    )
+
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
     provider_counter: BaseTokenCounter | None = None
     custom_llm_provider: str | None = None
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
-        provider_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        provider_counter = _with_user_profile_id(routed_counter, counted_user_profile_id)
         if _model is not None:
             model_to_use = _model
 
@@ -14964,6 +15044,7 @@ async def count_request_tokens(
             model_to_use=model_to_use,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
+            sends_user_profile_id=bool(counted_user_profile_id),
         )
     )
     if isinstance(ladder, TokenCountResponse):

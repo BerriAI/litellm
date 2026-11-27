@@ -888,6 +888,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -903,6 +904,7 @@
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -936,6 +938,7 @@
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -966,6 +969,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_response_schema": true,
@@ -985,6 +989,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1005,6 +1010,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.8e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1026,6 +1032,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1045,6 +1052,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -1062,7 +1070,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-06,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "anthropic.claude-opus-4-1-20250805-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -1080,6 +1089,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1111,6 +1121,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1129,6 +1140,7 @@
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -1163,6 +1175,7 @@
     },
     "anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -1204,6 +1217,7 @@
     },
     "global.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -1245,6 +1259,7 @@
     },
     "us.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -1286,6 +1301,7 @@
     },
     "eu.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -1327,6 +1343,7 @@
     },
     "au.anthropic.claude-opus-4-6-v1": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -1374,6 +1391,7 @@
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -1422,6 +1440,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
@@ -1439,6 +1458,7 @@
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -1483,6 +1503,7 @@
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -1527,6 +1548,7 @@
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -1571,6 +1593,7 @@
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -1625,6 +1648,7 @@
         },
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -1669,6 +1693,7 @@
         },
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -1709,6 +1734,7 @@
         },
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -1753,6 +1779,7 @@
         },
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -1793,6 +1820,7 @@
         },
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -1837,6 +1865,7 @@
         },
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -1877,6 +1906,7 @@
         },
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -1916,6 +1946,7 @@
         },
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -1940,6 +1971,7 @@
     "anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -1984,6 +2016,7 @@
     "anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_1hr": 8e-06,
@@ -2030,6 +2063,7 @@
     "global.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -2074,6 +2108,7 @@
     "global.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_1hr": 8e-06,
@@ -2120,6 +2155,7 @@
     "us.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2164,6 +2200,7 @@
     "us.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5.5e-06,
         "cache_creation_input_token_cost_above_1hr": 8.8e-06,
@@ -2210,6 +2247,7 @@
     "eu.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2254,6 +2292,7 @@
     "eu.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5.5e-06,
         "cache_creation_input_token_cost_above_1hr": 8.8e-06,
@@ -2295,6 +2334,7 @@
     "au.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2339,6 +2379,7 @@
     "au.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5.5e-06,
         "cache_creation_input_token_cost_above_1hr": 8.8e-06,
@@ -2385,6 +2426,7 @@
     "jp.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2424,6 +2466,7 @@
     "jp.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5.5e-06,
         "cache_creation_input_token_cost_above_1hr": 8.8e-06,
@@ -2465,6 +2508,7 @@
     "anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -2511,6 +2555,7 @@
     "global.anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -2557,6 +2602,7 @@
     "us.anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2603,6 +2649,7 @@
     "eu.anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2649,6 +2696,7 @@
     "au.anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2695,6 +2743,7 @@
     "jp.anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2745,6 +2794,7 @@
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -2788,6 +2838,7 @@
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -2834,6 +2885,7 @@
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -2880,6 +2932,7 @@
         "cache_read_input_token_cost": 2.2e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -2926,6 +2979,7 @@
         "cache_read_input_token_cost": 2.2e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -2972,6 +3026,7 @@
         "cache_read_input_token_cost": 2.2e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -3018,6 +3073,7 @@
         "cache_read_input_token_cost": 2.2e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -3054,6 +3110,7 @@
     },
     "anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -3094,6 +3151,7 @@
     },
     "global.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -3134,6 +3192,7 @@
     },
     "us.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
@@ -3174,6 +3233,7 @@
     },
     "eu.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
@@ -3214,6 +3274,7 @@
     },
     "au.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
@@ -3254,6 +3315,7 @@
     },
     "jp.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
@@ -3312,6 +3374,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -3342,6 +3405,7 @@
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "deprecation_date": "2027-04-08",
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -3382,7 +3446,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 2.4e-05,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "anthropic.claude-v2:1": {
         "input_cost_per_token": 8e-06,
@@ -3393,7 +3458,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-05,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "anyscale/HuggingFaceH4/zephyr-7b-beta": {
         "input_cost_per_token": 1.5e-07,
@@ -3567,6 +3633,7 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -3614,6 +3681,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -3656,6 +3724,7 @@
         "cache_read_input_token_cost_above_200k_tokens": 6.6e-07,
         "deprecation_date": "2027-04-08",
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -3753,6 +3822,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -3777,6 +3847,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -3793,6 +3864,7 @@
     "azure_ai/claude-opus-4-6": {
         "deprecation_date": "2027-02-02",
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "input_cost_per_token": 5e-06,
         "output_cost_per_token": 2.5e-05,
@@ -3840,6 +3912,7 @@
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -3856,6 +3929,7 @@
     },
     "azure_ai/claude-fable-5": {
         "deprecation_date": "2027-12-05",
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "input_cost_per_token": 1e-05,
         "output_cost_per_token": 5e-05,
@@ -3889,6 +3963,7 @@
         "prompt_cache_min_tokens": 512
     },
     "azure_ai/claude-fable-5-1": {
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "input_cost_per_token": 1e-05,
         "output_cost_per_token": 5e-05,
@@ -3926,6 +4001,7 @@
     },
     "azure_ai/claude-opus-5": {
         "deprecation_date": "2027-07-08",
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
         "input_cost_per_token": 5e-06,
@@ -3958,6 +4034,7 @@
         "prompt_cache_min_tokens": 512
     },
     "azure_ai/claude-opus-5-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "input_cost_per_token": 4e-06,
         "output_cost_per_token": 2e-05,
@@ -3996,6 +4073,7 @@
     },
     "azure_ai/claude-opus-4-8": {
         "deprecation_date": "2027-09-01",
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
         "input_cost_per_token": 5e-06,
@@ -4039,6 +4117,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -4053,6 +4132,7 @@
     },
     "azure_ai/claude-sonnet-5": {
         "deprecation_date": "2027-06-30",
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -4087,6 +4167,7 @@
     "azure_ai/claude-sonnet-4-6": {
         "deprecation_date": "2027-02-10",
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -13637,7 +13718,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-v1": {
         "cost_per_second": 0.0455,
@@ -13647,7 +13729,8 @@
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-v2:1": {
         "cost_per_second": 0.0455,
@@ -13658,7 +13741,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/ap-northeast-1/6-month-commitment/anthropic.claude-instant-v1": {
         "cost_per_second": 0.008194,
@@ -13669,7 +13753,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/ap-northeast-1/6-month-commitment/anthropic.claude-v1": {
         "cost_per_second": 0.02527,
@@ -13679,7 +13764,8 @@
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/ap-northeast-1/6-month-commitment/anthropic.claude-v2:1": {
         "cost_per_second": 0.02527,
@@ -13690,7 +13776,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/ap-northeast-1/anthropic.claude-instant-v1": {
         "input_cost_per_token": 2.23e-06,
@@ -13701,7 +13788,8 @@
         "mode": "chat",
         "output_cost_per_token": 7.55e-06,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/ap-northeast-1/anthropic.claude-v1": {
         "input_cost_per_token": 8e-06,
@@ -13712,7 +13800,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-05,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/ap-northeast-1/anthropic.claude-v2:1": {
         "input_cost_per_token": 8e-06,
@@ -13723,7 +13812,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-05,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/ap-northeast-1/deepseek.v3.2": {
         "input_cost_per_token": 7.4e-07,
@@ -14216,7 +14306,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/eu-central-1/1-month-commitment/anthropic.claude-v1": {
         "cost_per_second": 0.0415,
@@ -14226,7 +14317,8 @@
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/eu-central-1/1-month-commitment/anthropic.claude-v2:1": {
         "cost_per_second": 0.0415,
@@ -14237,7 +14329,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/eu-central-1/6-month-commitment/anthropic.claude-instant-v1": {
         "cost_per_second": 0.009083,
@@ -14248,7 +14341,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/eu-central-1/6-month-commitment/anthropic.claude-v1": {
         "cost_per_second": 0.02305,
@@ -14258,7 +14352,8 @@
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/eu-central-1/6-month-commitment/anthropic.claude-v2:1": {
         "cost_per_second": 0.02305,
@@ -14269,7 +14364,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/eu-central-1/anthropic.claude-instant-v1": {
         "input_cost_per_token": 2.48e-06,
@@ -14280,7 +14376,8 @@
         "mode": "chat",
         "output_cost_per_token": 8.38e-06,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/eu-central-1/anthropic.claude-v1": {
         "input_cost_per_token": 8e-06,
@@ -14290,7 +14387,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 2.4e-05,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/eu-central-1/anthropic.claude-v2:1": {
         "input_cost_per_token": 8e-06,
@@ -14301,7 +14399,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-05,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/eu-central-1/minimax.minimax-m2.1": {
         "deprecation_date": "2027-03-30",
@@ -14636,6 +14735,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -14783,7 +14883,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-east-1/1-month-commitment/anthropic.claude-v1": {
         "cost_per_second": 0.0175,
@@ -14793,7 +14894,8 @@
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-east-1/1-month-commitment/anthropic.claude-v2:1": {
         "cost_per_second": 0.0175,
@@ -14804,7 +14906,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-east-1/6-month-commitment/anthropic.claude-instant-v1": {
         "cost_per_second": 0.00611,
@@ -14815,7 +14918,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-east-1/6-month-commitment/anthropic.claude-v1": {
         "cost_per_second": 0.00972,
@@ -14825,7 +14929,8 @@
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-east-1/6-month-commitment/anthropic.claude-v2:1": {
         "cost_per_second": 0.00972,
@@ -14836,7 +14941,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-east-1/anthropic.claude-instant-v1": {
         "input_cost_per_token": 8e-07,
@@ -14847,7 +14953,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-06,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-east-1/anthropic.claude-v1": {
         "input_cost_per_token": 8e-06,
@@ -14858,7 +14965,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-05,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-east-1/anthropic.claude-v2:1": {
         "input_cost_per_token": 8e-06,
@@ -14869,7 +14977,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-05,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-east-1/meta.llama3-70b-instruct-v1:0": {
         "deprecation_date": "2027-03-30",
@@ -15210,6 +15319,7 @@
         "cache_read_input_token_cost": 3.6e-07,
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
@@ -15246,6 +15356,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.8e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -15393,6 +15504,7 @@
         "cache_read_input_token_cost": 3.6e-07,
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
@@ -15429,6 +15541,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.8e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -15494,7 +15607,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-west-2/1-month-commitment/anthropic.claude-v1": {
         "cost_per_second": 0.0175,
@@ -15504,7 +15618,8 @@
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-west-2/1-month-commitment/anthropic.claude-v2:1": {
         "cost_per_second": 0.0175,
@@ -15515,7 +15630,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-west-2/6-month-commitment/anthropic.claude-instant-v1": {
         "cost_per_second": 0.00611,
@@ -15526,7 +15642,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-west-2/6-month-commitment/anthropic.claude-v1": {
         "cost_per_second": 0.00972,
@@ -15536,7 +15653,8 @@
         "max_output_tokens": 8191,
         "max_tokens": 8191,
         "mode": "chat",
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-west-2/6-month-commitment/anthropic.claude-v2:1": {
         "cost_per_second": 0.00972,
@@ -15547,7 +15665,8 @@
         "max_tokens": 8191,
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-west-2/anthropic.claude-instant-v1": {
         "input_cost_per_token": 8e-07,
@@ -15558,7 +15677,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-06,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-west-2/anthropic.claude-v1": {
         "input_cost_per_token": 8e-06,
@@ -15569,7 +15689,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-05,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-west-2/anthropic.claude-v2:1": {
         "input_cost_per_token": 8e-06,
@@ -15580,7 +15701,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.4e-05,
         "supports_tool_choice": true,
-        "supports_tool_schema_defs": true
+        "supports_tool_schema_defs": true,
+        "supports_anthropic_user_profile_id": true
     },
     "bedrock/us-west-2/mistral.mistral-7b-instruct-v0:2": {
         "deprecation_date": "2027-03-30",
@@ -15734,6 +15856,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -15919,6 +16042,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "claude-haiku-4-5-20251001": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
@@ -15961,6 +16085,7 @@
         "mode": "chat",
         "output_cost_per_token": 5e-06,
         "output_cost_per_token_batches": 2.5e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_native_structured_output": true,
@@ -15995,6 +16120,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -16029,6 +16155,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -16044,6 +16171,7 @@
         "source": "https://docs.anthropic.com/en/docs/about-claude/pricing"
     },
     "claude-sonnet-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -16089,6 +16217,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-5-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -16135,6 +16264,7 @@
         "supports_web_search": true
     },
     "claude-sonnet-4-6": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -16188,6 +16318,7 @@
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -16210,6 +16341,7 @@
         "supports_tool_schema_defs": true
     },
     "claude-opus-4-5-20251101": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -16264,6 +16396,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -16280,6 +16413,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-6": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -16345,6 +16479,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -16366,6 +16501,7 @@
         "prompt_cache_min_tokens": 4096
     },
     "claude-opus-4-7": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -16432,6 +16568,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -16454,6 +16591,7 @@
         "prompt_cache_min_tokens": 2048
     },
     "claude-fable-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -16499,6 +16637,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-fable-5-1": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -16545,6 +16684,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-5-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 5e-06,
@@ -16594,6 +16734,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -16642,6 +16783,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-8": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -25314,6 +25456,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -25332,6 +25475,7 @@
         "input_cost_per_token": 1.1e-06,
         "deprecation_date": "2026-10-15",
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -25367,6 +25511,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_response_schema": true,
@@ -25384,6 +25529,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -25404,6 +25550,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -25425,6 +25572,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -25448,6 +25596,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -25480,6 +25629,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -25512,6 +25662,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -25542,6 +25693,7 @@
         "cache_read_input_token_cost_above_200k_tokens": 6.6e-07,
         "deprecation_date": "2027-04-08",
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -35084,6 +35236,7 @@
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
         "deprecation_date": "2027-04-08",
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -35136,6 +35289,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -35160,6 +35314,7 @@
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -40462,6 +40617,7 @@
         "cache_read_input_token_cost_above_200k_tokens": 6.6e-07,
         "deprecation_date": "2027-04-08",
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -40500,6 +40656,7 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -49735,6 +49892,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -49750,6 +49908,7 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -49785,6 +49944,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_response_schema": true,
@@ -49804,6 +49964,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -49824,6 +49985,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -49843,6 +50005,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -49867,6 +50030,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -49896,6 +50060,7 @@
         "cache_read_input_token_cost_above_200k_tokens": 6.6e-07,
         "deprecation_date": "2027-04-08",
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -49939,6 +50104,7 @@
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.44e-05,
         "cache_read_input_token_cost_above_200k_tokens": 7.2e-07,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -49972,6 +50138,7 @@
         "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 2.4e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -50013,6 +50180,7 @@
         "cache_read_input_token_cost": 6e-07,
         "input_cost_per_token": 6e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -50053,6 +50221,7 @@
         "cache_read_input_token_cost": 6e-07,
         "input_cost_per_token": 6e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -50092,6 +50261,7 @@
         "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 4.8e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -50139,6 +50309,7 @@
         "output_cost_per_token": 6e-05,
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -50297,6 +50468,7 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -50339,6 +50511,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -50357,6 +50530,7 @@
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -50395,6 +50569,7 @@
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -50433,6 +50608,7 @@
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -50485,6 +50661,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -52103,6 +52280,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -52117,6 +52295,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -52140,6 +52319,7 @@
         "output_cost_per_token_batches": 2.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -52169,6 +52349,7 @@
         "output_cost_per_token_batches": 2.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -52189,6 +52370,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -52205,6 +52387,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -52220,6 +52403,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.25e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -52234,6 +52418,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.25e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -52248,6 +52433,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -52262,6 +52448,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 7.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -52275,6 +52462,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -52288,6 +52476,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
@@ -52315,6 +52504,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -52350,6 +52540,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -52368,6 +52559,7 @@
         "deprecation_date": "2027-02-05",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -52406,6 +52598,7 @@
         "deprecation_date": "2027-02-05",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -52463,6 +52656,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -52501,6 +52695,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -52519,6 +52714,7 @@
     "vertex_ai/claude-fable-5": {
         "deprecation_date": "2027-06-08",
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
@@ -52558,6 +52754,7 @@
     },
     "vertex_ai/claude-fable-5-1": {
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
@@ -52601,6 +52798,7 @@
     "vertex_ai/claude-fable-5@default": {
         "deprecation_date": "2027-06-08",
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
@@ -52640,6 +52838,7 @@
     },
     "vertex_ai/claude-fable-5-1@default": {
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
@@ -52683,6 +52882,7 @@
     "vertex_ai/claude-opus-5": {
         "deprecation_date": "2027-01-24",
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -52722,6 +52922,7 @@
     "vertex_ai/claude-opus-5@default": {
         "deprecation_date": "2027-01-24",
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -52760,6 +52961,7 @@
     },
     "vertex_ai/claude-opus-5-5": {
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_1hr": 8e-06,
@@ -52801,6 +53003,7 @@
     },
     "vertex_ai/claude-opus-5-5@default": {
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_1hr": 8e-06,
@@ -52843,6 +53046,7 @@
     "vertex_ai/claude-opus-4-8": {
         "deprecation_date": "2027-05-28",
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -52882,6 +53086,7 @@
     "vertex_ai/claude-opus-4-8@default": {
         "deprecation_date": "2027-05-28",
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -52939,6 +53144,7 @@
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -52955,6 +53161,7 @@
     "vertex_ai/claude-sonnet-5": {
         "deprecation_date": "2026-12-24",
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -52992,6 +53199,7 @@
     "vertex_ai/claude-sonnet-4-6": {
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -53047,6 +53255,7 @@
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -60926,6 +61135,7 @@
     "vertex_ai/claude-sonnet-5@default": {
         "deprecation_date": "2026-12-24",
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -60963,6 +61173,7 @@
     "vertex_ai/claude-sonnet-4-6@default": {
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -62319,6 +62530,7 @@
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "bedrock_mantle",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -62344,6 +62556,7 @@
     "bedrock_mantle/anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5.5e-06,
         "cache_creation_input_token_cost_above_1hr": 8.8e-06,
@@ -62388,6 +62601,7 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "bedrock_mantle",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -63036,6 +63250,7 @@
         "cache_read_input_token_cost": 1.2e-07,
         "input_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -63067,6 +63282,7 @@
         "cache_read_input_token_cost": 1.2e-07,
         "input_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
@@ -64583,6 +64799,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -64625,6 +64842,7 @@
         },
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -64669,6 +64887,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -69318,6 +69537,7 @@
         "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 2.4e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -69358,6 +69578,7 @@
         "cache_read_input_token_cost": 6e-07,
         "input_cost_per_token": 6e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -69397,6 +69618,7 @@
         "cache_read_input_token_cost": 6e-07,
         "input_cost_per_token": 6e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -69435,6 +69657,7 @@
         "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 4.8e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -69482,6 +69705,7 @@
         "output_cost_per_token": 6e-05,
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -69620,6 +69844,7 @@
         "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 2.4e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -69655,6 +69880,7 @@
         "cache_read_input_token_cost": 6e-07,
         "input_cost_per_token": 6e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -69689,6 +69915,7 @@
         "cache_read_input_token_cost": 6e-07,
         "input_cost_per_token": 6e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -69722,6 +69949,7 @@
         "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 4.8e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -69764,6 +69992,7 @@
         "output_cost_per_token": 6e-05,
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -70035,6 +70264,7 @@
         "cache_read_input_token_cost": 2.4e-07,
         "input_cost_per_token": 4.8e-06,
         "litellm_provider": "bedrock_mantle",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -70071,6 +70301,7 @@
         "cache_read_input_token_cost": 1.2e-07,
         "input_cost_per_token": 2.4e-06,
         "litellm_provider": "bedrock_mantle",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -74865,6 +75096,7 @@
         "mode": "chat",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -74899,6 +75131,7 @@
         "mode": "chat",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -74933,6 +75166,7 @@
         "mode": "chat",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -74967,6 +75201,7 @@
         "mode": "chat",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -75006,6 +75241,7 @@
         "mode": "chat",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -75040,6 +75276,7 @@
         "mode": "chat",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -75070,6 +75307,7 @@
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -75108,6 +75346,7 @@
     "apac.anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -75149,6 +75388,7 @@
     "apac.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -75188,6 +75428,7 @@
     "apac.anthropic.claude-opus-5-5": {
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -75228,6 +75469,7 @@
     },
     "apac.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_legacy_thinking": true,
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -75264,6 +75506,7 @@
     "apac.anthropic.claude-sonnet-5": {
         "bedrock_converse_supports_strict_tools": false,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -75309,6 +75552,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
@@ -75330,6 +75574,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
@@ -75351,6 +75596,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "thinking_always_on": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
@@ -75430,6 +75676,7 @@
             "litellm_provider": "bedrock_mantle",
             "region": "us-east-1"
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -75469,6 +75716,7 @@
     "apac.anthropic.claude-sonnet-5-5": {
         "bedrock_converse_supports_strict_tools": false,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -75516,6 +75764,7 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -75553,6 +75802,7 @@
         "supports_tool_schema_defs": true
     },
     "azure_ai/claude-sonnet-5-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -75596,6 +75846,7 @@
         "cache_read_input_token_cost": 1.2e-07,
         "input_cost_per_token": 2.4e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -75634,6 +75885,7 @@
         "cache_read_input_token_cost": 1.2e-07,
         "input_cost_per_token": 2.4e-06,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -75676,6 +75928,7 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -75724,6 +75977,7 @@
             "litellm_provider": "bedrock_mantle",
             "region": "us-east-1"
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -75767,6 +76021,7 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -77238,6 +77493,7 @@
         "cache_read_input_token_cost": 1.2e-07,
         "input_cost_per_token": 2.4e-06,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -77285,6 +77541,7 @@
             "litellm_provider": "bedrock_mantle",
             "region": "us-east-1"
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -77323,6 +77580,7 @@
     },
     "vertex_ai/claude-sonnet-5-5": {
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -77363,6 +77621,7 @@
     },
     "vertex_ai/claude-sonnet-5-5@default": {
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -78120,6 +78379,7 @@
         "supports_vision": true
     },
     "claude-haiku-5-5": {
+        "supports_anthropic_user_profile_id": true,
         "input_cost_per_token_above_100k_tokens_batches": 2.5e-07,
         "output_cost_per_token_above_100k_tokens_batches": 1.25e-06,
         "cache_creation_input_token_cost_above_100k_tokens_batches": 3.125e-07,
@@ -78186,6 +78446,7 @@
         "cache_read_input_token_cost": 1.1e-08,
         "input_cost_per_token": 1.1e-07,
         "litellm_provider": "bedrock_mantle",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78233,6 +78494,7 @@
         "cache_read_input_token_cost": 1.2e-08,
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "bedrock_mantle",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78278,6 +78540,7 @@
             "litellm_provider": "bedrock_mantle",
             "region": "us-east-1"
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78322,6 +78585,7 @@
         "cache_read_input_token_cost_above_100k_tokens": 5.5e-08,
         "bedrock_converse_supports_strict_tools": false,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78374,6 +78638,7 @@
         "cache_read_input_token_cost": 1.1e-08,
         "input_cost_per_token": 1.1e-07,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78416,6 +78681,7 @@
         "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
         "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
         "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_1hr": 2e-07,
@@ -78464,6 +78730,7 @@
         "cache_read_input_token_cost": 1.2e-08,
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78507,6 +78774,7 @@
         "cache_read_input_token_cost": 1.2e-08,
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "bedrock",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78554,6 +78822,7 @@
         "cache_read_input_token_cost": 1.1e-08,
         "input_cost_per_token": 1.1e-07,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78607,6 +78876,7 @@
             "litellm_provider": "bedrock_mantle",
             "region": "us-east-1"
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78655,6 +78925,7 @@
         "cache_read_input_token_cost": 1.1e-08,
         "input_cost_per_token": 1.1e-07,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78715,6 +78986,7 @@
         "cache_read_input_token_cost": 1.2e-08,
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "bedrock_converse",
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78767,6 +79039,7 @@
             "litellm_provider": "bedrock_mantle",
             "region": "us-east-1"
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78810,6 +79083,7 @@
         "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
         "cache_read_input_token_cost_above_100k_tokens": 5e-08,
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_1hr": 2e-07,
@@ -78855,6 +79129,7 @@
         "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
         "cache_read_input_token_cost_above_100k_tokens": 5e-08,
         "regional_endpoint_uplift_multiplier": 1.1,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_1hr": 2e-07,
@@ -79537,6 +79812,7 @@
         },
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models",
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_forced_tool_use": false,
@@ -79980,6 +80256,7 @@
         "supports_vision": true
     },
     "bedrock/claude_platform/claude-fable-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -80026,6 +80303,7 @@
         "supports_tool_schema_defs": true
     },
     "bedrock/claude_platform/claude-fable-5-1": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -80087,6 +80365,7 @@
         "mode": "chat",
         "output_cost_per_token": 5e-06,
         "output_cost_per_token_batches": 2.5e-06,
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_native_structured_output": true,
@@ -80127,6 +80406,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -80177,6 +80457,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -80194,6 +80475,7 @@
         "supports_tool_schema_defs": true
     },
     "bedrock/claude_platform/claude-opus-4-6": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -80238,6 +80520,7 @@
         "supports_tool_schema_defs": true
     },
     "bedrock/claude_platform/claude-opus-4-7": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -80283,6 +80566,7 @@
         "supports_tool_schema_defs": true
     },
     "bedrock/claude_platform/claude-opus-4-8": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -80329,6 +80613,7 @@
         "supports_tool_schema_defs": true
     },
     "bedrock/claude_platform/claude-opus-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -80375,6 +80660,7 @@
         "supports_tool_schema_defs": true
     },
     "bedrock/claude_platform/claude-opus-5-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 5e-06,
@@ -80442,6 +80728,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_anthropic_user_profile_id": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -80457,6 +80744,7 @@
         "supports_tool_schema_defs": true
     },
     "bedrock/claude_platform/claude-sonnet-4-6": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -80501,6 +80789,7 @@
         "supports_tool_schema_defs": true
     },
     "bedrock/claude_platform/claude-sonnet-5": {
+        "supports_anthropic_user_profile_id": true,
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -80568,6 +80857,7 @@
             "search_context_size_medium": 0.01
         },
         "supports_adaptive_thinking": true,
+        "supports_anthropic_user_profile_id": true,
         "supports_mid_conversation_system": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,

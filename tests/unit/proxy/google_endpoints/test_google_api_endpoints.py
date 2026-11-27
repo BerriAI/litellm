@@ -170,7 +170,7 @@ def test_google_count_tokens_unchanged():
     )
 
     with patch(
-        "litellm.proxy.proxy_server.token_counter",
+        "litellm.proxy.proxy_server.count_request_tokens",
         new_callable=AsyncMock,
         return_value=fake_response,
     ):
@@ -192,7 +192,7 @@ def test_google_count_tokens_unexpected_failure_uses_the_google_error_envelope()
         pytest.skip(f"Skipping test due to missing dependency: {e}")
 
     with patch(
-        "litellm.proxy.proxy_server.token_counter",
+        "litellm.proxy.proxy_server.count_request_tokens",
         new_callable=AsyncMock,
         side_effect=RuntimeError("tokenizer unavailable"),
     ):
@@ -225,7 +225,7 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
     )
 
     with patch(
-        "litellm.proxy.proxy_server.token_counter",
+        "litellm.proxy.proxy_server.count_request_tokens",
         new_callable=AsyncMock,
         return_value=fake_response,
     ):

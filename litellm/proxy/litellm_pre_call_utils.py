@@ -5,7 +5,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import (
@@ -21,6 +21,7 @@ from fastapi import HTTPException, Request
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -45,8 +46,9 @@ from litellm.constants import (
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
-from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_codex_user_agent
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.get_provider_specific_headers import ANTHROPIC_USER_PROFILE_ID_PROVIDERS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
     _request_blocked_callback_params,
@@ -71,7 +73,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.proxy.auth.auth_utils import get_request_route, is_valid_anthropic_user_profile_id
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -90,6 +92,7 @@ _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialH
 
 _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 _DECODED_JSON: Final = TypeAdapter(object)
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
     {"cookie", "proxy-authorization"}
 )
@@ -229,7 +232,12 @@ def sanitize_for_log(value: object) -> str:
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
-from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_API_HEADERS,
+    ANTHROPIC_OAUTH_TOKEN_PREFIX,
+    ANTHROPIC_USER_PROFILE_ID_HEADER,
+    ANTHROPIC_USER_PROFILE_ID_METADATA_KEY,
+)
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     CAPTURE_MESSAGE_CONTENT_VAR,
@@ -551,14 +559,82 @@ def _is_false_like(value: object) -> bool:
     return False
 
 
+def _key_then_team_metadata_values(user_api_key_dict: UserAPIKeyAuth, metadata_key: str) -> Iterator[object]:
+    return (
+        (as_str_mapping(source) or {}).get(metadata_key)  # pyright: ignore[reportUnknownArgumentType]  # bare dict field
+        for source in (user_api_key_dict.metadata, user_api_key_dict.team_metadata)  # pyright: ignore[reportUnknownVariableType]  # bare dict field
+    )
+
+
 def _key_or_team_metadata_flag_is_true(
     user_api_key_dict: UserAPIKeyAuth,
     metadata_key: str,
 ) -> bool:
-    for admin_metadata in (user_api_key_dict.metadata, user_api_key_dict.team_metadata):
-        if isinstance(admin_metadata, dict) and admin_metadata.get(metadata_key) is True:
-            return True
-    return False
+    return any(value is True for value in _key_then_team_metadata_values(user_api_key_dict, metadata_key))
+
+
+def pinned_anthropic_user_profile_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    admin_mapped: Final = _key_then_team_metadata_values(user_api_key_dict, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
+    return next((value for value in admin_mapped if isinstance(value, str) and _usable_profile_pin(value)), None)
+
+
+def _usable_profile_pin(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and is_valid_anthropic_user_profile_id(value)
+
+
+def _warn_on_unusable_profile_pins(user_api_key_dict: UserAPIKeyAuth) -> None:
+    unusable: Final = sum(
+        1
+        for value in _key_then_team_metadata_values(user_api_key_dict, ANTHROPIC_USER_PROFILE_ID_METADATA_KEY)
+        if value not in (None, "") and not _usable_profile_pin(value)
+    )
+    if unusable:
+        verbose_proxy_logger.warning(
+            "Skipping %d stored %s value(s) on key alias %s / team %s that are not valid Anthropic user profile ids",
+            unusable,
+            ANTHROPIC_USER_PROFILE_ID_METADATA_KEY,
+            user_api_key_dict.key_alias,
+            user_api_key_dict.team_id,
+        )
+
+
+def anthropic_user_profile_id(
+    user_api_key_dict: UserAPIKeyAuth, headers: Mapping[str, str], caller_credential: bool = False
+) -> str | None:
+    client_profile_id: Final = headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER)
+    if caller_credential:
+        return client_profile_id
+    return pinned_anthropic_user_profile_id(user_api_key_dict) or client_profile_id
+
+
+def _request_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _REQUEST_FIELDS.validate_python(value)
+    except PydanticValidationError:
+        return MappingProxyType({})
+
+
+def _without_caller_profile_body_fields(fields: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            **{
+                name: value
+                for name, value in fields.items()
+                if name not in ("user_profile_id", "additionalModelRequestFields")
+            },
+            **(
+                {
+                    "additionalModelRequestFields": {
+                        name: value
+                        for name, value in _request_fields(fields["additionalModelRequestFields"]).items()
+                        if name != "user_profile_id"
+                    }
+                }
+                if "additionalModelRequestFields" in fields
+                else {}
+            ),
+        }
+    )
 
 
 def _key_or_team_allows_client_mock_response(
@@ -2385,9 +2461,33 @@ async def add_litellm_data_to_request(
     if dynamic_api_version is not None:  # only pass, if set
         data["api_version"] = dynamic_api_version
 
+    _warn_on_unusable_profile_pins(user_api_key_dict)
+    caller_body_profile: Final = _caller_anthropic_user_profile_id(_REQUEST_FIELDS.validate_python(data))
+    if anthropic_user_profile_id(user_api_key_dict, {}) is not None:
+        for field in ("extra_headers", "headers"):
+            if field in data:
+                data[field] = {  # rebind-ok: data is an out-param
+                    name: value
+                    for name, value in _request_fields(data[field]).items()  # pyright: ignore[reportUnknownArgumentType]  # legacy request data is a bare dict
+                    if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+                }
+        caller_body: Final = _without_caller_profile_body_fields(_REQUEST_FIELDS.validate_python(data))
+        data.pop("user_profile_id", None)
+        if "additionalModelRequestFields" in data:
+            data["additionalModelRequestFields"] = (  # rebind-ok: data is an out-param
+                caller_body["additionalModelRequestFields"]
+            )
+        if "extra_body" in data:
+            data["extra_body"] = dict(  # rebind-ok: data is an out-param
+                _without_caller_profile_body_fields(_request_fields(caller_body.get("extra_body")))
+            )
+
     ## Forward any LLM API Provider specific headers in extra_headers
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
-        data=data, headers=_headers
+        data=data,
+        headers=_headers,
+        user_profile_id=pinned_anthropic_user_profile_id(user_api_key_dict),
+        caller_user_profile_id=caller_body_profile,
     )
 
     ## Cache Controls
@@ -4076,12 +4176,191 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
         LlmProviders.VERTEX_AI.value,
     )
 )
+_PROVIDERS_A_CALLER_API_KEY_AUTHENTICATES: Final = frozenset(
+    (
+        LlmProviders.ANTHROPIC.value,
+        LlmProviders.AZURE_AI.value,
+        LlmProviders.BEDROCK.value,
+        LlmProviders.BEDROCK_MANTLE.value,
+    )
+)
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
+_REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+_PROVIDER_SPECIFIC_HEADER: Final = TypeAdapter(ProviderSpecificHeader)
+
+
+def _is_filled_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _providers_on_caller_credentials(data: Mapping[str, object]) -> frozenset[str]:
+    return _PROVIDERS_A_CALLER_API_KEY_AUTHENTICATES if _is_filled_string(data.get("api_key")) else frozenset()
+
+
+def _anthropic_bearer_oauth_credentials(headers: object) -> tuple[str, ...]:
+    return tuple(
+        value
+        for name, value in _request_fields(headers).items()
+        if name.lower() == "authorization"
+        and isinstance(value, str)
+        and value.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}")
+    )
+
+
+def anthropic_user_profile_id_in_headers(params: Mapping[str, object]) -> str | None:
+    for field in ("extra_headers", "headers"):
+        for name, value in reversed(tuple(_request_fields(params.get(field)).items())):
+            if name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER and isinstance(value, str):
+                return value
+    return None
+
+
+def _user_profile_id_body_field(fields: Mapping[str, object]) -> str | None:
+    values: Final = (
+        fields.get("user_profile_id"),
+        _request_fields(fields.get("additionalModelRequestFields")).get("user_profile_id"),
+    )
+    return next((value for value in values if isinstance(value, str) and value), None)
+
+
+def _caller_anthropic_user_profile_id(params: Mapping[str, object]) -> str | None:
+    return (
+        anthropic_user_profile_id_in_headers(params)
+        or _user_profile_id_body_field(params)
+        or _user_profile_id_body_field(_request_fields(params.get("extra_body")))
+    )
+
+
+def _request_entries(value: object) -> tuple[object, ...]:
+    if value is None:
+        return ()
+    try:
+        return _REQUEST_ENTRIES.validate_python(value)
+    except PydanticValidationError:
+        return (value,)
+
+
+class _CallerProviderSpecificHeader(TypedDict):
+    custom_llm_provider: ReadOnly[str]
+    extra_headers: ReadOnly[Mapping[str, str]]
+    native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
+
+
+_CALLER_PROVIDER_SPECIFIC_HEADER: Final = TypeAdapter(_CallerProviderSpecificHeader)
+
+
+def _caller_provider_specific_header(entry: object) -> ProviderSpecificHeader | None:
+    try:
+        return _PROVIDER_SPECIFIC_HEADER.validate_python(_CALLER_PROVIDER_SPECIFIC_HEADER.validate_python(entry))
+    except PydanticValidationError:
+        return None
+
+
+def _caller_entries_beside_a_pin(
+    header: ProviderSpecificHeader, pinned_providers: frozenset[str]
+) -> tuple[ProviderSpecificHeader, ...]:
+    profile: Final = {
+        ANTHROPIC_USER_PROFILE_ID_HEADER: value
+        for name, value in header["extra_headers"].items()
+        if name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER
+    }
+    headers: Final = {
+        name: value
+        for name, value in header["extra_headers"].items()
+        if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+    }
+    credentials: Final = {name: value for name, value in headers.items() if _is_credential_header(name)}
+    providers: Final = tuple(provider.strip() for provider in header["custom_llm_provider"].split(","))
+    unpinned_profile_providers: Final = ANTHROPIC_USER_PROFILE_ID_PROVIDERS - pinned_providers
+    variants: Final = (
+        (
+            header["custom_llm_provider"],
+            {name: value for name, value in headers.items() if name not in credentials},
+            {},
+        ),
+        (",".join(provider for provider in providers if provider not in pinned_providers), credentials, {}),
+        (
+            ",".join(provider for provider in providers if provider in pinned_providers),
+            credentials,
+            {"non_user_profile_id_models_only": True},
+        ),
+        (",".join(provider for provider in providers if provider in unpinned_profile_providers), profile, {}),
+    )
+    return tuple(
+        _PROVIDER_SPECIFIC_HEADER.validate_python(
+            {**header, "custom_llm_provider": scope, "extra_headers": extra_headers, **model_filter}
+        )
+        for scope, extra_headers, model_filter in variants
+        if scope and extra_headers
+    )
+
+
+def _user_profile_id_header(
+    providers: frozenset[str], user_profile_id: str | None, yields_to_configured: bool = False
+) -> ProviderSpecificHeader:
+    return ProviderSpecificHeader(
+        custom_llm_provider=",".join(sorted(providers)),
+        extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
+        user_profile_id_models_only=True,
+        yields_to_configured=yields_to_configured,
+    )
+
+
+_CREDENTIAL_HEADERS_MESSAGES_SENDS_OVER_A_CALLER_KEY: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        LlmProviders.ANTHROPIC.value: ("authorization", "x-api-key"),
+        LlmProviders.AZURE_AI.value: ("authorization", "x-api-key", "api-key"),
+        LlmProviders.BEDROCK.value: ("authorization", "x-api-key", "api-key"),
+        LlmProviders.BEDROCK_MANTLE.value: ("authorization", "x-api-key", "api-key"),
+    }
+)
+_CREDENTIAL_HEADERS_CHAT_SENDS_BESIDE_OR_OVER_A_CALLER_KEY: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        LlmProviders.ANTHROPIC.value: ("authorization",),
+        LlmProviders.AZURE_AI.value: ("authorization", "x-api-key"),
+    }
+)
+
+
+def _pin_where_a_configured_credential_authenticates(
+    providers: frozenset[str],
+    user_profile_id: str | None,
+    credential_headers: tuple[str, ...],
+    native_anthropic_messages_only: bool,
+) -> ProviderSpecificHeader:
+    return ProviderSpecificHeader(
+        custom_llm_provider=",".join(sorted(providers)),
+        extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
+        user_profile_id_models_only=True,
+        native_anthropic_messages_only=native_anthropic_messages_only,
+        configured_credential_headers=credential_headers,
+    )
+
+
+def _profile_by_which_oauth_token_is_sent(
+    providers: frozenset[str],
+    user_profile_id: str | None,
+    caller_credentials: tuple[str, ...],
+    sends_the_callers_token: bool,
+    yields_to_configured: bool = False,
+) -> ProviderSpecificHeader:
+    return ProviderSpecificHeader(
+        custom_llm_provider=",".join(sorted(providers)),
+        extra_headers={ANTHROPIC_USER_PROFILE_ID_HEADER: user_profile_id} if user_profile_id and providers else {},
+        user_profile_id_models_only=True,
+        yields_to_configured=yields_to_configured,
+        configured_credential_headers=("authorization",),
+        configured_credential_prefix=f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}",
+        caller_credentials=caller_credentials,
+        without_configured_credential=sends_the_callers_token,
+    )
 
 
 def add_provider_specific_headers_to_request(
     data: dict,
     headers: Mapping[str, str],
+    user_profile_id: str | None = None,
+    caller_user_profile_id: str | None = None,
 ) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 
@@ -4091,6 +4370,24 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
+    request_fields: Final = _REQUEST_FIELDS.validate_python(data)
+    caller_bearer_oauth_credentials: Final = tuple(
+        itertools.chain.from_iterable(
+            map(
+                _anthropic_bearer_oauth_credentials,
+                (headers, request_fields.get("extra_headers"), request_fields.get("headers")),
+            )
+        )
+    )
+    caller_api_key: Final = request_fields.get("api_key")
+    sends_anthropic_oauth: Final = bool(caller_bearer_oauth_credentials) or (
+        isinstance(caller_api_key, str) and caller_api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
+    )
+    caller_oauth_providers: Final = ANTHROPIC_OAUTH_FORWARD_PROVIDERS if sends_anthropic_oauth else frozenset[str]()
+    caller_api_key_providers: Final = _providers_on_caller_credentials(request_fields)
+    caller_credential_providers: Final = caller_oauth_providers | caller_api_key_providers
+    caller_profile: Final = headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER, caller_user_profile_id)
+
     typesafe_danger_zone_headers: Final = {
         header: value
         for header, value in headers.items()
@@ -4098,17 +4395,70 @@ def add_provider_specific_headers_to_request(
     }
 
     scoped_headers: Final = [
-        ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
-        for providers, extra_headers in (
-            (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
-            (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
-            (LlmProviders.TYPESAFE.value, typesafe_danger_zone_headers),
+        scoped_header
+        for scoped_header in (
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
+            ),
+            _user_profile_id_header(
+                ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers,
+                user_profile_id or headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
+                yields_to_configured=user_profile_id is None,
+            ),
+            _user_profile_id_header(caller_api_key_providers - caller_oauth_providers, caller_profile),
+            _profile_by_which_oauth_token_is_sent(
+                caller_oauth_providers, caller_profile, caller_bearer_oauth_credentials, sends_the_callers_token=True
+            ),
+            *(
+                _pin_where_a_configured_credential_authenticates(
+                    frozenset((provider,)) & (caller_api_key_providers - caller_oauth_providers),
+                    user_profile_id,
+                    credential_headers,
+                    native_anthropic_messages_only=True,
+                )
+                for provider, credential_headers in _CREDENTIAL_HEADERS_MESSAGES_SENDS_OVER_A_CALLER_KEY.items()
+            ),
+            *(
+                _pin_where_a_configured_credential_authenticates(
+                    frozenset((provider,)) & (caller_api_key_providers - caller_oauth_providers),
+                    user_profile_id,
+                    credential_headers,
+                    native_anthropic_messages_only=False,
+                )
+                for provider, credential_headers in _CREDENTIAL_HEADERS_CHAT_SENDS_BESIDE_OR_OVER_A_CALLER_KEY.items()
+            ),
+            _profile_by_which_oauth_token_is_sent(
+                caller_oauth_providers,
+                user_profile_id or headers.get(ANTHROPIC_USER_PROFILE_ID_HEADER),
+                caller_bearer_oauth_credentials,
+                sends_the_callers_token=False,
+                yields_to_configured=user_profile_id is None,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
+                extra_headers=anthropic_oauth_credential_headers,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=LlmProviders.TYPESAFE.value, extra_headers=typesafe_danger_zone_headers
+            ),
         )
-        if extra_headers
+        if scoped_header["extra_headers"]
     ]
 
-    if scoped_headers:
-        data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
+    caller_entries: Final = tuple(
+        itertools.chain.from_iterable(
+            _caller_entries_beside_a_pin(entry, ANTHROPIC_USER_PROFILE_ID_PROVIDERS - caller_credential_providers)
+            if user_profile_id
+            else (entry,)
+            for entry in map(
+                _caller_provider_specific_header, _request_entries(request_fields.get("provider_specific_header"))
+            )
+            if entry is not None
+        )
+    )
+    entries: Final = [*caller_entries, *scoped_headers]
+    if entries:
+        data["provider_specific_header"] = entries[0] if len(entries) == 1 else entries
     return bool(anthropic_oauth_credential_headers)
 
 

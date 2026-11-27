@@ -5,6 +5,8 @@ Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objec
 import json
 import logging
 import unittest
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -690,6 +692,129 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
 
     assert response == {"input_tokens": 7}
     assert counter.await_args.kwargs["request"].tools is None
+
+
+def _count_with_user_profile_id(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_litellm_params: Mapping[str, str],
+    key_metadata: Mapping[str, str],
+    client_headers: Mapping[str, str],
+    sent_profile_id: str | None,
+    model_info: Mapping[str, str] = MappingProxyType({}),
+) -> httpx.Response:
+    from fastapi import FastAPI
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.anthropic_endpoints.endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    def peer(request: httpx.Request) -> httpx.Response:
+        received: Final = request.headers.get("anthropic-user-profile-id")
+        return (
+            httpx.Response(200, json={"input_tokens": 77}, request=request)
+            if received == sent_profile_id
+            else httpx.Response(
+                400,
+                json={"type": "error", "error": {"type": "invalid_request_error", "message": f"got {received}"}},
+                request=request,
+            )
+        )
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-profile-claude",
+                    "litellm_params": {**deployment_litellm_params, "api_key": "test-key"},
+                    "model_info": dict(model_info),
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        anthropic_count_tokens_handler,
+        "get_async_httpx_client",
+        lambda *args, **kwargs: AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(metadata=dict(key_metadata))
+
+    return TestClient(app).post(
+        "/v1/messages/count_tokens",
+        json={"model": "count-profile-claude", "messages": [{"role": "user", "content": "Hello"}]},
+        headers=dict(client_headers),
+    )
+
+
+@pytest.mark.parametrize(
+    "deployment_model,key_metadata,client_headers,sent_profile_id",
+    [
+        ("anthropic/claude-sonnet-5-5", {}, {"anthropic-user-profile-id": "uprof_client"}, "uprof_client"),
+        (
+            "anthropic/claude-sonnet-5-5",
+            {"anthropic_user_profile_id": "uprof_pinned"},
+            {"anthropic-user-profile-id": "uprof_client"},
+            "uprof_pinned",
+        ),
+        ("anthropic/claude-sonnet-5-5", {"anthropic_user_profile_id": "uprof_pinned"}, {}, "uprof_pinned"),
+        ("anthropic/claude-sonnet-5-5", {}, {}, None),
+        ("anthropic/claude-unlisted-deployment", {"anthropic_user_profile_id": "uprof_pinned"}, {}, None),
+        ("anthropic/claude-unlisted-deployment", {}, {"anthropic-user-profile-id": "uprof_client"}, None),
+    ],
+    ids=[
+        "client_header",
+        "key_pin_over_client",
+        "key_pin_alone",
+        "neither",
+        "unflagged_claude_name_key_pin",
+        "unflagged_claude_name_client_header",
+    ],
+)
+def test_count_tokens_sends_the_user_profile_id_inference_would_send(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_model: str,
+    key_metadata: Mapping[str, str],
+    client_headers: Mapping[str, str],
+    sent_profile_id: str | None,
+) -> None:
+    response: Final = _count_with_user_profile_id(
+        monkeypatch, {"model": deployment_model}, key_metadata, client_headers, sent_profile_id
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
+
+
+@pytest.mark.parametrize(
+    "litellm_params,model_info,sent_profile_id",
+    [
+        ({}, {"base_model": "anthropic/claude-sonnet-5-5"}, "uprof_pinned"),
+        ({"base_model": "anthropic/claude-sonnet-5-5"}, {}, "uprof_pinned"),
+        ({}, {}, None),
+    ],
+    ids=["model_info_base_model_flagged", "litellm_params_base_model_flagged", "no_base_model"],
+)
+def test_count_tokens_pins_an_unlisted_claude_whose_base_model_the_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_params: Mapping[str, str],
+    model_info: Mapping[str, str],
+    sent_profile_id: str | None,
+) -> None:
+    response: Final = _count_with_user_profile_id(
+        monkeypatch,
+        {"model": "anthropic/claude-unlisted-deployment", **litellm_params},
+        {"anthropic_user_profile_id": "uprof_pinned"},
+        {},
+        sent_profile_id,
+        model_info,
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
 
 
 class TestEventLoggingBatchEndpoint:
