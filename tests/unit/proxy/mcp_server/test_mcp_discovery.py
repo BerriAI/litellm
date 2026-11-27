@@ -129,6 +129,27 @@ class TestMCPRegistryFile:
             "env_vars": [],
         }
 
+    def test_dealport_uses_streamable_http_mcp_endpoint(self, registry_path: str) -> None:
+        with open(registry_path, "r") as f:
+            data: Final = json.load(f)
+
+        dealport: Final = next(
+            server for server in data["servers"] if server["name"] == "dealport"
+        )
+        assert dealport == {
+            "name": "dealport",
+            "title": "Dealport",
+            "description": "US private company, commercial building, and verified owner intelligence for agents",
+            "icon_url": "https://app.dealport.com/icon.svg",
+            "category": "Search",
+            "registry_url": "https://registry.modelcontextprotocol.io/servers/com.dealport%2Fdealport",
+            "transport": "http",
+            # Dealport's MCP quickstart (checked 2026-11-27) names this URL for streamable HTTP discovery
+            # and free preview_companies without an API key https://app.dealport.com/llms.txt
+            "url": "https://app.dealport.com/api/mcp",
+            "env_vars": [],
+        }
+
     def test_well_known_servers_present(self, registry_path):
         """Ensure key well-known MCPs are in the registry."""
         with open(registry_path, "r") as f:
