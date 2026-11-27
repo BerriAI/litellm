@@ -3738,3 +3738,21 @@ async def test_the_connect_probe_never_sends_the_callers_token_to_a_server_using
     )
 
     assert client.probed == probed
+
+
+@pytest.mark.asyncio
+async def test_connect_targets_skips_unauthorized_servers_before_profile_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server import operations, server as mcp_server
+
+    manager: Final = profile_manager(_interactive_oauth_server(), ProfileUpstream())
+    monkeypatch.setattr(manager, "get_allowed_mcp_servers", AsyncMock(return_value=[]))
+    install_profile_manager(monkeypatch, manager)
+    split_called: Final = AsyncMock(side_effect=operations.split_usable_mcp_servers)
+    monkeypatch.setattr(operations, "split_usable_mcp_servers", split_called)
+
+    usable: Final = await mcp_server._usable_connect_targets(["tickets"], caller_granted("bots"), None, None)
+
+    assert usable == {}
+    split_called.assert_awaited_once_with((), caller_granted("bots"))
