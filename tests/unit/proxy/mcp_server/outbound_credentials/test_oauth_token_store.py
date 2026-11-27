@@ -1,17 +1,22 @@
 """Tests for the v2 OAuth token cache and refresh (CachedOAuthTokenStore, RefreshingTokenStore)."""
 
 import asyncio
+import gc
+import logging
 from types import SimpleNamespace
 from typing import Dict, Final, List, Optional, Tuple
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
+from litellm._logging import verbose_logger
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     CachedOAuthTokenStore,
+    InProcessRefreshCoordinator,
     OAuthToken,
     RefreshingTokenStore,
     TokenStoreUnavailable,
+    run_to_completion,
 )
 
 
@@ -231,6 +236,115 @@ async def test_refreshing_is_single_flight_under_concurrency():
     results = await asyncio.gather(*[store.fetch("u", "s") for _ in range(5)])
     assert pair.refresh_calls == 1  # one refresh shared across 5 concurrent callers
     assert all(r is not None and r.access_token == "refreshed" for r in results)
+
+
+async def test_refresh_survives_a_cancelled_caller_and_is_shared_with_the_next_one() -> None:
+    started: Final = asyncio.Event()
+    upstream_answered: Final = asyncio.Event()
+    presented: Final = MagicMock()
+
+    class _SlowRefreshPair(_RefreshablePair):
+        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
+            presented(token.refresh_token)
+            started.set()
+            await upstream_answered.wait()
+            return await super().refresh(user_id, server_id, token)
+
+    pair: Final = _SlowRefreshPair(OAuthToken(access_token="old", expires_at=900.0, refresh_token="rt-1"))
+    store: Final = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+
+    first: Final = asyncio.create_task(store.fetch("u", "s"))
+    await started.wait()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    second: Final = asyncio.create_task(store.fetch("u", "s"))
+    upstream_answered.set()
+    token: Final = await second
+
+    assert token is not None and token.access_token == "refreshed"
+    assert presented.call_args_list == [call("rt-1")], (
+        "the next caller must join the surviving refresh, not re-present a spent token"
+    )
+
+
+@pytest.mark.parametrize("through_coordinator", [False, True])
+async def test_a_refresh_failing_after_the_caller_hangs_up_is_logged_once_not_left_unhandled(
+    through_coordinator: bool,
+) -> None:
+    loop: Final = asyncio.get_running_loop()
+    reported: Final = MagicMock()
+    capture: Final = MagicMock(spec=logging.Handler, level=logging.WARNING)
+    verbose_logger.addHandler(capture)
+    loop.set_exception_handler(reported)
+    try:
+        started: Final = asyncio.Event()
+        upstream_answered: Final = asyncio.Event()
+
+        async def failing_refresh() -> OAuthToken | None:
+            started.set()
+            await upstream_answered.wait()
+            raise RuntimeError("saving the rotated token failed")
+
+        async def reread() -> OAuthToken | None:
+            return None
+
+        caller: Final = asyncio.create_task(
+            InProcessRefreshCoordinator().run("u", "s", failing_refresh, reread)
+            if through_coordinator
+            else run_to_completion(failing_refresh())
+        )
+        await started.wait()
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        upstream_answered.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        gc.collect()
+    finally:
+        loop.set_exception_handler(None)
+        verbose_logger.removeHandler(capture)
+
+    reported.assert_not_called()
+    warnings: Final = [handled.args[0].getMessage() for handled in capture.handle.call_args_list]
+    assert len(warnings) == 1 and "saving the rotated token failed" in warnings[0], (
+        "a lost rotated token must leave one log line"
+    )
+
+
+async def test_a_refresh_failing_after_several_callers_hang_up_is_logged_once() -> None:
+    capture: Final = MagicMock(spec=logging.Handler, level=logging.WARNING)
+    verbose_logger.addHandler(capture)
+    try:
+        started: Final = asyncio.Event()
+        upstream_answered: Final = asyncio.Event()
+
+        async def failing_refresh() -> OAuthToken | None:
+            started.set()
+            await upstream_answered.wait()
+            raise RuntimeError("saving the rotated token failed")
+
+        async def reread() -> OAuthToken | None:
+            return None
+
+        coordinator: Final = InProcessRefreshCoordinator()
+        callers: Final = [asyncio.create_task(coordinator.run("u", "s", failing_refresh, reread)) for _ in range(3)]
+        await started.wait()
+        for caller in callers:
+            caller.cancel()
+        await asyncio.gather(*callers, return_exceptions=True)
+        upstream_answered.set()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        gc.collect()
+    finally:
+        verbose_logger.removeHandler(capture)
+
+    warnings: Final = [handled.args[0].getMessage() for handled in capture.handle.call_args_list]
+    assert len(warnings) == 1 and "saving the rotated token failed" in warnings[0], (
+        "one failed refresh must leave one log line however many callers hung up"
+    )
 
 
 class _StaleReadRacePair:

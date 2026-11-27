@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from prisma.models import LiteLLM_MCPServerTable as PrismaMCPServer
 
@@ -52,6 +53,10 @@ from litellm.proxy.mcp_server.db import (
     store_user_credential,
     store_user_oauth_credential,
     update_mcp_server,
+)
+from litellm.proxy.mcp_server.outbound_credentials.redis_refresh_coordinator import (
+    LockAcquisition,
+    RedisRefreshCoordinator,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport
 
@@ -989,6 +994,251 @@ async def test_refresh_preserves_refusals_without_replacing_a_new_signin(
     assert same_consent == (interleaving in ("none", "refusal"))
 
 
+@pytest.mark.asyncio
+async def test_v1_refresh_saves_the_rotated_token_after_the_caller_hangs_up(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter"
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=-3600
+    )
+    expired: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    rotated: Final = asyncio.Event()
+    upstream_answered: Final = asyncio.Event()
+
+    async def rotate(_request: httpx.Request) -> httpx.Response:
+        rotated.set()
+        await upstream_answered.wait()
+        return httpx.Response(200, json={"access_token": "at-2", "refresh_token": "rt-2", "expires_in": 3600})
+
+    respx_mock.post("https://idp.example.com/token").mock(side_effect=rotate)
+    caller: Final = asyncio.create_task(
+        resolve_valid_user_oauth_token("alice", _refresh_server(), expired, credentials_prisma)
+    )
+    await rotated.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    upstream_answered.set()
+    for _ in range(200):
+        if (await get_user_oauth_credential(credentials_prisma, "alice", "srv-1") or {}).get("refresh_token") == "rt-2":
+            break
+        await asyncio.sleep(0)
+    saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+
+    assert saved is not None and saved.get("refresh_token") == "rt-2", (
+        "a hung-up caller must not lose the rotated token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_v1_reconnect_during_a_hung_up_refresh_waits_for_it_instead_of_reusing_the_old_token(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter"
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=-3600
+    )
+    expired: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    rotated: Final = asyncio.Event()
+    upstream_answered: Final = asyncio.Event()
+
+    async def rotate_once_then_refuse_reuse(request: httpx.Request) -> httpx.Response:
+        if rotated.is_set():
+            return httpx.Response(400, json={"error": "invalid_grant"})
+        rotated.set()
+        await upstream_answered.wait()
+        return httpx.Response(200, json={"access_token": "at-2", "refresh_token": "rt-2", "expires_in": 3600})
+
+    route: Final = respx_mock.post("https://idp.example.com/token").mock(side_effect=rotate_once_then_refuse_reuse)
+    hung_up: Final = asyncio.create_task(
+        resolve_valid_user_oauth_token("alice", _refresh_server(), expired, credentials_prisma)
+    )
+    await rotated.wait()
+    hung_up.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await hung_up
+    reconnect: Final = asyncio.create_task(
+        resolve_valid_user_oauth_token("alice", _refresh_server(), expired, credentials_prisma)
+    )
+    for _ in range(10):
+        await asyncio.sleep(0)
+    upstream_answered.set()
+    resolved: Final = await reconnect
+
+    assert resolved is not None and resolved.get("refresh_token") == "rt-2", "the reconnect must use the rotated token"
+    assert route.call_count == 1, "the reconnect must not present the spent refresh token again"
+
+
+@pytest.mark.asyncio
+async def test_v1_request_that_read_the_old_token_before_another_refresh_finished_uses_the_new_one(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter"
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=-3600
+    )
+    read_before_the_refresh: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    route: Final = respx_mock.post("https://idp.example.com/token").mock(
+        side_effect=[
+            httpx.Response(200, json={"access_token": "at-2", "refresh_token": "rt-2", "expires_in": 3600}),
+            httpx.Response(400, json={"error": "invalid_grant"}),
+        ]
+    )
+    await resolve_valid_user_oauth_token("alice", _refresh_server(), read_before_the_refresh, credentials_prisma)
+    late: Final = await resolve_valid_user_oauth_token(
+        "alice", _refresh_server(), read_before_the_refresh, credentials_prisma
+    )
+
+    assert late is not None and late.get("refresh_token") == "rt-2", "a late request uses the token already saved"
+    assert route.call_count == 1, "a late request never presents the spent refresh token"
+
+
+@pytest.mark.asyncio
+async def test_v1_refresh_returns_a_new_token_that_lives_inside_the_expiry_buffer(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter"
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=-3600
+    )
+    expired: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    respx_mock.post("https://idp.example.com/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "at-2", "refresh_token": "rt-2", "expires_in": 30})
+    )
+
+    refreshed: Final = await resolve_valid_user_oauth_token("alice", _refresh_server(), expired, credentials_prisma)
+
+    assert refreshed is not None and refreshed.get("access_token") == "at-2", (
+        "a provider issuing short-lived access tokens still gets the token it just minted"
+    )
+
+
+@pytest.mark.asyncio
+async def test_v1_request_waiting_on_a_refresh_gets_a_new_token_that_lives_inside_the_expiry_buffer(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter"
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=-3600
+    )
+    expired: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    route: Final = respx_mock.post("https://idp.example.com/token").mock(
+        side_effect=[httpx.Response(200, json={"access_token": "at-2", "refresh_token": "rt-2", "expires_in": 30})]
+    )
+
+    results: Final = await asyncio.gather(
+        *(resolve_valid_user_oauth_token("alice", _refresh_server(), expired, credentials_prisma) for _ in range(2))
+    )
+
+    assert [(result or {}).get("access_token") for result in results] == ["at-2", "at-2"], (
+        "a request that waited on the refresh gets the short-lived token it minted"
+    )
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_v1_refresh_held_by_another_worker_waits_then_uses_the_token_it_saved(
+    credentials_prisma: SimpleNamespace, respx_mock: "MockRouter"
+) -> None:
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=-3600
+    )
+    expired: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    route: Final = respx_mock.post("https://idp.example.com/token")
+
+    async def other_worker_saves_then_releases(_seconds: float) -> None:
+        await store_user_oauth_credential(
+            credentials_prisma, "alice", "srv-1", "at-2", refresh_token="rt-2", expires_in=3600, refreshed_from="rt-1"
+        )
+
+    lock: Final = SimpleNamespace(
+        acquire=AsyncMock(return_value=LockAcquisition.HELD), is_held=AsyncMock(side_effect=[True, False])
+    )
+    coordinator: Final = RedisRefreshCoordinator(lock, sleep=other_worker_saves_then_releases)
+    resolved: Final = await resolve_valid_user_oauth_token(
+        "alice", _refresh_server(), expired, credentials_prisma, refresh_coordinator=coordinator
+    )
+
+    assert resolved is not None and resolved.get("refresh_token") == "rt-2", (
+        "the waiter reads the token the holder saved"
+    )
+    assert route.call_count == 0, "a request that waited never presents the spent refresh token"
+
+
+@pytest.mark.asyncio
+async def test_v1_request_that_waited_on_a_failed_refresh_does_not_use_the_old_token_inside_the_buffer(
+    credentials_prisma: SimpleNamespace, respx_mock: "MockRouter"
+) -> None:
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=30)
+    expiring: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    route: Final = respx_mock.post("https://idp.example.com/token")
+
+    async def other_worker_fails_then_releases(_seconds: float) -> None:
+        return None
+
+    lock: Final = SimpleNamespace(
+        acquire=AsyncMock(return_value=LockAcquisition.HELD), is_held=AsyncMock(side_effect=[True, False])
+    )
+    coordinator: Final = RedisRefreshCoordinator(lock, sleep=other_worker_fails_then_releases)
+    resolved: Final = await resolve_valid_user_oauth_token(
+        "alice", _refresh_server(), expiring, credentials_prisma, refresh_coordinator=coordinator
+    )
+
+    assert resolved is None, "a waiter does not forward the token the failed refresh was meant to replace"
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "other_worker_saves, expected",
+    [("a token bound to alice", "at-2"), ("an unbound token", None), ("nothing, the login was revoked", None)],
+)
+async def test_v1_request_that_waited_takes_only_a_bound_row_the_holder_left(
+    credentials_prisma: SimpleNamespace, other_worker_saves: str, expected: str | None
+) -> None:
+    from litellm.proxy.mcp_server.oauth_identity_binding import current_binding_proof
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding
+
+    binding: Final = MCPOAuthIdentityBinding(
+        mode="enforce",
+        issuer="https://idp.example.com",
+        audiences=["cid"],
+        caller_field="user_id",
+        principal_claim="sub",
+    )
+    alice_proof: Final = await current_binding_proof(binding, "alice", "srv-1")
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=-3600,
+        identity_binding_proof=alice_proof,
+    )
+    expired: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+
+    async def other_worker_finishes(_seconds: float) -> None:
+        if other_worker_saves == "nothing, the login was revoked":
+            table: Final = credentials_prisma.db.litellm_mcpusercredentials
+            table.rows = {key: row for key, row in table.rows.items() if key != ("alice", "srv-1")}
+            return
+        proof: Final = alice_proof if other_worker_saves == "a token bound to alice" else None
+        await store_user_oauth_credential(
+            credentials_prisma, "alice", "srv-1", "at-2", refresh_token="rt-2", expires_in=3600,
+            identity_binding_proof=proof,
+        )
+
+    lock: Final = SimpleNamespace(
+        acquire=AsyncMock(return_value=LockAcquisition.HELD), is_held=AsyncMock(side_effect=[True, False])
+    )
+    resolved: Final = await resolve_valid_user_oauth_token(
+        "alice",
+        _refresh_server(oauth_identity_binding=binding),
+        expired,
+        credentials_prisma,
+        refresh_coordinator=RedisRefreshCoordinator(lock, sleep=other_worker_finishes),
+    )
+
+    assert (resolved or {}).get("access_token") == expected, "a waiter takes a row only if it is bound to the caller"
+
+
 def _row_written_under_previous_salt_key(monkeypatch, payload: str):
     """A row encrypted under a salt key the proxy no longer holds.
 
@@ -1351,7 +1601,9 @@ async def test_resolve_returns_valid_token_without_refreshing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_refreshes_expired_token_with_refresh_token(monkeypatch):
+async def test_resolve_refreshes_expired_token_with_refresh_token(
+    monkeypatch: pytest.MonkeyPatch, credentials_prisma: SimpleNamespace
+) -> None:
     # The core regression: an expired OBO cred with a refresh_token must mint a
     # new token rather than returning None (which left the UI tool list empty).
     import litellm.proxy.mcp_server.db as db_mod
@@ -1361,8 +1613,11 @@ async def test_resolve_refreshes_expired_token_with_refresh_token(monkeypatch):
     monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
 
     expired = _oauth_cred(access_token="at-dead", refresh_token="rt-1", expires_in_seconds=-5)
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-dead", refresh_token="rt-1", expires_in=-5
+    )
     result = await resolve_valid_user_oauth_token(
-        user_id="alice", server=MagicMock(), cred=expired, prisma_client=MagicMock()
+        user_id="alice", server=_refresh_server(), cred=expired, prisma_client=credentials_prisma
     )
 
     refresh.assert_awaited_once()
@@ -1370,7 +1625,9 @@ async def test_resolve_refreshes_expired_token_with_refresh_token(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_refreshes_token_expiring_within_buffer(monkeypatch):
+async def test_resolve_refreshes_token_expiring_within_buffer(
+    monkeypatch: pytest.MonkeyPatch, credentials_prisma: SimpleNamespace
+) -> None:
     # A token still technically valid (30s left) but inside the 60s buffer must
     # be proactively refreshed, not handed back.
     import litellm.proxy.mcp_server.db as db_mod
@@ -1380,8 +1637,11 @@ async def test_resolve_refreshes_token_expiring_within_buffer(monkeypatch):
     monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
 
     soon = _oauth_cred(access_token="at-soon", refresh_token="rt-1", expires_in_seconds=30)
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-soon", refresh_token="rt-1", expires_in=30
+    )
     result = await resolve_valid_user_oauth_token(
-        user_id="alice", server=MagicMock(), cred=soon, prisma_client=MagicMock()
+        user_id="alice", server=_refresh_server(), cred=soon, prisma_client=credentials_prisma
     )
 
     refresh.assert_awaited_once()
@@ -1406,7 +1666,9 @@ async def test_resolve_returns_none_when_expired_without_refresh_token(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_resolve_returns_none_when_refresh_fails(monkeypatch):
+async def test_resolve_returns_none_when_refresh_fails(
+    monkeypatch: pytest.MonkeyPatch, credentials_prisma: SimpleNamespace
+) -> None:
     # A failed refresh (provider returns nothing usable) must surface as None.
     import litellm.proxy.mcp_server.db as db_mod
 
@@ -1414,8 +1676,11 @@ async def test_resolve_returns_none_when_refresh_fails(monkeypatch):
     monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
 
     expired = _oauth_cred(access_token="at-dead", refresh_token="rt-1", expires_in_seconds=-5)
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-dead", refresh_token="rt-1", expires_in=-5
+    )
     result = await resolve_valid_user_oauth_token(
-        user_id="alice", server=MagicMock(), cred=expired, prisma_client=MagicMock()
+        user_id="alice", server=_refresh_server(), cred=expired, prisma_client=credentials_prisma
     )
 
     refresh.assert_awaited_once()
