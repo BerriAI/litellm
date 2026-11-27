@@ -2,8 +2,8 @@
 //! why the native app would not answer that request as Python does, or `None`. The checks run in
 //! three stages, each named for what its checks read and each in order, cheapest first. `mod.rs`
 //! authenticates the caller before `CALLER` and reads the body before `BODY`, so neither happens
-//! for a request an earlier stage sent to Python. A request goes to Python only over a check's
-//! reason.
+//! for a request an earlier stage sent to Python. A JWT's body is read before it is authenticated,
+//! which changes no stage's order. A request goes to Python only over a check's reason.
 
 #[macro_use]
 mod fields;

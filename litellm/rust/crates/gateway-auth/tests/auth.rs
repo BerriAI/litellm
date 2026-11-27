@@ -13,7 +13,7 @@ use litellm_gateway_auth::{
     RequireMasterKey, authenticate,
 };
 use litellm_gateway_auth_core::{
-    self as auth_core, Affiliation, Caller, KeyHash, Rows, authn::key::KeyRecord,
+    self as auth_core, Affiliation, Caller, KeyHash, Model, Rows, authn::key::KeyRecord,
 };
 use litellm_secret_value::SecretValue;
 use rstest::rstest;
@@ -83,10 +83,15 @@ struct Verifier {
 }
 
 impl Authenticator<Held> for Verifier {
+    fn reads_model(&self, _: &Credential, _: &Parts) -> bool {
+        false
+    }
+
     fn authenticate<'a>(
         &'a self,
         credential: &'a Credential,
         _: &'a Parts,
+        _: Model<'a>,
     ) -> AuthFuture<'a, Caller<Held>> {
         Box::pin(async move {
             match (self.failure, credential) {

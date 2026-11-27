@@ -676,7 +676,7 @@ mod tests {
     use jiff::Timestamp;
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
     use litellm_gateway_auth_core::{
-        Credential, Holder, JwtActor, JwtStamp, Named, Team, Via,
+        Credential, Holder, JwtActor, JwtStamp, Model, Named, Team, Via,
         authz::{Layer, ModelList},
     };
     use litellm_python_compat::Value as PyValue;
@@ -746,7 +746,7 @@ mod tests {
         header: (&str, &str),
     ) -> Result<Authenticated<NativeRows>, Rejected> {
         auth(config, keys.map(memory_only), true)
-            .authenticate_parts(&parts(header))
+            .authenticate_parts(&parts(header), Model::Unread)
             .await
     }
 
@@ -756,7 +756,7 @@ mod tests {
         token: &str,
     ) -> Result<Authenticated<NativeRows>, Rejected> {
         let bearer = format!("Bearer {token}");
-        auth.authenticate_parts(&parts(("authorization", &bearer)))
+        auth.authenticate_parts(&parts(("authorization", &bearer)), Model::Unread)
             .await
     }
 

@@ -536,7 +536,7 @@ impl AuthHost for ScriptedHost {
     }
 
     async fn team_model_access(&self, team: &String, model: &str) -> Result<ModelAccess, Error> {
-        self.record(format!("model {team} {model}"));
+        self.step("team_model_access", format!("model {team} {model}"))?;
         Ok(if self.model_access.contains(team.as_str()) {
             ModelAccess::Allowed
         } else {

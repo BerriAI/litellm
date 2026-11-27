@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use axum::http::request::Parts;
 use jiff::Timestamp;
 use litellm_gateway_auth_core::{
-    self as auth_core, AuthHost, Caller, Outcome, Rows, Settings, Token, authenticate_jwt,
+    self as auth_core, AuthHost, Caller, Model, Outcome, Rows, Settings, Token, authenticate_jwt,
     authenticate_key, plan::Plan,
 };
 use litellm_secret_value::SecretValue;
@@ -34,10 +34,16 @@ pub enum Credential {
 /// Who a selected credential stands for. The only answer is `gateway-auth-core`'s [`Caller`], so
 /// nothing this crate hands a route was decided here.
 pub trait Authenticator<R: Rows>: Send + Sync {
+    /// Whether authenticating `credential` decides on the model the request's body names, so a
+    /// server that can read the body first should. Decided with no IO.
+    fn reads_model(&self, credential: &Credential, request: &Parts) -> bool;
+
+    /// `model` is what the server read of the body, [`Model::Unread`] when it read none.
     fn authenticate<'a>(
         &'a self,
         credential: &'a Credential,
         request: &'a Parts,
+        model: Model<'a>,
     ) -> AuthFuture<'a, Caller<R>>;
 }
 
@@ -67,9 +73,21 @@ impl<R: Rows> Auth<R> {
         Self { extractor, ..self }
     }
 
-    pub async fn authenticate_parts(&self, request: &Parts) -> Result<Authenticated<R>, Error> {
+    /// Whether authenticating `request` decides on the model its body names. A request with no
+    /// usable credential reads none.
+    pub fn reads_model(&self, request: &Parts) -> bool {
+        self.extractor
+            .extract(request)
+            .is_ok_and(|credential| self.authenticator.reads_model(&credential, request))
+    }
+
+    pub async fn authenticate_parts(
+        &self,
+        request: &Parts,
+        model: Model<'_>,
+    ) -> Result<Authenticated<R>, Error> {
         let credential = self.extractor.extract(request)?;
-        self.authenticate_credential(&credential, request)
+        self.authenticate_credential(&credential, request, model)
             .await
             .map_err(|error| self.extractor.reject(request, error))
     }
@@ -78,8 +96,12 @@ impl<R: Rows> Auth<R> {
         &self,
         credential: &Credential,
         request: &Parts,
+        model: Model<'_>,
     ) -> Result<Authenticated<R>, Error> {
-        let caller = self.authenticator.authenticate(credential, request).await?;
+        let caller = self
+            .authenticator
+            .authenticate(credential, request, model)
+            .await?;
         Ok(Authenticated::from(caller))
     }
 }
@@ -111,27 +133,62 @@ fn team_header(parts: &Parts) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
+fn token_of(credential: &Credential) -> Option<Token> {
+    match credential {
+        Credential::Token(presented) => Some(Token::new(presented.clone())),
+        Credential::Transport => None,
+    }
+}
+
+impl<H> CoreAuthenticator<H> {
+    fn core_request<'a>(
+        &self,
+        token: Option<&'a Token>,
+        request: &'a Parts,
+        model: Model<'a>,
+    ) -> auth_core::Request<'a> {
+        auth_core::Request {
+            route: request.uri.path(),
+            method: Some(&request.method),
+            token,
+            model,
+            team_header: team_header(request),
+            is_llm_api_route: true,
+            runs_inference_checks: true,
+            now: self.clock.now(),
+            ..auth_core::Request::default()
+        }
+    }
+}
+
 impl<H: AuthHost> Authenticator<H::Rows> for CoreAuthenticator<H> {
+    /// Only the JWT path reads the model: to pick a team, and for the role and scope rules.
+    fn reads_model(&self, credential: &Credential, request: &Parts) -> bool {
+        let token = token_of(credential);
+        let core_request = self.core_request(token.as_ref(), request, Model::Unread);
+        match auth_core::plan(&core_request, &self.settings) {
+            Ok(Plan::Jwt) => true,
+            Ok(
+                Plan::Key
+                | Plan::Public
+                | Plan::OAuth2Introspection
+                | Plan::OAuth2Proxy
+                | Plan::JwtWithOperatorCode
+                | Plan::PassThroughOpen,
+            )
+            | Err(_) => false,
+        }
+    }
+
     fn authenticate<'a>(
         &'a self,
         credential: &'a Credential,
         request: &'a Parts,
+        model: Model<'a>,
     ) -> AuthFuture<'a, Caller<H::Rows>> {
         Box::pin(async move {
-            let token = match credential {
-                Credential::Token(presented) => Some(Token::new(presented.clone())),
-                Credential::Transport => None,
-            };
-            let core_request = auth_core::Request {
-                route: request.uri.path(),
-                method: Some(&request.method),
-                token: token.as_ref(),
-                team_header: team_header(request),
-                is_llm_api_route: true,
-                runs_inference_checks: true,
-                now: self.clock.now(),
-                ..auth_core::Request::default()
-            };
+            let token = token_of(credential);
+            let core_request = self.core_request(token.as_ref(), request, model);
             let plan = auth_core::plan(&core_request, &self.settings)
                 .map_err(|premium| Error::from(auth_core::Error::from(premium)))?;
             let outcome = match plan {
@@ -159,7 +216,7 @@ mod tests {
     use std::{convert::Infallible, sync::OnceLock, time::Duration};
 
     use axum::http::Request as HttpRequest;
-    use litellm_config::{GeneralSettings, JwtAuthSettings, LitellmRole, RouteList};
+    use litellm_config::{GeneralSettings, JwtAuthSettings, LitellmRole, RouteList, ScopeMapping};
     use litellm_gateway_auth_core::{
         AgentIdentityFailure, HostFacts, KeyHash, MasterKey, OperatorHooks, RouteGroups,
         authn::{
@@ -569,9 +626,82 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
             .into_parts()
             .0;
 
-        let error = auth.authenticate(&token, &request).await.unwrap_err();
+        let error = auth
+            .authenticate(&token, &request, Model::Unread)
+            .await
+            .unwrap_err();
 
         assert_eq!(<&'static str>::from(error), answered);
+    }
+
+    /// [`jwt_auth`] with the admin scope mapped to the model `claude` and scope mappings enforced.
+    fn scoped_to_claude() -> GeneralSettings {
+        let general = jwt_auth(true);
+        GeneralSettings {
+            litellm_jwtauth: general.litellm_jwtauth.map(|jwt| JwtAuthSettings {
+                enforce_scope_based_access: true,
+                scope_mappings: Some(
+                    [ScopeMapping {
+                        scope: "litellm_proxy_admin".to_owned(),
+                        models: Some(["claude".to_owned()].into()),
+                        routes: None,
+                    }]
+                    .into(),
+                ),
+                ..jwt
+            }),
+            ..general
+        }
+    }
+
+    fn messages_request() -> Parts {
+        HttpRequest::post("/v1/messages")
+            .body(())
+            .unwrap()
+            .into_parts()
+            .0
+    }
+
+    #[rstest]
+    #[case::a_jwt(jwt_auth(true), true, Some(admin_jwt()), true)]
+    #[case::a_jwt_with_jwt_auth_off(jwt_auth(false), true, Some(admin_jwt()), false)]
+    #[case::a_jwt_without_an_enterprise_license(jwt_auth(true), false, Some(admin_jwt()), false)]
+    #[case::a_jwt_on_a_public_route(public_messages_route(), true, Some(admin_jwt()), false)]
+    #[case::a_key(jwt_auth(true), true, Some("sk-virtual".to_owned()), false)]
+    #[case::no_token(jwt_auth(true), true, None, false)]
+    fn only_a_request_planned_as_a_jwt_reads_the_model(
+        #[case] general: GeneralSettings,
+        #[case] premium: bool,
+        #[case] token: Option<String>,
+        #[case] reads: bool,
+    ) {
+        let auth = authenticator(DecliningHost::default(), general, premium);
+        let credential = token.map_or(Credential::Transport, |token| {
+            Credential::Token(SecretValue::from(token))
+        });
+
+        assert_eq!(auth.reads_model(&credential, &messages_request()), reads);
+    }
+
+    #[rstest]
+    #[case::the_model_its_scope_reaches(Model::Named(Some("claude")), None)]
+    #[case::a_model_its_scope_does_not_reach(Model::Named(Some("gpt")), Some("forbidden"))]
+    #[case::a_body_the_server_did_not_read(Model::Unread, Some("not_native"))]
+    #[tokio::test]
+    async fn a_jwt_is_judged_on_the_model_the_server_read(
+        #[case] model: Model<'static>,
+        #[case] refused: Option<&str>,
+    ) {
+        let host = DecliningHost {
+            jwks: Some(jwks()),
+            ..DecliningHost::default()
+        };
+        let auth = authenticator(host, scoped_to_claude(), true);
+        let token = Credential::Token(SecretValue::from(admin_jwt()));
+
+        let answered = auth.authenticate(&token, &messages_request(), model).await;
+
+        assert_eq!(answered.err().map(<&'static str>::from), refused);
     }
 
     #[tokio::test]
@@ -589,7 +719,7 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
             .into_parts()
             .0;
 
-        let _ = auth.authenticate(&token, &request).await;
+        let _ = auth.authenticate(&token, &request, Model::Unread).await;
 
         assert_eq!(
             auth.host.team_asked.get().map(String::as_str),

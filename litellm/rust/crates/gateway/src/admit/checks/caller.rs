@@ -13,8 +13,8 @@ use crate::{
 
 /// Each caller the core hands back is matched by name, with no catch-all, so a caller the native
 /// host learns to serve does not compile here until it is named native or not. A credential the
-/// core did not authenticate is over the error's name, including when a JWT decision needs the
-/// model before the body is read. A key that holds a team, owner, organization or project stays
+/// core did not authenticate is over the error's name. A JWT's body is read before auth so the
+/// core can decide on its model. A key that holds a team, owner, organization or project stays
 /// with Python over the first unserved column or association. This also applies to mapped keys.
 /// Python resolves a JWT customer claim after auth and applies its budgets and models. A key
 /// that sends the team header also stays with Python, which reads that header after auth.

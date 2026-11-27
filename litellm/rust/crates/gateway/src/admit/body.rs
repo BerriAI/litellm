@@ -6,8 +6,7 @@ use axum::{
 };
 use futures_util::{Stream, StreamExt, future, stream};
 use http_body_util::BodyExt;
-
-use litellm_gateway_inference::MAX_BODY_BYTES;
+use serde_json::{Map, Value};
 
 /// `read` followed by `rest`, as one body.
 fn replayed(
@@ -17,20 +16,19 @@ fn replayed(
     Body::from_stream(stream::iter(read).map(Ok).chain(rest))
 }
 
-fn declares_more_than_the_route_reads(request: &Parts) -> bool {
+fn declares_more_than(request: &Parts, limit: usize) -> bool {
     request
         .headers
         .get(CONTENT_LENGTH)
         .and_then(|length| length.to_str().ok()?.parse::<usize>().ok())
-        .is_some_and(|length| length > MAX_BODY_BYTES)
+        .is_some_and(|length| length > limit)
 }
 
-/// `body` to send on, carrying the bytes the client sent, and those bytes when the native route
-/// would read all of them. A body that says it is larger than the native route reads is sent on
-/// untouched, one that turns out to be is sent on from where the reading stopped, and one that
-/// breaks is sent on broken.
-pub(super) async fn read(request: &Parts, mut body: Body) -> (Body, Option<Bytes>) {
-    if declares_more_than_the_route_reads(request) {
+/// `body` to send on, carrying the bytes the client sent, and those bytes when they fit in
+/// `limit`. A body that says it is larger is sent on untouched, one that turns out to be is sent
+/// on from where the reading stopped, and one that breaks is sent on broken.
+pub(super) async fn read(request: &Parts, mut body: Body, limit: usize) -> (Body, Option<Bytes>) {
+    if declares_more_than(request, limit) {
         return (body, None);
     }
     let mut read = Vec::new();
@@ -48,7 +46,7 @@ pub(super) async fn read(request: &Parts, mut body: Body) -> (Body, Option<Bytes
         };
         size += data.len();
         read.push(data);
-        if size > MAX_BODY_BYTES {
+        if size > limit {
             return (replayed(read, body.into_data_stream()), None);
         }
     }
@@ -56,9 +54,22 @@ pub(super) async fn read(request: &Parts, mut body: Body) -> (Body, Option<Bytes
     (Body::from(whole.clone()), Some(whole))
 }
 
+/// [`read`], with the bytes parsed as the JSON object a native route takes. A body that is not
+/// one is sent on as the client sent it.
+pub(super) async fn parsed(
+    request: &Parts,
+    body: Body,
+    limit: usize,
+) -> (Body, Option<Map<String, Value>>) {
+    let (body, whole) = read(request, body, limit).await;
+    let fields = whole.and_then(|sent| serde_json::from_slice(&sent).ok());
+    (body, fields)
+}
+
 #[cfg(test)]
 mod tests {
     use axum::http::Request;
+    use litellm_gateway_inference::MAX_BODY_BYTES;
     use rstest::rstest;
 
     use super::*;
@@ -87,7 +98,7 @@ mod tests {
             Ok(Bytes::from_static(b"\"claude\"}")),
         ]));
 
-        let (body, whole) = read(&parts(Some(18)), sent).await;
+        let (body, whole) = read(&parts(Some(18)), sent, MAX_BODY_BYTES).await;
 
         assert_eq!(
             (whole, sent_on(body).await),
@@ -107,7 +118,7 @@ mod tests {
             std::iter::repeat_n(chunk.clone(), chunks).map(Ok::<_, axum::Error>),
         ));
 
-        let (body, whole) = read(&parts(None), sent).await;
+        let (body, whole) = read(&parts(None), sent, MAX_BODY_BYTES).await;
 
         assert_eq!(
             (whole, sent_on(body).await.len()),
@@ -118,7 +129,12 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn a_body_that_says_it_is_larger_than_the_native_route_reads_is_not_read() {
-        let (body, whole) = read(&parts(Some(MAX_BODY_BYTES + 1)), Body::from("{}")).await;
+        let (body, whole) = read(
+            &parts(Some(MAX_BODY_BYTES + 1)),
+            Body::from("{}"),
+            MAX_BODY_BYTES,
+        )
+        .await;
 
         assert_eq!((whole, sent_on(body).await), (None, Bytes::from("{}")));
     }
@@ -131,7 +147,7 @@ mod tests {
             Err(std::io::Error::other("the client went away")),
         ]));
 
-        let (body, whole) = read(&parts(None), sent).await;
+        let (body, whole) = read(&parts(None), sent, MAX_BODY_BYTES).await;
 
         assert_eq!(whole, None);
         assert!(axum::body::to_bytes(body, usize::MAX).await.is_err());
