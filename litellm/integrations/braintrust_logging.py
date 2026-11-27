@@ -367,7 +367,7 @@ class BraintrustLogger(CustomLogger):
                 "span_parents": span_parents,
             }
 
-            request_data: Final = {
+            request_data: Final[dict[str, object]] = {  # mutable-ok: built here, sent as is
                 "id": litellm_call_id,
                 "input": prompt["messages"],
                 "output": output,

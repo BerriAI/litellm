@@ -43,6 +43,8 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 CHECKER: Final = REPO_ROOT / "litellm/scripts" / "check_openapi_docs.py"
 TARGET: Final = "litellm"
 TERMINATION_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
+NATIVE_MODULE: Final = Path("litellm/rust_bridge/_native.abi3.so")
+NATIVE_BUILD_INPUTS: Final = ("litellm/rust", "pyproject.toml")
 
 _LINE: Final = re.compile(r"^(?P<method>[A-Z]+) (?P<path>\S+) (?P<code>OA\d+)$")
 _ADDED_LINE: Final = re.compile(r"^\+(?!\+\+)(?P<text>.*)$", re.MULTILINE)
@@ -120,6 +122,18 @@ def _install_base_native(worktree: Path, repo_root: Path) -> None:
     )
 
 
+def _native_inputs_unchanged(ref: str, repo_root: Path) -> bool:
+    return subprocess.run(["git", "diff", "--quiet", ref, "--", *NATIVE_BUILD_INPUTS], cwd=repo_root).returncode == 0
+
+
+def _provide_base_native(worktree: Path, repo_root: Path, ref: str) -> None:
+    head_native: Final = repo_root / NATIVE_MODULE
+    if head_native.is_file() and _native_inputs_unchanged(ref, repo_root):
+        shutil.copy2(head_native, worktree / NATIVE_MODULE)
+        return
+    _install_base_native(worktree, repo_root)
+
+
 def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) -> Mapping[str, int]:
     """Rule counts at `ref`, measured with the *current* checker over the base tree."""
     _install_termination_handlers()
@@ -130,7 +144,7 @@ def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) 
         (worktree / "litellm/scripts").mkdir(parents=True, exist_ok=True)
         base_checker: Final = worktree / "litellm/scripts" / "check_openapi_docs.py"
         shutil.copy(checker, base_checker)
-        _install_base_native(worktree, repo_root)
+        _provide_base_native(worktree, repo_root, ref)
         return count_by_rule(_check(worktree, base_checker))
     finally:
         # Teardown must never raise, or it masks the real error when the body failed.

@@ -1,11 +1,13 @@
 import importlib
+import json
+import os
 from typing import Final
 
 import pytest
 
 import litellm
 import litellm.utils
-from litellm._lazy_imports_registry import LITELLM_ATTRIBUTES, UTILS_ATTRIBUTES
+from litellm._lazy_imports_registry import LAZY_ATTRIBUTES
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 
@@ -14,14 +16,14 @@ def _declared(location: tuple[str, str]) -> object:
     return getattr(importlib.import_module(module_path, package="litellm"), attr_name)
 
 
-@pytest.mark.parametrize("name", sorted(LITELLM_ATTRIBUTES))
+@pytest.mark.parametrize("name", sorted(LAZY_ATTRIBUTES["litellm"]))
 def test_litellm_attribute_is_the_declared_object(name: str):
-    assert getattr(litellm, name) is _declared(LITELLM_ATTRIBUTES[name])
+    assert getattr(litellm, name) is _declared(LAZY_ATTRIBUTES["litellm"][name])
 
 
-@pytest.mark.parametrize("name", sorted(UTILS_ATTRIBUTES))
+@pytest.mark.parametrize("name", sorted(LAZY_ATTRIBUTES["litellm.utils"]))
 def test_utils_attribute_is_the_same_object_from_litellm_and_litellm_utils(name: str):
-    expected: Final = _declared(UTILS_ATTRIBUTES[name])
+    expected: Final = _declared(LAZY_ATTRIBUTES["litellm.utils"][name])
     assert getattr(litellm.utils, name) is expected
     assert getattr(litellm, name) is expected
 
@@ -78,6 +80,33 @@ def test_unknown_attribute_raises_attribute_error(module: object):
 
 def test_litellm_instances_are_not_attributes_of_litellm_utils():
     assert not hasattr(litellm.utils, "module_level_client")
+
+
+@pytest.mark.parametrize("name", ["DualCache", "KeyManagementSystem", "all_litellm_params", "get_modified_max_tokens"])
+def test_names_litellm_utils_exported_before_lazy_loading_still_import_from_it(name: str):
+    """`litellm.utils` imported these at module level up to 1.80, so callers import them from there."""
+    assert getattr(litellm.utils, name) is _declared(LAZY_ATTRIBUTES["litellm"][name])
+
+
+@pytest.mark.parametrize("name", sorted(LAZY_ATTRIBUTES["litellm"]))
+def test_litellm_lazy_attribute_resolves_from_litellm_utils(name: str):
+    assert getattr(litellm.utils, name) is getattr(litellm, name)
+
+
+def test_disable_lazy_loading_resolves_every_lazy_attribute_at_import():
+    result: Final = run_child_interpreter(
+        "import json, litellm\n"
+        "from litellm._lazy_imports import _LITELLM_FACTORIES\n"
+        "from litellm._lazy_imports_registry import LAZY_ATTRIBUTES\n"
+        "print(json.dumps(sorted(\n"
+        "    [n for n in [*LAZY_ATTRIBUTES['litellm'], *_LITELLM_FACTORIES] if n not in vars(litellm)]\n"
+        "    + [n for n in LAZY_ATTRIBUTES['litellm.utils'] if n not in vars(litellm.utils)]\n"
+        ")))\n",
+        env={**os.environ, "LITELLM_DISABLE_LAZY_LOADING": "1"},
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.splitlines()[-1]) == []
 
 
 @pytest.mark.parametrize(

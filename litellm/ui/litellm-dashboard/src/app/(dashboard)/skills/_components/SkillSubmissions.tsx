@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, type QueryKey } from "@tanstack/react-query";
+import { Controller } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import {
@@ -15,6 +16,9 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable/useUrlTableState";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toSkillReviewPayload } from "./skill-review/mapper";
+import { skillReviewSchema } from "./skill-review/schema";
 import SkillScanPanel from "./SkillScanPanel";
 import { toast } from "@/lib/toast";
 import AddPluginForm from "./add_plugin_form";
@@ -198,7 +202,7 @@ function SubmissionReview({
   onChanged,
 }: SubmissionReviewProps) {
   const { t } = useTranslation();
-  const [reason, setReason] = useState("");
+  const { control, getValues } = useZodForm(skillReviewSchema, { defaultValues: { reason: "" } });
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -219,10 +223,12 @@ function SubmissionReview({
     setBusy(true);
     setError(null);
     try {
-      await reviewSkillSubmission(accessToken, id, action, {
-        expected_revision: submission.revision ?? 0,
-        ...(action === "reject" ? { reason: reason.trim() || null } : {}),
-      });
+      await reviewSkillSubmission(
+        accessToken,
+        id,
+        action,
+        toSkillReviewPayload(skillReviewSchema.parse(getValues()), action, submission.revision),
+      );
       onClose();
       await onChanged();
       toast.success(t(action === "approve" ? "skills.submissions.approved" : "skills.submissions.rejected"));
@@ -311,12 +317,18 @@ function SubmissionReview({
                   <label htmlFor="skill-rejection-reason" className="text-sm font-medium">
                     {t("skills.submissions.reasonLabel")}
                   </label>
-                  <Textarea
-                    id="skill-rejection-reason"
-                    value={reason}
-                    maxLength={2000}
-                    onChange={(event) => setReason(event.target.value)}
-                    disabled={busy}
+                  <Controller
+                    control={control}
+                    name="reason"
+                    render={({ field }) => (
+                      <Textarea
+                        id="skill-rejection-reason"
+                        value={field.value}
+                        maxLength={2000}
+                        onChange={(event) => field.onChange(event.target.value)}
+                        disabled={busy}
+                      />
+                    )}
                   />
                   <div className="flex justify-end gap-2">
                     <Button variant="destructive" onClick={() => void review("reject")} disabled={actionsDisabled}>
