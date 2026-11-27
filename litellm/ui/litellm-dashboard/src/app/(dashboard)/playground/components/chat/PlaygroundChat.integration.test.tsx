@@ -1,10 +1,14 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import i18next from "i18next";
+import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders as render, testQueryClient } from "@/../tests/test-utils";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
+import en from "@/i18n/locales/en.json";
+import zh from "@/i18n/locales/zh-CN.json";
 import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools, tagListCall } from "@/components/networking";
 import { setSecureItem } from "@/utils/secureStorage";
 import { fetchClient } from "@/lib/http/api";
@@ -124,6 +128,25 @@ describe("PlaygroundChat", () => {
     expect(model).toBe("gpt-fast");
     expect(apiKey).toBe("session-token");
     expect(guardrails).toEqual(["pii-mask"]);
+  });
+
+  it("sends the original starter prompt from a Chinese dashboard", async () => {
+    const i18n = i18next.createInstance();
+    await i18n.init({ lng: "zh-CN", resources: { en: { translation: en }, "zh-CN": { translation: zh } } });
+    const user = userEvent.setup();
+    chatRequest.mockImplementation(replyWith("Hi there"));
+    preload({ selectedModel: "gpt-fast" });
+    render(
+      <I18nextProvider i18n={i18n}>
+        <PlaygroundChat accessToken="session-token" disabledPersonalKeyCreation={false} proxySettings={undefined} />
+      </I18nextProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^(Write me a poem|给我写一首诗)$/ }));
+    await user.click(screen.getByRole("button", { name: "发送消息" }));
+
+    expect(await screen.findByText("Hi there")).toBeInTheDocument();
+    expect(sentMessages(0)).toEqual([{ role: "user", content: "Write me a poem" }]);
   });
 
   it("keeps answered turns in the history but never resends a failed one", async () => {

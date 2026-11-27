@@ -1,15 +1,11 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
+import { Controller, useWatch } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
-import { loggingOnlyContinueFromParams, loggingOnlyScopeToChoice } from "../guardrail_info_helpers";
-import type { LoggingOnlyScope, LoggingOnlyScopeChoice } from "../guardrail_info_helpers";
-import {
-  CustomCodeLoggingOnlyScopeSelect,
-  getCustomCodeLoggingOnlyScopeCreate,
-  getCustomCodeLoggingOnlyScopeUpdate,
-} from "./CustomCodeLoggingOnlyScope";
+import { CustomCodeLoggingOnlyScopeSelect } from "./CustomCodeLoggingOnlyScope";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -39,13 +35,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { StreamScopeFields } from "../StreamScopeFields";
-import {
-  formatGuardrailMode,
-  streamScopeByModeFromConfig,
-  streamScopeForUpdate,
-  streamScopePayload,
-  type GuardrailStreamScope,
-} from "../guardrail_info_helpers";
+import { formatGuardrailMode } from "../guardrail_info_helpers";
 import {
   CODE_TEMPLATES,
   DEFAULT_OPEN_PRIMITIVE_CATEGORY,
@@ -55,20 +45,16 @@ import {
   type ModeOption,
 } from "./custom_code_catalog";
 import { codeSamples } from "@/i18n/untranslated/codeSamples";
+import {
+  buildCustomCodeCreatePayload,
+  buildCustomCodeUpdatePayload,
+  customCodeToFormValues,
+  deriveCustomCodeTestInputType,
+  type EditGuardrailData,
+} from "./mapper";
+import { createCustomCodeSchema, type CustomCodeFormValues } from "./schema";
 
-// Data for editing an existing guardrail
-
-export interface EditGuardrailData {
-  guardrail_id: string;
-  guardrail_name: string;
-  litellm_params: {
-    mode?: string | string[] | Record<string, unknown>;
-    default_on?: boolean;
-    custom_code?: string;
-    logging_only_scope?: LoggingOnlyScope | null;
-    [key: string]: any;
-  };
-}
+export type { EditGuardrailData };
 
 interface CustomCodeModalProps {
   visible: boolean;
@@ -83,15 +69,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   const { t } = useTranslation();
   const anchor = useComboboxAnchor();
   const isEditMode = !!editData;
-  const [guardrailName, setGuardrailName] = useState("");
-  const [mode, setMode] = useState<string[]>(["pre_call"]);
-  const [streamScopeByMode, setStreamScopeByMode] = useState<Record<string, GuardrailStreamScope>>({});
-  const [loggingOnlyScopeChoice, setLoggingOnlyScopeChoice] = useState<LoggingOnlyScopeChoice>("default");
-  const [loggingOnlyContinue, setLoggingOnlyContinue] = useState(false);
-  const [defaultOn, setDefaultOn] = useState(false);
+  const schema = useMemo(() => createCustomCodeSchema(t), [t]);
+  const form = useZodForm(schema, { defaultValues: customCodeToFormValues(null) });
+  const guardrailName = useWatch({ control: form.control, name: "guardrail_name" });
+  const mode = useWatch({ control: form.control, name: "mode" });
+  const loggingOnlyScopeChoice = useWatch({ control: form.control, name: "logging_only_scope_choice" });
+  const code = useWatch({ control: form.control, name: "code" });
   const [selectedTemplate, setSelectedTemplate] = useState<string>("empty");
-  const [code, setCode] = useState(CODE_TEMPLATES.empty.code);
   const [isSaving, setIsSaving] = useState(false);
+  const isSavingRef = useRef(false);
   const [isTesting, setIsTesting] = useState(false);
   const [testExpanded, setTestExpanded] = useState(false);
 
@@ -190,57 +176,21 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   const [copiedPrimitive, setCopiedPrimitive] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Handle template change
   const handleTemplateChange = (templateKey: string) => {
     setSelectedTemplate(templateKey);
-
-    // Check if it's a standard template
-    setCode(CODE_TEMPLATES[templateKey as keyof typeof CODE_TEMPLATES].code);
+    form.setValue("code", CODE_TEMPLATES[templateKey as keyof typeof CODE_TEMPLATES].code);
   };
 
-  // Normalize mode from API (string or string[]) to string[].
-  // A tag-scoped mode dict ({ tags, default }) is managed outside this editor, so it
-  // contributes no editable modes and is displayed read-only instead.
-  const normalizeMode = (m: string | string[] | Record<string, unknown> | undefined): string[] => {
-    if (m === undefined || m === null) return ["pre_call"];
-    if (Array.isArray(m)) return m.length ? m : ["pre_call"];
-    if (typeof m === "string") return [m];
-    return [];
-  };
+  const { reset } = form;
 
-  // Reset form when modal opens or editData changes
   useEffect(() => {
     if (visible) {
-      if (editData) {
-        // Edit mode: populate with existing data
-        setGuardrailName(editData.guardrail_name || "");
-        setMode(normalizeMode(editData.litellm_params?.mode));
-        setStreamScopeByMode(
-          streamScopeByModeFromConfig(
-            editData.litellm_params?.stream_scope,
-            normalizeMode(editData.litellm_params?.mode),
-          ),
-        );
-        setLoggingOnlyScopeChoice(loggingOnlyScopeToChoice(editData.litellm_params?.logging_only_scope));
-        setLoggingOnlyContinue(loggingOnlyContinueFromParams(editData.litellm_params));
-        setDefaultOn(editData.litellm_params?.default_on || false);
-        setCode(editData.litellm_params?.custom_code || CODE_TEMPLATES.empty.code);
-        setSelectedTemplate(""); // No template selected in edit mode
-      } else {
-        // Create mode: reset to defaults
-        setGuardrailName("");
-        setMode(["pre_call"]);
-        setStreamScopeByMode({});
-        setLoggingOnlyScopeChoice("default");
-        setLoggingOnlyContinue(false);
-        setDefaultOn(false);
-        setSelectedTemplate("empty");
-        setCode(CODE_TEMPLATES.empty.code);
-      }
+      reset(customCodeToFormValues(editData));
+      setSelectedTemplate(editData ? "" : "empty");
       setTestResult(null);
       setTestExpanded(false);
     }
-  }, [visible, editData]);
+  }, [visible, editData, reset]);
 
   // Copy primitive to clipboard
   const copyPrimitive = async (primitive: string) => {
@@ -253,32 +203,24 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
     }
   };
 
-  // Handle tab key in textarea
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Tab") {
       e.preventDefault();
       const textarea = e.currentTarget;
       const start = textarea.selectionStart;
       const end = textarea.selectionEnd;
-      const newValue = code.substring(0, start) + "    " + code.substring(end);
-      setCode(newValue);
+      const currentCode = form.getValues("code");
+      const newValue = currentCode.substring(0, start) + "    " + currentCode.substring(end);
+      form.setValue("code", newValue);
       setTimeout(() => {
         textarea.selectionStart = textarea.selectionEnd = start + 4;
       }, 0);
     }
   };
 
-  // Save guardrail (create or update)
-  const handleSave = async () => {
-    if (!guardrailName.trim()) {
-      toast.fromError(t("guardrails.customCode.toast.nameRequired"));
-      return;
-    }
-    if (!code.trim()) {
-      toast.fromError(t("guardrails.customCode.toast.codeRequired"));
-      return;
-    }
+  const submitCustomCode = async (values: CustomCodeFormValues) => {
     if (!accessToken) {
+      isSavingRef.current = false;
       toast.fromError(t("guardrails.customCode.toast.noAccessToken"));
       return;
     }
@@ -286,59 +228,11 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
     setIsSaving(true);
     try {
       if (isEditMode && editData) {
-        // Update existing guardrail
-        const updateData: any = {
-          litellm_params: {
-            custom_code: code,
-            ...getCustomCodeLoggingOnlyScopeUpdate(
-              mode,
-              editData.litellm_params,
-              loggingOnlyScopeChoice,
-              loggingOnlyContinue,
-            ),
-          },
-        };
-
-        // Only include changed fields
-        if (guardrailName !== editData.guardrail_name) {
-          updateData.guardrail_name = guardrailName;
-        }
-        const existingMode = normalizeMode(editData.litellm_params?.mode);
-        const modeChanged = mode.length !== existingMode.length || mode.some((m, i) => m !== existingMode[i]);
-        if (modeChanged) {
-          updateData.litellm_params.mode = mode;
-        }
-        if (defaultOn !== editData.litellm_params?.default_on) {
-          updateData.litellm_params.default_on = defaultOn;
-        }
-        const nextStreamScope = streamScopeForUpdate(
-          mode,
-          streamScopeByMode,
-          editData.litellm_params?.stream_scope,
-          existingMode,
-        );
-        if (nextStreamScope !== undefined) {
-          updateData.litellm_params.stream_scope = nextStreamScope;
-        }
-
+        const updateData = buildCustomCodeUpdatePayload(values, editData);
         await updateGuardrailCall(accessToken, editData.guardrail_id, updateData);
         toast.success(t("guardrails.customCode.toast.updated"));
       } else {
-        // Create new guardrail
-        const streamScope = streamScopePayload(mode, streamScopeByMode);
-        const guardrailData = {
-          guardrail_name: guardrailName,
-          litellm_params: {
-            guardrail: "custom_code",
-            mode: mode,
-            default_on: defaultOn,
-            custom_code: code,
-            ...(streamScope !== undefined ? { stream_scope: streamScope } : {}),
-            ...getCustomCodeLoggingOnlyScopeCreate(mode, loggingOnlyScopeChoice, loggingOnlyContinue),
-          },
-          guardrail_info: {},
-        };
-
+        const guardrailData = buildCustomCodeCreatePayload(values);
         await createGuardrailCall(accessToken, guardrailData);
         toast.success(t("guardrails.customCode.toast.created"));
       }
@@ -352,8 +246,22 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         }),
       );
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
+  };
+
+  const handleSave = () => {
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
+    const submitWithValidation = form.handleSubmit(submitCustomCode, (errors) => {
+      isSavingRef.current = false;
+      const message = errors.guardrail_name?.message || errors.code?.message;
+      if (message) {
+        toast.fromError(message);
+      }
+    });
+    void submitWithValidation();
   };
 
   // Test guardrail using backend endpoint
@@ -382,17 +290,10 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         parsedInput.texts = [];
       }
 
-      // Use first request-like or response-like mode for test input_type
-      const requestModes = ["pre_call", "pre_mcp_call"];
-      const responseModes = ["post_call", "post_mcp_call"];
-      const testInputType: "request" | "response" = mode.some((m) => requestModes.includes(m))
-        ? "request"
-        : mode.some((m) => responseModes.includes(m))
-          ? "response"
-          : "request";
+      const testInputType = deriveCustomCodeTestInputType(form.getValues("mode"));
 
       const response = await testCustomCodeGuardrail(accessToken, {
-        custom_code: code,
+        custom_code: form.getValues("code"),
         test_input: parsedInput,
         input_type: testInputType,
         request_data: {
@@ -457,10 +358,16 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             <label className="mb-1 block text-xs font-medium text-muted-foreground">
               {t("guardrails.customCode.nameLabel")}
             </label>
-            <Input
-              value={guardrailName}
-              onChange={(e) => setGuardrailName(e.target.value)}
-              placeholder={t("guardrails.customCode.namePlaceholder")}
+            <Controller
+              control={form.control}
+              name="guardrail_name"
+              render={({ field }) => (
+                <Input
+                  value={field.value}
+                  onChange={(e) => field.onChange(e.target.value)}
+                  placeholder={t("guardrails.customCode.namePlaceholder")}
+                />
+              )}
             />
           </div>
           <div className="w-[280px]">
@@ -476,46 +383,62 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                 aria-label={t("guardrails.customCode.tagScopedModeAriaLabel")}
               />
             ) : (
-              <Combobox
-                items={modeOptions}
-                value={selectedModeOptions}
-                onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
-                multiple
-              >
-                <ComboboxChips render={<div ref={anchor} />} className="w-full">
-                  {selectedModeOptions.map((option) => (
-                    <ComboboxChip key={option.value} aria-label={option.label}>
-                      {option.label}
-                    </ComboboxChip>
-                  ))}
-                  <ComboboxChipsInput
-                    placeholder={mode.length === 0 ? t("guardrails.customCode.modePlaceholder") : undefined}
-                  />
-                </ComboboxChips>
-                <ComboboxContent anchor={anchor}>
-                  <ComboboxEmpty>{t("guardrails.customCode.noMatchingModes")}</ComboboxEmpty>
-                  <ComboboxList>
-                    {(option: ModeOption) => (
-                      <ComboboxItem key={option.value} value={option}>
-                        {option.label}
-                      </ComboboxItem>
-                    )}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
+              <Controller
+                control={form.control}
+                name="mode"
+                render={({ field }) => (
+                  <Combobox
+                    items={modeOptions}
+                    value={selectedModeOptions}
+                    onValueChange={(options: ModeOption[]) => field.onChange(options.map((option) => option.value))}
+                    multiple
+                  >
+                    <ComboboxChips render={<div ref={anchor} />} className="w-full">
+                      {selectedModeOptions.map((option) => (
+                        <ComboboxChip key={option.value} aria-label={option.label}>
+                          {option.label}
+                        </ComboboxChip>
+                      ))}
+                      <ComboboxChipsInput
+                        placeholder={mode.length === 0 ? t("guardrails.customCode.modePlaceholder") : undefined}
+                      />
+                    </ComboboxChips>
+                    <ComboboxContent anchor={anchor}>
+                      <ComboboxEmpty>{t("guardrails.customCode.noMatchingModes")}</ComboboxEmpty>
+                      <ComboboxList>
+                        {(option: ModeOption) => (
+                          <ComboboxItem key={option.value} value={option}>
+                            {option.label}
+                          </ComboboxItem>
+                        )}
+                      </ComboboxList>
+                    </ComboboxContent>
+                  </Combobox>
+                )}
+              />
             )}
           </div>
           {mode.includes("logging_only") && (
-            <CustomCodeLoggingOnlyScopeSelect value={loggingOnlyScopeChoice} onChange={setLoggingOnlyScopeChoice} />
+            <Controller
+              control={form.control}
+              name="logging_only_scope_choice"
+              render={({ field }) => <CustomCodeLoggingOnlyScopeSelect value={field.value} onChange={field.onChange} />}
+            />
           )}
           {mode.includes("logging_only") && (
             <div className="flex shrink-0 items-center gap-2 pt-5">
               <span className="text-sm text-muted-foreground">{t("guardrails.customCode.continueObserving")}</span>
-              <Switch
-                checked={loggingOnlyScopeChoice === "default" && loggingOnlyContinue}
-                disabled={loggingOnlyScopeChoice !== "default"}
-                onCheckedChange={setLoggingOnlyContinue}
-                aria-label={t("guardrails.customCode.continueObserving")}
+              <Controller
+                control={form.control}
+                name="logging_only_continue"
+                render={({ field }) => (
+                  <Switch
+                    checked={loggingOnlyScopeChoice === "default" && field.value}
+                    disabled={loggingOnlyScopeChoice !== "default"}
+                    onCheckedChange={field.onChange}
+                    aria-label={t("guardrails.customCode.continueObserving")}
+                  />
+                )}
               />
             </div>
           )}
@@ -555,16 +478,26 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
           </div>
           <div className="flex items-center gap-2 pt-5">
             <span className="text-sm text-muted-foreground">{t("guardrails.customCode.defaultOn")}</span>
-            <Switch
-              checked={defaultOn}
-              onCheckedChange={setDefaultOn}
-              aria-label={t("guardrails.customCode.defaultOn")}
+            <Controller
+              control={form.control}
+              name="default_on"
+              render={({ field }) => (
+                <Switch
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                  aria-label={t("guardrails.customCode.defaultOn")}
+                />
+              )}
             />
           </div>
         </div>
         {mode.length > 0 && (
           <div className="border-b border-border py-4">
-            <StreamScopeFields modes={mode} value={streamScopeByMode} onChange={setStreamScopeByMode} />
+            <Controller
+              control={form.control}
+              name="stream_scope_by_mode"
+              render={({ field }) => <StreamScopeFields modes={mode} value={field.value} onChange={field.onChange} />}
+            />
           </div>
         )}
 
@@ -598,19 +531,25 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                 ))}
               </div>
               {/* Code textarea */}
-              <textarea
-                ref={textareaRef}
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                onKeyDown={handleKeyDown}
-                spellCheck={false}
-                className="w-full h-full pl-14 pr-4 pt-3 pb-3 resize-none focus:outline-hidden bg-transparent text-gray-200"
-                style={{
-                  fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace",
-                  fontSize: "14px",
-                  lineHeight: "1.6",
-                  tabSize: 4,
-                }}
+              <Controller
+                control={form.control}
+                name="code"
+                render={({ field }) => (
+                  <textarea
+                    ref={textareaRef}
+                    value={field.value}
+                    onChange={(e) => field.onChange(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    spellCheck={false}
+                    className="w-full h-full pl-14 pr-4 pt-3 pb-3 resize-none focus:outline-hidden bg-transparent text-gray-200"
+                    style={{
+                      fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace",
+                      fontSize: "14px",
+                      lineHeight: "1.6",
+                      tabSize: 4,
+                    }}
+                  />
+                )}
               />
             </div>
 
