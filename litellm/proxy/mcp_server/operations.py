@@ -1326,7 +1326,7 @@ async def find_mcp_proxy_tool(
     from litellm.proxy.mcp_server.catalog import get_filtered_server_tools
     from litellm.proxy.mcp_server.tool_search import mcp_proxy_tool_id
 
-    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+    allowed_mcp_servers: Final = await _get_usable_mcp_servers(
         user_api_key_auth=user_api_key_auth,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
