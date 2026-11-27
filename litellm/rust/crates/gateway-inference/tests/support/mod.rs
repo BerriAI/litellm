@@ -126,7 +126,17 @@ pub fn app_with_callbacks(
     api_base: &str,
     callbacks: Vec<Arc<dyn ErasedCallback>>,
 ) -> Router {
-    mounted(Arc::new(hosted_gateway(
+    app_and_gateway_with_callbacks(model, api_base, callbacks).0
+}
+
+/// The app with `callbacks` run around each call, and the gateway it serves from, for a test that
+/// installs a cost map.
+pub fn app_and_gateway_with_callbacks(
+    model: &str,
+    api_base: &str,
+    callbacks: Vec<Arc<dyn ErasedCallback>>,
+) -> (Router, Arc<Gateway>) {
+    let gateway = Arc::new(hosted_gateway(
         public_model(test_params(model, api_base)),
         MessagesSettings::default(),
         None,
@@ -135,7 +145,8 @@ pub fn app_with_callbacks(
             Arc::default(),
         ),
         &RouterSettings::default(),
-    )))
+    ));
+    (mounted(gateway.clone()), gateway)
 }
 
 fn test_params(model: &str, api_base: &str) -> Map<String, Value> {
