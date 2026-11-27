@@ -420,6 +420,7 @@ class LiteLLMRoutes(enum.Enum):
         "/bedrock",
         "/comprehendmedical",
         "/azure_speech",
+        "/gnani/stt/v3/batch",
         "/transcribe",
         "/vertex-ai",
         "/vertex_ai",

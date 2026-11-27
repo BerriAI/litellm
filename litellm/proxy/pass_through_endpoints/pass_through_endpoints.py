@@ -606,7 +606,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         requested_query_params: dict | None = None,
         _parsed_body: Mapping[str, object] | None = None,
         forward_multipart: bool = False,
-        raw_body: str | bytes | None = None,
+        raw_body: str | bytes | AsyncIterator[bytes] | None = None,
         raw_response: bool = False,
     ) -> httpx.Response:
         """
@@ -1644,6 +1644,8 @@ async def pass_through_request(
     response_owner: AsyncExitStack | None = None,
     *,
     preserve_trace_context: bool = False,
+    raw_request_body: AsyncIterator[bytes] | None = None,
+    allow_redirects: bool = True,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1672,6 +1674,8 @@ async def pass_through_request(
         raw_response: Relay opaque response bytes without parsing, buffering or following redirects
         response_owner: Request-scoped owner that closes the upstream even if streaming never starts
         preserve_trace_context: Relay the caller trace context without injecting the proxy span
+        raw_request_body: Stream the supplied request bytes upstream without re-encoding them
+        allow_redirects: Allow the HTTP client to follow upstream redirects
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1718,7 +1722,7 @@ async def pass_through_request(
             str(url), custom_llm_provider
         )
 
-        state_raw_body: Final = _raw_pass_through_body(request)
+        state_raw_body: Final = raw_request_body if raw_request_body is not None else _raw_pass_through_body(request)
 
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
@@ -1726,7 +1730,7 @@ async def pass_through_request(
 
         if custom_body:
             _parsed_body = dict(custom_body)
-        elif is_multipart:
+        elif is_multipart or raw_request_body is not None:
             # Don't parse multipart body here - it will be handled by make_multipart_http_request
             _parsed_body = {}
         else:
@@ -1839,7 +1843,7 @@ async def pass_through_request(
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
         async_client_obj: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,
-            params={"timeout": resolved_timeout},
+            params={"timeout": resolved_timeout, **({} if allow_redirects else {"follow_redirects": False})},
         )
         async_client: Final = async_client_obj.client
         passthrough_logging_payload: Final = PassthroughStandardLoggingPayload(

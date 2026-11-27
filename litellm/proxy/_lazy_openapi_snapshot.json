@@ -16688,6 +16688,225 @@
       }
     }
   },
+  "gnani_batch": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/gnani/stt/v3/batch/{endpoint}": {
+        "get": {
+          "description": "Create, start, inspect, list and cancel Gnani audio jobs on the proxy's provider account.\n\nUpload audio or submit cloud URLs to `jobs`. Use `v2/jobs` for presigned uploads.\nSet `config.with_diarization` for speaker labels and `callback_url` for job notifications.\nFetch transcript links from `jobs/{job_id}/files`. Shared jobs require a proxy admin key.",
+          "operationId": "gnani_batch_gnani_stt_v3_batch__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "title": "Response Gnani Batch Gnani Stt V3 Batch  Endpoint  Get",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Gnani Batch",
+          "tags": [
+            "gnani_batch"
+          ]
+        },
+        "post": {
+          "description": "Create, start, inspect, list and cancel Gnani audio jobs on the proxy's provider account.\n\nUpload audio or submit cloud URLs to `jobs`. Use `v2/jobs` for presigned uploads.\nSet `config.with_diarization` for speaker labels and `callback_url` for job notifications.\nFetch transcript links from `jobs/{job_id}/files`. Shared jobs require a proxy admin key.",
+          "operationId": "gnani_batch_gnani_stt_v3_batch__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              },
+              "multipart/form-data": {
+                "schema": {
+                  "properties": {
+                    "callback_url": {
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    "config": {
+                      "description": "Gnani transcription configuration as JSON",
+                      "type": "string"
+                    },
+                    "files": {
+                      "items": {
+                        "format": "binary",
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "config",
+                    "files"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "title": "Response Gnani Batch Gnani Stt V3 Batch  Endpoint  Post",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "201": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "title": "Response 201 Gnani Batch Gnani Stt V3 Batch  Endpoint  Post",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Job created"
+            },
+            "202": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "title": "Response 202 Gnani Batch Gnani Stt V3 Batch  Endpoint  Post",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Job accepted for processing"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Gnani Batch",
+          "tags": [
+            "gnani_batch"
+          ]
+        }
+      }
+    }
+  },
   "guardrails": {
     "components": {
       "schemas": {

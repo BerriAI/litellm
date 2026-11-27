@@ -7090,6 +7090,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/gnani/stt/v3/batch/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Gnani Batch
+         * @description Create, start, inspect, list and cancel Gnani audio jobs on the proxy's provider account.
+         *
+         *     Upload audio or submit cloud URLs to `jobs`. Use `v2/jobs` for presigned uploads.
+         *     Set `config.with_diarization` for speaker labels and `callback_url` for job notifications.
+         *     Fetch transcript links from `jobs/{job_id}/files`. Shared jobs require a proxy admin key.
+         */
+        get: operations["gnani_batch_gnani_stt_v3_batch__endpoint__get"];
+        put?: never;
+        /**
+         * Gnani Batch
+         * @description Create, start, inspect, list and cancel Gnani audio jobs on the proxy's provider account.
+         *
+         *     Upload audio or submit cloud URLs to `jobs`. Use `v2/jobs` for presigned uploads.
+         *     Set `config.with_diarization` for speaker labels and `callback_url` for job notifications.
+         *     Fetch transcript links from `jobs/{job_id}/files`. Shared jobs require a proxy admin key.
+         */
+        post: operations["gnani_batch_gnani_stt_v3_batch__endpoint__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/guardrails": {
         parameters: {
             query?: never;
@@ -68313,6 +68345,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    gnani_batch_gnani_stt_v3_batch__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    gnani_batch_gnani_stt_v3_batch__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+                "multipart/form-data": {
+                    /** Format: uri */
+                    callback_url?: string;
+                    /** @description Gnani transcription configuration as JSON */
+                    config: string;
+                    files: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Job created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Job accepted for processing */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
