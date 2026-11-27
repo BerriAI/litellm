@@ -1,10 +1,14 @@
 import React, { useState } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import ToolModal from "../tool_modal";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import { createPromptCall, updatePromptCall, getPromptInfo } from "@/components/networking";
 import { PromptType, PromptEditorViewProps, Tool } from "./types";
-import { convertToDotPrompt, parseExistingPrompt } from "./utils";
+import { parseExistingPrompt } from "./utils";
+import { toPromptEditorPayload } from "./mapper";
+import { promptEditorSchema } from "./schema";
 import PromptEditorHeader from "./PromptEditorHeader";
 import ModelConfigCard from "./ModelConfigCard";
 import ToolsCard from "./ToolsCard";
@@ -47,7 +51,11 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
     };
   };
 
-  const [prompt, setPrompt] = useState<PromptType>(getInitialPrompt());
+  const { control } = useZodForm(promptEditorSchema, { defaultValues: { prompt: getInitialPrompt() } });
+  const {
+    field: { value: prompt, onChange },
+  } = useController({ control, name: "prompt" });
+  const setPrompt = (next: PromptType) => onChange(next);
   const [editMode] = useState<boolean>(!!initialPromptData);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
@@ -93,11 +101,9 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   };
 
   const updateMessage = (index: number, field: "role" | "content", value: string) => {
-    const newMessages = [...prompt.messages];
-    newMessages[index][field] = value;
     setPrompt({
       ...prompt,
-      messages: newMessages,
+      messages: prompt.messages.map((message, i) => (i === index ? { ...message, [field]: value } : message)),
     });
   };
 
@@ -193,28 +199,15 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
       return;
     }
 
-    if (!prompt.name || prompt.name.trim() === "") {
+    const result = promptEditorSchema.safeParse({ prompt });
+    if (!result.success) {
       toast.fromError(t("prompts.editor.toasts.nameRequired"));
       return;
     }
 
     setIsSaving(true);
     try {
-      const promptId = prompt.name.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
-      const dotpromptContent = convertToDotPrompt(prompt);
-
-      const promptData = {
-        prompt_id: promptId,
-        litellm_params: {
-          prompt_integration: "dotprompt",
-          prompt_id: promptId,
-          dotprompt_content: dotpromptContent,
-        },
-        prompt_info: {
-          prompt_type: "db",
-          environment: prompt.environment,
-        },
-      };
+      const promptData = toPromptEditorPayload(result.data);
 
       if (editMode && initialPromptData?.prompt_spec?.prompt_id) {
         await updatePromptCall(accessToken, initialPromptData.prompt_spec.prompt_id, promptData);
