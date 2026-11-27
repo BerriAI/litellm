@@ -181,8 +181,8 @@ MYTHOS_5_2_VERTEX_ROWS: Final = (
 )
 
 
-def _without_source(row: dict[str, object]) -> dict[str, object]:
-    return {k: v for k, v in row.items() if k != "source"}
+def _without_source_and_retirement_date(row: dict[str, object]) -> dict[str, object]:
+    return {k: v for k, v in row.items() if k not in ("source", "deprecation_date")}
 
 
 def test_mythos_5_2_vertex_rows_present_in_bundled_backup() -> None:
@@ -197,9 +197,9 @@ def test_mythos_5_2_vertex_rows_present_in_bundled_backup() -> None:
 def test_mythos_5_2_vertex_rows_match_fable_5_2(mythos_row: str, fable_row: str) -> None:
     """Anthropic ships Mythos 5.2 as a verified-access twin of Fable 5.2 with "the same
     specifications and pricing" (platform.claude.com/docs/en/models/mythos-5-2/overview,
-    read 2026-11-10), so the Vertex rows must stay identical apart from their source."""
+    read 2026-11-10). The Vertex entries can have different sources and retirement dates."""
     root: Final = _load_root_cost_map()
-    assert _without_source(root[mythos_row]) == _without_source(root[fable_row])
+    assert _without_source_and_retirement_date(root[mythos_row]) == _without_source_and_retirement_date(root[fable_row])
     assert root[mythos_row]["source"] == "https://platform.claude.com/docs/en/models/mythos-5-2/overview"
 
 
