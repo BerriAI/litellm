@@ -8015,6 +8015,8 @@ class ProxyConfig:
         self,
         new_models: Json | None,
         proxy_logging_obj: ProxyLogging,
+        *,
+        raise_on_error: bool = False,
     ) -> frozenset[str] | None:
         global llm_router, llm_model_list, master_key, general_settings
 
@@ -8041,6 +8043,8 @@ class ProxyConfig:
                     "_update_llm_router: DB model fetch returned None (transient failure). "
                     "Skipping router update to preserve existing deployments."
                 )
+                if raise_on_error:
+                    raise RuntimeError("config reload could not fetch models from the database")
                 return
 
             models_list: Final[list] = new_models if isinstance(new_models, list) else []
@@ -8087,6 +8091,8 @@ class ProxyConfig:
 
         except Exception as e:
             verbose_proxy_logger.exception("Error adding/deleting model to llm_router: %s", e)
+            if raise_on_error:
+                raise
 
         if llm_router is not None:
             llm_model_list = llm_router.registry().deployments()
@@ -8825,6 +8831,7 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
         *,
         ui_settings_already_synced: bool = False,
+        raise_on_error: bool = False,
     ) -> ReconcileOutcome:
         """
         - Check db for new models
@@ -8847,16 +8854,37 @@ class ProxyConfig:
         Also re-reads the UI settings that back runtime flags. That runs before the lock, so a
         setting written through one pod reaches the others without waiting on a model reconcile.
         """
-        if not ui_settings_already_synced:
-            await sync_ui_settings_to_general_settings(prisma_client)
+        ui_sync_failure: Final = (
+            None
+            if ui_settings_already_synced
+            else await self._sync_ui_settings_for_reload(prisma_client, raise_on_error=raise_on_error)
+        )
 
         async with DB_RECONCILE_LOCK:
-            return await self.add_deployment_locked(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+            outcome: Final = await self.add_deployment_locked(
+                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj, raise_on_error=raise_on_error
+            )
+        if ui_sync_failure is not None:
+            raise ui_sync_failure
+        return outcome
+
+    @staticmethod
+    async def _sync_ui_settings_for_reload(prisma_client: PrismaClient, *, raise_on_error: bool) -> Exception | None:
+        if not raise_on_error:
+            await sync_ui_settings_to_general_settings(prisma_client)
+            return None
+        try:
+            await sync_ui_settings_to_general_settings(prisma_client, require_fresh=True)
+        except Exception as e:  # noqa: BLE001  # re-raised by add_deployment after the model reload has run
+            return e
+        return None
 
     async def add_deployment_locked(
         self,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
+        *,
+        raise_on_error: bool = False,
     ) -> ReconcileOutcome:
         """add_deployment's body, minus the locking. DB_RECONCILE_LOCK MUST already
         be held. Split out for clear_cache, which already holds the lock and would
@@ -8883,7 +8911,7 @@ class ProxyConfig:
             await self.get_credentials(prisma_client=prisma_client)
             if load_models:
                 still_desired_ids = await self._update_llm_router(
-                    new_models=new_models, proxy_logging_obj=proxy_logging_obj
+                    new_models=new_models, proxy_logging_obj=proxy_logging_obj, raise_on_error=raise_on_error
                 )
 
             db_general_settings: Final[_ConfigParamRow | None] = await get_config_param(
@@ -8904,6 +8932,8 @@ class ProxyConfig:
 
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)
+            if raise_on_error:
+                raise
 
         # Read while the lock is still held: once it is released the next reconcile can
         # begin, and clear_cache's leading wipe would make this look like a mass drop.
@@ -8924,7 +8954,9 @@ class ProxyConfig:
             return
 
         async def _resync_config_from_db() -> None:
-            await self.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+            await self.add_deployment(
+                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj, raise_on_error=True
+            )
 
         subscriber: Final = ConfigSyncSubscriber(
             redis_cache=redis_cache,
