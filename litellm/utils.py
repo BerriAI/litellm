@@ -12268,16 +12268,25 @@ class ProviderConfigManager:
         """
         Get sandbox (code execution) configuration for a given provider.
         """
+        from litellm.llms.blaxel.sandbox.transformation import BlaxelSandboxConfig
+        from litellm.llms.boat.sandbox.transformation import BoatSandboxConfig
         from litellm.llms.e2b.sandbox.transformation import E2BSandboxConfig
+        from litellm.llms.modal.sandbox.transformation import ModalSandboxConfig
         from litellm.llms.opensandbox.sandbox.transformation import (
             OpenSandboxSandboxConfig,
         )
+        from litellm.llms.tensorlake.sandbox.transformation import TensorlakeSandboxConfig
 
-        if provider == SandboxProviders.E2B:
-            return E2BSandboxConfig()
-        if provider == SandboxProviders.OPENSANDBOX:
-            return OpenSandboxSandboxConfig()
-        return None
+        configs: Final[Mapping[SandboxProviders, type[BaseSandboxConfig]]] = {
+            SandboxProviders.E2B: E2BSandboxConfig,
+            SandboxProviders.OPENSANDBOX: OpenSandboxSandboxConfig,
+            SandboxProviders.MODAL: ModalSandboxConfig,
+            SandboxProviders.TENSORLAKE: TensorlakeSandboxConfig,
+            SandboxProviders.BLAXEL: BlaxelSandboxConfig,
+            SandboxProviders.BOAT: BoatSandboxConfig,
+        }
+        config_class: Final = configs.get(provider)
+        return config_class() if config_class is not None else None
 
     @staticmethod
     def get_provider_harness_config(harness: Harness) -> BaseHarnessConfig | None:

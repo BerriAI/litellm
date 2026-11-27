@@ -11,6 +11,7 @@ Each entrypoint is `@client`-decorated, so every operation is logged the same
 way `litellm.asearch` is.
 """
 
+import time
 from collections.abc import Mapping
 from typing import Final
 
@@ -19,6 +20,8 @@ from litellm.llms.base_llm.sandbox.transformation import (
     BaseSandboxConfig,
     CodeExecutionResult,
     ContainerHandle,
+    SandboxCost,
+    estimate_sandbox_cost,
 )
 from litellm.types.utils import SandboxProviders
 from litellm.utils import ProviderConfigManager, client
@@ -28,6 +31,7 @@ __all__ = [
     "acreate_sandbox",
     "adelete_sandbox",
     "arun_code",
+    "asandbox_cost",
 ]
 
 _LITELLM_INTERNAL_KWARGS: Final = {
@@ -100,6 +104,46 @@ async def arun_code(
     )
 
 
+async def asandbox_cost(
+    provider: str,
+    container: ContainerHandle | str,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    **kwargs: object,
+) -> SandboxCost:
+    """
+    What the sandbox has cost so far. The provider's own dollars when it reports them,
+    otherwise an estimate from `sandbox_prices.json`. After delete it returns the final cost.
+    """
+    if isinstance(container, ContainerHandle) and container.final_cost is not None:
+        return container.final_cost
+    return await _get_config(provider).aget_sandbox_cost(
+        container=container, api_key=api_key, api_base=api_base, **_forward_kwargs(kwargs)
+    )
+
+
+async def _delete_with_final_cost(
+    config: BaseSandboxConfig,
+    container: ContainerHandle | str,
+    api_key: str | None,
+    api_base: str | None,
+    forwarded: Mapping[str, object],
+) -> bool:
+    if not isinstance(container, ContainerHandle):
+        return await config.adelete_sandbox(container=container, api_key=api_key, api_base=api_base, **forwarded)
+    try:
+        reported: Final = await config.aget_sandbox_cost(
+            container=container, api_key=api_key, api_base=api_base, **forwarded
+        )
+    except Exception as e:
+        verbose_logger.debug("sandbox: failed to read cost before delete: %s", e)
+        reported = SandboxCost()
+    deleted: Final = await config.adelete_sandbox(container=container, api_key=api_key, api_base=api_base, **forwarded)
+    container.ended_at = time.time()
+    container.final_cost = reported if reported.source == "provider" else estimate_sandbox_cost(container)
+    return deleted
+
+
 @client
 async def adelete_sandbox(
     provider: str,
@@ -109,12 +153,7 @@ async def adelete_sandbox(
     **kwargs: object,
 ) -> bool:
     _update_logging(kwargs, provider, "delete_sandbox")
-    return await _get_config(provider).adelete_sandbox(
-        container=container,
-        api_key=api_key,
-        api_base=api_base,
-        **_forward_kwargs(kwargs),
-    )
+    return await _delete_with_final_cost(_get_config(provider), container, api_key, api_base, _forward_kwargs(kwargs))
 
 
 @client
@@ -139,9 +178,24 @@ async def acode_interpreter_tool(
         **forwarded,
     )
     try:
-        return await config.arun_code(container=container, code=code, api_key=api_key, **forwarded)
-    finally:
-        try:
-            await config.adelete_sandbox(container=container, api_key=api_key, api_base=api_base, **forwarded)
-        except Exception as e:
-            verbose_logger.debug("sandbox: failed to delete ephemeral container: %s", e)
+        result: Final = await config.arun_code(container=container, code=code, api_key=api_key, **forwarded)
+    except BaseException:
+        await _delete_ephemeral(config, container, api_key, api_base, forwarded)
+        raise
+    await _delete_ephemeral(config, container, api_key, api_base, forwarded)
+    if container.final_cost is not None and container.final_cost.cost_usd is not None:
+        result.hidden_params["response_cost"] = container.final_cost.cost_usd
+    return result
+
+
+async def _delete_ephemeral(
+    config: BaseSandboxConfig,
+    container: ContainerHandle,
+    api_key: str | None,
+    api_base: str | None,
+    forwarded: Mapping[str, object],
+) -> None:
+    try:
+        await _delete_with_final_cost(config, container, api_key, api_base, forwarded)
+    except Exception as e:
+        verbose_logger.debug("sandbox: failed to delete ephemeral container: %s", e)

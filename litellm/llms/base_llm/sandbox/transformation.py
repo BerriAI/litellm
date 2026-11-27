@@ -7,15 +7,43 @@ run code -> delete container; `code_interpreter_tool` combines all three.
 """
 
 import builtins
-from typing import Final
+import shlex
+import time
+from functools import cache
+from importlib.resources import files
+from typing import Final, Literal
 
 import httpx
-from pydantic import Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter
 
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 SANDBOX_MAX_OUTPUT_BYTES: Final = 10 * 1024 * 1024
+
+
+class SandboxCost(LiteLLMPydanticObjectBase):
+    """What a sandbox has cost so far. `cost_usd` is None when it cannot be known, never a guessed 0."""
+
+    cost_usd: float | None = None
+    source: Literal["provider", "estimate", "unknown"] = "unknown"
+    seconds: float | None = None
+
+
+class SandboxPrice(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    cost_per_vcpu_second: float = 0.0
+    cost_per_gib_second: float = 0.0
+    cost_per_disk_gib_second: float = 0.0
+
+
+_SANDBOX_PRICES: Final = TypeAdapter(dict[str, SandboxPrice])
+
+
+@cache
+def get_sandbox_prices() -> dict[str, SandboxPrice]:
+    return _SANDBOX_PRICES.validate_json(files("litellm").joinpath("sandbox_prices.json").read_bytes())
 
 
 class ContainerHandle(LiteLLMPydanticObjectBase):
@@ -24,6 +52,12 @@ class ContainerHandle(LiteLLMPydanticObjectBase):
     id: str
     provider: str
     domain: str | None = None
+    created_at: float | None = None
+    ended_at: float | None = None
+    vcpus: float | None = None
+    memory_gib: float | None = None
+    disk_gib: float | None = None
+    final_cost: SandboxCost | None = None
 
     model_config = {"extra": "allow"}
 
@@ -36,6 +70,31 @@ class ContainerHandle(LiteLLMPydanticObjectBase):
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
+
+
+def estimate_sandbox_cost(container: ContainerHandle | str, now: float | None = None) -> SandboxCost:
+    """Price the sandbox's allocated resources over its lifetime from `sandbox_prices.json`."""
+    if not isinstance(container, ContainerHandle) or container.created_at is None:
+        return SandboxCost()
+    end: Final = container.ended_at if container.ended_at is not None else (time.time() if now is None else now)
+    seconds: Final = max(end - container.created_at, 0.0)
+    price: Final = get_sandbox_prices().get(container.provider)
+    if price is None or container.memory_gib is None or (price.cost_per_vcpu_second and container.vcpus is None):
+        return SandboxCost(seconds=seconds)
+    per_second: Final = (
+        price.cost_per_vcpu_second * (container.vcpus or 0.0)
+        + price.cost_per_gib_second * container.memory_gib
+        + price.cost_per_disk_gib_second * (container.disk_gib or 0.0)
+    )
+    return SandboxCost(cost_usd=per_second * seconds, source="estimate", seconds=seconds)
+
+
+def shell_command(code: str, language: str) -> str:
+    if language == "bash":
+        return code
+    if language == "python":
+        return f"python3 -c {shlex.quote(code)}"
+    raise ValueError(f"Unsupported sandbox language: {language}. Use 'python' or 'bash'.")
 
 
 class CodeExecutionResult(LiteLLMPydanticObjectBase):
@@ -96,6 +155,26 @@ class BaseSandboxConfig:
         **kwargs,
     ) -> bool:
         raise NotImplementedError("adelete_sandbox must be implemented by provider")
+
+    async def aget_sandbox_cost(
+        self,
+        *,
+        container: ContainerHandle | str,
+        api_key: str | None = None,
+        **kwargs,
+    ) -> SandboxCost:
+        return estimate_sandbox_cost(container)
+
+    @staticmethod
+    def _shell_result(stdout: str, stderr: str, exit_code: int | None) -> CodeExecutionResult:
+        return CodeExecutionResult.model_validate(
+            {
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": exit_code,
+                "error": None if exit_code == 0 else {"name": "ExitCode", "value": str(exit_code), "traceback": stderr},
+            }
+        )
 
     async def _read_capped_lines(self, response: httpx.Response) -> list[str]:
         lines: Final[list[str]] = []

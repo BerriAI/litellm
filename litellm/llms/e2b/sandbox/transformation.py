@@ -8,6 +8,7 @@ Talks to e2b's REST API directly over httpx (no e2b SDK dependency):
 """
 
 import json
+import time
 from collections.abc import Mapping
 from typing import Final, cast
 
@@ -69,6 +70,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
     ) -> ContainerHandle:
         key: Final = self.validate_environment(api_key=api_key)
         base: Final = api_base or E2B_API_BASE
+        created_at: Final = time.time()
         body: Final = {
             "templateID": template or E2B_DEFAULT_TEMPLATE,
             "timeout": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
@@ -90,6 +92,9 @@ class E2BSandboxConfig(BaseSandboxConfig):
                 "id": data["sandboxID"],
                 "provider": "e2b",
                 "domain": data.get("domain") or E2B_DEFAULT_DOMAIN,
+                "created_at": created_at,
+                "vcpus": data.get("cpuCount"),
+                "memory_gib": memory_mb / 1024 if isinstance(memory_mb := data.get("memoryMB"), int | float) else None,
             }
         )
         handle.hidden_params = {

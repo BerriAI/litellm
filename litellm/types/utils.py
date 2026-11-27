@@ -5031,6 +5031,10 @@ class SandboxProviders(str, Enum):
 
     E2B = "e2b"
     OPENSANDBOX = "opensandbox"
+    MODAL = "modal"
+    TENSORLAKE = "tensorlake"
+    BLAXEL = "blaxel"
+    BOAT = "boat"
 
 
 class LiteLLMLoggingBaseClass:

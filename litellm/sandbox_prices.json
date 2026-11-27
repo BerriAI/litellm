@@ -1,0 +1,22 @@
+{
+    "e2b": {
+        "cost_per_vcpu_second": 0.000014,
+        "cost_per_gib_second": 0.0000045,
+        "source": "https://e2b.dev/pricing"
+    },
+    "modal": {
+        "cost_per_vcpu_second": 0.00003942,
+        "cost_per_gib_second": 0.00000667,
+        "source": "https://modal.com/pricing"
+    },
+    "tensorlake": {
+        "cost_per_vcpu_second": 0.00001944,
+        "cost_per_gib_second": 0.00000417,
+        "cost_per_disk_gib_second": 0.0000000556,
+        "source": "https://docs.tensorlake.ai/platform/billing"
+    },
+    "blaxel": {
+        "cost_per_gib_second": 0.0000115,
+        "source": "https://blaxel.ai/pricing"
+    }
+}
