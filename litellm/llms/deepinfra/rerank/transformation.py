@@ -110,18 +110,12 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         if api_key is None:
             raise ValueError("Deepinfra API key is required. Please set 'DEEPINFRA_API_KEY' environment variable")
 
-        default_headers: Final[dict[str, object]] = {  # mutable-ok: Authorization is reassigned below
+        return {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
+            **headers,
         }
-
-        # If 'Authorization' is provided in headers, it overrides the default.
-        if "Authorization" in headers:
-            default_headers["Authorization"] = headers["Authorization"]
-
-        # Merge other headers, overriding any default ones except Authorization
-        return {**default_headers, **headers}
 
     def map_cohere_rerank_params(
         self,
