@@ -1,3 +1,4 @@
+import { displayDate } from "@/i18n/displayDate";
 import { availableRoleDisplayLabel } from "@/utils/roles";
 import React, { useState, useEffect } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -54,13 +55,8 @@ interface UISettings {
   SSO_ENABLED: boolean;
 }
 
-const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
-  accessToken,
-  teams,
-  possibleUIRoles,
-  onUsersCreated,
-}) => {
-  const { t } = useTranslation();
+const BulkCreateUsersButton = ({ accessToken, teams, possibleUIRoles, onUsersCreated }: BulkCreateUsersProps) => {
+  const { t, i18n: locale } = useTranslation();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [parsedData, setParsedData] = useState<UserData[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -659,7 +655,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                             <span className={`block text-xs ${fileError ? "text-destructive" : "text-info"}`}>
                               {t("users.bulkCreate.upload.fileMeta", {
                                 size: (selectedFile.size / 1024).toFixed(1),
-                                date: new Date().toLocaleDateString(),
+                                date: displayDate(new Date(), locale.language),
                               })}
                             </span>
                           </div>

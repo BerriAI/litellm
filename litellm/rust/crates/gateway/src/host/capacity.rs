@@ -1,5 +1,5 @@
 //! The gateway's answers to the model capacity engine's host calls, the counterpart of the
-//! proxy's `CapacityHost`: the registry of callers active on a model, and the proxy's log lines.
+//! proxy's `CapacityHost`: the registry of callers active on a model.
 //!
 //! The rest is answered with nothing, since no caller the gateway serves reaches it: a per-model
 //! limit that borrows idle capacity belongs to a config `admit` leaves to Python, and the share
@@ -19,9 +19,6 @@ use litellm_python_compat::json::loaded_str;
 use litellm_redis_store::active_teams::{ActiveMember, ActiveTeams};
 use parking_lot::Mutex;
 use serde_json::Value;
-
-/// `UNLICENSED_PRIORITY_MESSAGE`.
-const UNLICENSED_PRIORITY: &str = "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/enterprise.";
 
 /// One touch the engine asked for and has yet to wait on.
 struct Touch {
@@ -129,20 +126,6 @@ impl CapacityHost for NativeCapacityHost {
 
     fn set_share<'a>(&'a self, _: &'a ShareGauge) -> SeamFuture<'a, ()> {
         Box::pin(async { Ok(()) })
-    }
-
-    fn unlicensed_priority(&self) -> Result<(), CapacityError> {
-        tracing::error!("{UNLICENSED_PRIORITY}");
-        Ok(())
-    }
-
-    fn log(&self, level: &'static str, message: &str) -> Result<(), CapacityError> {
-        match level {
-            "error" => tracing::error!("{message}"),
-            "warning" => tracing::warn!("{message}"),
-            _ => tracing::info!("{message}"),
-        }
-        Ok(())
     }
 
     fn model_group<'a>(&'a self, model: &'a str) -> SeamFuture<'a, String> {

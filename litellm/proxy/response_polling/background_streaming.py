@@ -309,6 +309,7 @@ async def _stream_into_polling_state(
                 user_api_base=user_api_base,
                 version=version,
                 skip_pre_call_logic=True,
+                read_stream_on_after_disconnect=False,
                 sse_framing=RESPONSES_SSE_FRAMING,
             )
         except asyncio.CancelledError:

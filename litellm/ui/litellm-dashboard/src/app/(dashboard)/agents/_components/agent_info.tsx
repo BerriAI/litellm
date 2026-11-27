@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { AgentIdentityFields } from "./AgentIdentityFields";
 import { AgentIdentityDetails } from "./AgentIdentityDetails";
 import React, { useState, useEffect, useMemo } from "react";
@@ -80,7 +81,7 @@ const DetailItem: React.FC<{ label: React.ReactNode; children: React.ReactNode }
 );
 
 const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessToken, isAdmin }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const resetDetailState = useResetDetailState();
   const [agent, setAgent] = useState<Agent | null>(null);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
@@ -276,7 +277,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   const formatDate = (dateString?: string | null) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
-    return date.toLocaleString();
+    return displayTimestamp(date, locale.language);
   };
 
   const rateLimitField = (name: keyof AgentFormValues & string, label: string) => (

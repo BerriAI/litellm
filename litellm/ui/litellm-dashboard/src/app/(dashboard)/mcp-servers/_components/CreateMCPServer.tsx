@@ -22,7 +22,7 @@ import {
   MCPServerCostInfo,
   TRANSPORT,
   TRANSPORT_ITEMS,
-  AUTH_TYPE_ITEMS,
+  mcpAuthTypeItems,
   getMcpOAuthMode,
   MCP_OAUTH2_FLOW_M2M,
   isClientForwardedTokenMode,
@@ -116,6 +116,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   stdioEnabled = true,
 }) => {
   const { t } = useTranslation();
+  const authTypeItems = mcpAuthTypeItems(t);
   const { schema, registerValidation } = useMcpFormSchema();
   const form = useZodForm(schema, { mode: "onChange", defaultValues: CREATE_DEFAULTS });
   const registry = useMountRegistry();
@@ -882,17 +883,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                           }}
                         >
                           {(control) => (
-                            <Select
-                              {...selectControl<string>(control)}
-                              items={AUTH_TYPE_ITEMS.map((item) => ({ ...item, label: t(item.label) }))}
-                            >
+                            <Select {...selectControl<string>(control)} items={authTypeItems}>
                               <SelectTrigger {...selectTriggerControl(control)} className="w-full rounded-lg">
                                 <SelectValue placeholder={t("mcpServers.createMcpServer.auth.typePlaceholder")} />
                               </SelectTrigger>
                               <SelectContent>
-                                {AUTH_TYPE_ITEMS.map((item) => (
+                                {authTypeItems.map((item) => (
                                   <SelectItem key={item.value} value={item.value}>
-                                    {t(item.label)}
+                                    {item.label}
                                   </SelectItem>
                                 ))}
                               </SelectContent>
