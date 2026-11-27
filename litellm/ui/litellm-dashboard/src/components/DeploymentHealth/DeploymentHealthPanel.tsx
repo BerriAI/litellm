@@ -49,13 +49,12 @@ const SEVERITY_GROUPS = [
   { severity: "warning", label: "shell.deploymentHealthPanel.severity.warning" },
 ] as const;
 
-const LOCAL_DAY_FORMAT = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
-const LOCAL_MINUTE_FORMAT = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
-const FULL_UTC_FORMAT = new Intl.DateTimeFormat("en-US", { dateStyle: "full", timeStyle: "long", timeZone: "UTC" });
-
-const formatLocalMinute = (iso: string): string => LOCAL_MINUTE_FORMAT.format(new Date(iso));
-const formatLocalDay = (iso: string): string => LOCAL_DAY_FORMAT.format(new Date(iso));
-const formatFullUtc = (iso: string): string => FULL_UTC_FORMAT.format(new Date(iso));
+const formatLocalMinute = (iso: string, language: string): string =>
+  new Intl.DateTimeFormat(language, { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+const formatLocalDay = (iso: string, language: string): string =>
+  new Date(iso).toLocaleDateString(language, { dateStyle: "medium" });
+const formatFullUtc = (iso: string, language: string): string =>
+  new Intl.DateTimeFormat(language, { dateStyle: "full", timeStyle: "long", timeZone: "UTC" }).format(new Date(iso));
 
 interface ItemPermissions {
   canManage: boolean;
@@ -131,7 +130,7 @@ const ItemAction = ({
 };
 
 const IgnoreMeta = ({ ignore }: { ignore: IgnoreState }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   if (ignore.source === "env_var") {
     return (
       <span>
@@ -145,9 +144,11 @@ const IgnoreMeta = ({ ignore }: { ignore: IgnoreState }) => {
   if (ignore.ignored_until) {
     return (
       <span>
-        <SimpleTooltip content={formatFullUtc(ignore.ignored_until)}>
+        <SimpleTooltip content={formatFullUtc(ignore.ignored_until, i18n.language)}>
           <span className="underline decoration-dotted underline-offset-3">
-            {t("shell.deploymentHealthPanel.ignoreMeta.until", { time: formatLocalMinute(ignore.ignored_until) })}
+            {t("shell.deploymentHealthPanel.ignoreMeta.until", {
+              time: formatLocalMinute(ignore.ignored_until, i18n.language),
+            })}
           </span>
         </SimpleTooltip>{" "}
         {t("shell.deploymentHealthPanel.ignoreMeta.byUser", { user: ignore.ignored_by })}
@@ -157,7 +158,7 @@ const IgnoreMeta = ({ ignore }: { ignore: IgnoreState }) => {
   return (
     <span>
       {t("shell.deploymentHealthPanel.ignoreMeta.since", {
-        date: formatLocalDay(ignore.ignored_at),
+        date: formatLocalDay(ignore.ignored_at, i18n.language),
         user: ignore.ignored_by,
       })}
     </span>

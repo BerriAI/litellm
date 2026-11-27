@@ -3,27 +3,47 @@ import utc from "dayjs/plugin/utc";
 import type { TFunction } from "i18next";
 
 import i18n from "@/i18n/i18n";
+import { formatDateWithEnglishPattern } from "@/i18n/formats";
 
 dayjs.extend(utc);
 
-export function formatBudgetResetTime(iso: string | null | undefined, t: TFunction = i18n.t.bind(i18n)): string | null {
+const UTC_MONTH_DAY = { month: "short", day: "numeric", timeZone: "UTC" } as const;
+const UTC_DATE = { ...UTC_MONTH_DAY, year: "numeric" } as const;
+const UTC_CLOCK = { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" } as const;
+const UTC_TIMESTAMP = { ...UTC_DATE, ...UTC_CLOCK } as const;
+const UTC_SECONDS = { second: "2-digit" } as const;
+const UTC_12_HOUR_CLOCK = { ...UTC_CLOCK, hour: "numeric", hour12: true } as const;
+
+const displayBudgetDate = (date: Dayjs, language: string, pattern: string, options: Intl.DateTimeFormatOptions) =>
+  formatDateWithEnglishPattern(date.toDate(), language, date.format(pattern), options);
+
+export const formatBudgetTimestamp = (date: Dayjs, language = i18n.language): string =>
+  displayBudgetDate(date, language, "MMM D, YYYY HH:mm", UTC_TIMESTAMP);
+
+export function formatBudgetResetTime(
+  iso: string | null | undefined,
+  t: TFunction = i18n.t.bind(i18n),
+  language = i18n.language,
+): string | null {
   if (!iso) return null;
   const resetDate = dayjs.utc(iso);
   if (!resetDate.isValid()) return null;
   const timestamp = t("keyDetail.keyInfoView.timestamp", {
-    date: resetDate.format("MMM D, YYYY"),
-    time: resetDate.format("h:mm A"),
+    date: displayBudgetDate(resetDate, language, "MMM D, YYYY", UTC_DATE),
+    time: displayBudgetDate(resetDate, language, "h:mm A", UTC_12_HOUR_CLOCK),
   });
   return `${timestamp} UTC`;
 }
 
 const isMidnight = (instant: Dayjs): boolean => instant.isSame(instant.startOf("day"));
 
-export function formatBudgetResetUtc(iso: string | null | undefined): string | null {
+export function formatBudgetResetUtc(iso: string | null | undefined, language = i18n.language): string | null {
   if (!iso) return null;
   const resetDate = dayjs.utc(iso);
   if (!resetDate.isValid()) return null;
-  return resetDate.format(isMidnight(resetDate) ? "MMM D, YYYY" : "MMM D, YYYY HH:mm");
+  return isMidnight(resetDate)
+    ? displayBudgetDate(resetDate, language, "MMM D, YYYY", UTC_DATE)
+    : formatBudgetTimestamp(resetDate, language);
 }
 
 export interface BudgetResetSchedule {
@@ -85,39 +105,49 @@ export function getBudgetPeriodStart(budgetDuration: string, resetAt: Dayjs): Da
   }
 }
 
-export function formatBudgetPeriod(start: Dayjs, end: Dayjs): string {
+export function formatBudgetPeriod(start: Dayjs, end: Dayjs, language = i18n.language): string {
   const windowSeconds = end.diff(start, "second");
   if (windowSeconds < 24 * 60 * 60 || !isMidnight(start) || !isMidnight(end)) {
-    const time = windowSeconds < 60 ? "HH:mm:ss" : "HH:mm";
-    const endFormat = start.isSame(end, "day") ? time : `MMM D, YYYY ${time}`;
-    return `${start.format(`MMM D, YYYY ${time}`)} - ${end.format(endFormat)}`;
+    const hasSeconds = windowSeconds < 60;
+    const time = hasSeconds ? "HH:mm:ss" : "HH:mm";
+    const clock = hasSeconds ? { ...UTC_CLOCK, ...UTC_SECONDS } : UTC_CLOCK;
+    const timestamp = { ...UTC_DATE, ...clock };
+    const pattern = `MMM D, YYYY ${time}`;
+    const first = displayBudgetDate(start, language, pattern, timestamp);
+    const last = start.isSame(end, "day")
+      ? displayBudgetDate(end, language, time, clock)
+      : displayBudgetDate(end, language, pattern, timestamp);
+    return `${first} - ${last}`;
   }
-  if (start.isSame(end, "year")) return `${start.format("MMM D")} - ${end.format("MMM D, YYYY")}`;
-  return `${start.format("MMM D, YYYY")} - ${end.format("MMM D, YYYY")}`;
+  const first = start.isSame(end, "year")
+    ? displayBudgetDate(start, language, "MMM D", UTC_MONTH_DAY)
+    : displayBudgetDate(start, language, "MMM D, YYYY", UTC_DATE);
+  return `${first} - ${displayBudgetDate(end, language, "MMM D, YYYY", UTC_DATE)}`;
 }
 
 export function describeBudgetResetSchedule(
   budgetDuration: string | null | undefined,
   budgetResetAt: string | null | undefined,
   t: TFunction = i18n.t.bind(i18n),
+  language = i18n.language,
 ): BudgetResetSchedule {
   const resetDate = budgetResetAt ? dayjs.utc(budgetResetAt) : null;
   if (resetDate?.isValid()) {
-    const label = resetDate.format("MMM D, YYYY HH:mm [UTC]");
+    const timestamp = formatBudgetTimestamp(resetDate, language);
     const period = budgetDuration
-      ? `${formatBudgetPeriod(getBudgetPeriodStart(budgetDuration, resetDate), resetDate)} UTC`
+      ? `${formatBudgetPeriod(getBudgetPeriodStart(budgetDuration, resetDate), resetDate, language)} UTC`
       : null;
     const coverage = period
       ? t("budgetSchedule.coverageWithPeriod", { period, duration: budgetDuration })
       : t("budgetSchedule.coverageWithoutPeriod");
     const tooltipValues = {
       coverage,
-      label: resetDate.format("MMM D, YYYY HH:mm"),
+      label: timestamp,
       timeZone: "UTC",
       rolloverNote: t("budgetSchedule.rolloverNote"),
     };
     return {
-      label,
+      label: `${timestamp} UTC`,
       resetAt: resetDate.toISOString(),
       period,
       tooltip: t("budgetSchedule.scheduledTooltip", tooltipValues),

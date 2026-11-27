@@ -10,10 +10,6 @@ import { AgentFormField, type AgentFormValues } from "./AgentFormKit";
 import { entraTenantFromIssuer, IDENTITY_UUID_PATTERN } from "./agent_identity";
 import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
-const PROVIDER_OPTIONS: { value: string; labelKey: ParseKeys }[] = [
-  { value: "none", labelKey: "agents.identityFields.providers.none" },
-  { value: "microsoft_entra", labelKey: "agents.identityFields.providers.microsoftEntra" },
-];
 const EXECUTION_MODE_OPTIONS: { value: string; labelKey: ParseKeys }[] = [
   { value: "autonomous", labelKey: "agents.identityFields.executionModes.autonomous" },
   { value: "delegated", labelKey: "agents.identityFields.executionModes.delegated" },
@@ -26,6 +22,10 @@ const EXECUTION_OPTIONS: { value: string; labelKey: ParseKeys }[] = [
 
 export const AgentIdentityFields = ({ accessToken }: { accessToken: string | null }) => {
   const { t } = useTranslation();
+  const providerOptions = [
+    { value: "none", label: t("agents.identityFields.providers.none") },
+    { value: "microsoft_entra", label: "Microsoft Entra ID" },
+  ];
   const provider = useWatch<AgentFormValues>({ name: "identity_provider" });
   const mode = useWatch<AgentFormValues>({ name: "execution_mode" });
   const showScopes = mode !== "autonomous" && mode !== undefined;
@@ -68,18 +68,14 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
         </div>
         <AgentFormField name="identity_provider" label={t("agents.identityFields.provider")} defaultValue="none">
           {({ value, onChange, id }) => (
-            <Select
-              items={PROVIDER_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
-              value={typeof value === "string" ? value : "none"}
-              onValueChange={onChange}
-            >
+            <Select items={providerOptions} value={typeof value === "string" ? value : "none"} onValueChange={onChange}>
               <SelectTrigger id={id}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {PROVIDER_OPTIONS.map((option) => (
+                {providerOptions.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
-                    {t(option.labelKey)}
+                    {option.label}
                   </SelectItem>
                 ))}
               </SelectContent>

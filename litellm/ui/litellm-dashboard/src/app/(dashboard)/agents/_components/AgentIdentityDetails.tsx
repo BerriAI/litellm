@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import React from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -10,7 +11,7 @@ import { readAgentIdentity } from "./agent_identity";
 const authenticationMessage = (t: TFunction, error: boolean, lastAuthenticated?: string | null): string => {
   if (error) return t("agents.identityDetails.evidence.loadFailed");
   if (lastAuthenticated)
-    return t("agents.identityDetails.evidence.lastMatch", { date: new Date(lastAuthenticated).toLocaleString() });
+    return t("agents.identityDetails.evidence.lastMatch", { date: displayTimestamp(new Date(lastAuthenticated)) });
   return t("agents.identityDetails.evidence.awaiting");
 };
 

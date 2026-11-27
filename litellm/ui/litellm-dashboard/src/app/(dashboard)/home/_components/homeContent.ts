@@ -1,4 +1,5 @@
 import type { BlogPost } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
+import i18n from "@/i18n/i18n";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 
 export const DAY_ZERO_TAG = "day 0 support";
@@ -33,5 +34,5 @@ export const cardSummary = (post: BlogPost): string =>
 export const cardProvider = (post: BlogPost): string | undefined =>
   post.tags.find((tag) => getProviderLogoAndName(tag).logo !== "");
 
-export const formatPublishedOn = (isoDate: string): string =>
-  new Date(`${isoDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+export const formatPublishedOn = (isoDate: string, language = i18n.language): string =>
+  new Date(`${isoDate}T00:00:00`).toLocaleDateString(language, { month: "short", day: "numeric" });

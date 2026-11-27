@@ -44951,6 +44951,12 @@ export interface components {
              */
             path: string;
             /**
+             * Preserve Trace Context
+             * @description Forward caller traceparent and tracestate even when forward_headers is disabled, without injecting LiteLLM trace context on this HTTP endpoint.
+             * @default false
+             */
+            preserve_trace_context: boolean;
+            /**
              * Show In Model Hub
              * @description If True, this endpoint is published on the public Model Hub as a row in mode 'passthrough'.
              * @default false
