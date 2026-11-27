@@ -87,6 +87,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    DETACHED_STREAM_DRAIN_SHUTDOWN_BILLING_MIN_SECONDS,
     GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
     INTERNAL_CALLBACK_NAMES,
     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
@@ -550,6 +551,8 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _should_return_raw_model_name,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    arm_disconnect_drain,
+    bill_detached_stream_drains_on_shutdown,
     close_guarded_stream,
     create_response,
     is_azure_model_router_request,
@@ -2221,6 +2224,9 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     GracefulShutdownManager.start_shutdown()
                     await GracefulShutdownManager.wait_for_drain()
         finally:
+            await bill_detached_stream_drains_on_shutdown(
+                max(DETACHED_STREAM_DRAIN_SHUTDOWN_BILLING_MIN_SECONDS, GracefulShutdownManager.remaining(5.0))
+            )
             # Shutdown event - close shared aiohttp session
             if shared_aiohttp_session is not None:
                 try:
@@ -10749,6 +10755,7 @@ async def async_data_generator(
     verbose_proxy_logger.debug("inside generator")
     stream_completed = False
     client_disconnected = False
+    arm_disconnect_drain(response)
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
     ends_with_openai_done: Final = not responses_stream_errors and not request_data.get(
         "_litellm_skip_openai_stream_done"

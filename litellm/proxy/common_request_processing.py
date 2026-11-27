@@ -53,6 +53,8 @@ from litellm._logging import redact_internal_details_from_client_message, verbos
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.constants import (
+    CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
+    CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS,
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
     IMAGE_CALL_TYPES,
@@ -74,7 +76,10 @@ from litellm.integrations.custom_logger import subclass_overrides_hook
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.legacy import hook_subscribers
 from litellm.integrations.otel.runtime import phase_event
-from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    HiddenParamsAsyncIteratorWrapper,
+    get_hidden_params_dict,
+)
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
@@ -130,6 +135,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 )
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.litellm_core_utils.streaming_handler import (
+    CustomStreamWrapper,
     backfill_missing_cache_usage_fields,
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
@@ -634,6 +640,146 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: Mapping[str, 
             )
         )
     return await _dispatch_disconnect_billing_event(logging_obj, partial_response)
+
+
+_DETACHED_STREAM_DRAINS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep drains from GC
+
+
+def _unwrapped_stream(response: object) -> object:
+    return response.inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
+
+
+def arm_disconnect_drain(response: object) -> None:
+    """Let a chat stream outlive a client disconnect, so its spend is the provider's terminal usage."""
+    stream: Final = _unwrapped_stream(response)
+    if CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS > 0 and isinstance(stream, CustomStreamWrapper):
+        stream.arm_disconnect_drain()
+
+
+def _disconnect_drain_target(response: object) -> CustomStreamWrapper | None:
+    stream: Final = _unwrapped_stream(response)
+    return stream.disconnect_drain_target() if isinstance(stream, CustomStreamWrapper) else None
+
+
+def _spawn_detached_stream_drain(drain: Coroutine[object, object, None]) -> bool:
+    """Run ``drain`` detached from the torn-down response, unless the concurrent drain cap is reached."""
+    if len(_DETACHED_STREAM_DRAINS) >= CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS:
+        drain.close()
+        verbose_proxy_logger.warning(
+            "Detached stream drain cap (%d) reached; billing the disconnected stream on the chunks already sent",
+            CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS,
+        )
+        return False
+    task: Final = asyncio.create_task(drain)
+    _DETACHED_STREAM_DRAINS.add(task)
+    task.add_done_callback(_DETACHED_STREAM_DRAINS.discard)
+    return True
+
+
+async def _read_stream_to_end(stream: CustomStreamWrapper, owner: CustomStreamWrapper) -> bool:
+    """Read ``stream`` to its end and tell ``owner``, the wrapper the request was served through, how it ended."""
+    last: object = None  # rebind-ok: the newest item
+    try:
+        while True:
+            last = await stream.__anext__()
+    except StopAsyncIteration:
+        owner.report_disconnect_drain(last)
+        return True
+    except Exception as e:  # noqa: BLE001  # the stream already logged its own failure; the drain must still clean up
+        verbose_proxy_logger.debug("Draining a stream after client disconnect failed: %s", e)
+        owner.report_disconnect_drain(last, e)
+        return False
+
+
+@dataclass(frozen=True, slots=True)
+class _DisconnectedStream:
+    response: object
+    logging_obj: LiteLLMLoggingObj | None
+    fire_deferred_logging: Callable[[], None]
+    bill_partial_spend: Callable[[], Awaitable[bool]]
+    user_api_key_dict: UserAPIKeyAuth | None
+    proxy_logging_obj: "ProxyLogging | None"
+
+
+async def _bill_drained_stream_after_disconnect(stream: CustomStreamWrapper, disconnected: _DisconnectedStream) -> None:
+    """Read the rest of a stream whose client left, so it bills what the provider generated.
+
+    The provider keeps generating (and charging for) the response after the
+    client disconnects, and its usage only arrives on the final chunk. Reading
+    the stream to its end runs its normal end-of-stream logging with that usage,
+    or its failure logging (with the partial usage) when the provider errors.
+    A drain still running at the time limit bills the chunks it has read and
+    closes the provider stream instead.
+    """
+    unwrapped: Final = _unwrapped_stream(disconnected.response)
+    owner: Final = unwrapped if isinstance(unwrapped, CustomStreamWrapper) else stream
+    try:
+        drained: Final = await asyncio.wait_for(
+            _read_stream_to_end(stream, owner), timeout=CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.warning(
+            "Detached stream drain hit its %ss limit; billing the %d chunks read so far",
+            CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
+            len(stream.chunks),
+        )
+        with anyio.CancelScope(shield=True):
+            await _settle_detached_stream(disconnected, drained=False, bills_partial_spend=True)
+        return
+    except BaseException:
+        with anyio.CancelScope(shield=True):
+            await _settle_detached_stream(disconnected, drained=False, bills_partial_spend=True)
+        raise
+    with anyio.CancelScope(shield=True):
+        await _settle_detached_stream(disconnected, drained=drained)
+
+
+async def bill_detached_stream_drains_on_shutdown(timeout: float) -> None:
+    """Stop the drains still running at shutdown, so each bills the chunks it has read before the spend flush."""
+    drains: Final = tuple(_DETACHED_STREAM_DRAINS)
+    if not drains:
+        return
+    await asyncio.sleep(0)  # a drain cancelled before its first step would never bill
+    for drain in drains:
+        drain.cancel()
+    unfinished: Final = (await asyncio.wait(drains, timeout=timeout))[1]
+    if unfinished:
+        verbose_proxy_logger.warning(
+            "%d detached stream drains did not bill within %.3fs of shutdown; their spend may be lost",
+            len(unfinished),
+            timeout,
+        )
+
+
+async def _settle_detached_stream(
+    disconnected: _DisconnectedStream, drained: bool, *, bills_partial_spend: bool = False
+) -> None:
+    try:
+        if bills_partial_spend:
+            await disconnected.bill_partial_spend()
+        if drained:
+            disconnected.fire_deferred_logging()
+        if disconnected.proxy_logging_obj is not None and disconnected.user_api_key_dict is not None:
+            await disconnected.proxy_logging_obj.arelease_max_parallel_requests(disconnected.user_api_key_dict)
+    finally:
+        await _close_stream_and_settle_cache_estimate(disconnected.response, disconnected.logging_obj, drained)
+
+
+async def _close_stream_and_settle_cache_estimate(
+    response: object, logging_obj: LiteLLMLoggingObj | None, completed: bool
+) -> None:
+    if has_attributes(response, _ClosesAsync, "aclose"):
+        try:
+            await response.aclose()
+        except BaseException as e:  # noqa: BLE001
+            verbose_proxy_logger.debug("async_streaming_data_generator: error closing response stream: %s", e)
+    if (
+        not completed
+        and logging_obj is not None
+        and logging_obj.baseline_cache_context is not None
+        and logging_obj.model_call_details.get("prompt_cache_response_complete") is not True
+    ):
+        await logging_obj.invalidate_baseline_cache_estimate("incomplete_response", completed=True)
 
 
 def _choices_without_unobserved_finish_reasons(
@@ -5628,10 +5774,32 @@ class ProxyBaseLLMRequestProcessing:
                     request_data,
                     client_disconnected,
                 )
+            request_logging_obj: Final = request_data.get("litellm_logging_obj")
+            logging_obj: Final = request_logging_obj if isinstance(request_logging_obj, LiteLLMLoggingObj) else None
             if recorded_client_disconnect:
                 await _bill_in_flight_round_on_disconnect(_REQUEST_FIELDS.validate_python(request_data))
                 deferred_stream_logging_armed: Final = _deferred_stream_logging_is_armed(request_data)
-                ProxyLogging.fire_deferred_stream_logging(request_data)
+                fire_deferred_logging: Final[Callable[[], None]] = partial(
+                    ProxyLogging.fire_deferred_stream_logging, request_data
+                )
+                fire_deferred_logging()
+                drain_target: Final = None if deferred_stream_logging_armed else _disconnect_drain_target(response)
+                if drain_target is not None and _spawn_detached_stream_drain(
+                    _bill_drained_stream_after_disconnect(
+                        drain_target,
+                        _DisconnectedStream(
+                            response=response,
+                            logging_obj=logging_obj,
+                            fire_deferred_logging=fire_deferred_logging,
+                            bill_partial_spend=partial(
+                                _bill_partial_streamed_spend_on_disconnect, request_data, response
+                            ),
+                            user_api_key_dict=user_api_key_dict,
+                            proxy_logging_obj=proxy_logging_obj,
+                        ),
+                    )
+                ):
+                    return
                 # A disconnect-time success event (the deferred-guardrail flush
                 # above, or the partial-spend billing below) releases the
                 # request's max_parallel_requests slot through the limiter's
@@ -5654,22 +5822,7 @@ class ProxyBaseLLMRequestProcessing:
                 ):
                     await release_budget_reservation_on_cancel(user_api_key_dict.budget_reservation)
 
-            if has_attributes(response, _ClosesAsync, "aclose"):
-                try:
-                    await response.aclose()
-                except BaseException as e:  # noqa: BLE001
-                    verbose_proxy_logger.debug(
-                        "async_streaming_data_generator: error closing response stream: %s",
-                        e,
-                    )
-            logging_obj: Final = request_data.get("litellm_logging_obj")
-            if (
-                not stream_completed
-                and isinstance(logging_obj, LiteLLMLoggingObj)
-                and logging_obj.baseline_cache_context is not None
-                and logging_obj.model_call_details.get("prompt_cache_response_complete") is not True
-            ):
-                await logging_obj.invalidate_baseline_cache_estimate("incomplete_response", completed=True)
+            await _close_stream_and_settle_cache_estimate(response, logging_obj, stream_completed)
 
     _finalize_streaming_generator_cleanup = finalize_streaming_generator_cleanup
 

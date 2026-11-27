@@ -772,6 +772,19 @@ ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS: Final = get_env_float(
 ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
     "ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 600.0
 )
+# Same bound for /v1/chat/completions streams the proxy keeps reading after the
+# client disconnects, so it can bill the provider's terminal usage. 0 disables
+# the drain: the request is billed on the chunks the client already received.
+CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS: Final = get_env_int("CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS", 100)
+# Wall-clock limit on one such drain. On expiry the request is billed on the chunks
+# read so far and the provider stream is closed, so a stalled upstream can't hold
+# a drain slot, its buffered chunks or the request's concurrency slot forever.
+CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
+    "CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 600.0
+)
+# At shutdown the drains still running are stopped and bill the chunks they read. They get
+# at least this long to do it even when in-flight requests used up the shutdown budget.
+DETACHED_STREAM_DRAIN_SHUTDOWN_BILLING_MIN_SECONDS: Final = 1.0
 LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 100)  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
