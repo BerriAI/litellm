@@ -1,0 +1,370 @@
+{
+ "source": "main f631dbd13213 budget_reservation estimate_request_max_cost",
+ "cases": [
+  {
+   "name": "anthropic_requested_output",
+   "shape": "row",
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "mode": "chat"
+   },
+   "body": {
+    "max_tokens": 2000,
+    "model": "claude-opus-4-8"
+   },
+   "route": "/v1/messages",
+   "counted": 1000,
+   "expected": {
+    "max": 0.055,
+    "input": 0.005,
+    "max_direct": 0.055,
+    "input_direct": 0.005
+   }
+  },
+  {
+   "name": "anthropic_default_output",
+   "shape": "row",
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "mode": "chat"
+   },
+   "body": {
+    "model": "claude-opus-4-8"
+   },
+   "route": "/v1/messages",
+   "counted": 50000,
+   "expected": {
+    "max": 0.6596,
+    "input": 0.25,
+    "max_direct": 0.6596,
+    "input_direct": 0.25
+   }
+  },
+  {
+   "name": "anthropic_output_clamped_to_row",
+   "shape": "row",
+   "row": {
+    "input_cost_per_token": 1e-07,
+    "output_cost_per_token": 5e-07,
+    "input_cost_per_token_above_100k_tokens": 5e-07,
+    "output_cost_per_token_above_100k_tokens": 2.5e-06,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "mode": "chat"
+   },
+   "body": {
+    "max_tokens": 1000000,
+    "model": "claude-haiku-5-5"
+   },
+   "route": "/v1/messages",
+   "counted": 300000,
+   "expected": {
+    "max": 0.094,
+    "input": 0.03,
+    "max_direct": 0.094,
+    "input_direct": 0.03
+   }
+  },
+  {
+   "name": "bedrock_n_and_best_of",
+   "shape": "row",
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "mode": "chat"
+   },
+   "body": {
+    "max_tokens": 700,
+    "n": 3,
+    "best_of": 2,
+    "model": "bedrock/claude_platform/claude-opus-5"
+   },
+   "route": "/v1/messages",
+   "counted": 4321,
+   "expected": {
+    "max": 0.074105,
+    "input": 0.021605000000000003,
+    "max_direct": 0.074105,
+    "input_direct": 0.021605000000000003
+   }
+  },
+  {
+   "name": "bedrock_inference_config",
+   "shape": "row",
+   "row": {
+    "input_cost_per_token": 1.1e-07,
+    "output_cost_per_token": 5.5e-07,
+    "input_cost_per_token_above_100k_tokens": 5.5e-07,
+    "output_cost_per_token_above_100k_tokens": 2.75e-06,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "mode": "chat"
+   },
+   "body": {
+    "inferenceConfig": {
+     "maxTokens": 99
+    },
+    "model": "us.anthropic.claude-haiku-5-5"
+   },
+   "route": "/v1/messages",
+   "counted": 250001,
+   "expected": {
+    "max": 0.027554560000000002,
+    "input": 0.02750011,
+    "max_direct": 0.027554560000000002,
+    "input_direct": 0.02750011
+   }
+  },
+  {
+   "name": "vertex_max_completion_tokens",
+   "shape": "row",
+   "row": {
+    "input_cost_per_token": 1e-07,
+    "output_cost_per_token": 5e-07,
+    "input_cost_per_token_above_100k_tokens": 5e-07,
+    "output_cost_per_token_above_100k_tokens": 2.5e-06,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "mode": "chat"
+   },
+   "body": {
+    "max_completion_tokens": 512,
+    "max_tokens": 9,
+    "model": "vertex_ai/claude-haiku-5-5"
+   },
+   "route": "/v1/messages",
+   "counted": 120000,
+   "expected": {
+    "max": 0.012256,
+    "input": 0.012,
+    "max_direct": 0.012256,
+    "input_direct": 0.012
+   }
+  },
+  {
+   "name": "azure_ai_input_only_route",
+   "shape": "row",
+   "row": {
+    "input_cost_per_token": 5e-06,
+    "output_cost_per_token": 2.5e-05,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "mode": "chat"
+   },
+   "body": {
+    "max_tokens": 512,
+    "model": "azure_ai/claude-opus-4-8"
+   },
+   "route": "/v1/embeddings",
+   "counted": 777,
+   "expected": {
+    "max": 0.0038850000000000004,
+    "input": 0.0038850000000000004,
+    "max_direct": 0.0038850000000000004,
+    "input_direct": 0.0038850000000000004
+   }
+  },
+  {
+   "name": "tiered_low",
+   "shape": "row",
+   "row": {
+    "max_input_tokens": 997952,
+    "max_output_tokens": 32768,
+    "mode": "chat",
+    "tiered_pricing": [
+     {
+      "input_cost_per_token": 5e-08,
+      "output_cost_per_token": 4e-07,
+      "range": [
+       0,
+       256000.0
+      ]
+     },
+     {
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 2e-06,
+      "range": [
+       256000.0,
+       1000000.0
+      ]
+     }
+    ]
+   },
+   "body": {
+    "max_tokens": 100,
+    "model": "dashscope/qwen-flash"
+   },
+   "route": "/v1/chat/completions",
+   "counted": 1000,
+   "expected": {
+    "max": 8.999999999999999e-05,
+    "input": 4.9999999999999996e-05,
+    "max_direct": 8.999999999999999e-05,
+    "input_direct": 4.9999999999999996e-05
+   }
+  },
+  {
+   "name": "tiered_high",
+   "shape": "row",
+   "row": {
+    "max_input_tokens": 997952,
+    "max_output_tokens": 32768,
+    "mode": "chat",
+    "tiered_pricing": [
+     {
+      "input_cost_per_token": 5e-08,
+      "output_cost_per_token": 4e-07,
+      "range": [
+       0,
+       256000.0
+      ]
+     },
+     {
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 2e-06,
+      "range": [
+       256000.0,
+       1000000.0
+      ]
+     }
+    ]
+   },
+   "body": {
+    "max_tokens": 100,
+    "model": "dashscope/qwen-flash"
+   },
+   "route": "/v1/chat/completions",
+   "counted": 300000,
+   "expected": {
+    "max": 0.0752,
+    "input": 0.075,
+    "max_direct": 0.0752,
+    "input_direct": 0.075
+   }
+  },
+  {
+   "name": "tiered_empty_prompt",
+   "shape": "row",
+   "row": {
+    "max_input_tokens": 997952,
+    "max_output_tokens": 32768,
+    "mode": "chat",
+    "tiered_pricing": [
+     {
+      "input_cost_per_token": 5e-08,
+      "output_cost_per_token": 4e-07,
+      "range": [
+       0,
+       256000.0
+      ]
+     },
+     {
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 2e-06,
+      "range": [
+       256000.0,
+       1000000.0
+      ]
+     }
+    ]
+   },
+   "body": {
+    "max_tokens": 100,
+    "model": "dashscope/qwen-flash"
+   },
+   "route": "/v1/chat/completions",
+   "counted": 0,
+   "expected": {
+    "max": 0.0,
+    "input": 0.0,
+    "max_direct": 0.0,
+    "input_direct": 0.0
+   }
+  },
+  {
+   "name": "image_generation",
+   "shape": "row",
+   "row": {
+    "max_input_tokens": 2600,
+    "mode": "image_generation",
+    "output_cost_per_image": 0.06
+   },
+   "body": {
+    "n": 3,
+    "model": "1024-x-1024/50-steps/bedrock/amazon.nova-canvas-v1:0"
+   },
+   "route": "/v1/images/generations",
+   "counted": 10,
+   "expected": {
+    "max": 0.18,
+    "input": 0.0,
+    "max_direct": 0.18,
+    "input_direct": 0.0
+   }
+  },
+  {
+   "name": "group_uncounted_reads_max_input",
+   "shape": "group",
+   "row": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": 1.5e-05,
+    "max_input_tokens": 200000,
+    "max_output_tokens": 64000,
+    "mode": "chat"
+   },
+   "body": {
+    "max_tokens": 1024
+   },
+   "route": "/v1/messages",
+   "counted": null,
+   "expected": {
+    "max": 0.61536,
+    "input": 0.6
+   }
+  },
+  {
+   "name": "group_missing_output_rate",
+   "shape": "group",
+   "row": {
+    "input_cost_per_token": 3e-06,
+    "output_cost_per_token": null,
+    "max_input_tokens": 200000,
+    "max_output_tokens": 64000
+   },
+   "body": {
+    "max_tokens": 1024
+   },
+   "route": "/v1/messages",
+   "counted": 12,
+   "expected": {
+    "max": null,
+    "input": 3.6e-05
+   }
+  },
+  {
+   "name": "group_zero_max_output_reads_default",
+   "shape": "group",
+   "row": {
+    "input_cost_per_token": 1.1e-06,
+    "output_cost_per_token": 4.4e-06,
+    "max_input_tokens": 100,
+    "max_output_tokens": 0
+   },
+   "body": {},
+   "route": "/v1/messages",
+   "counted": 12,
+   "expected": {
+    "max": 0.07210280000000001,
+    "input": 1.32e-05
+   }
+  }
+ ]
+}

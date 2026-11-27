@@ -6,7 +6,7 @@ from typing import Annotated, Final, Literal, TypeAlias
 from pydantic import AfterValidator, ConfigDict, Field, PrivateAttr, field_validator, model_validator, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
-from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.llms.base import LiteLLMPydanticObjectBase, StrAsGiven
 
 DecisionsJSON: TypeAlias = str | Mapping[str, object] | Sequence[object]
 NoulCriteria: TypeAlias = Mapping[Literal["true", "false"], DecisionsJSON | None]
@@ -193,7 +193,7 @@ class DecisionsCallParams(TypedDict, total=False):
     assets: ReadOnly[DecisionsAssets | None]
     audio: ReadOnly[Sequence[DecisionsAudio]]
     videos: ReadOnly[Sequence[DecisionsVideo]]
-    api_key: ReadOnly[str | None]
+    api_key: ReadOnly[StrAsGiven | None]
     api_base: ReadOnly[str | None]
     timeout: ReadOnly[float | None]
     custom_llm_provider: ReadOnly[str | None]
@@ -277,9 +277,29 @@ class DecisionsResponse(_HiddenParamsResponse):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+class OpenAIDecisionPromptCacheBreakpoint(LiteLLMPydanticObjectBase):
+    mode: Literal["explicit"]
+    ttl: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIDecisionPromptCacheOptions(LiteLLMPydanticObjectBase):
+    mode: str | None = None
+    ttl: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIDecisionPromptCacheOptionsFields(TypedDict, total=False):
+    mode: ReadOnly[Literal["implicit", "explicit"]]
+    ttl: ReadOnly[Literal["30m", "12h"]]
+
+
 class OpenAIDecisionInputText(LiteLLMPydanticObjectBase):
     type: Literal["input_text"]
     text: str
+    prompt_cache_breakpoint: OpenAIDecisionPromptCacheBreakpoint | None = None
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -288,22 +308,38 @@ class OpenAIDecisionInputImage(LiteLLMPydanticObjectBase):
     type: Literal["input_image"]
     image_url: str
     detail: str | None = None
+    prompt_cache_breakpoint: OpenAIDecisionPromptCacheBreakpoint | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionInputJSON(LiteLLMPydanticObjectBase):
+    type: Literal["input_json"]
+    data: Mapping[str, object] | Sequence[Mapping[str, object]]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 OpenAIDecisionContentPart: TypeAlias = Annotated[
-    OpenAIDecisionInputText | OpenAIDecisionInputImage,
+    OpenAIDecisionInputText | OpenAIDecisionInputImage | OpenAIDecisionInputJSON,
     Field(discriminator="type"),
 ]
 
 
 class OpenAIDecisionInputMessage(LiteLLMPydanticObjectBase):
-    role: Literal["user"] = "user"
+    role: Literal["user", "developer", "system"] = "user"
     type: Literal["message"] = "message"
     content: str | Sequence[OpenAIDecisionContentPart]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_validator(mode="after")
+    def _developer_and_system_are_text(self) -> "OpenAIDecisionInputMessage":
+        if self.role == "user" or isinstance(self.content, str):
+            return self
+        if any(not isinstance(part, OpenAIDecisionInputText) for part in self.content):
+            raise ValueError(f"{self.role} messages only accept input text")
+        return self
 
 
 OpenAIDecisionInput: TypeAlias = str | Sequence[OpenAIDecisionInputMessage]
@@ -388,7 +424,10 @@ class OpenAIDecisionRequestBody(DecisionsMediaBody):
     input: Annotated[
         OpenAIDecisionInput,
         Field(
-            description="The text being judged, or user messages whose content mixes input_text and input_image parts"
+            description=(
+                "The text being judged, or user, developer, and system messages. "
+                "Developer and system messages are input text. User messages can mix input text, images, and JSON."
+            )
         ),
     ]
     questions: Annotated[
@@ -403,6 +442,11 @@ class OpenAIDecisionRequestBody(DecisionsMediaBody):
         str | None,
         Field(description="A stable id for your end user. Sent to OpenAI and dropped for other providers"),
     ] = None
+    prompt_cache_key: Annotated[
+        str | None,
+        Field(description="Partitions prompt-cache reuse. Sent to OpenAI and dropped for other providers"),
+    ] = None
+    prompt_cache_options: OpenAIDecisionPromptCacheOptions | None = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -476,9 +520,21 @@ OpenAIDecisionAnswer: TypeAlias = Annotated[
 ]
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
+class OpenAIDecisionCacheWriteTokensDetails(LiteLLMPydanticObjectBase):
+    ttl_30m_tokens: int = 0
+    ttl_12h_tokens: int = 0
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
 class OpenAIDecisionInputTokensDetails(LiteLLMPydanticObjectBase):
     cached_tokens: int = 0
     cache_write_tokens: int = 0
+    cache_write_tokens_details: OpenAIDecisionCacheWriteTokensDetails | None = Field(default=None, exclude_if=_is_none)
 
     model_config = ConfigDict(frozen=True)
 
@@ -575,9 +631,12 @@ class DecisionsIRRequest:
     input: DecisionsIRState | DecisionsIRMessages
     questions: tuple[DecisionsIRQuestion, ...]
     safety_identifier: str | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_options: OpenAIDecisionPromptCacheOptions | None = None
     assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
     audio: tuple[DecisionsAudio, ...] = ()
     videos: tuple[DecisionsVideo, ...] = ()
+    drop_params: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -642,6 +701,7 @@ class DecisionsIRUsage:
     output_tokens: int = 0
     cached_tokens: int = 0
     cache_write_tokens: int = 0
+    cache_write_tokens_details: OpenAIDecisionCacheWriteTokensDetails | None = None
     reasoning_tokens: int = 0
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
@@ -652,6 +712,7 @@ class DecisionsIRResponse:
     answers: tuple[DecisionsIRAnswer, ...]
     usage: DecisionsIRUsage | None
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+    reported_cost: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

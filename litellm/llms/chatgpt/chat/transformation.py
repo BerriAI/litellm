@@ -1,6 +1,7 @@
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Collection, Mapping
+from typing import Final
 
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -77,7 +78,7 @@ class ChatGPTConfig(OpenAIConfig):
         headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
@@ -113,16 +114,28 @@ class ChatGPTConfig(OpenAIConfig):
         default_headers: Final = get_chatgpt_default_headers(resolved_api_key or "", account_id, session_id)
         return {**default_headers, **validated_headers}
 
-    def post_stream_processing(self, stream: Any) -> ChatGPTToolCallNormalizer:
+    def post_stream_processing(self, stream: object) -> ChatGPTToolCallNormalizer:
         return ChatGPTToolCallNormalizer(stream)
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
-        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        *,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
+        declared_reasoning_efforts: Collection[str] | None = None,
+        allowed_openai_params: Collection[str] = (),
+    ) -> dict[str, object]:
+        optional_params = super().map_openai_params(
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+            reasoning_drop_logger=reasoning_drop_logger,
+            declared_reasoning_efforts=declared_reasoning_efforts,
+            allowed_openai_params=allowed_openai_params,
+        )
         optional_params.setdefault("stream", False)
         return optional_params

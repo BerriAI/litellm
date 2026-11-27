@@ -21,7 +21,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.types.router import LiteLLM_Params
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from unittest.mock import patch
 
@@ -209,7 +209,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -324,6 +324,53 @@ def test_get_llm_provider_vertex_ai_image_models(monkeypatch):
         model="imagegeneration@006", custom_llm_provider=None
     )
     assert custom_llm_provider == "vertex_ai"
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_add_known_models_adds_a_new_model_to_the_model_list_and_its_set_in_place():
+    model: Final = "lit-model-list-follows-a-reload"
+    model_list: Final = litellm.model_list
+    model_list_set: Final = litellm.model_list_set
+
+    litellm.add_known_models(model_cost_map={model: {"litellm_provider": "openai", "mode": "chat"}})
+    assert (model_list.count(model), model in model_list_set) == (1, True)
+
+    litellm.add_known_models(model_cost_map={})
+
+    assert model_list.count(model) == 1
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_add_known_models_drops_a_model_a_reload_retires_and_keeps_names_the_caller_added():
+    model: Final = "aiand/lit-model-list-retires-on-a-reload"
+    caller_model: Final = "lit-caller-added-model"
+    model_list: Final = litellm.model_list
+    model_list_set: Final = litellm.model_list_set
+    model_list.append(caller_model)
+    model_list_set.add(caller_model)
+    litellm.add_known_models(
+        model_cost_map={model: {"litellm_provider": "aiand", "mode": "chat", "deprecation_date": "2999-01-01"}}
+    )
+    assert (model in model_list, model in model_list_set) == (True, True)
+
+    litellm.add_known_models(
+        model_cost_map={model: {"litellm_provider": "aiand", "mode": "chat", "deprecation_date": "2000-01-01"}}
+    )
+
+    assert (model in model_list, model in model_list_set) == (False, False)
+    assert (caller_model in model_list, caller_model in model_list_set) == (True, True)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_add_known_models_adds_a_new_embedding_model_to_all_embedding_models_in_place():
+    model: Final = "lit-embedding-list-follows-a-reload"
+    all_embedding_models: Final = litellm.all_embedding_models
+
+    litellm.add_known_models(
+        model_cost_map={model: {"litellm_provider": "vertex_ai-embedding-models", "mode": "embedding"}}
+    )
+
+    assert model in all_embedding_models
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")

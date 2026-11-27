@@ -5,10 +5,11 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_TOKENS
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import json_contains, map_finish_reason, subscript
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
     render_custom_prompt_template,
@@ -27,6 +28,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PredibaseConfig(BaseConfig):
@@ -92,7 +95,7 @@ class PredibaseConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str):
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "stream",
             "temperature",
@@ -106,11 +109,11 @@ class PredibaseConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
             if param == "temperature":
@@ -151,7 +154,7 @@ class PredibaseConfig(BaseConfig):
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -163,13 +166,13 @@ class PredibaseConfig(BaseConfig):
             additional_args={"complete_input_dict": request_data},
         )
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise PredibaseError(message=raw_response.text, status_code=422)
 
-        if "error" in completion_response:
+        if json_contains(completion_response, "error"):
             raise PredibaseError(
-                message=str(completion_response["error"]),
+                message=str(subscript(completion_response, "error")),
                 status_code=raw_response.status_code,
             )
         elif not isinstance(completion_response, dict):
@@ -271,10 +274,10 @@ class PredibaseConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict", {})
         if model in custom_prompt_dict:
             model_prompt_details: Final = custom_prompt_dict[model]
@@ -322,8 +325,8 @@ class PredibaseConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         tenant_id: Final = litellm_params.get("predibase_tenant_id") or litellm_params.get("tenant_id")
@@ -354,11 +357,11 @@ class PredibaseConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is None:
             raise ValueError(
                 "Missing Predibase API Key - A call is being made to predibase but no key is set either in the environment variables or via params"

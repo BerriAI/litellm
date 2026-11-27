@@ -11,11 +11,11 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.credential_accessor import sends_api_key_secret_reference
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, sends_api_key_secret_reference
 from litellm.types.utils import server_owned_wif_litellm_params
 
 clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
@@ -82,16 +82,25 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 
 
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
+UPSTREAM_BOUND_PARAMS: Final = frozenset((*clientside_credential_keys, *_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE))
 
 
-def is_clientside_credential(request_kwargs: dict) -> bool:
+def is_clientside_credential(request_kwargs: Mapping[str, object]) -> bool:
     """
     Check if the credential is a clientside credential.
     """
     return any(key in request_kwargs for key in clientside_credential_keys)
 
 
-def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> dict:
+def _uses_provider_oauth(params: Mapping[str, object]) -> bool:
+    if "oauth_client_credentials" in params:
+        return params["oauth_client_credentials"] is True
+    name: Final = params.get("litellm_credential_name")
+    credential: Final = CredentialAccessor.find_credential(name) if isinstance(name, str) and name else None
+    return credential is not None and credential.credential_values.get("oauth_client_credentials") is True
+
+
+def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: Mapping[str, object]) -> dict[str, object]:
     """
     Generate a unique model_id for the deployment.
 
@@ -100,6 +109,22 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
 
     for generating a unique model_id.
     """
+    from litellm.llms.github_copilot.app_auth import app_config
+
+    app_params: Final = cast("dict[str, object]", litellm_params)  # cast-ok: the existing request boundary is untyped
+    if is_clientside_credential(request_kwargs) and _uses_provider_oauth(app_params):
+        raise BadRequestError(
+            message="OAuth client credentials deployments do not accept client-side credential or endpoint overrides.",
+            llm_provider=None,
+            model=None,
+        )
+    if app_config(app_params) is not None and is_clientside_credential(request_kwargs):
+        raise BadRequestError(
+            message="GitHub App deployments do not accept client-side credential or endpoint overrides.",
+            llm_provider="github_copilot",
+            model=None,
+        )
+
     # update litellm_params with clientside credentials
     for key in clientside_credential_keys:
         if key in request_kwargs:

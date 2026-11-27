@@ -278,7 +278,7 @@ def test_member_added_without_any_budget_is_charged_on_its_membership_row(gatewa
 
 
 @pytest.mark.covers("spend.team_member.stale_low_redis_counter_still_blocks_member_over_budget")
-def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gateway: Gateway) -> None:
+def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gateway: Gateway, peer: Gateway) -> None:
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
@@ -308,7 +308,7 @@ def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gatewa
         assert float(counted) == pytest.approx(0.06), counted
         cache.set(counter_key, "0.01")
         upstream.delete("/__observations").raise_for_status()
-        denied: Final = gateway.request(
+        denied: Final = peer.request(
             "POST",
             "/v1/chat/completions",
             {"model": model, "messages": [{"role": "user", "content": f"stale counter {uuid.uuid4().hex}"}]},
@@ -506,7 +506,7 @@ def test_member_update_temp_budget_increase_readmits_a_blocked_member(
         else:
             assert default_budget_id is not None
             assert state[0].budget_id != default_budget_id, state
-            assert state[0].max_budget == 0.05, state
+            assert state[0].max_budget is None, state
             default_budget_after: Final = _budget_record(default_budget_id)
             assert default_budget_after == default_budget_before, repr(default_budget_after)
             assert default_budget_after[0].max_budget == 0.05, default_budget_after
@@ -1093,7 +1093,7 @@ def test_temp_budget_increase_on_a_team_default_member_keeps_the_team_reset_sche
         assert len(topped_up_state) == 1, topped_up_state
         topped_up_budget_id: Final = topped_up_state[0].budget_id
         assert topped_up_budget_id is not None and topped_up_budget_id != default_budget_id, topped_up_state
-        assert topped_up_state[0].max_budget == 5, topped_up_state
+        assert topped_up_state[0].max_budget is None, topped_up_state
         assert topped_up_state[0].budget_duration == "30d", topped_up_state
         assert topped_up_state[0].temp_budget_increase == 1, topped_up_state
         assert _budget_reset_at(topped_up_budget_id) == _budget_reset_at(default_budget_id), topped_up_state
@@ -1118,5 +1118,63 @@ def test_temp_budget_increase_on_a_team_default_member_keeps_the_team_reset_sche
         assert len(final_state) == 1, final_state
         assert final_state[0].budget_id == topped_up_budget_id, final_state
         assert final_state[0].budget_duration == "30d", final_state
-        assert final_state[0].max_budget == 5, final_state
+        assert final_state[0].max_budget is None, final_state
         assert final_state[0].temp_budget_increase is None, final_state
+
+
+@pytest.mark.parametrize("grant_state", ["active", "cleared"])
+def test_temp_budget_increase_on_a_team_default_member_keeps_following_the_team_default_budget(
+    gateway: Gateway, grant_state: str
+) -> None:
+    with gateway.scenario() as scenario:
+        model, _ = _priced_model(scenario)
+        team: Final = scenario.team(models=[model], team_member_budget=0.01, team_member_budget_duration="30d")
+        topped_up: Final = scenario.user()
+        untouched: Final = scenario.user()
+        for user in (topped_up, untouched):
+            added = gateway.request(
+                "POST", "/team/member_add", {"team_id": team, "member": {"user_id": user, "role": "user"}}
+            )
+            assert added.status_code == 200, added.text
+        keys: Final = {user: scenario.key(team_id=team, user_id=user) for user in (topped_up, untouched)}
+        for user in (topped_up, untouched):
+            spent = _chat(gateway, model, keys[user], f"spend past the team default {uuid.uuid4().hex}")
+            assert spent.status_code == 200, (user, spent.text)
+        for user in (topped_up, untouched):
+            _budget_refused(
+                eventually(
+                    lambda user=user: _chat(gateway, model, keys[user], f"over the team default {uuid.uuid4().hex}"),
+                    lambda response: response.status_code != 200,
+                    seconds=70,
+                )
+            )
+
+        expiry: Final = datetime.now(timezone.utc) + timedelta(days=30)
+        granted: Final = _member_update(
+            gateway,
+            {
+                "team_id": team,
+                "user_id": topped_up,
+                "temp_budget_increase": 0.01,
+                "temp_budget_expiry": expiry.isoformat(),
+            },
+        )
+        assert granted.temp_budget_increase == 0.01, granted
+        if grant_state == "cleared":
+            cleared: Final = _member_update(
+                gateway,
+                {"team_id": team, "user_id": topped_up, "temp_budget_increase": None, "temp_budget_expiry": None},
+            )
+            assert cleared.temp_budget_increase is None, cleared
+
+        raised: Final = gateway.request("POST", "/team/update", {"team_id": team, "team_member_budget": 5})
+        assert raised.status_code == 200, raised.text
+
+        for user in (topped_up, untouched):
+            admitted = eventually(
+                lambda user=user: _chat(gateway, model, keys[user], f"under the raised default {uuid.uuid4().hex}"),
+                lambda response: response.status_code == 200,
+                seconds=30,
+                return_last_on_timeout=True,
+            )
+            assert admitted.status_code == 200, (user, admitted.text)

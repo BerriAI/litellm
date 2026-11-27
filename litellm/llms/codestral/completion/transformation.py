@@ -1,9 +1,20 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
+
 import litellm
+from litellm.litellm_core_utils.core_helpers import keyword_arguments
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from litellm.types.llms.databricks import GenericStreamingChunk
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _StreamChunkFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
@@ -52,11 +63,11 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "suffix":
                 optional_params["suffix"] = value
@@ -100,7 +111,11 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
                 "finish_reason": finish_reason,
             }
 
-        original_chunk: Final = litellm.ModelResponseStream(**chunk_data_dict)
+        original_chunk: Final = litellm.ModelResponseStream(
+            **_StreamChunkFields(
+                **keyword_arguments(_DECODED_JSON.validate_python(chunk_data_dict), litellm.ModelResponseStream)
+            )
+        )
         _choices: Final = chunk_data_dict.get("choices", []) or []
         if len(_choices) == 0:
             return {

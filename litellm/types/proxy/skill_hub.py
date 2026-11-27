@@ -6,6 +6,7 @@ from pydantic import ConfigDict, Field
 
 from litellm.models.skill_submission import SubmissionOperation, SubmissionStatus
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.proxy.claude_code_endpoints import PluginAuthor
 
 SkillSortField: TypeAlias = Literal[
     "name",
@@ -39,6 +40,9 @@ class SkillHubSkill(LiteLLMBaseModel):
     domain: str | None = None
     namespace: str | None = None
     keywords: tuple[str, ...] | None = None
+    author: PluginAuthor | None = None
+    category: str | None = None
+    homepage: str | None = None
     download_count: int | None = Field(None, description="Gateway ZIP downloads, including repeat downloads")
 
 
@@ -51,31 +55,68 @@ class SkillHubList(LiteLLMBaseModel):
     next_offset: int | None
 
 
+class SkillHubUpload(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(..., pattern=r"^[a-z0-9-]+$", description="Registry skill name")
+    version: str | None = Field("1.0.0", description="Semantic version, defaults to 1.0.0 on creation")
+    description: str | None = None
+    author: PluginAuthor | None = None
+    homepage: str | None = None
+    keywords: tuple[str, ...] | None = None
+    category: str | None = None
+    domain: str | None = None
+    namespace: str | None = None
+
+
+class SkillHubRegistration(SkillHubUpload):
+    source: Mapping[str, str] = Field(description="Repository or HTTPS archive source reference")
+
+
 class ImportSkillRequest(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     url: str = Field(description="Public skills.sh skill URL or GitHub repository URL")
     skill: str | None = Field(None, description="Skill name to select when a repository contains several skills")
     ref: str = Field("HEAD", description="Git commit, tag or branch to import")
     path: str | None = Field(None, description="Repository-relative skill directory")
     version: str | None = Field(None, description="Semantic version, or omit/null to start at 1.0.0")
+    metadata: SkillHubUpload | None = Field(None, description="Optional registry name and metadata overrides")
 
 
 class SkillHubMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    description: str | None = Field(None, max_length=1024)
+    description: str | None = Field(None, description="Omit to preserve, null to clear the registry description")
     version: str | None = Field(None, description="Explicit higher SemVer, or omit/null for an automatic patch bump")
     expected_updated_at: datetime | None = Field(
         None, description="Published updated_at read by the editor. A stale value returns 409", exclude=True
     )
-    domain: str | None = None
-    namespace: str | None = None
-    keywords: tuple[str, ...] | None = None
+    domain: str | None = Field(None, description="Omit to preserve, null to clear")
+    namespace: str | None = Field(None, description="Omit to preserve, null to clear")
+    keywords: tuple[str, ...] | None = Field(None, description="Omit to preserve, null or an empty list to clear")
+    author: PluginAuthor | None = Field(None, description="Omit to preserve, null to clear")
+    category: str | None = Field(None, description="Omit to preserve, null to clear")
+    homepage: str | None = Field(None, description="Omit to preserve, null to clear")
+
+
+class SkillHubUpdate(SkillHubMetadata):
+    source: Mapping[str, str] | None = Field(
+        None,
+        description="Explicit replacement source reference. Omit/null to preserve the stored source and archive",
+    )
 
 
 class SkillHubPublication(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class SkillHubRestore(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_skill_id: str = Field(description="Current skill ID read by the editor")
+    expected_updated_at: datetime | None = Field(description="Current updated_at read by the editor, including null")
+    version: str | None = Field(None, description="Higher semantic version, or omit/null for an automatic patch bump")
 
 
 class SkillHubVersion(LiteLLMBaseModel):
@@ -116,6 +157,9 @@ class SkillHubProposal(LiteLLMBaseModel):
     domain: str | None = None
     namespace: str | None = None
     keywords: tuple[str, ...] | None = None
+    author: PluginAuthor | None = None
+    category: str | None = None
+    homepage: str | None = None
     source: Mapping[str, str]
     agent_skill: SkillHubAgentSkill | None = None
 
@@ -148,6 +192,8 @@ class SkillHubSubmission(LiteLLMBaseModel):
     reviewed_by: str | None
     reviewed_at: datetime | None
     rejection_reason: str | None
+    revision: int = Field(0, ge=0, description="Proposal revision used to prevent stale edits and reviews")
+    can_edit: bool = Field(False, description="Whether the caller may edit or withdraw this pending submission")
 
 
 class SkillHubSubmissionList(LiteLLMBaseModel):
@@ -165,6 +211,17 @@ class SkillHubSubmissionDetail(LiteLLMBaseModel):
     current_skill: SkillHubSkill | None
 
 
+class SkillHubSubmissionRevision(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_revision: int = Field(ge=0, description="Revision read from the submission detail")
+
+
+class SkillHubSubmissionEdit(SkillHubMetadata):
+    expected_revision: int = Field(ge=0, description="Revision read from the submission detail")
+    version: str | None = Field(None, description="Explicit SemVer, or omit/null for automatic versioning on approval")
+
+
 class SkillHubReviewResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -178,3 +235,4 @@ class SkillHubRejection(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     reason: str | None = Field(None, max_length=2000)
+    expected_revision: int | None = Field(None, ge=0)

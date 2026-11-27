@@ -282,7 +282,7 @@ def _make_logging_obj(
     )
 
 
-async def _proxy_boundary_hook(exc: Exception) -> None:
+async def _proxy_boundary_hook(_logging_obj: object, exc: Exception) -> None:
     return None
 
 
@@ -385,3 +385,41 @@ async def test_mid_stream_error_emits_error_event_without_logging_obj():
     events = await _drain_sse(_failing_wrapper(None))
 
     assert _parse_sse(events[-1])[0] == "error"
+
+
+class _StreamThenRaise:
+    def __init__(self, items: Sequence[object], exc: BaseException) -> None:
+        self._it: Final = iter(items)
+        self._exc: Final = exc
+
+    def __iter__(self) -> "_StreamThenRaise":
+        return self
+
+    def __next__(self) -> object:
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise self._exc
+
+
+def test_sync_mid_stream_error_ends_with_an_anthropic_error_event() -> None:
+    wrapper: Final = AnthropicStreamWrapper(
+        completion_stream=_StreamThenRaise(
+            [_make_chunk(Delta(content="Partial answer"))],
+            litellm.InternalServerError(
+                message="Upstream generation aborted (finish_reason=abort)",
+                model="test-model",
+                llm_provider="azure_ai",
+            ),
+        ),
+        model="azure_ai/test-model",
+    )
+
+    parsed: Final = [_parse_sse(event) for event in wrapper.anthropic_sse_wrapper()]
+
+    event_types: Final = [name for name, _ in parsed]
+    assert "content_block_delta" in event_types
+    assert "message_stop" not in event_types
+    assert event_types[-1] == "error"
+    assert parsed[-1][1]["error"]["type"] == "api_error"
+    assert "Upstream generation aborted" in parsed[-1][1]["error"]["message"]

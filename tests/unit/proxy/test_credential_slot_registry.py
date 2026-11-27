@@ -102,6 +102,8 @@ CALLBACK_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProx
         "newrelic_region": NotSecret("region name"),
         "signoz_ingestion_key": Unplanted(),
         "signoz_ingestion_endpoint": NotSecret("sink endpoint URL"),
+        "mixpanel_project_token": Unplanted(),
+        "mixpanel_region": NotSecret("region name"),
         "turn_off_message_logging": NotSecret("boolean logging switch"),
         "litellm_disabled_callbacks": NotSecret("list of callback names"),
     }
@@ -138,6 +140,11 @@ DEPLOYMENT_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingPr
         "anthropic_keycloak_client_secret_ref": Unplanted(),
         "anthropic_keycloak_scope": NotSecret("OAuth scope string"),
         "openai_identity_token_file": Unplanted(),
+        "github_copilot_app_private_key": Unplanted(),
+        "github_copilot_app_private_key_ref": Unplanted(),
+        "oauth_client_credentials": NotSecret("boolean switch for the OAuth client credentials grant"),
+        "oauth_token_url": NotSecret("OAuth token endpoint URL"),
+        "oauth_client_secret": Unplanted(),
     }
 )
 
@@ -147,8 +154,6 @@ REQUEST_BODY_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = Mapping
         "aws_access_key_id": Unplanted(),
         "aws_secret_access_key": Unplanted(),
         "aws_session_token": Unplanted(),
-        "azure_password": Unplanted(),
-        "client_secret": Unplanted(),
         "s3_access_key_id": Unplanted(),
         "s3_secret_access_key": Unplanted(),
         "valkey_password": Unplanted(),

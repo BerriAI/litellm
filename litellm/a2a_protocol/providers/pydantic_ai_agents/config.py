@@ -42,7 +42,12 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
         request_id: str,
         params: dict[str, object],
         api_base: str | None = None,
-        **kwargs,
+        *,
+        timeout: float = 60.0,
+        chunk_size: int = 50,
+        delay_ms: int = 10,
+        agent_extra_headers: Mapping[str, str] | None = None,
+        **kwargs: object,
     ) -> AsyncIterator[dict[str, object]]:
         """Handle streaming request with fake streaming."""
         if not api_base:
@@ -51,9 +56,9 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
             request_id=request_id,
             params=params,
             api_base=api_base,
-            timeout=kwargs.get("timeout", 60.0),
-            chunk_size=kwargs.get("chunk_size", 50),
-            delay_ms=kwargs.get("delay_ms", 10),
-            agent_extra_headers=kwargs.get("agent_extra_headers"),
+            timeout=timeout,
+            chunk_size=chunk_size,
+            delay_ms=delay_ms,
+            agent_extra_headers=agent_extra_headers,
         ):
             yield chunk

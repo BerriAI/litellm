@@ -8,8 +8,8 @@ Azure, and assert that the upstream's usage block reports either
 Foundry's Anthropic deployments honor the default 5-minute ephemeral
 `cache_control` exactly like anthropic.com. The 1-hour `scope: "global"`
 variant is *not* supported on Foundry — LiteLLM strips that field
-before forwarding (see `_remove_scope_from_cache_control` in
-`litellm/llms/azure_ai/anthropic/messages_transformation.py`) — but
+before forwarding (see `strip_cache_control_scope` in
+`litellm/rust/crates/llms/src/base_llm/messages/normalization.rs`) — but
 this row exercises the 5-minute TTL only, so that quirk does not apply.
 
 The (feature, provider) for this cell is inferred from the file path by
@@ -36,9 +36,10 @@ from claude_code.cli_driver import (
 
 
 AZURE_MODELS = [
-    "claude-haiku-4-5-azure",
-    "claude-sonnet-4-5-azure",
-    "claude-opus-4-7-azure",
+    "claude-haiku-5-5-azure",
+    "claude-sonnet-5-5-azure",
+    "claude-opus-5-5-azure",
+    "claude-fable-5-2-azure",
 ]
 
 

@@ -1,9 +1,19 @@
-from typing import Final
+from enum import Enum
+from typing import Annotated, Final, TypeAlias
 
 from openai._models import BaseModel as OpenAIObject
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter, ValidatorFunctionWrapHandler, WrapValidator
 
 from litellm.types.llms.base_model import LiteLLMBaseModel
+
+_ATTRIBUTE_VALUE: Final = TypeAdapter(object)
+
+
+def _str_as_given(value: object, handler: ValidatorFunctionWrapHandler) -> object:
+    return value if isinstance(value, str) and not isinstance(value, Enum) else handler(value)
+
+
+StrAsGiven: TypeAlias = Annotated[str, WrapValidator(_str_as_given)]
 
 
 class LiteLLMPydanticObjectBase(LiteLLMBaseModel):
@@ -31,13 +41,13 @@ class LiteLLMPydanticObjectBase(LiteLLMBaseModel):
 class BaseLiteLLMOpenAIResponseObject(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
-    def __getitem__(self, key):
-        return self.__dict__[key]
+    def __getitem__(self, key: str) -> object:
+        return _ATTRIBUTE_VALUE.validate_python(self.__dict__[key])
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         return self.__dict__.get(key, default)
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: object) -> bool:
         return key in self.__dict__
 
     def items(self):
@@ -53,19 +63,19 @@ class HiddenParams(OpenAIObject):
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:

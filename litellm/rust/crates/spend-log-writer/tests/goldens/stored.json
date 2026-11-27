@@ -1,0 +1,252 @@
+{
+  "deliveries": [
+    {
+      "accounting_payload": {
+        "spend": 4.0
+      },
+      "applied_at": null,
+      "attempts": 0,
+      "delivery_id": "golden-batch",
+      "is_batch": true,
+      "last_error": null,
+      "request_id": "golden-batch",
+      "state": "pending"
+    },
+    {
+      "accounting_payload": {
+        "spend": 0.5
+      },
+      "applied_at": null,
+      "attempts": 0,
+      "delivery_id": "golden-disabled-delivery",
+      "is_batch": false,
+      "last_error": null,
+      "request_id": "golden-disabled",
+      "state": "pending"
+    },
+    {
+      "accounting_payload": {
+        "nested": {
+          "a": [
+            1,
+            {
+              "b": "c"
+            }
+          ]
+        },
+        "request_id": "golden-full",
+        "spend": 0.25
+      },
+      "applied_at": null,
+      "attempts": 0,
+      "delivery_id": "golden-full-delivery",
+      "is_batch": false,
+      "last_error": null,
+      "request_id": "golden-full",
+      "state": "pending"
+    },
+    {
+      "accounting_payload": {
+        "nested": {
+          "a": [
+            1,
+            {
+              "b": "c"
+            }
+          ]
+        },
+        "request_id": "golden-odd_values",
+        "spend": 0.25
+      },
+      "applied_at": null,
+      "attempts": 0,
+      "delivery_id": "golden-odd_values-delivery",
+      "is_batch": false,
+      "last_error": null,
+      "request_id": "golden-odd_values",
+      "state": "pending"
+    }
+  ],
+  "logs": [
+    {
+      "agent_id": null,
+      "api_base": "https://example.test",
+      "api_key": "hashed",
+      "billing_agent_id": null,
+      "cache_hit": "False",
+      "cache_key": "Cache OFF",
+      "call_type": "aretrieve_batch",
+      "completionStartTime": "2026-11-02T12:00:00.5",
+      "completion_tokens": 2,
+      "custom_llm_provider": "openai",
+      "endTime": "2026-11-02T12:00:01",
+      "end_user": "",
+      "litellm_call_id": "call",
+      "mcp_namespaced_tool_name": null,
+      "messages": [
+        {
+          "content": "h\u00e9llo \u2603",
+          "role": "user"
+        }
+      ],
+      "metadata": {
+        "nested": {
+          "x": [
+            1,
+            2.5,
+            null
+          ]
+        },
+        "status": "success",
+        "tenant": "a"
+      },
+      "model": "gpt",
+      "model_group": "gpt",
+      "model_id": "deployment",
+      "organization_id": "",
+      "prompt_tokens": 1,
+      "proxy_server_request": {},
+      "request_duration_ms": 1000,
+      "request_id": "golden-batch",
+      "request_tags": [
+        "tag",
+        "other"
+      ],
+      "requester_ip_address": null,
+      "response": {
+        "choices": [
+          {
+            "text": "a \"quoted\" \\ value"
+          }
+        ],
+        "id": "resp"
+      },
+      "session_id": null,
+      "spend": 4,
+      "startTime": "2026-11-02T12:00:00",
+      "status": "success",
+      "team_id": "team",
+      "total_tokens": 3,
+      "user": "user"
+    },
+    {
+      "agent_id": null,
+      "api_base": "https://example.test",
+      "api_key": "hashed",
+      "billing_agent_id": null,
+      "cache_hit": "False",
+      "cache_key": "Cache OFF",
+      "call_type": "acompletion",
+      "completionStartTime": "2026-11-02T12:00:00.5",
+      "completion_tokens": 2,
+      "custom_llm_provider": "openai",
+      "endTime": "2026-11-02T12:00:01",
+      "end_user": "",
+      "litellm_call_id": "call",
+      "mcp_namespaced_tool_name": null,
+      "messages": [
+        {
+          "content": "h\u00e9llo \u2603",
+          "role": "user"
+        }
+      ],
+      "metadata": {
+        "nested": {
+          "x": [
+            1,
+            2.5,
+            null
+          ]
+        },
+        "status": "success",
+        "tenant": "a"
+      },
+      "model": "gpt",
+      "model_group": "gpt",
+      "model_id": "deployment",
+      "organization_id": "",
+      "prompt_tokens": 1,
+      "proxy_server_request": {},
+      "request_duration_ms": 1000,
+      "request_id": "golden-full",
+      "request_tags": [
+        "tag",
+        "other"
+      ],
+      "requester_ip_address": null,
+      "response": {
+        "choices": [
+          {
+            "text": "a \"quoted\" \\ value"
+          }
+        ],
+        "id": "resp"
+      },
+      "session_id": null,
+      "spend": 0.25,
+      "startTime": "2026-11-02T12:00:00",
+      "status": "success",
+      "team_id": "team",
+      "total_tokens": 3,
+      "user": "user"
+    },
+    {
+      "agent_id": null,
+      "api_base": "https://example.test",
+      "api_key": "hashed",
+      "billing_agent_id": null,
+      "cache_hit": "False",
+      "cache_key": "Cache OFF",
+      "call_type": "acompletion",
+      "completionStartTime": "2026-11-02T12:00:00.5",
+      "completion_tokens": 2,
+      "custom_llm_provider": "openai",
+      "endTime": "2026-11-02T12:00:01",
+      "end_user": "",
+      "litellm_call_id": "call",
+      "mcp_namespaced_tool_name": null,
+      "messages": [
+        {
+          "content": "h\u00e9llo \u2603",
+          "role": "user"
+        }
+      ],
+      "metadata": {
+        "nul": "ab",
+        "spend": null,
+        "status": "success"
+      },
+      "model": "gpt",
+      "model_group": "gpt",
+      "model_id": "deployment",
+      "organization_id": "",
+      "prompt_tokens": 1,
+      "proxy_server_request": {},
+      "request_duration_ms": 1000,
+      "request_id": "golden-odd_values",
+      "request_tags": [
+        "tag",
+        "other"
+      ],
+      "requester_ip_address": null,
+      "response": {
+        "big": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,
+        "text": "xy"
+      },
+      "session_id": null,
+      "spend": 0.25,
+      "startTime": "2026-11-02T12:00:00",
+      "status": "success",
+      "team_id": "team",
+      "total_tokens": 3,
+      "user": "user"
+    }
+  ],
+  "rows": [
+    "{\"request_id\": \"golden-full\", \"call_type\": \"acompletion\", \"api_key\": \"hashed\", \"spend\": 0.25, \"total_tokens\": 3, \"prompt_tokens\": 1, \"completion_tokens\": 2, \"startTime\": \"2026-11-02T12:00:00+00:00\", \"endTime\": \"2026-11-02T12:00:01+00:00\", \"completionStartTime\": \"2026-11-02T12:00:00.500000+00:00\", \"model\": \"gpt\", \"user\": \"user\", \"team_id\": \"team\", \"organization_id\": \"\", \"metadata\": \"{\\\"status\\\": \\\"success\\\", \\\"tenant\\\": \\\"a\\\", \\\"nested\\\": {\\\"x\\\": [1, 2.5, null]}}\", \"cache_key\": \"Cache OFF\", \"cache_hit\": \"False\", \"request_tags\": \"[\\\"tag\\\", \\\"other\\\"]\", \"end_user\": \"\", \"api_base\": \"https://example.test\", \"model_group\": \"gpt\", \"model_id\": \"deployment\", \"mcp_namespaced_tool_name\": null, \"agent_id\": null, \"billing_agent_id\": null, \"requester_ip_address\": null, \"custom_llm_provider\": \"openai\", \"messages\": \"[{\\\"role\\\": \\\"user\\\", \\\"content\\\": \\\"h\\\\u00e9llo \\\\u2603\\\"}]\", \"response\": \"{\\\"id\\\": \\\"resp\\\", \\\"choices\\\": [{\\\"text\\\": \\\"a \\\\\\\"quoted\\\\\\\" \\\\\\\\ value\\\"}]}\", \"proxy_server_request\": \"{}\", \"session_id\": null, \"request_duration_ms\": 1000, \"status\": \"success\", \"litellm_call_id\": \"call\", \"accounting_delivery_id\": \"golden-full-delivery\", \"accounting_payload\": {\"request_id\": \"golden-full\", \"spend\": 0.25, \"nested\": {\"a\": [1, {\"b\": \"c\"}]}}, \"accounting_log_disabled\": false}",
+    "{\"request_id\": \"golden-full\", \"call_type\": \"acompletion\", \"api_key\": \"hashed\", \"spend\": 9.0, \"total_tokens\": 3, \"prompt_tokens\": 1, \"completion_tokens\": 2, \"startTime\": \"2026-11-02T12:00:00+00:00\", \"endTime\": \"2026-11-02T12:00:01+00:00\", \"completionStartTime\": \"2026-11-02T12:00:00.500000+00:00\", \"model\": \"gpt\", \"user\": \"user\", \"team_id\": \"team\", \"organization_id\": \"\", \"metadata\": \"{\\\"status\\\": \\\"success\\\", \\\"tenant\\\": \\\"a\\\", \\\"nested\\\": {\\\"x\\\": [1, 2.5, null]}}\", \"cache_key\": \"Cache OFF\", \"cache_hit\": \"False\", \"request_tags\": \"[\\\"tag\\\", \\\"other\\\"]\", \"end_user\": \"\", \"api_base\": \"https://example.test\", \"model_group\": \"gpt\", \"model_id\": \"deployment\", \"mcp_namespaced_tool_name\": null, \"agent_id\": null, \"billing_agent_id\": null, \"requester_ip_address\": null, \"custom_llm_provider\": \"openai\", \"messages\": \"[{\\\"role\\\": \\\"user\\\", \\\"content\\\": \\\"h\\\\u00e9llo \\\\u2603\\\"}]\", \"response\": \"{\\\"id\\\": \\\"resp\\\", \\\"choices\\\": [{\\\"text\\\": \\\"a \\\\\\\"quoted\\\\\\\" \\\\\\\\ value\\\"}]}\", \"proxy_server_request\": \"{}\", \"session_id\": null, \"request_duration_ms\": 1000, \"status\": \"success\", \"litellm_call_id\": \"call\", \"accounting_delivery_id\": \"golden-full-delivery\", \"accounting_payload\": {\"request_id\": \"golden-full\", \"spend\": 9.0, \"nested\": {\"a\": [1, {\"b\": \"c\"}]}}, \"accounting_log_disabled\": false}",
+    "{\"request_id\": \"golden-batch\", \"call_type\": \"aretrieve_batch\", \"api_key\": \"hashed\", \"spend\": 4.0, \"total_tokens\": 3, \"prompt_tokens\": 1, \"completion_tokens\": 2, \"startTime\": \"2026-11-02T12:00:00+00:00\", \"endTime\": \"2026-11-02T12:00:01+00:00\", \"completionStartTime\": \"2026-11-02T12:00:00.500000+00:00\", \"model\": \"gpt\", \"user\": \"user\", \"team_id\": \"team\", \"organization_id\": \"\", \"metadata\": \"{\\\"status\\\": \\\"success\\\", \\\"tenant\\\": \\\"a\\\", \\\"nested\\\": {\\\"x\\\": [1, 2.5, null]}}\", \"cache_key\": \"Cache OFF\", \"cache_hit\": \"False\", \"request_tags\": \"[\\\"tag\\\", \\\"other\\\"]\", \"end_user\": \"\", \"api_base\": \"https://example.test\", \"model_group\": \"gpt\", \"model_id\": \"deployment\", \"mcp_namespaced_tool_name\": null, \"agent_id\": null, \"billing_agent_id\": null, \"requester_ip_address\": null, \"custom_llm_provider\": \"openai\", \"messages\": \"[{\\\"role\\\": \\\"user\\\", \\\"content\\\": \\\"h\\\\u00e9llo \\\\u2603\\\"}]\", \"response\": \"{\\\"id\\\": \\\"resp\\\", \\\"choices\\\": [{\\\"text\\\": \\\"a \\\\\\\"quoted\\\\\\\" \\\\\\\\ value\\\"}]}\", \"proxy_server_request\": \"{}\", \"session_id\": null, \"request_duration_ms\": 1000, \"status\": \"success\", \"litellm_call_id\": \"call\", \"accounting_payload\": \"{\\\"spend\\\": 4.0}\", \"accounting_log_disabled\": false}",
+    "{\"request_id\": \"golden-disabled\", \"call_type\": \"acompletion\", \"accounting_delivery_id\": \"golden-disabled-delivery\", \"accounting_payload\": {\"spend\": 0.5}, \"accounting_log_disabled\": true}",
+    "{\"request_id\": \"golden-odd_values\", \"call_type\": \"acompletion\", \"api_key\": \"hashed\", \"spend\": 0.25, \"total_tokens\": 3, \"prompt_tokens\": 1, \"completion_tokens\": 2, \"startTime\": \"2026-11-02T12:00:00+00:00\", \"endTime\": \"2026-11-02T12:00:01+00:00\", \"completionStartTime\": \"2026-11-02T12:00:00.500000+00:00\", \"model\": \"gpt\", \"user\": \"user\", \"team_id\": \"team\", \"organization_id\": \"\", \"metadata\": \"{\\\"status\\\": \\\"success\\\", \\\"spend\\\": NaN, \\\"nul\\\": \\\"a\\\\u0000b\\\"}\", \"cache_key\": \"Cache OFF\", \"cache_hit\": \"False\", \"request_tags\": \"[\\\"tag\\\", \\\"other\\\"]\", \"end_user\": \"\", \"api_base\": \"https://example.test\", \"model_group\": \"gpt\", \"model_id\": \"deployment\", \"mcp_namespaced_tool_name\": null, \"agent_id\": null, \"billing_agent_id\": null, \"requester_ip_address\": null, \"custom_llm_provider\": \"openai\", \"messages\": \"[{\\\"role\\\": \\\"user\\\", \\\"content\\\": \\\"h\\\\u00e9llo \\\\u2603\\\"}]\", \"response\": \"{\\\"text\\\": \\\"x\\\\u0000y\\\", \\\"big\\\": 1e300}\", \"proxy_server_request\": \"{}\", \"session_id\": null, \"request_duration_ms\": 1000, \"status\": \"success\", \"litellm_call_id\": \"call\", \"accounting_delivery_id\": \"golden-odd_values-delivery\", \"accounting_payload\": {\"request_id\": \"golden-odd_values\", \"spend\": 0.25, \"nested\": {\"a\": [1, {\"b\": \"c\"}]}}, \"accounting_log_disabled\": false}"
+  ]
+}

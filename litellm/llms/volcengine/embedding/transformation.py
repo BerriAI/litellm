@@ -8,7 +8,10 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -17,6 +20,12 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import get_volcengine_base_url, get_volcengine_headers
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _VolcengineEmbeddingFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
@@ -59,8 +68,8 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -123,12 +132,12 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """Transform embedding request to Volcengine format"""
         # Prepare request data (only the JSON body, not the full request)
-        data: Final = {
+        data: Final[dict[str, object]] = {
             "model": model,
             "input": input if isinstance(input, list) else [input],
         }
@@ -153,15 +162,16 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         """Transform Volcengine response to EmbeddingResponse"""
         try:
-            response_json: Final = raw_response.json()
+            decoded_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise ValueError(f"Failed to parse Volcengine response as JSON: {e}")
+        response_json: Final = decoded_json_object(decoded_response)
 
         # Volcengine response format matches OpenAI format closely
         # Just need to ensure all required fields are present
@@ -177,18 +187,18 @@ class VolcEngineEmbeddingConfig(BaseEmbeddingConfig):
             transformed_response["id"] = response_json["id"]
 
         # Create EmbeddingResponse from transformed data
-        return EmbeddingResponse(**transformed_response)
+        return EmbeddingResponse(**_VolcengineEmbeddingFields(**transformed_response))
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Validate environment and return headers"""
         # Get Volcengine headers
         if api_key is None:

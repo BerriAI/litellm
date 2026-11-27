@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -26,7 +26,7 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
     control image and has no ``/edit`` path suffix.
     """
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a list
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns a list
         return list(SUPPORTED_OPENAI_PARAMS)
 
     def map_openai_params(
@@ -34,7 +34,7 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: base class contract returns a dict
+    ) -> dict[str, object]:  # mutable-ok: base class contract returns a dict
         return {
             PARAM_TRANSLATION.get(key, key): self._translate_value(key, value, model)
             for key, value in image_edit_optional_params.items()
@@ -45,7 +45,7 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,  # mutable-ok: base class contract
+        litellm_params: dict[str, object],  # mutable-ok: base class contract
     ) -> str:
         base_url: Final = api_base or get_secret_str("FAL_AI_API_BASE") or DEFAULT_BASE_URL
         return join_api_base(base_url, FLUX_LORA_DEPTH_ENDPOINT)
@@ -54,11 +54,11 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
-        image_edit_optional_request_params: dict,  # mutable-ok: base class contract
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: dict[str, object],  # mutable-ok: base class contract
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: base class contract
-    ) -> tuple[dict, RequestFiles]:  # mutable-ok: base class contract returns a dict
+        headers: dict[str, object],  # mutable-ok: base class contract
+    ) -> tuple[dict[str, object], RequestFiles]:  # mutable-ok: base class contract returns a dict
         images: Final = tuple(img for img in (image if isinstance(image, list) else (image,)) if img is not None)
         if not images:
             raise ValueError("Fal AI image edit requires at least one input image")

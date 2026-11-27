@@ -11,19 +11,20 @@ instead, so the route table is complete before the first request.
 import asyncio
 import importlib
 import os
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from starlette.routing import BaseRoute, Match
 from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes
 from litellm.proxy.route_priority import (
     builtin_pass_through_routes_first,
     configured_pass_through_routes_first,
@@ -222,6 +223,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/backend-api/codex/",),
     ),
     LazyFeature(
+        name="cursor_cli_passthrough",
+        module_path="litellm.proxy.pass_through_endpoints.cursor_cli_passthrough_endpoints",
+        path_prefixes=("/cursor-cli/",),
+    ),
+    LazyFeature(
         name="llm_passthrough",
         module_path="litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints",
         path_prefixes=(
@@ -243,10 +249,10 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/mistral/",
             "/nvidia_nim/",
             "/openai/",
+            "/opensearch/",
             "/openai_passthrough/",
             "/tinyfish/",
             "/transcribe",
-            "/typesafe/",
             "/eu_jev/",
             "/laya/",
             "/bespoke/",
@@ -261,6 +267,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="realtime",
         module_path="litellm.proxy.realtime_endpoints.endpoints",
         path_prefixes=("/openai/v1/realtime", "/v1/realtime", "/realtime"),
+    ),
+    LazyFeature(
+        name="live_sessions",
+        module_path="litellm.proxy.realtime_endpoints.live_endpoints",
+        path_prefixes=("/openai/v1/live", "/v1/live", "/live"),
     ),
     LazyFeature(
         name="anthropic_passthrough",
@@ -403,12 +414,24 @@ def _scope_value(scope: Mapping[str, object], key: str) -> object:
     return scope.get(key, "")
 
 
+class _LazySlotsState(Protocol):
+    @property
+    def lazy_slots(self) -> Mapping[str, BaseRoute | None]: ...
+
+
+class _LazyRoutesState(Protocol):
+    @property
+    def lazy_routes(self) -> Mapping[str, tuple[BaseRoute, ...]]: ...
+
+
 def _lazy_slots(app: "FastAPI") -> Mapping[str, BaseRoute | None]:
-    return app.state.lazy_slots if hasattr(app.state, "lazy_slots") else MappingProxyType({})
+    state: Final = app.state
+    return state.lazy_slots if has_attributes(state, _LazySlotsState, "lazy_slots") else MappingProxyType({})
 
 
 def _lazy_routes(app: "FastAPI") -> Mapping[str, tuple[BaseRoute, ...]]:
-    return app.state.lazy_routes if hasattr(app.state, "lazy_routes") else MappingProxyType({})
+    state: Final = app.state
+    return state.lazy_routes if has_attributes(state, _LazyRoutesState, "lazy_routes") else MappingProxyType({})
 
 
 def reserve_lazy_slot(app: "FastAPI", name: str, features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> None:
@@ -668,6 +691,22 @@ def loaded_lazy_modules(app: "FastAPI") -> frozenset[str]:
     return frozenset(m for m in loaded if isinstance(m, str))
 
 
+class _SnapshotLookup(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+class _SnapshotEntries(Protocol):
+    def items(self) -> Iterable[tuple[object, object]]: ...
+
+
+def _snapshot_child(node: object, key: str, default: object) -> object:
+    return require_attributes(node, _SnapshotLookup, "get").get(key, default)
+
+
+def _snapshot_entries(node: object) -> Iterable[tuple[object, object]]:
+    return require_attributes(node, _SnapshotEntries, "items").items()
+
+
 def inject_lazy_stubs(
     schema: dict,
     loaded_modules: AbstractSet[str],
@@ -688,11 +727,13 @@ def inject_lazy_stubs(
             if feat.module_path in loaded_modules and not feat.persistent_swagger_stub:
                 continue
 
-            fragment = (snapshot or {}).get(feat.name)
+            fragment = require_attributes(snapshot, _SnapshotLookup, "get").get(feat.name) if snapshot else None
             if fragment:
-                for p, ops in fragment.get("paths", {}).items():
+                for p, ops in _snapshot_entries(_snapshot_child(fragment, "paths", {})):
                     paths.setdefault(p, ops)
-                for name, sch in fragment.get("components", {}).get("schemas", {}).items():
+                for name, sch in _snapshot_entries(
+                    _snapshot_child(_snapshot_child(fragment, "components", {}), "schemas", {})
+                ):
                     schemas.setdefault(name, sch)
                 continue
 

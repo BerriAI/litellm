@@ -20,7 +20,10 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, require_attributes
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
@@ -29,6 +32,8 @@ from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VertexAIRealtimeConfig(GeminiRealtimeConfig):
@@ -52,6 +57,9 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         return False
 
     def _rejects_undocumented_voices(self, model: str) -> bool:
+        return True
+
+    def _supports_avatars(self) -> bool:
         return True
 
     # ------------------------------------------------------------------
@@ -84,10 +92,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,  # noqa: ARG002
         api_key: str | None = None,  # noqa: ARG002
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Return headers with a Bearer token for Vertex AI.
 
@@ -157,7 +165,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         """Return the fully-qualified Vertex AI model resource path."""
         return f"projects/{self._project}/locations/{self._location}/publishers/google/models/{model}"
 
-    def _build_vertex_ai_setup_config(self, model: str, session_params: dict) -> dict:
+    def _build_vertex_ai_setup_config(self, model: str, session_params: dict[str, object]) -> dict[str, object]:
         """Build Vertex AI setup configuration with proper model path and defaults."""
         # Normalize GA-remapped fields (``output_modalities``, nested
         # ``audio.input.transcription``, ``audio.input.turn_detection``) back to
@@ -216,12 +224,16 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         documents ``setup`` as the first-and-only client message, and a second
         ``setup`` closes the connection with a 1007 policy error.
         """
-        json_message: Final = json.loads(message)
-        msg_type: Final = json_message.get("type")
+        fields: Final = decoded_json_object(_DECODED_JSON.validate_python(json.loads(message)))
+        msg_type: Final = fields.get("type")
 
         if msg_type == "session.update":
+            session: Final = fields.get("session")
+            session_params: Final = dict(as_str_mapping(session) or {})
             if session_configuration_request is None:
-                setup_config: Final = self._build_vertex_ai_setup_config(model, json_message.get("session") or {})
+                setup_config: Final = self._build_vertex_ai_setup_config(
+                    model, require_attributes(session or {}, dict[str, object], "items")
+                )
                 gemini_setup_msg: Final = json.dumps({"setup": setup_config})
 
                 verbose_logger.debug("Vertex AI Realtime: Sending initial setup with tools to backend")
@@ -232,7 +244,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
             # silencing the audio-transcription guardrail's create_response
             # disable, surface a warning so operators know the model will
             # auto-respond before the guardrail can gate it on Vertex AI.
-            client_turn_detection = GeminiRealtimeConfig._extract_turn_detection(json_message.get("session") or {})
+            client_turn_detection: Final = GeminiRealtimeConfig._extract_turn_detection(session_params)
             if isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False:
                 verbose_logger.warning(
                     "Vertex AI Realtime: Dropping subsequent session.update "

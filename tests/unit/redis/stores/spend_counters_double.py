@@ -35,8 +35,21 @@ def _is_number(value: object) -> bool:
     return value is None or (isinstance(value, (int, float)) and not isinstance(value, bool))
 
 
+_TWIN_SCOPES: Final = frozenset({"key", "team", "user", "org", "end_user"})
+_WINDOWED_SCOPES: Final = frozenset({"key", "team"})
+
+
+def _native_store_takes_twin(twin: str) -> bool:
+    scope, _, counter_id = twin.partition(":")
+    _, separator, window = counter_id.rpartition(":window:")
+    return scope in _TWIN_SCOPES and not (scope in _WINDOWED_SCOPES and separator and window)
+
+
 def _check(counter: str) -> None:
     if not counter.startswith("spend:"):
+        raise ValueError(f"{counter!r} is not a spend counter")
+    twin: Final = counter.removeprefix("spend:committed:")
+    if twin != counter and not _native_store_takes_twin(twin):
         raise ValueError(f"{counter!r} is not a spend counter")
 
 
@@ -57,7 +70,7 @@ class DeclaredRead:
 class FakeSpendCounters:
     """``redis`` is None for a worker without Redis, and ``redis_default`` answers reads of a key it lacks. ``fail``
     makes every Redis call fail with ``failure``, ``fail_pipelines`` only the increment pipelines and ``failing`` only
-    the named writes ("set", "delete")."""
+    the named writes ("set", "set_max", "delete")."""
 
     redis: dict[str, object] | None = field(default_factory=dict)
     memory: dict[str, float] = field(default_factory=dict)
@@ -68,6 +81,7 @@ class FakeSpendCounters:
     failure: str = "transport"
     redis_default: float | None = None
     redis_ttl: float = 60
+    committed_ttl: float | None = None
     batch_reads: bool = True
     read_hook: Callable[[str], Awaitable[None]] | None = None
     on_delete: Callable[[tuple[str, ...]], None] | None = None
@@ -85,6 +99,9 @@ class FakeSpendCounters:
     @property
     def redis_ttl_seconds(self) -> float | None:
         return None if self.redis is None else self.redis_ttl
+
+    def set_committed_ttl(self, ttl_seconds: float, /) -> None:
+        self.committed_ttl = ttl_seconds
 
     def attach(self, client: NativeRedisClient, /) -> bool:
         if self.redis is not None:
@@ -164,7 +181,7 @@ class FakeSpendCounters:
             self.memory[counter] = spend
         if self.redis is None:
             return _done(None)
-        if self.fail:
+        if self.fail or "set_max" in self.failing:
             return _failed(unavailable(self.failure))
         self.commands.append(f"SETMAX {counter} {spend}")
         current: Final = self.redis.get(counter)

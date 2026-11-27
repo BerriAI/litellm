@@ -2,15 +2,20 @@
 Common utility functions used for translating messages across providers
 """
 
+import importlib
 import json
-from collections.abc import Hashable, Iterable, Mapping, Sequence
+import sys
+import warnings
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data as extract_file_data,  # noqa: PLC0414  # public compatibility re-export
 )
@@ -53,6 +58,7 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     is_object_schema as is_object_schema,  # noqa: PLC0414  # public compatibility re-export
 )
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import ref_points_into_defs
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     schema_fragment_ref as schema_fragment_ref,  # noqa: PLC0414  # public compatibility re-export
 )
@@ -180,13 +186,13 @@ from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
     split_concatenated_json_objects as split_concatenated_json_objects,  # noqa: PLC0414  # public compatibility re-export
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
-    _image_part_url,  # pyright: ignore[reportPrivateUsage]  # Shared implementation for as_openai_image_part
-)
-from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     anthropic_image_source_to_openai_url as anthropic_image_source_to_openai_url,  # noqa: PLC0414  # public compatibility re-export
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     embedding_input_is_all_media as embedding_input_is_all_media,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    image_part_url,
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     split_embedding_media_for_tpm as split_embedding_media_for_tpm,  # noqa: PLC0414  # public compatibility re-export
@@ -194,6 +200,7 @@ from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     split_media_for_tpm as split_media_for_tpm,  # noqa: PLC0414  # public compatibility re-export
 )
+from litellm.types.llms.anthropic import ANTHROPIC_UNRENDERED_BLOCK_TYPES
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -221,6 +228,108 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE: Final = ChatCompletionAssistantMessage(conte
 _extract_reasoning_content: Final = extract_reasoning_content
 _get_image_mime_type_from_url: Final = get_image_mime_type_from_url
 _parse_content_for_reasoning: Final = parse_content_for_reasoning
+
+_MOVED_PRIVATE_NAME_MODULES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        **dict.fromkeys(
+            ("_decode_vector_store_ids_in_tools",),
+            "file_id_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_EMPTY_SCHEMA",
+                "_LOCAL_SCHEMA_REF_PREFIXES",
+                "_MAX_SCHEMA_FLATTEN_DEPTH",
+                "_MAX_SCHEMA_NESTING",
+                "_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS",
+                "_REGEX_LOOKAROUND_RE",
+                "_SCHEMA_LIST",
+                "_SUBSCHEMA_KEYWORDS",
+                "_SUBSCHEMA_LIST_KEYWORDS",
+                "_SUBSCHEMA_MAP_KEYWORDS",
+                "_TOP_LEVEL_SCHEMA_COMBINATORS",
+                "_any_of",
+                "_combinator_required_names",
+                "_dropped_pattern_properties",
+                "_flatten_schema_against_root",
+                "_grammar_branches",
+                "_is_not_python_regex",
+                "_is_object_schema",
+                "_is_open_object",
+                "_is_union",
+                "_keyword_value_rebuilt",
+                "_list_at",
+                "_may_be_string",
+                "_mergeable_branch",
+                "_named_schemas",
+                "_node_without_rejected_regex",
+                "_optional_property_names",
+                "_property_schemas",
+                "_refs_in",
+                "_resolve_local_schema_ref",
+                "_root_definitions",
+                "_schema_at",
+                "_schema_branches",
+                "_schema_levels",
+                "_schema_nodes",
+                "_schema_properties",
+                "_schema_required_names",
+                "_schema_without_rejected_regex",
+                "_subschemas",
+                "_uses_regex_lookaround",
+            ),
+            "json_schema_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_BREAKPOINT_BLOCKS",
+                "_BREAKPOINT_BLOCK_LIST_KEYS",
+                "_BREAKPOINT_FIELDS",
+                "_MarkedT",
+                "_PROMPT_CACHE_BREAKPOINT",
+                "_breakpoints_stripped_from",
+                "_without_prompt_cache_breakpoint",
+            ),
+            "prompt_cache_breakpoint_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_carries_encrypted_reasoning",
+                "_converse_wrapped_payload",
+                "_encrypted_reasoning_field",
+                "_provider_text_or_none",
+                "_readable_thinking_text",
+                "_reasoning_item_from_block_group",
+                "_reasoning_replay_group_key",
+                "_strip_encrypted_reasoning_from_blocks",
+            ),
+            "reasoning_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_DECODED_JSON",
+                "_attempt_json_repair",
+            ),
+            "tool_call_json_repair",
+        ),
+        **dict.fromkeys(
+            (
+                "_TPMMediaProjection",
+                "_tpm_blank_fields",
+                "_tpm_code_output_media",
+                "_tpm_document_media",
+                "_tpm_file_media",
+                "_tpm_image_part",
+                "_tpm_input_media",
+                "_tpm_media_leaf",
+                "_tpm_media_list",
+                "_tpm_replace_field",
+                "_tpm_tool_result_media",
+            ),
+            "tpm_media_utils",
+        ),
+    }
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
@@ -273,6 +382,43 @@ def handle_messages_with_content_list_to_str_conversion(
     return [_message_with_str_content(message) for message in messages]
 
 
+def _text_part(part: object) -> str | None:
+    match part:
+        case {"type": "text", "text": str() as text}:
+            return text
+        case _:
+            return None
+
+
+def _text_only_content(content: object) -> str | None:
+    if not isinstance(content, list) or not content:
+        return None
+    parts: Final = cast("list[object]", content)  # cast-ok: isinstance narrows object to an unparameterized list
+    texts: Final = tuple(_text_part(part) for part in parts)
+    if None in texts:
+        return None
+    return "\n".join(text for text in texts if text is not None)
+
+
+def _content_of(message: Mapping[str, object]) -> object:
+    return message.get("content")
+
+
+def _message_with_text_only_content_as_str(message: AllMessageValues) -> AllMessageValues:
+    text: Final = _text_only_content(_content_of(message))
+    if text is None:
+        return message
+    return cast(  # cast-ok: the same message with its text parts joined into one string
+        AllMessageValues, {**message, "content": text}
+    )
+
+
+def handle_messages_with_text_only_content_lists_as_str(
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    return tuple(_message_with_text_only_content_as_str(message) for message in messages)
+
+
 def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[str] = ["user"]) -> AllMessageValues:
     """
     Removes 'name' from message
@@ -289,7 +435,7 @@ def strip_name_from_messages(
     """
     Removes 'name' from messages
     """
-    new_messages: Final = []
+    new_messages: Final[list[AllMessageValues]] = []
     for message in messages:
         msg_role = message.get("role")
         msg_copy = message.copy()
@@ -337,6 +483,17 @@ def extract_search_results_text(search_results: object) -> str:
         if citations is not None:
             texts += json.dumps(citations, separators=(",", ":"))
     return texts
+
+
+def is_unrendered_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    block_type: Final = None if fields is None else fields.get("type")
+    return isinstance(block_type, str) and block_type in ANTHROPIC_UNRENDERED_BLOCK_TYPES
+
+
+def is_unrendered_block_without_text(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and is_unrendered_block(fields) and "text" not in fields
 
 
 def convert_content_list_to_str(
@@ -537,7 +694,7 @@ def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObjec
 
     Rebuilt rather than forwarded so no caller-controlled key beyond the URL rides along.
     """
-    url: Final = _image_part_url(part)
+    url: Final = image_part_url(part)
     return {"type": "image_url", "image_url": {"url": url}} if url else None
 
 
@@ -585,7 +742,7 @@ def convert_openai_message_to_only_content_messages(
 
     Used for calling guardrails integrations which expect string content
     """
-    converted_messages: Final = []
+    converted_messages: Final[list[dict[str, str]]] = []
     user_roles: Final = ["user", "tool", "function"]
     for message in messages:
         if message.get("role") in user_roles:
@@ -647,6 +804,51 @@ def detect_first_expected_role(
     return None
 
 
+_TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
+
+
+def _is_blank_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and not fields.get("text")
+
+
+def is_blank_content(content: object) -> bool:
+    if content is None or content == "":
+        return True
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_blank_text_block, blocks))
+
+
+def is_empty_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and is_blank_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and is_blank_content(getattr(message, "content", None))
+
+
+def _is_whitespace_text(text: object) -> bool:
+    return not text or (isinstance(text, str) and not text.strip())
+
+
+def _is_whitespace_text_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in _TEXT_BLOCK_TYPES and _is_whitespace_text(fields.get("text"))
+
+
+def _is_whitespace_content(content: object) -> bool:
+    if content is None or isinstance(content, str):
+        return _is_whitespace_text(content)
+    blocks: Final = as_object_list(content)
+    return blocks is not None and all(map(_is_whitespace_text_block, blocks))
+
+
+def is_whitespace_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and _is_whitespace_content(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and _is_whitespace_content(getattr(message, "content", None))
+
+
 def _counts_for_alternation(message: AllMessageValues) -> bool:
     role: Final = message.get("role")
     if role == "user":
@@ -680,7 +882,7 @@ def _insert_user_continue_message(
     # Handle first message if it's an assistant message — always prepend
     # user_continue regardless of tool_calls, to preserve backward compatibility.
     if result_messages[0]["role"] == "assistant":
-        result_messages.insert(0, continue_message)
+        result_messages.insert(0, continue_message.copy())
 
     # Handle consecutive assistant messages in the counted sequence
     i = 1
@@ -691,7 +893,7 @@ def _insert_user_continue_message(
             # Preserve old behavior for malformed adjacent assistant sequences like
             # assistant(tool_calls) -> assistant(no-tool-calls) with no tool message.
             if i > 0 and result_messages[i - 1].get("role") == "assistant":
-                result_messages.insert(i, continue_message)
+                result_messages.insert(i, continue_message.copy())
                 i += 2
                 inserted_continue_message = True
             else:
@@ -700,7 +902,7 @@ def _insert_user_continue_message(
                     previous_message = result_messages[j]
                     if _counts_for_alternation(previous_message):
                         if previous_message["role"] == "assistant":
-                            result_messages.insert(i, continue_message)
+                            result_messages.insert(i, continue_message.copy())
                             i += 2
                             inserted_continue_message = True
                         break
@@ -711,7 +913,7 @@ def _insert_user_continue_message(
     # Handle final message — append user_continue after any trailing assistant,
     # including ones with tool_calls, to preserve backward compatibility.
     if result_messages[-1]["role"] == "assistant" and ensure_alternating_roles:
-        result_messages.append(continue_message)
+        result_messages.append(continue_message.copy())
 
     return result_messages
 
@@ -733,7 +935,7 @@ def _insert_assistant_continue_message(
     continue_message: Final = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
     # Find indexes where assistant_continue should be inserted (before that index)
-    insert_before_indexes: Final[set] = set()
+    insert_before_indexes: Final[set[int]] = set()
 
     for i in range(len(messages)):
         curr = messages[i]
@@ -751,7 +953,7 @@ def _insert_assistant_continue_message(
     modified_messages: Final[list[AllMessageValues]] = []
     for i, message in enumerate(messages):
         if i in insert_before_indexes:
-            modified_messages.append(continue_message)
+            modified_messages.append(continue_message.copy())
         modified_messages.append(message)
 
     return modified_messages
@@ -797,7 +999,7 @@ def _estimate_json_bytes(obj: object) -> int:
     serialised size, which is what a schema-bomb budget needs.
     """
     total = 0
-    stack: Final[list] = [obj]
+    stack: Final[list[object]] = [obj]
     while stack:
         x = stack.pop()
         if isinstance(x, dict):
@@ -822,20 +1024,96 @@ def _estimate_json_bytes(obj: object) -> int:
     return total
 
 
+_DefsScope: TypeAlias = tuple[Mapping[str, object], ...]
+_DEFS_KEYS: Final = ("$defs", "definitions")
+_NON_BODY_KEYS: Final = frozenset({"$defs", "definitions", "components"})
+
+_JSON_SCHEMA_ANNOTATION_KEYWORDS: Final = frozenset(
+    {"title", "description", "default", "deprecated", "readOnly", "writeOnly", "examples"}
+)
+JSON_SCHEMA_KEPT_REF_SIBLINGS: Final = _JSON_SCHEMA_ANNOTATION_KEYWORDS | frozenset({"required"})
+
+_SCHEMA_NODE: Final = TypeAdapter(Mapping[str, object])
+
+
+def _mapping_or_empty(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _local_defs(node: Mapping[str, object]) -> Mapping[str, object]:
+    return dict(chain.from_iterable(_mapping_or_empty(node.get(key)).items() for key in _DEFS_KEYS))
+
+
+def _scope_with_local_defs(scope: _DefsScope, local_defs: Mapping[str, object]) -> _DefsScope:
+    return (local_defs, *scope) if local_defs else scope
+
+
+def _resolve_in_scope(scope: _DefsScope, ref: str) -> tuple[str, object] | None:
+    name: Final = ref.split("/")[-1]
+    return next(((ref, defs[ref]) if ref in defs else (name, defs[name]) for defs in scope if name in defs), None)
+
+
+class DefsRefTargetNotASchemaError(AttributeError):
+    pass
+
+
+def _definition_schema(definition: object) -> Mapping[str, object]:
+    if isinstance(definition, bool):
+        return {} if definition else {"not": {}}
+    if not isinstance(definition, dict):
+        raise DefsRefTargetNotASchemaError(
+            f"unpack_defs: a $ref target must be a schema object, not {type(definition).__name__}"
+        )
+    return definition
+
+
+def _required_names(schema: Mapping[str, object]) -> tuple[str, ...] | None:
+    entries: Final = as_object_list(schema.get("required", []))
+    if entries is None:
+        return None
+    names: Final = tuple(entry for entry in entries if isinstance(entry, str))
+    return names if len(names) == len(entries) else None
+
+
+def _ref_target_with_siblings(
+    target_schema: Mapping[str, object], ref_node: Mapping[str, object]
+) -> Mapping[str, object]:
+    target_required: Final = _required_names(target_schema)
+    target_names: Final = frozenset(target_required or ())
+    added: Final = tuple(dict.fromkeys(name for name in _required_names(ref_node) or () if name not in target_names))
+    return {
+        **target_schema,
+        **{key: value for key, value in ref_node.items() if key in _JSON_SCHEMA_ANNOTATION_KEYWORDS},
+        **({"required": [*target_required, *added]} if target_required is not None and added else {}),
+    }
+
+
+class DefsInliningBudgetExceededError(ValueError):
+    pass
+
+
+def _keeps_no_ref(_ref: str, _scope: _DefsScope) -> bool:
+    return False
+
+
 def unpack_defs(
     schema: dict,
     defs: dict,
     max_inlined_bytes: int | None = None,
-) -> None:
+    keep_ref_siblings: bool = False,
+    *,
+    keeps_ref: Callable[[str, _DefsScope], bool] = _keeps_no_ref,
+) -> int:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
     This utility walks the entire schema tree (dicts and lists) so it naturally
     resolves references hidden under any keyword – ``items``, ``allOf``,
     ``anyOf``, ``oneOf``, ``additionalProperties``, etc.
 
-    It mutates *schema* in-place and does **not** return anything.  The helper
-    keeps memory overhead low by resolving nodes as it encounters them rather
-    than materialising a fully dereferenced copy first.
+    It mutates *schema* in-place and returns the JSON-byte size it inlined,
+    counted only when ``max_inlined_bytes`` is set.  The helper keeps memory
+    overhead low by resolving nodes as it encounters them rather than
+    materialising a fully dereferenced copy first.
 
     ``max_inlined_bytes`` caps the cumulative JSON-byte size of every target
     that has been inlined and is checked *before* each ``copy.deepcopy``, so
@@ -845,6 +1123,13 @@ def unpack_defs(
     (a target containing a large string, ``const``, or ``enum`` entry).
     Defaults to ``None`` (unbounded) so existing callers are unaffected;
     raises ``ValueError`` on overflow.
+
+    ``keep_ref_siblings`` keeps the annotations next to a ``$ref`` (a field's
+    ``description``, say) over the inlined target's and adds a sibling
+    ``required`` to the target's, since both apply to the value.
+
+    ``keeps_ref`` names the refs to leave as they are, given the definition
+    layers in scope, nearest first, for a provider that resolves those itself.
     """
 
     import copy
@@ -853,15 +1138,11 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[dict] = {
-        **defs,
-        **schema.get("$defs", {}),
-        **schema.get("definitions", {}),
-    }
+    root_defs: Final[_DefsScope] = ({**defs, **_local_defs(schema)},)
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: Final[deque[tuple[object, dict | list | None, str | int | None, dict, set]]] = deque(
+    queue: Final[deque[tuple[object, dict | list | None, str | int | None, _DefsScope, set[str]]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -872,23 +1153,30 @@ def unpack_defs(
         # ----------------------------- dict -----------------------------
         if isinstance(node, dict):
             # --- Case 1: this node *is* a reference ---
-            if "$ref" in node:
-                ref_name = node["$ref"].split("/")[-1]
+            ref = node.get("$ref")
+            if isinstance(ref, str) and not keeps_ref(ref, active_defs):
+                resolved_ref = _resolve_in_scope(active_defs, ref)
+                # Unknown reference – leave untouched
+                if resolved_ref is None:
+                    continue
+                ref_key, definition = resolved_ref
 
                 # Check for circular reference in the resolution chain
-                if ref_name in ref_chain:
+                if ref_key in ref_chain:
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
-                target_schema = active_defs.get(ref_name)
-                # Unknown reference – leave untouched
-                if target_schema is None:
-                    continue
+                target_schema = _definition_schema(definition)
+                replacement = (
+                    _ref_target_with_siblings(target_schema, _SCHEMA_NODE.validate_python(node))
+                    if keep_ref_siblings
+                    else target_schema
+                )
 
                 if max_inlined_bytes is not None:
-                    inlined_bytes += _estimate_json_bytes(target_schema)
+                    inlined_bytes += _estimate_json_bytes(replacement)
                     if inlined_bytes > max_inlined_bytes:
-                        raise ValueError(
+                        raise DefsInliningBudgetExceededError(
                             f"unpack_defs: inlined schema exceeded the "
                             f"{max_inlined_bytes:,}-byte budget. Refusing to "
                             f"deep-copy further to prevent schema-bomb "
@@ -896,14 +1184,10 @@ def unpack_defs(
                         )
 
                 # Merge defs from the target to capture nested definitions
-                child_defs = {
-                    **active_defs,
-                    **target_schema.get("$defs", {}),
-                    **target_schema.get("definitions", {}),
-                }
+                child_defs = _scope_with_local_defs(active_defs, _local_defs(target_schema))
 
                 # Replace the reference with resolved copy
-                resolved = copy.deepcopy(target_schema)
+                resolved = copy.deepcopy(replacement)
                 if parent is not None and key is not None:
                     if (
                         isinstance(parent, dict)
@@ -920,7 +1204,7 @@ def unpack_defs(
 
                 # Add to ref chain to track circular references
                 new_ref_chain = ref_chain.copy()
-                new_ref_chain.add(ref_name)
+                new_ref_chain.add(ref_key)
 
                 # Add resolved node to queue for further processing
                 queue.append((resolved, parent, key, child_defs, new_ref_chain))
@@ -928,11 +1212,7 @@ def unpack_defs(
 
             # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
-            current_defs = {
-                **active_defs,
-                **node.get("$defs", {}),
-                **node.get("definitions", {}),
-            }
+            current_defs = _scope_with_local_defs(active_defs, _local_defs(node))
 
             # Add all dict values to queue
             for k, v in node.items():
@@ -944,12 +1224,28 @@ def unpack_defs(
             for idx, item in enumerate(node):
                 queue.append((item, node, idx, active_defs, ref_chain))
 
+    return inlined_bytes
 
-def _has_legacy_defs(schema: object) -> bool:
-    if not isinstance(schema, dict):
-        return False
-    components: Final = schema.get("components")
-    return "definitions" in schema or (isinstance(components, dict) and isinstance(components.get("schemas"), dict))
+
+def _legacy_defs(schema: object) -> Mapping[str, object] | None:
+    node: Final = _mapping_or_empty(schema)
+    components: Final = _mapping_or_empty(node.get("components"))
+    if "definitions" not in node and not isinstance(components.get("schemas"), dict):
+        return None
+    # On key collision, ``definitions`` wins over ``components.schemas`` --
+    # ``unpack_defs`` keys refs by last path segment so a single name can only
+    # resolve to one body, and ``definitions`` is the JSON-Schema-native
+    # namespace.
+    return {**_mapping_or_empty(components.get("schemas")), **_mapping_or_empty(node.get("definitions"))}
+
+
+def _legacy_blocks_are_well_formed(schema: Mapping[str, object]) -> bool:
+    components: Final = schema.get("components", {})
+    return (
+        isinstance(schema.get("definitions") or {}, dict)
+        and isinstance(components, dict)
+        and isinstance(_mapping_or_empty(components).get("schemas") or {}, dict)
+    )
 
 
 # Schema-bomb budget for ``$ref`` inlining: cap the cumulative JSON-byte
@@ -961,6 +1257,38 @@ def _has_legacy_defs(schema: object) -> bool:
 # below memory-pressure territory, and rejects request-supplied bombs before
 # the proxy materialises them.
 DEFS_MAX_INLINED_BYTES: Final = 10_000_000
+
+
+def _definitions_shadowed_by_defs(json_schema: Mapping[str, object]) -> Mapping[str, object]:
+    dollar_defs: Final = json_schema.get("$defs")
+    definitions: Final = json_schema.get("definitions")
+    if not isinstance(dollar_defs, dict) or not isinstance(definitions, dict):
+        return MappingProxyType({})
+    current: Final = _SCHEMA_NODE.validate_python(dollar_defs)
+    legacy: Final = _SCHEMA_NODE.validate_python(definitions)
+    return MappingProxyType(
+        {
+            f"#/definitions/{name}": legacy[name]
+            for name in current.keys() & legacy.keys()
+            if current[name] != legacy[name]
+        }
+    )
+
+
+def defs_unpacked(json_schema: Mapping[str, object], keep_ref_siblings: bool = False) -> Mapping[str, object]:
+    import copy
+
+    unpacked: Final = copy.deepcopy(dict(json_schema))
+    dollar_defs: Final = unpacked.pop("$defs", None)
+    definitions: Final = unpacked.pop("definitions", None)
+    defs: Final = {
+        **(definitions if isinstance(definitions, dict) else {}),
+        **(dollar_defs if isinstance(dollar_defs, dict) else {}),
+        **_definitions_shadowed_by_defs(json_schema),
+    }
+    if defs:
+        unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES, keep_ref_siblings=keep_ref_siblings)
+    return unpacked
 
 
 def unpack_legacy_defs(
@@ -982,23 +1310,44 @@ def unpack_legacy_defs(
     schemas cannot expand into a schema-bomb before reaching the upstream
     provider -- raises ``ValueError`` on overflow.
     """
-    if not _has_legacy_defs(schema):
+    if _legacy_defs(schema) is None or not _legacy_blocks_are_well_formed(schema):
         return schema
     if copy:
         import copy as _copy
 
         schema = _copy.deepcopy(schema)
-    # On key collision, ``definitions`` wins over ``components.schemas`` --
-    # ``unpack_defs`` keys refs by last path segment so a single name can only
-    # resolve to one body, and ``definitions`` is the JSON-Schema-native
-    # namespace.
-    defs: Final = schema.pop("components", {}).get("schemas") or {}
-    defs.update(schema.pop("definitions", None) or {})
-    unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
+    defs: Final = _legacy_defs(schema) or {}
+    schema.pop("components", None)
+    schema.pop("definitions", None)
+    unpack_defs(schema, dict(defs), max_inlined_bytes=max_inlined_bytes)
     return schema
 
 
-def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":
+def inline_refs_outside_root_defs(
+    schema: Mapping[str, object], max_inlined_bytes: int
+) -> tuple[Mapping[str, object], int]:
+    root_defs: Final = dict(_mapping_or_empty(schema.get("$defs")))
+    body: Final = {key: value for key, value in schema.items() if key not in _NON_BODY_KEYS}
+    document: Final = {"body": body, "defs": root_defs}
+    inlined_bytes: Final = unpack_defs(
+        document,
+        {**root_defs, **(_legacy_defs(schema) or {})},
+        max_inlined_bytes=max_inlined_bytes,
+        keeps_ref=lambda ref, scope: (
+            ref_points_into_defs(ref, root_defs) and not any(ref_points_into_defs(ref, layer) for layer in scope[:-1])
+        ),
+    )
+    inlined: Final = document["body"]
+    return ({**inlined, "$defs": root_defs} if root_defs else inlined), inlined_bytes
+
+
+def inline_refs_and_drop_defs(schema: Mapping[str, object], max_inlined_bytes: int) -> tuple[Mapping[str, object], int]:
+    body: Final = {key: value for key, value in schema.items() if key not in _NON_BODY_KEYS}
+    inlined_bytes: Final = unpack_defs(body, dict(_local_defs(schema)), max_inlined_bytes=max_inlined_bytes)
+    return {key: value for key, value in body.items() if key != "$defs"}, inlined_bytes
+
+
+def sanitize_input_schema_for_anthropic(input_schema: Mapping[str, object]) -> "AnthropicInputSchema":
     """Coerce an arbitrary tool input_schema into the shape Anthropic accepts.
 
     Anthropic requires ``type == "object"``, only recognises ``$defs`` (legacy
@@ -1036,7 +1385,7 @@ def get_tool_call_names(tools: list[ChatCompletionToolParam]) -> list[str]:
     return tool_call_names
 
 
-def is_function_call(optional_params: dict) -> bool:
+def is_function_call(optional_params: Mapping[str, object]) -> bool:
     """
     Checks if the optional params contain the function call
     """
@@ -1110,19 +1459,31 @@ def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
     }
 
 
+def _image_without_provider_specific_fields(image: object) -> object:
+    fields: Final = as_str_mapping(image)
+    if fields is None or "provider_specific_fields" not in fields:
+        return image
+    return {key: value for key, value in fields.items() if key != "provider_specific_fields"}
+
+
 def _message_without_fields(message: AllMessageValues, dropped: frozenset[str]) -> AllMessageValues:
-    kept: Final = {key: value for key, value in message.items() if key not in dropped}
-    tool_calls: Final = message.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        return cast(AllMessageValues, kept)  # cast-ok: same TypedDict minus dropped keys
-    return cast(  # cast-ok: same TypedDict minus dropped keys, tool calls minus their provider_specific_fields
+    kept: Final[Mapping[str, object]] = {key: value for key, value in message.items() if key not in dropped}
+    tool_calls: Final = as_object_list(kept.get("tool_calls"))
+    images: Final = as_object_list(kept.get("images"))
+    return cast(  # cast-ok: same TypedDict minus dropped keys and nested provider_specific_fields
         AllMessageValues,
         {
             **kept,
-            "tool_calls": [
-                _tool_call_without_provider_specific_fields(tool_call)
-                for tool_call in cast(list[object], tool_calls)  # cast-ok: untyped JSON tool calls
-            ],
+            **(
+                {"tool_calls": [_tool_call_without_provider_specific_fields(tool_call) for tool_call in tool_calls]}
+                if tool_calls is not None
+                else {}
+            ),
+            **(
+                {"images": [_image_without_provider_specific_fields(image) for image in images]}
+                if images is not None
+                else {}
+            ),
         },
     )
 
@@ -1219,7 +1580,7 @@ def get_last_user_message(messages: list[AllMessageValues]) -> str | None:
         return None
 
     # Iterate from the end to find the last consecutive block of user messages
-    user_messages: Final = []
+    user_messages: Final[list[AllMessageValues]] = []
     for message in reversed(messages):
         if message.get("role") == "user":
             user_messages.append(message)
@@ -1249,7 +1610,7 @@ def set_last_user_message(messages: list[AllMessageValues], content: str) -> lis
     1. remove all the last consecutive user messages (FROM THE END)
     2. add the new message
     """
-    idx_to_remove: Final = []
+    idx_to_remove: Final[list[int]] = []
     for idx, message in enumerate(reversed(messages)):
         if message.get("role") == "user":
             idx_to_remove.append(idx)
@@ -1367,7 +1728,7 @@ def extract_images_from_message(message: AllMessageValues) -> list[str]:
     data portion is extracted. This is required for providers like Ollama
     that expect pure base64 data rather than full data URLs.
     """
-    images: Final = []
+    images: Final[list[str]] = []
     message_content: Final = message.get("content")
     if isinstance(message_content, list):
         for m in message_content:
@@ -1572,9 +1933,78 @@ def is_present_non_string(value: object) -> bool:
     return value is not None and not isinstance(value, str)
 
 
-def invalid_type_message(field_path: str, value: object) -> str:
-    return f"Invalid type for '{field_path}': expected a string, got {type(value).__name__}"
+def invalid_type_message(field_path: str, value: object, expected: str = "a string") -> str:
+    return f"Invalid type for '{field_path}': expected {expected}, got {type(value).__name__}"
 
 
 def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
     return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)
+
+
+_UNBOUND: Final = object()
+
+
+def _module(module_name: str) -> ModuleType:
+    return importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}")
+
+
+def _namespace(module: ModuleType) -> Mapping[str, object]:
+    return vars(module)
+
+
+def _moved_name_home(name: str) -> ModuleType:
+    module_name: Final = _MOVED_PRIVATE_NAME_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return _module(module_name)
+
+
+def _split_modules_sharing(name: str, value: object) -> tuple[ModuleType, ...]:
+    if value is _UNBOUND:
+        return ()
+    split_modules: Final = (_module(module_name) for module_name in frozenset(_MOVED_PRIVATE_NAME_MODULES.values()))
+    return tuple(module for module in split_modules if _namespace(module).get(name, _UNBOUND) is value)
+
+
+def _warn_old_path(name: str, home: ModuleType) -> None:
+    warnings.warn(
+        f"{__name__}.{name} moved to {home.__name__}, import or patch it there. "
+        "The old path will be removed in a future release",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+_RELEASED_MOVED_VALUES: Final = MappingProxyType(
+    {name: _namespace(_moved_name_home(name))[name] for name in _MOVED_PRIVATE_NAME_MODULES}
+)
+
+
+class _CommonUtilsModule(ModuleType):
+    def __getattr__(self, name: str) -> object:
+        home: Final = _moved_name_home(name)
+        value: Final = _namespace(home).get(name, _UNBOUND)
+        if value is _UNBOUND:
+            raise AttributeError(f"module {home.__name__!r} has no attribute {name!r}")
+        _warn_old_path(name, home)
+        return value
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in _MOVED_PRIVATE_NAME_MODULES:
+            home: Final = _moved_name_home(name)
+            _warn_old_path(name, home)
+            setattr(home, name, value)
+            return
+        for module in _split_modules_sharing(name, _namespace(self).get(name, _UNBOUND)):
+            setattr(module, name, value)
+        super().__setattr__(name, value)
+
+    def __delattr__(self, name: str) -> None:
+        released: Final = _RELEASED_MOVED_VALUES.get(name, _UNBOUND)
+        if released is _UNBOUND:
+            super().__delattr__(name)
+            return
+        setattr(_moved_name_home(name), name, released)
+
+
+sys.modules[__name__].__class__ = _CommonUtilsModule

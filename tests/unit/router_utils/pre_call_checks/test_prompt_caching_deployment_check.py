@@ -766,17 +766,17 @@ async def test_wildcard_route_resolves_underlying_model_minimum(local_model_cost
 
 @pytest.mark.asyncio
 async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
     warm_tokenizer("anthropic/claude-fable-5")
     check = PromptCachingDeploymentCheck(cache=DualCache())
     deployments = _deployments("anthropic/claude-fable-5", "anthropic/claude-fable-5")
-    messages = cast(list[AllMessageValues], [{"role": "user", "content": text * 100}])
+    messages = cast(list[AllMessageValues], [{"role": "user", "content": uncounted_text()}])
 
     result, took, lags = await timed_with_loop_lags(
         lambda: check.async_filter_deployments(
@@ -790,10 +790,10 @@ async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
 
 @pytest.mark.asyncio
 async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -802,7 +802,14 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
     check = PromptCachingDeploymentCheck(cache=cache)
     messages = cast(
         list[AllMessageValues],
-        [{"role": "user", "content": [{"type": "text", "text": text * 100, "cache_control": {"type": "ephemeral"}}]}],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": uncounted_text(), "cache_control": {"type": "ephemeral"}}
+                ],
+            }
+        ],
     )
     standard_logging_object = {
         "call_type": "acompletion",
@@ -1632,21 +1639,25 @@ def _responses_router(model: str) -> litellm.Router:
     )
 
 
-async def _serve_response(router: litellm.Router, request_input: object) -> str:
+async def _serve_response(
+    router: litellm.Router, request_input: object, tools: tuple[object, ...] = (_RESPONSES_TOOL,)
+) -> str:
     response = await router.aresponses(
         model=MODEL_GROUP_ALIAS,
         input=copy.deepcopy(request_input),
         instructions="Be terse.",
-        tools=[_RESPONSES_TOOL],
+        tools=copy.deepcopy(list(tools)),
         mock_response="ok",
     )
     return response._hidden_params["model_id"]
 
 
-async def _deployments_serving_repeats(router: litellm.Router, request_input: object) -> set[str]:
-    await _serve_response(router, request_input)
+async def _deployments_serving_repeats(
+    router: litellm.Router, request_input: object, tools: tuple[object, ...] = (_RESPONSES_TOOL,)
+) -> set[str]:
+    await _serve_response(router, request_input, tools)
     assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
-    return {await _serve_response(router, request_input) for _ in range(8)}
+    return {await _serve_response(router, request_input, tools) for _ in range(8)}
 
 
 @pytest.mark.asyncio
@@ -2513,3 +2524,77 @@ async def test_responses_request_with_a_malformed_tool_is_left_to_the_provider(b
     pinned = await _read_responses_pin(PromptCachingDeploymentCheck(cache=DualCache()), request)
 
     assert pinned == ("dep-1", "dep-2")
+
+
+@pytest.mark.asyncio
+async def test_native_responses_request_whose_flattened_tool_names_collide_still_pins():
+    colliding_tools: Final = (
+        {"type": "function", "name": "admin__run", "parameters": {"type": "object"}},
+        {
+            "type": "namespace",
+            "name": "admin",
+            "tools": [{"type": "function", "name": "run", "parameters": {"type": "object"}}],
+        },
+    )
+    router: Final = _responses_router(RESPONSES_NATIVE_MODEL)
+
+    assert len(await _deployments_serving_repeats(router, _marked_responses_input(), colliding_tools)) == 1
+
+
+def _base64_document_messages(data: str) -> list[AllMessageValues]:
+    return cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}},
+                    {"type": "text", "text": "word " * 5000, "cache_control": {"type": "ephemeral"}},
+                ],
+            }
+        ],
+    )
+
+
+async def _pinned_and_later_deployments(router: litellm.Router, messages: list[AllMessageValues]) -> tuple[object, ...]:
+    first: Final = await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok")
+    affinity_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, None)
+    pin: Final = await _eventually(lambda: router.registry().plugins("prompt_caching_pins").get_cache(key=affinity_key))
+    later: Final = tuple(
+        [
+            (await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok"))._hidden_params[
+                "model_id"
+            ]
+            for _ in range(4)
+        ]
+    )
+    return (first._hidden_params["model_id"], pin, later)
+
+
+@pytest.mark.asyncio
+async def test_same_size_base64_documents_pin_their_own_deployment_while_loggers_see_a_placeholder(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+    probe: Final = _LoggedMessagesProbe()
+    monkeypatch.setattr(litellm, "callbacks", [probe])
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "sk-fake"},
+                "model_info": {"id": model_id},
+            }
+            for model_id in ("dep-1", "dep-2")
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    documents: Final = ("QUJD" * 4096, "WFla" * 4096)
+
+    for document in documents:
+        served_by, pin, later = await _pinned_and_later_deployments(router, _base64_document_messages(document))
+        assert pin == {"model_id": served_by}
+        assert later == (served_by,) * 4
+
+    await _eventually(lambda: len(probe.logged_messages) == 10)
+    logged_sources: Final = [logged[0][0]["content"][0]["source"]["data"] for logged in probe.logged_messages]
+    assert len(logged_sources) == 10
+    assert all(source.startswith("[base64_data truncated: ") for source in logged_sources), logged_sources

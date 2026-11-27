@@ -6,6 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-mm.html
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.types.llms.bedrock import (
@@ -33,13 +34,15 @@ class AmazonTitanMultimodalEmbeddingG1Config:
     def get_supported_openai_params(self) -> list[str]:
         return ["dimensions"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict[str, object]) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "dimensions":
                 optional_params["embeddingConfig"] = AmazonTitanMultimodalEmbeddingConfig(outputEmbeddingLength=v)
         return optional_params
 
-    def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanMultimodalEmbeddingRequest:
+    def _transform_request(
+        self, input: str, inference_params: Mapping[str, object]
+    ) -> AmazonTitanMultimodalEmbeddingRequest:
         ## check if b64 encoded str or not ##
         is_encoded: Final = is_base64_encoded(input)
         if is_encoded:  # check if string is b64 encoded image or not
@@ -63,7 +66,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
         self,
         response_list: list[dict],
         model: str,
-        batch_data: list[dict] | None = None,
+        batch_data: list[dict[str, object]] | None = None,
     ) -> EmbeddingResponse:
         total_prompt_tokens = 0
         transformed_responses: Final[list[Embedding]] = []

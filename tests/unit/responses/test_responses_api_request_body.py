@@ -10,8 +10,9 @@ import json
 import logging
 import math
 from collections.abc import Awaitable, Callable, Mapping
-from pathlib import Path
+from datetime import datetime, timezone
 from importlib import import_module
+from pathlib import Path
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
@@ -22,6 +23,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -255,9 +257,7 @@ async def test_aresponses_forwards_non_enum_reasoning_effort(
 
 
 @pytest.mark.asyncio
-async def test_aresponses_forwards_moderation(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-) -> None:
+async def test_aresponses_forwards_moderation(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -276,9 +276,7 @@ async def test_aresponses_forwards_moderation(
 
 
 @pytest.mark.asyncio
-async def test_aresponses_omits_null_moderation(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-) -> None:
+async def test_aresponses_omits_null_moderation(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -740,11 +738,48 @@ async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs(
             litellm_logging_obj=MagicMock(),
             input=[{"type": "message", "role": "user", "content": "hi"}],
             previous_response_id="resp_prev",
+            generate=False,
         )
 
         mock_ws.assert_awaited_once()
         assert "input" not in mock_ws.call_args.kwargs
         assert "previous_response_id" not in mock_ws.call_args.kwargs
+        assert "generate" not in mock_ws.call_args.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (("openai/provider-label-model", "openai"), ("azure/provider-label-model", "azure")),
+    ids=("openai", "azure"),
+)
+async def test_aresponses_websocket_logs_the_provider_inferred_from_the_model(model: str, provider: str) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import (
+        _aresponses_websocket,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # the private entry is what the proxy calls
+        base_llm_http_handler,
+    )
+
+    logging_obj: Final = LiteLLMLogging(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="_aresponses_websocket",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="websocket-provider-label",
+        function_id="websocket-provider-label",
+    )
+
+    with patch.object(base_llm_http_handler, "async_responses_websocket", new_callable=AsyncMock):
+        await _aresponses_websocket(
+            model=model,
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert logging_obj.model_call_details["litellm_params"]["custom_llm_provider"] == provider
 
 
 _STRIPPED_WS_INPUT = [{"role": "user", "content": "hi"}]
@@ -1543,3 +1578,61 @@ async def test_router_responses_deployment_pricing_keeps_inherited_cache_rates(
         uncached_input * rates["input_cost_per_token"] + response.usage.output_tokens * rates["output_cost_per_token"]
     )
     assert floor < _response_cost(response) < full_price
+
+
+def test_responses_with_a_call_id_that_is_not_a_string_still_sends_the_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_wrong_typed_call_id", "gpt-4o"))
+    )
+
+    response: Final = litellm.responses(model="openai/gpt-4o", input="hi", api_key="sk-test", litellm_call_id=123)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert json.loads(route.calls.last.request.content) == {"model": "gpt-4o", "input": "hi"}
+
+
+def test_responses_with_litellm_metadata_that_is_not_a_mapping_raises_the_same_attribute_error(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_wrong_typed_metadata", "gpt-4o"))
+    )
+
+    with pytest.raises(AttributeError, match="'str' object has no attribute 'get'"):
+        litellm.responses(model="openai/gpt-4o", input="hi", api_key="sk-test", litellm_metadata="not-a-mapping")
+
+
+@pytest.mark.asyncio
+async def test_aresponses_websocket_refuses_a_user_api_key_dict_without_auth_attributes_before_the_relay() -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import (
+        _aresponses_websocket,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # the private entry is what the proxy calls
+    )
+
+    with patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler,
+        "async_responses_websocket",
+        new_callable=AsyncMock,
+    ) as relay:
+        with pytest.raises(AttributeError, match="api_key"):
+            await _aresponses_websocket(
+                model="openai/gpt-5.6",
+                websocket=MagicMock(),
+                api_key="sk-test",
+                litellm_logging_obj=MagicMock(async_failure_handler=AsyncMock()),
+                user_api_key_dict={"user_id": "plain-dict"},
+            )
+        refused_relay_calls: Final = relay.await_count
+
+        outcome: Final = await _aresponses_websocket(
+            model="openai/gpt-5.6",
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=MagicMock(),
+            user_api_key_dict=None,
+        )
+
+    assert refused_relay_calls == 0
+    assert outcome is relay.return_value
+    assert relay.call_args.kwargs["user_api_key_dict"] is None

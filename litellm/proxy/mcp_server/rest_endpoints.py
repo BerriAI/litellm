@@ -15,7 +15,7 @@ import httpx2
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import Headers
-from typing_extensions import ReadOnly
+from typing_extensions import Never, ReadOnly
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT
@@ -24,6 +24,8 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     ModifyResponseException,
 )
+from litellm.litellm_core_utils.core_helpers import unpackable_mapping
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
@@ -117,6 +119,12 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
 )
 
 _CLIENT_FORWARDED_TOKEN_AUTH_TYPES: Final = frozenset((MCPAuth.true_passthrough, MCPAuth.oauth_delegate))
+
+_NO_TOOL_ARGUMENTS: Final[Mapping[str, Never]] = MappingProxyType({})
+
+_NO_REQUEST_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
@@ -356,7 +364,7 @@ if MCP_AVAILABLE:
                 status_code=403,
                 detail={"error": "forbidden", "message": f"{tool_name} requires mcp_tool_search_enabled on the key"},
             )
-        tool_arguments: Final = data.get("arguments") or {}
+        tool_arguments: Final = data.get("arguments") or _NO_TOOL_ARGUMENTS
         if tool_name == AGENT_SEARCH_TOOL_NAME:
             return await handle_agent_search(
                 query=str(tool_arguments.get("query", "")),
@@ -417,6 +425,7 @@ if MCP_AVAILABLE:
                 litellm_logging_obj=virtual_logging_obj,
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(virtual_data),
                 incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
+                flatten_url_elicitation=True,
             )
         except Exception as e:
             virtual_request_data: Final = virtual_processor.data
@@ -470,7 +479,7 @@ if MCP_AVAILABLE:
             to_server_spec,
         )
 
-        if getattr(server, "auth_type", None) != MCPAuth.oauth2:
+        if server is None or getattr(server, "auth_type", None) != MCPAuth.oauth2:
             return False
         return to_server_spec(server) is None
 
@@ -627,7 +636,6 @@ if MCP_AVAILABLE:
         ) = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=False,
             admitted_credential=admitted_credential,
-            preserve_jwt_subject=bool(user_api_key_dict.jwt_claims),
             oauth2_headers=oauth2_headers_from_request,
             raw_headers=dict(headers),
             mcp_auth_header=MCPRequestHandler.get_mcp_auth_header_from_headers(headers),
@@ -678,7 +686,7 @@ if MCP_AVAILABLE:
 
         # Collect allowed server IDs from all contexts, then apply IP filtering
         _rest_client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-        allowed_server_ids_set = set()
+        allowed_server_ids_set: set[str] = set()
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_allowed_mcp_servers(
                 user_api_key_auth=auth_context,
@@ -747,6 +755,7 @@ if MCP_AVAILABLE:
         proxy_logging_obj: "ProxyLogging | None",
         *,
         record_listing: bool,
+        use_tool_list_cache: bool,
     ) -> list[MCPTool]:
         return list(
             await global_mcp_server_manager.get_tools_from_server(
@@ -759,6 +768,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 proxy_logging_obj=proxy_logging_obj,
                 record_listing=record_listing,
+                use_tool_list_cache=use_tool_list_cache,
             )
         )
 
@@ -792,6 +802,7 @@ if MCP_AVAILABLE:
             client_ip,
             proxy_logging_obj,
             record_listing=False,
+            use_tool_list_cache=apply_tool_filters,
         )
 
         server_filtered: Final = filter_tools_by_allowed_tools(tools, server) if apply_tool_filters else tools
@@ -838,6 +849,7 @@ if MCP_AVAILABLE:
             IPAddressUtils.get_mcp_client_ip(request),
             None,
             record_listing=False,
+            use_tool_list_cache=False,
         )
         scan: Final = await scan_tool_descriptions(
             apply_description_overrides(upstream, server),
@@ -859,7 +871,7 @@ if MCP_AVAILABLE:
     ) -> list[MCPServer]:
         """Resolve allowed MCP servers for the given user and validate server_id access."""
         auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
-        allowed_server_ids_set: Final = set()
+        allowed_server_ids_set: Final[set[str]] = set()
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth=auth_context)
             allowed_server_ids_set.update(servers)
@@ -882,12 +894,12 @@ if MCP_AVAILABLE:
         server_id: str,
         allowed_server_ids: list[str],
         rest_client_ip: str | None,
-        mcp_server_auth_headers: dict,
+        mcp_server_auth_headers: dict[str, dict[str, str]],
         mcp_auth_header: str | None,
-        raw_headers_from_request: dict,
+        raw_headers_from_request: dict[str, str],
         user_api_key_dict: UserAPIKeyAuth,
         apply_tool_filters: bool = True,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Handle tool listing for a single server_id request."""
         # Resolve a server name to its UUID if needed
         _name_resolved = None
@@ -1016,7 +1028,7 @@ if MCP_AVAILABLE:
             ),
         ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         List all available tools with information about the server they belong to.
 
@@ -1080,7 +1092,7 @@ if MCP_AVAILABLE:
 
             _rest_client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
 
-            allowed_server_ids_set: Final = set()
+            allowed_server_ids_set: Final[set[str]] = set()
             for auth_context in auth_contexts:
                 servers = await global_mcp_server_manager.get_allowed_mcp_servers(
                     user_api_key_auth=auth_context,
@@ -1222,7 +1234,7 @@ if MCP_AVAILABLE:
     async def _execute_rest_mcp_tool(
         request: Request,
         tool_name: str,
-        tool_arguments: Mapping[str, object],
+        tool_arguments: object,
         allowed_mcp_servers: Sequence[MCPServer],
         canonical_server_id: str,
         target_server: MCPServer | None,
@@ -1281,6 +1293,7 @@ if MCP_AVAILABLE:
             requested_server_id=canonical_server_id,
             incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
             guardrail_auth=guardrail_auth,
+            flatten_url_elicitation=True,
         )
         return executed, tool_start_time
 
@@ -1339,10 +1352,12 @@ if MCP_AVAILABLE:
         reject_disallowed_mcp_client(request.headers, user_api_key_dict)
         try:
             user_api_key_dict = await acting_user_auth(user_api_key_dict)
-            data = await request.json()
+            body: Final = await request.json()
 
-            tool_name: Final[str | None] = data.get("name")
-            tool_arguments: Final[dict[str, object]] = data.get("arguments") or {}
+            tool_name: Final[str | None] = body.get("name")
+            decoded_body: Final = _DECODED_JSON.validate_python(body)
+            data = decoded_body if is_str_keyed_dict(decoded_body) else {**unpackable_mapping(decoded_body)}
+            tool_arguments: Final[object] = data.get("arguments") or {}
 
             from litellm.proxy.mcp_server.tool_search import VIRTUAL_TOOL_NAMES
 
@@ -1350,7 +1365,7 @@ if MCP_AVAILABLE:
                 return await _handle_virtual_mcp_tool(request, data, tool_name, user_api_key_dict)
 
             # Validate required parameters early
-            server_id: Final[str | None] = data.get("server_id")
+            server_id: Final[str | None] = body.get("server_id")
             if not server_id:
                 raise HTTPException(
                     status_code=400,
@@ -1371,7 +1386,7 @@ if MCP_AVAILABLE:
 
             data["model"] = f"MCP: {tool_name}"
             model_metadata: Final[_MCPModelMetadata] = {
-                **(data.get("metadata") or MappingProxyType({})),
+                **unpackable_mapping(data.get("metadata") or _NO_REQUEST_METADATA),
                 "model_group": f"MCP: {tool_name}",
             }
             data["metadata"] = model_metadata
@@ -1551,7 +1566,7 @@ if MCP_AVAILABLE:
 
     def _extract_credentials(
         request: NewMCPServerRequest,
-    ) -> tuple:
+    ) -> tuple[str | None, str | None, list[str] | None]:
         """
         Extract OAuth credentials from the nested ``request.credentials`` dict.
 
@@ -1793,7 +1808,7 @@ if MCP_AVAILABLE:
                 "message": _connection_error_message(e, request.url, effective_timeout),
             }
 
-    async def _preview_openapi_tools(spec_path: str) -> dict:
+    async def _preview_openapi_tools(spec_path: str) -> dict[str, object]:
         """Generate tool previews from an OpenAPI spec without creating a server."""
         from litellm.proxy.mcp_server.openapi_to_mcp_generator import (
             OPENAPI_TOOL_NAME_MAX_LEN,
@@ -1807,8 +1822,8 @@ if MCP_AVAILABLE:
             spec: Final = await load_openapi_spec_async(spec_path)
             paths: Final = spec.get("paths", {})
             components: Final = spec.get("components", {})
-            tools: Final[list[dict]] = []
-            used_names: Final[set] = set()
+            tools: Final[list[dict[str, object]]] = []
+            used_names: Final[set[str]] = set()
             for path, path_item in paths.items():
                 for method in ("get", "post", "put", "delete", "patch"):
                     operation = path_item.get(method)
@@ -1874,8 +1889,8 @@ if MCP_AVAILABLE:
 
         staged: Final = _stage_server_test(new_mcp_server_request, request.headers)
 
-        async def _test_connection_operation(client):
-            async def _noop(session):
+        async def _test_connection_operation(client: MCPClient):
+            async def _noop(session: object):
                 return "ok"
 
             await client.run_with_session(_noop)
@@ -1912,7 +1927,7 @@ if MCP_AVAILABLE:
         if staged.request.spec_path:
             return await _preview_openapi_tools(staged.request.spec_path)
 
-        async def _list_tools_operation(client):
+        async def _list_tools_operation(client: MCPClient):
             # Bound the whole pagination walk: without this the preview is limited only by the
             # per-request timeout times the page cap. max() keeps the pre-pagination guarantee
             # that a single slow page within the client timeout still succeeds, and a
@@ -1933,7 +1948,9 @@ if MCP_AVAILABLE:
                     "message": f"Timed out listing tools after {listing_deadline} seconds. "
                     "The MCP server may be responding slowly or paginating excessively.",
                 }
-            model_dumped_tools: Final[list[dict]] = [tool.model_dump(by_alias=True) for tool in list_tools_result]
+            model_dumped_tools: Final[list[dict[str, object]]] = [
+                tool.model_dump(by_alias=True) for tool in list_tools_result
+            ]
             return {
                 "tools": model_dumped_tools,
                 "error": None,

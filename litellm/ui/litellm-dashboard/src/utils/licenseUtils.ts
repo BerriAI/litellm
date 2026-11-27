@@ -1,0 +1,45 @@
+import type { i18n as I18n } from "i18next";
+import i18n from "@/i18n/i18n";
+
+export const getDaysUntilExpiration = (expirationDate: string | null, now: Date = new Date()): number | null => {
+  if (!expirationDate) {
+    return null;
+  }
+
+  const expiration = new Date(`${expirationDate}T00:00:00Z`);
+  if (Number.isNaN(expiration.getTime())) {
+    return null;
+  }
+
+  const nowUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const diffMs = expiration.getTime() - nowUtcMidnight;
+  return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+};
+
+const EXPIRY_DATE_FORMAT: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+};
+
+export const formatExpiryDate = (expirationDate: string, language = i18n.language): string => {
+  const date = new Date(`${expirationDate}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return expirationDate;
+  }
+  return date.toLocaleDateString(language, EXPIRY_DATE_FORMAT);
+};
+
+export const formatExpirationStatus = (
+  expirationDate: string | null,
+  now: Date = new Date(),
+  locale: I18n = i18n,
+): string => {
+  const days = getDaysUntilExpiration(expirationDate, now);
+  if (expirationDate === null || days === null) {
+    return locale.t("utils.licenseUtils.noExpiration");
+  }
+  const date = formatExpiryDate(expirationDate, locale.language);
+  return days < 0 ? locale.t("utils.licenseUtils.expired", { date }) : locale.t("utils.licenseUtils.expires", { date });
+};

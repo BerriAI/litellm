@@ -11,6 +11,7 @@ import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import SESSION_ID_INHERITED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.messages.caller_model_checks import (
@@ -411,6 +412,7 @@ async def test_build_evaluator_prefers_the_router_and_keeps_only_the_attribution
         "user_api_key": "hashed",
         "headers": {"x": "y"},
         "user_api_key_auth": caller,
+        SESSION_ID_INHERITED_METADATA_KEY: True,
     }
     assert router.calls[0]["allowed_model_region"] == "us"
     assert evaluator.classifier_context == '{"permission_mode": "auto"}'
@@ -608,7 +610,7 @@ def test_build_evaluator_without_a_router_calls_litellm_directly():
         )
     assert evaluator is not None
     assert evaluator.acompletion is litellm.acompletion
-    assert evaluator.litellm_metadata == {}
+    assert evaluator.litellm_metadata == {SESSION_ID_INHERITED_METADATA_KEY: True}
 
 
 def test_render_transcript_keeps_turns_and_tool_calls_and_truncates_tool_results():

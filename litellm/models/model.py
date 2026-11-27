@@ -28,7 +28,7 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="before")
     @classmethod
-    def check_potential_json_str(cls, values):
+    def check_potential_json_str(cls, values: object) -> object:
         if not isinstance(values, dict):
             return values
         if isinstance(values.get("litellm_params"), str):

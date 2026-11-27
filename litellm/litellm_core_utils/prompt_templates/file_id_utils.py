@@ -4,10 +4,11 @@ import re
 from collections.abc import Mapping
 from os import PathLike
 from pathlib import Path
-from typing import Final, cast  # noqa: TID251  # Existing casts retained unchanged in this pure move
+from typing import Final, Protocol, cast  # noqa: TID251  # Existing casts retained unchanged in this pure move
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.batch_utils import InMemoryFile
+from litellm.litellm_core_utils.core_helpers import json_contains, require_attributes
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionFileObject,
@@ -17,6 +18,19 @@ from litellm.types.utils import (
     FileTypes,
     SpecialEnums,
 )
+
+
+class _LooksUpWithDefault(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+class _LooksUp(Protocol):
+    def get(self, key: object, /) -> object: ...
+
+
+def _mapped_provider_file_id(model_file_id_mapping: object, file_id: str, model_id: object) -> object:
+    file_id_by_model: Final = require_attributes(model_file_id_mapping, _LooksUpWithDefault, "get").get(file_id, {})
+    return require_attributes(file_id_by_model, _LooksUp, "get").get(model_id)
 
 
 def get_format_from_file_id(file_id: str | None) -> str | None:
@@ -119,8 +133,8 @@ def update_messages_with_model_file_ids(
 
 def update_responses_input_with_model_file_ids(
     input: object,
-    model_id: str | None = None,
-    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
+    model_id: object = None,
+    model_file_id_mapping: object = None,
 ) -> object:
     """
     Updates responses API input with provider-specific file IDs.
@@ -148,7 +162,7 @@ def update_responses_input_with_model_file_ids(
     if not isinstance(input, list):
         return input
 
-    updated_input: Final = []
+    updated_input: Final[list[object]] = []
     for item in input:
         if not isinstance(item, dict):
             updated_input.append(item)
@@ -165,9 +179,11 @@ def update_responses_input_with_model_file_ids(
                         provider_file_id = file_id  # Default to original
 
                         # Check if we have a mapping for this file ID
-                        if model_file_id_mapping and model_id and file_id in model_file_id_mapping:
+                        if model_file_id_mapping and model_id and json_contains(model_file_id_mapping, file_id):
                             # Use the model-specific file ID from mapping
-                            provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
+                            provider_file_id = (
+                                _mapped_provider_file_id(model_file_id_mapping, file_id, model_id) or file_id
+                            )
                             updated_content_item = content_item.copy()
                             updated_content_item["file_id"] = provider_file_id
                             updated_content.append(updated_content_item)
@@ -218,7 +234,7 @@ def _decode_vector_store_ids_in_tools(
         parse_unified_id,
     )
 
-    updated_tools: Final = []
+    updated_tools: Final[list[dict[str, object]]] = []
     for tool in tools:
         if not isinstance(tool, dict) or tool.get("type") != "file_search":
             updated_tools.append(tool)
@@ -229,7 +245,7 @@ def _decode_vector_store_ids_in_tools(
             updated_tools.append(tool)
             continue
 
-        decoded_ids = []
+        decoded_ids: list[object] = []
         for vs_id in vector_store_ids:
             if not isinstance(vs_id, str) or not is_base64_encoded_unified_id(vs_id):
                 decoded_ids.append(vs_id)
@@ -256,8 +272,8 @@ def _decode_vector_store_ids_in_tools(
 
 def update_responses_tools_with_model_file_ids(
     tools: list[dict[str, object]] | None,
-    model_id: str | None = None,
-    model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None,
+    model_id: object = None,
+    model_file_id_mapping: object = None,
 ) -> list[dict[str, object]] | None:
     """
     Updates responses API tools with provider-specific file IDs.
@@ -281,7 +297,7 @@ def update_responses_tools_with_model_file_ids(
     if not model_file_id_mapping or not model_id:
         return tools
 
-    updated_tools: Final = []
+    updated_tools: Final[list[dict[str, object]]] = []
     for tool in tools:
         if not isinstance(tool, dict):
             updated_tools.append(tool)
@@ -295,13 +311,15 @@ def update_responses_tools_with_model_file_ids(
             if isinstance(container, dict):
                 container_file_ids = container.get("file_ids")
                 if isinstance(container_file_ids, list):
-                    updated_file_ids = []
+                    updated_file_ids: list[object] = []
                     for file_id in container_file_ids:
                         if isinstance(file_id, str):
                             # Check if we have a mapping for this file ID
-                            if file_id in model_file_id_mapping:
+                            if json_contains(model_file_id_mapping, file_id):
                                 # Map to provider-specific file ID
-                                provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
+                                provider_file_id = (
+                                    _mapped_provider_file_id(model_file_id_mapping, file_id, model_id) or file_id
+                                )
                                 updated_file_ids.append(provider_file_id)
                             else:
                                 updated_file_ids.append(file_id)
@@ -514,6 +532,20 @@ def get_image_mime_type_from_url(url: str) -> str | None:
 _get_image_mime_type_from_url = get_image_mime_type_from_url
 
 
+_MP4_VIDEO_BRANDS: Final = frozenset(
+    (b"isom", b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1", b"M4V ", b"dash", b"XAVC", b"MSNV")
+)
+
+
+def _sniffed_video_mime(content: bytes) -> str | None:
+    if content[4:8] != b"ftyp":
+        return None
+    brand: Final = content[8:12]
+    if brand == b"qt  ":
+        return "video/mov"
+    return "video/mp4" if brand in _MP4_VIDEO_BRANDS else None
+
+
 def infer_content_type_from_url_and_content(
     url: str,
     content: bytes,
@@ -572,6 +604,15 @@ def infer_content_type_from_url_and_content(
         "png": "image/png",
         "gif": "image/gif",
         "webp": "image/webp",
+        # Video formats
+        "mp4": "video/mp4",
+        "mov": "video/mov",
+        "webm": "video/webm",
+        "mpeg": "video/mpeg",
+        "mpg": "video/mpeg",
+        "avi": "video/avi",
+        "wmv": "video/wmv",
+        "flv": "video/flv",
         # Document formats
         "pdf": "application/pdf",
         "csv": "text/csv",
@@ -592,6 +633,9 @@ def infer_content_type_from_url_and_content(
             return inferred_type
 
     # Try to detect from binary content signature (magic bytes)
+    video_type: Final = _sniffed_video_mime(content)
+    if video_type:
+        return video_type
     if content:
         detected_type: Final = get_image_type(content[:100])
         if detected_type:
@@ -613,7 +657,7 @@ def get_file_ids_from_messages(messages: list[AllMessageValues]) -> list[str]:
     """
     Gets file ids from messages
     """
-    file_ids: Final = []
+    file_ids: Final[list[str]] = []
     for message in messages:
         if message.get("role") == "user":
             content = message.get("content")

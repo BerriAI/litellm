@@ -5,7 +5,7 @@ Azure Anthropic handler - reuses AnthropicChatCompletion logic with Azure authen
 import copy
 import json
 from collections.abc import Callable, Mapping
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -17,10 +17,14 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from .transformation import AzureAnthropicConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AzureAnthropicChatCompletion(AnthropicChatCompletion):
@@ -35,21 +39,21 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
+        print_verbose: Callable[..., object],
+        encoding: "Tokenizer",
+        api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: float | httpx.Timeout,
-        litellm_params: dict,
-        acompletion=None,
-        logger_fn=None,
-        headers={},
+        litellm_params: dict[str, object],
+        acompletion: object = None,
+        logger_fn: object = None,
+        headers: dict[str, object] = {},
         client=None,
     ):
         """

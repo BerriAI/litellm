@@ -24,7 +24,7 @@ from opentelemetry.sdk._logs.export import (
 )
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import Event, ReadableSpan, SpanLimits, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace import Span as SDKSpan
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
@@ -36,7 +36,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
-from opentelemetry.trace import Link, Span, SpanContext, SpanKind, Status, StatusCode, Tracer, TraceState
+from opentelemetry.trace import Link, Span, SpanContext, SpanKind, Status, StatusCode, TraceFlags, Tracer, TraceState
 from opentelemetry.util.re import parse_env_headers
 from opentelemetry.util.types import Attributes, AttributeValue
 
@@ -49,6 +49,7 @@ from litellm.integrations.otel.mappers.langfuse import (
     LANGFUSE_TRACE_NAME,
     LangfuseMapper,
 )
+from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.config import (
     CaptureMessageContent,
     ExporterOwner,
@@ -67,13 +68,17 @@ from litellm.integrations.otel.model.semconv import (
     LiteLLM,
     LiteLLMError,
     Server,
+    User,
 )
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 from litellm.integrations.otel.plumbing.context import (
     request_destinations,
+    request_metadata,
     request_traces_excluded,
+    request_user_id,
     suppressed_backends,
 )
+from litellm.integrations.otel.plumbing.named_trace import NamedTraceSpanProcessor, named_trace_id_of
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 
 if TYPE_CHECKING:
@@ -152,7 +157,7 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
         return endpoint
     endpoint = endpoint.rstrip("/")
     # Splunk Observability uses ``/v2/trace/otlp``; never rewrite it.
-    if endpoint.endswith("/v1/traces") or "/v2/trace/otlp" in endpoint:
+    if endpoint.endswith(("/v1/traces", "/v1/ai/otel/traces")) or "/v2/trace/otlp" in endpoint:
         return endpoint
     for other_signal in ("/v1/logs", "/v1/metrics"):
         if endpoint.endswith(other_signal):
@@ -436,15 +441,18 @@ class _SpanView(ReadableSpan):
         events: Sequence[Event],
         status: Status,
         parent: SpanContext | None,
+        *,
+        context: SpanContext | None = None,
+        links: Sequence[Link] | None = None,
     ) -> None:
         super().__init__(
             name=inner.name,
-            context=inner.context,
+            context=context or inner.context,
             parent=parent,
             resource=resource,
             attributes=attributes,
             events=events,
-            links=inner.links,
+            links=inner.links if links is None else links,
             kind=inner.kind,
             status=status,
             start_time=inner.start_time,
@@ -469,9 +477,32 @@ def without_message_content(span: ReadableSpan) -> ReadableSpan:
 class _CountedSpanView(_SpanView):
     """A ``_SpanView`` of ``inner`` with other attributes that reports the dropped counts ``inner`` reports."""
 
-    def __init__(self, inner: ReadableSpan, attributes: Attributes) -> None:
-        super().__init__(inner, inner.resource, attributes, inner.events, inner.status, parent=inner.parent)
-        self._dropped_counts: Final = (inner.dropped_attributes, inner.dropped_events, inner.dropped_links)
+    def __init__(
+        self,
+        inner: ReadableSpan,
+        attributes: Attributes,
+        dropped_attributes: int = 0,
+        resource: Resource | None = None,
+        *,
+        context: SpanContext | None = None,
+        parent: SpanContext | None = None,
+        links: Sequence[Link] | None = None,
+    ) -> None:
+        super().__init__(
+            inner,
+            resource or inner.resource,
+            attributes,
+            inner.events,
+            inner.status,
+            parent=parent or inner.parent,
+            context=context,
+            links=links,
+        )
+        self._dropped_counts: Final = (
+            inner.dropped_attributes + dropped_attributes,
+            inner.dropped_events,
+            inner.dropped_links,
+        )
 
     @property
     def dropped_attributes(self) -> int:
@@ -486,25 +517,166 @@ class _CountedSpanView(_SpanView):
         return self._dropped_counts[2]
 
 
+def in_named_trace(span: ReadableSpan) -> ReadableSpan:
+    """``span`` as a Langfuse exporter receives it: a span whose caller named its trace goes out in that trace, with
+    no mark naming it, and linked to the same span in the trace every other exporter gets."""
+    named: Final = named_trace_id_of(span)
+    context: Final = span.context
+    if named is None or context is None:
+        return span
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    parent: Final = span.parent
+    return _CountedSpanView(
+        span,
+        MappingProxyType({key: value for key, value in attributes.items() if key != LiteLLM.NAMED_TRACE_ID}),
+        context=_in_trace(context, named),
+        parent=_in_trace(parent, named) if parent is not None and parent.trace_id == context.trace_id else None,
+        links=(*span.links, Link(context)),
+    )
+
+
+def _in_trace(context: SpanContext, trace_id: int) -> SpanContext:
+    """``context`` in the trace a caller named, whose id is the caller's choice and so not random."""
+    return SpanContext(
+        trace_id=trace_id,
+        span_id=context.span_id,
+        is_remote=context.is_remote,
+        trace_flags=TraceFlags(context.trace_flags & ~TraceFlags.RANDOM_TRACE_ID),
+        trace_state=context.trace_state,
+    )
+
+
+_NAMED_TRACE_MARKS: Final = frozenset((LiteLLM.NAMED_TRACE_ID, LiteLLM.TRACE_ID_SKIPPED))
+
+
+def without_named_trace_marks(span: ReadableSpan) -> ReadableSpan:
+    """``span`` as an exporter other than Langfuse receives it, with nothing about a trace its caller named."""
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    if attributes.keys().isdisjoint(_NAMED_TRACE_MARKS):
+        return span
+    return _CountedSpanView(
+        span, MappingProxyType({key: value for key, value in attributes.items() if key not in _NAMED_TRACE_MARKS})
+    )
+
+
+def as_exported_to(span: ReadableSpan, langfuse: bool) -> ReadableSpan:
+    return in_named_trace(span) if langfuse else without_named_trace_marks(span)
+
+
+class _NamedTraceFilter(SpanProcessor):
+    """Hand ``inner`` each span as its exporter receives it (see :func:`as_exported_to`)."""
+
+    def __init__(self, inner: SpanProcessor, langfuse: bool) -> None:
+        self._inner: Final = inner
+        self._langfuse: Final = langfuse
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self._inner.on_end(as_exported_to(span, self._langfuse))
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
+_LLM_CALL_ATTRIBUTES_BUT_USER_ID: Final = LangfuseMapper.LLM_CALL_ATTRIBUTES - {User.ID}
+
+
+def span_limits(span: object) -> SpanLimits:
+    """The limits ``span`` was built with; the env-configured defaults for a span the SDK did not build."""
+    if not isinstance(span, SDKSpan):
+        return SpanLimits()
+    return span._limits  # pyright: ignore[reportPrivateUsage]  # the SDK has no public accessor for a span's limits
+
+
+class _PendingMetadataSpan(_CountedSpanView):
+    """``inner`` as it ended, carrying the destination metadata added once the destination's view is built."""
+
+    def __init__(self, inner: ReadableSpan, metadata: tuple[tuple[str, str], ...], limits: SpanLimits) -> None:
+        super().__init__(inner, inner.attributes)
+        self.destination_metadata: Final = metadata
+        self.limits: Final = limits
+
+
+def with_destination_metadata(
+    span: ReadableSpan, metadata_keys: tuple[str, ...], metadata: Mapping[str, str], limits: SpanLimits
+) -> ReadableSpan:
+    """``span`` carrying the ``litellm.metadata.*`` values a destination's own ``metadata_keys`` select.
+
+    Bound when the span ends, so a tree held for sampling keeps its own request's values, along
+    with the span limits it ended under. :func:`with_pending_metadata` adds them once the
+    destination's view is built.
+    """
+    if not metadata_keys:
+        return span
+    promoted: Final = tuple(promoted_metadata(metadata, metadata_keys).items())
+    if not promoted:
+        return span
+    return _PendingMetadataSpan(span, promoted, limits)
+
+
+def with_pending_metadata(ended: ReadableSpan, exported: ReadableSpan) -> ReadableSpan:
+    """``exported``, the destination's view of ``ended``, plus the metadata ``ended`` carries.
+
+    Counted against what the destination exports rather than the span as it ended, since the view
+    can drop prompt content and backend-specific attributes. An exported attribute always wins, so a
+    destination key never replaces a value the global allowlist or the proxy's identity wrote.
+    Values are cut to the length limit, and keys past the count limit are dropped and counted.
+    """
+    if not isinstance(ended, _PendingMetadataSpan):
+        return exported
+    attributes: Final = exported.attributes or _NO_ATTRIBUTES
+    extra: Final = tuple((key, value) for key, value in ended.destination_metadata if key not in attributes)
+    max_attributes: Final = ended.limits.max_span_attributes
+    max_length: Final = ended.limits.max_span_attribute_length
+    room: Final = len(extra) if max_attributes is None else max(0, max_attributes - len(attributes))
+    kept: Final = {key: value if max_length is None else value[:max_length] for key, value in extra[:room]}
+    return _CountedSpanView(
+        exported, MappingProxyType({**attributes, **kept}), dropped_attributes=len(extra) - len(kept)
+    )
+
+
 def _is_litellm_span(span: ReadableSpan) -> bool:
     """Whether LiteLLM's own tracer wrote ``span``, rather than application or instrumentation code."""
     scope: Final = span.instrumentation_scope
     return scope is not None and scope.name == LITELLM_TRACER_NAME
 
 
-def without_destination_langfuse_attributes(span: ReadableSpan, langfuse_mapped: bool) -> ReadableSpan:
+def with_request_user_id(span: ReadableSpan) -> ReadableSpan:
+    """``span`` carrying the id the request's caller named, for a backend that drops a span without one.
+
+    That id replaces a ``user.id`` already on the span, such as what a mapper wrote for another backend,
+    so the whole request names one caller. Called as the span ends, on the request's own task. A held span
+    must already have been through here, since a tree can be released on another request's task.
+    """
+    user_id: Final = request_user_id()
+    if user_id is None:
+        return span
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    return _CountedSpanView(span, MappingProxyType({**attributes, User.ID: user_id}))
+
+
+def without_destination_langfuse_attributes(
+    span: ReadableSpan, langfuse_mapped: bool, keeps_user_id: bool = False
+) -> ReadableSpan:
     """``span`` without the Langfuse attributes only a Langfuse destination asked for.
 
     That is the request metadata the Langfuse mapper writes and, on a model call written by
     a logger whose own mappers leave the Langfuse vocabulary out (``langfuse_mapped`` off),
     every Langfuse attribute, since that logger wrote them for a key's or team's Langfuse
     destination alone. Only LiteLLM's own spans lose them: any other span keeps every key
-    its own code set.
+    its own code set. ``keeps_user_id`` spares ``user.id``, which Mixpanel reads too.
     """
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     dropped: Final = (
         LANGFUSE_REQUEST_METADATA_ATTRIBUTES
         if langfuse_mapped or not is_llm_call_span(span)
+        else _LLM_CALL_ATTRIBUTES_BUT_USER_ID
+        if keeps_user_id
         else LangfuseMapper.LLM_CALL_ATTRIBUTES
     )
     if not (_is_litellm_span(span) and any(key in dropped for key in attributes)):
@@ -690,7 +862,9 @@ def _for_destination(
     source: Final = (
         span
         if destination.callback_name == ExporterOwner.LANGFUSE_OTEL
-        else without_destination_langfuse_attributes(span, langfuse_mapped)
+        else without_destination_langfuse_attributes(
+            span, langfuse_mapped, keeps_user_id=destination.callback_name == ExporterOwner.MIXPANEL
+        )
     )
     attributes: Final = source.attributes or _NO_ATTRIBUTES
     database: Final = _is_database_span(attributes)
@@ -761,9 +935,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._span_roots: weakref.WeakKeyDictionary[SDKSpan, int] = weakref.WeakKeyDictionary()
         self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
+        self._span_limits = SpanLimits()
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         context: Final = span.context
+        self._span_limits = span_limits(span)
         with self._lock:
             request: Final = self._request_of(span, trace.get_current_span(parent_context))
             if context is not None:
@@ -782,8 +958,19 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             if span.context is not None:
                 self._roots.pop(span.context.span_id, None)
         failed: Final = span.status.status_code is StatusCode.ERROR
-        for destination in request_destinations():
-            if (
+        metadata: Final = request_metadata()
+        deliveries: Final = tuple(
+            (
+                destination,
+                with_destination_metadata(
+                    with_request_user_id(span) if destination.callback_name == ExporterOwner.MIXPANEL else span,
+                    destination.metadata_keys,
+                    metadata,
+                    self._span_limits,
+                ),
+            )
+            for destination in request_destinations()
+            if not (
                 self._operator_already_writes(span, destination, suppressed)
                 or not _in_scope(span, destination.span_scope)
                 or _is_excluded_database_span(
@@ -792,12 +979,13 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                     if destination.excluded_db_systems is None
                     else destination.excluded_db_systems,
                 )
-            ):
-                continue
+            )
+        )
+        for destination, view in deliveries:
             if not _is_sampled(destination):
-                self._forward(span, destination)
+                self._forward(view, destination)
                 continue
-            for held_span, held_destination in self._route(request, span, destination, failed):
+            for held_span, held_destination in self._route(request, view, destination, failed):
                 self._forward(held_span, held_destination)
         for held_span, held_destination in self._settle(request, span, failed):
             self._forward(held_span, held_destination)
@@ -834,12 +1022,16 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         if processor is None:
             return
         try:
-            processor.on_end(
-                _scoped(
-                    _for_destination(span, destination, self._default_capture_for(destination), self._langfuse_mapped),
-                    destination.span_scope,
-                )
+            exported: Final = _scoped(
+                _for_destination(
+                    as_exported_to(span, destination.callback_name == ExporterOwner.LANGFUSE_OTEL),
+                    destination,
+                    self._default_capture_for(destination),
+                    self._langfuse_mapped,
+                ),
+                destination.span_scope,
             )
+            processor.on_end(with_pending_metadata(span, exported))
         except Exception as exc:  # noqa: BLE001  # one destination's failure must not cost the others their span
             verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
         finally:
@@ -1217,15 +1409,67 @@ class _DestinationLangfuseAttributeFilter(SpanProcessor):
     """Strip the Langfuse attributes only a Langfuse destination asked for from LiteLLM's own spans before ``inner``
     exports them."""
 
-    def __init__(self, inner: SpanProcessor, langfuse_mapped: bool) -> None:
+    def __init__(self, inner: SpanProcessor, langfuse_mapped: bool, keeps_user_id: bool = False) -> None:
         self._inner: Final = inner
         self._langfuse_mapped: Final = langfuse_mapped
+        self._keeps_user_id: Final = keeps_user_id
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         self._inner.on_start(span, parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
-        self._inner.on_end(without_destination_langfuse_attributes(span, self._langfuse_mapped))
+        self._inner.on_end(
+            without_destination_langfuse_attributes(span, self._langfuse_mapped, keeps_user_id=self._keeps_user_id)
+        )
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
+class _RequestUserIdStamp(SpanProcessor):
+    """Give every span the id the request's caller named before ``inner`` exports it."""
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self._inner: Final = inner
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self._inner.on_end(with_request_user_id(span))
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
+class _ExporterResource(SpanProcessor):
+    """Add one exporter's own resource attributes to every span before ``inner`` exports it, under any value the
+    span's own resource already names. The merged resource is kept for the next span, since a provider's spans share
+    one resource."""
+
+    def __init__(self, inner: SpanProcessor, attributes: Mapping[str, str]) -> None:
+        self._inner: Final = inner
+        self._extra: Final = Resource(dict(attributes))
+        self._merged: tuple[Resource, Resource] | None = None
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        cached: Final = self._merged
+        merged: Final = (
+            cached
+            if cached is not None and cached[0] is span.resource
+            else (span.resource, self._extra.merge(span.resource))
+        )
+        self._merged = merged
+        self._inner.on_end(_CountedSpanView(span, span.attributes, resource=merged[1]))
 
     def shutdown(self) -> None:
         self._inner.shutdown()
@@ -1379,7 +1623,7 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
 
         tls: Final = resolve_otlp_http_tls("LOGS")
         return HTTPLogExporter(
-            endpoint=_otlp_logs_endpoint(config.endpoint),
+            endpoint=config.logs_endpoint or _otlp_logs_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
             certificate_file=tls.certificate_file,
             session=tls.session,
@@ -1395,7 +1639,10 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
                 "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
             ) from exc
 
-        return GRPCLogExporter(endpoint=config.endpoint, headers=parse_headers(config.headers))
+        return GRPCLogExporter(
+            endpoint=config.logs_endpoint or config.endpoint,
+            headers=parse_headers(config.headers),
+        )
     return ConsoleLogExporter()
 
 
@@ -1511,16 +1758,20 @@ def _spec_processor(
     strip_destination_langfuse_attributes: bool,
     langfuse_mapped: bool,
 ) -> SpanProcessor:
-    exporting: Final = _processor_for(
+    batching: Final = _processor_for(
         _exporter_from_spec(spec),
         (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
     )
+    exporting: Final = _ExporterResource(batching, spec.resource_attributes) if spec.resource_attributes else batching
+    labels_user_id: Final = spec.owner is ExporterOwner.MIXPANEL
+    labeled: Final = _RequestUserIdStamp(exporting) if labels_user_id else exporting
     scoped: Final = (
-        _DestinationLangfuseAttributeFilter(exporting, langfuse_mapped)
+        _DestinationLangfuseAttributeFilter(labeled, langfuse_mapped, keeps_user_id=labels_user_id)
         if strip_destination_langfuse_attributes
-        else exporting
+        else labeled
     )
-    return _MessageContentFilter(scoped) if strip_message_content else scoped
+    filtered: Final = _MessageContentFilter(scoped) if strip_message_content else scoped
+    return _NamedTraceFilter(filtered, langfuse=spec.owner is ExporterOwner.LANGFUSE_OTEL)
 
 
 class _RequestExclusionSampler(Sampler):
@@ -1587,6 +1838,7 @@ def build_tracer_provider(
     if baggage_processor is None:
         baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
     provider.add_span_processor(baggage_processor)
+    provider.add_span_processor(NamedTraceSpanProcessor())
 
     if exporter is not None:
         provider.add_span_processor(_processor_for(exporter, use_simple_processor))

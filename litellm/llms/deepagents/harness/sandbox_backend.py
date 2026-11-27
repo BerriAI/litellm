@@ -54,10 +54,10 @@ from langchain_core.outputs import LLMResult
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import HARNESS_SNAPSHOT_SKIP_DIRS
 from litellm.harness.context import SessionContext
+from litellm.harness.endpoint import compute_cost
 from litellm.harness.errors import SandboxError
 from litellm.harness.sandbox.base import CompletedRun, Sandbox
 
@@ -65,8 +65,6 @@ T = TypeVar("T")
 
 # Module alias so ruff recognises `.exception()` as logging the swallowed error (BLE001).
 _logger = verbose_logger
-# Models cost_per_token could not price: logged once, then skipped (always 0.0).
-_UNPRICED_MODELS: set[str] = set()  # mutable-ok: process-wide log-once memo, grown as unpriced models are seen
 
 DEEPAGENTS_EXECUTE_TIMEOUT_SECONDS: Final = 120.0
 DEEPAGENTS_FS_TIMEOUT_SECONDS: Final = 60.0
@@ -92,6 +90,8 @@ _REALPATH_SCRIPT: Final = (
 )
 _GREP_LINE: Final = re.compile(r"^(.+?):(\d+):(.*)$")
 _FILTER_MIDDLEWARE_NAME: Final = "LiteLLMHarnessToolFilter"
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+_NO_USAGE: Final[Mapping[str, int]] = MappingProxyType({})
 
 
 def _decode(data: bytes) -> str:
@@ -497,25 +497,13 @@ def _number(value: object) -> float | None:
     return float(value)
 
 
-def message_cost(message: object, cost_model: str | None, input_tokens: int, output_tokens: int) -> float:
-    """Cost of one model call: response_cost reported by litellm, else cost_per_token, else 0."""
-    metadata = getattr(message, "response_metadata", None) or MappingProxyType({})
+def message_cost(message: object, cost_model: str | None, input_tokens: int, output_tokens: int) -> float | None:
+    """Cost of one model call, or None when the token price is unknown."""
+    metadata = getattr(message, "response_metadata", None) or _NO_METADATA
     reported = _number(metadata.get("response_cost"))
     if reported is not None:
         return reported
-    if not cost_model or cost_model in _UNPRICED_MODELS:
-        return 0.0
-    try:
-        prompt_cost, completion_cost = litellm.cost_per_token(
-            model=cost_model,
-            prompt_tokens=input_tokens,
-            completion_tokens=output_tokens,
-        )
-        return float(prompt_cost) + float(completion_cost)
-    except Exception:  # litellm raises plain Exception for unmapped models
-        _UNPRICED_MODELS.add(cost_model)
-        _logger.exception("harness deepagents: no cost for %s; counting its calls as 0", cost_model)
-        return 0.0
+    return compute_cost(cost_model, input_tokens, output_tokens)
 
 
 def record_llm_usage(ctx: SessionContext, cost_model: str | None, response: LLMResult) -> None:
@@ -525,12 +513,12 @@ def record_llm_usage(ctx: SessionContext, cost_model: str | None, response: LLMR
         for generations in response.generations:
             for generation in generations:
                 message = getattr(generation, "message", None)
-                usage = getattr(message, "usage_metadata", None) or MappingProxyType({})
+                usage = getattr(message, "usage_metadata", None) or _NO_USAGE
                 input_tokens = int(usage.get("input_tokens") or 0)
                 output_tokens = int(usage.get("output_tokens") or 0)
                 ctx.input_tokens += input_tokens
                 ctx.output_tokens += output_tokens
-                ctx.cost += message_cost(message, cost_model, input_tokens, output_tokens)
+                ctx.costs.add(message_cost(message, cost_model, input_tokens, output_tokens))
     except Exception:
         # Usage accounting must never fail a turn; log with traceback and move on.
         _logger.exception("harness deepagents: usage accounting failed")

@@ -25,7 +25,7 @@ def _mock_id() -> str:
     return f"chatcmpl-mock-{uuid.uuid4().hex[:8]}"
 
 
-def _chat_completion_json(model: object) -> dict:
+def _chat_completion_json(model: object) -> dict[str, object]:
     """Return a minimal valid ChatCompletion object."""
     return {
         "id": _mock_id(),
