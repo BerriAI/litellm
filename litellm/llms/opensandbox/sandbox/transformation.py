@@ -31,10 +31,8 @@ from litellm.llms.base_llm.sandbox.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
-    get_async_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.custom_http import httpxSpecialProvider
 
 DEFAULT_SANDBOX_TIMEOUT: Final = OPEN_SANDBOX_DEFAULT_TIMEOUT
 DEFAULT_READY_TIMEOUT: Final = OPEN_SANDBOX_READY_TIMEOUT
@@ -57,11 +55,6 @@ def _as_dict(value: object) -> Mapping[object, object] | None:
 
 
 class OpenSandboxSandboxConfig(BaseSandboxConfig):
-    def _http(self, client: AsyncHTTPHandler | None) -> AsyncHTTPHandler:
-        if client is not None:
-            return client
-        return get_async_httpx_client(llm_provider=httpxSpecialProvider.Sandbox)
-
     def validate_environment(self, api_key: str | None = None, **kwargs: object) -> str:
         if api_key is not None:
             return api_key

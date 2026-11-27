@@ -9,6 +9,7 @@ run code -> delete container; `code_interpreter_tool` combines all three.
 import builtins
 import shlex
 import time
+from collections.abc import Mapping
 from functools import cache
 from importlib.resources import files
 from typing import Final, Literal
@@ -16,8 +17,10 @@ from typing import Final, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 SANDBOX_MAX_OUTPUT_BYTES: Final = 10 * 1024 * 1024
 
@@ -25,13 +28,15 @@ SANDBOX_MAX_OUTPUT_BYTES: Final = 10 * 1024 * 1024
 class SandboxCost(LiteLLMPydanticObjectBase):
     """What a sandbox has cost so far. `cost_usd` is None when it cannot be known, never a guessed 0."""
 
+    model_config = ConfigDict(frozen=True)
+
     cost_usd: float | None = None
     source: Literal["provider", "estimate", "unknown"] = "unknown"
     seconds: float | None = None
 
 
 class SandboxPrice(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     cost_per_vcpu_second: float = 0.0
     cost_per_gib_second: float = 0.0
@@ -42,7 +47,7 @@ _SANDBOX_PRICES: Final = TypeAdapter(dict[str, SandboxPrice])
 
 
 @cache
-def get_sandbox_prices() -> dict[str, SandboxPrice]:
+def get_sandbox_prices() -> Mapping[str, SandboxPrice]:
     return _SANDBOX_PRICES.validate_json(files("litellm").joinpath("sandbox_prices.json").read_bytes())
 
 
@@ -79,10 +84,10 @@ def estimate_sandbox_cost(container: ContainerHandle | str, now: float | None = 
     end: Final = container.ended_at if container.ended_at is not None else (time.time() if now is None else now)
     seconds: Final = max(end - container.created_at, 0.0)
     price: Final = get_sandbox_prices().get(container.provider)
-    if price is None or container.memory_gib is None or (price.cost_per_vcpu_second and container.vcpus is None):
+    if price is None or container.memory_gib is None or container.vcpus is None:
         return SandboxCost(seconds=seconds)
     per_second: Final = (
-        price.cost_per_vcpu_second * (container.vcpus or 0.0)
+        price.cost_per_vcpu_second * container.vcpus
         + price.cost_per_gib_second * container.memory_gib
         + price.cost_per_disk_gib_second * (container.disk_gib or 0.0)
     )
@@ -123,6 +128,9 @@ class CodeExecutionResult(LiteLLMPydanticObjectBase):
 class BaseSandboxConfig:
     """Provider-agnostic sandbox operations."""
 
+    def _http(self, client: AsyncHTTPHandler | None) -> AsyncHTTPHandler:
+        return client or get_async_httpx_client(llm_provider=httpxSpecialProvider.Sandbox)
+
     def validate_environment(self, api_key: str | None = None, **kwargs: builtins.object) -> str:
         raise NotImplementedError("validate_environment must be implemented by provider")
 
@@ -161,7 +169,9 @@ class BaseSandboxConfig:
         *,
         container: ContainerHandle | str,
         api_key: str | None = None,
-        **kwargs,
+        api_base: str | None = None,
+        client: AsyncHTTPHandler | None = None,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> SandboxCost:
         return estimate_sandbox_cost(container)
 

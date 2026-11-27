@@ -19,9 +19,8 @@ from litellm.llms.base_llm.sandbox.transformation import (
     ContainerHandle,
     shell_command,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.custom_http import httpxSpecialProvider
 
 TENSORLAKE_API_BASE: Final = "https://api.tensorlake.ai"
 DEFAULT_SANDBOX_TIMEOUT: Final = 300
@@ -32,14 +31,14 @@ PROCESS_POLL_SECONDS: Final = 0.25
 
 
 class _Created(BaseModel):
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True, frozen=True)
 
     sandbox_id: str
     sandbox_url: str
 
 
 class _Process(BaseModel):
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True, frozen=True)
 
     pid: int
     status: str
@@ -47,16 +46,17 @@ class _Process(BaseModel):
 
 
 class _Output(BaseModel):
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True, frozen=True)
 
     lines: tuple[str, ...] = ()
 
 
 class TensorlakeSandboxConfig(BaseSandboxConfig):
-    def _http(self, client: AsyncHTTPHandler | None) -> AsyncHTTPHandler:
-        return client or get_async_httpx_client(llm_provider=httpxSpecialProvider.Sandbox)
-
-    def validate_environment(self, api_key: str | None = None, **kwargs: object) -> str:
+    def validate_environment(
+        self,
+        api_key: str | None = None,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
+    ) -> str:
         key: Final = api_key or get_secret_str("TENSORLAKE_API_KEY")
         if not key:
             raise ValueError("Tensorlake API key not set. Set TENSORLAKE_API_KEY or pass api_key=...")
@@ -77,7 +77,7 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
         cpus: float = DEFAULT_CPUS,
         memory_mb: int = DEFAULT_MEMORY_MB,
         client: AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> ContainerHandle:
         key: Final = self.validate_environment(api_key=api_key)
         base: Final = api_base or TENSORLAKE_API_BASE
@@ -111,7 +111,7 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         language: str = "python",
         client: AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> CodeExecutionResult:
         key: Final = self._key(container, api_key)
         sandbox_url: Final = (
@@ -124,7 +124,7 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
         started: Final = await http.post(
             url=processes, headers=headers, json={"command": "bash", "args": ["-c", shell_command(code, language)]}
         )
-        process = _Process.model_validate(started.json())
+        process = _Process.model_validate(started.json())  # rebind-ok: polled until the process exits
         while process.status == "running":
             await asyncio.sleep(PROCESS_POLL_SECONDS)
             process = _Process.model_validate(
@@ -146,7 +146,7 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> bool:
         hidden: Final[Mapping[str, object]] = container.hidden_params if isinstance(container, ContainerHandle) else {}
         base: Final = str(api_base or hidden.get("api_base") or TENSORLAKE_API_BASE)

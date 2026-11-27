@@ -20,9 +20,8 @@ from litellm.llms.base_llm.sandbox.transformation import (
     SandboxCost,
     shell_command,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.custom_http import httpxSpecialProvider
 
 BOAT_API_BASE: Final = "https://boat.dev/api/v1"
 BOAT_DEFAULT_TYPE: Final = "small"
@@ -30,7 +29,7 @@ DEFAULT_SANDBOX_TIMEOUT: Final = 300
 
 
 class _Sandbox(BaseModel):
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True, frozen=True)
 
     id: str
     vcpu: float | None = None
@@ -38,13 +37,13 @@ class _Sandbox(BaseModel):
 
 
 class _Created(BaseModel):
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True, frozen=True)
 
     sandbox: _Sandbox
 
 
 class _Command(BaseModel):
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True, frozen=True)
 
     stdout: str = ""
     stderr: str = ""
@@ -52,17 +51,18 @@ class _Command(BaseModel):
 
 
 class _Usage(BaseModel):
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True, frozen=True)
 
     dollars: float
     seconds: float | None = None
 
 
 class BoatSandboxConfig(BaseSandboxConfig):
-    def _http(self, client: AsyncHTTPHandler | None) -> AsyncHTTPHandler:
-        return client or get_async_httpx_client(llm_provider=httpxSpecialProvider.Sandbox)
-
-    def validate_environment(self, api_key: str | None = None, **kwargs: object) -> str:
+    def validate_environment(
+        self,
+        api_key: str | None = None,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
+    ) -> str:
         key: Final = api_key or get_secret_str("BOAT_API_KEY")
         if not key:
             raise ValueError("Boat API key not set. Set BOAT_API_KEY or pass api_key=...")
@@ -82,7 +82,7 @@ class BoatSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> ContainerHandle:
         key: Final = self.validate_environment(api_key=api_key)
         base: Final = api_base or BOAT_API_BASE
@@ -111,7 +111,7 @@ class BoatSandboxConfig(BaseSandboxConfig):
         api_base: str | None = None,
         language: str = "python",
         client: AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> CodeExecutionResult:
         key, base = self._auth(container, api_key, api_base)
         sandbox_id: Final = container.id if isinstance(container, ContainerHandle) else container
@@ -130,7 +130,7 @@ class BoatSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> bool:
         key, base = self._auth(container, api_key, api_base)
         sandbox_id: Final = container.id if isinstance(container, ContainerHandle) else container
@@ -152,7 +152,7 @@ class BoatSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> SandboxCost:
         key, base = self._auth(container, api_key, api_base)
         sandbox_id: Final = container.id if isinstance(container, ContainerHandle) else container

@@ -15,6 +15,8 @@ import time
 from collections.abc import Mapping
 from typing import Final
 
+import httpx
+
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.sandbox.transformation import (
     BaseSandboxConfig,
@@ -23,6 +25,7 @@ from litellm.llms.base_llm.sandbox.transformation import (
     SandboxCost,
     estimate_sandbox_cost,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import SandboxProviders
 from litellm.utils import ProviderConfigManager, client
 
@@ -109,7 +112,7 @@ async def asandbox_cost(
     container: ContainerHandle | str,
     api_key: str | None = None,
     api_base: str | None = None,
-    **kwargs: object,
+    client: AsyncHTTPHandler | None = None,
 ) -> SandboxCost:
     """
     What the sandbox has cost so far. The provider's own dollars when it reports them,
@@ -118,8 +121,22 @@ async def asandbox_cost(
     if isinstance(container, ContainerHandle) and container.final_cost is not None:
         return container.final_cost
     return await _get_config(provider).aget_sandbox_cost(
-        container=container, api_key=api_key, api_base=api_base, **_forward_kwargs(kwargs)
+        container=container, api_key=api_key, api_base=api_base, client=client
     )
+
+
+async def _reported_cost(
+    config: BaseSandboxConfig,
+    container: ContainerHandle,
+    api_key: str | None,
+    api_base: str | None,
+    client: AsyncHTTPHandler | None,
+) -> SandboxCost:
+    try:
+        return await config.aget_sandbox_cost(container=container, api_key=api_key, api_base=api_base, client=client)
+    except (httpx.HTTPError, ValueError) as e:
+        verbose_logger.debug("sandbox: failed to read cost before delete: %s", e)
+        return SandboxCost()
 
 
 async def _delete_with_final_cost(
@@ -127,20 +144,20 @@ async def _delete_with_final_cost(
     container: ContainerHandle | str,
     api_key: str | None,
     api_base: str | None,
-    forwarded: Mapping[str, object],
+    client: AsyncHTTPHandler | None,
+    kwargs: Mapping[str, object],
 ) -> bool:
     if not isinstance(container, ContainerHandle):
-        return await config.adelete_sandbox(container=container, api_key=api_key, api_base=api_base, **forwarded)
-    try:
-        reported: Final = await config.aget_sandbox_cost(
-            container=container, api_key=api_key, api_base=api_base, **forwarded
+        return await config.adelete_sandbox(
+            container=container, api_key=api_key, api_base=api_base, client=client, **_forward_kwargs(kwargs)
         )
-    except Exception as e:
-        verbose_logger.debug("sandbox: failed to read cost before delete: %s", e)
-        reported = SandboxCost()
-    deleted: Final = await config.adelete_sandbox(container=container, api_key=api_key, api_base=api_base, **forwarded)
-    container.ended_at = time.time()
-    container.final_cost = reported if reported.source == "provider" else estimate_sandbox_cost(container)
+    reported: Final = await _reported_cost(config, container, api_key, api_base, client)
+    deleted: Final = await config.adelete_sandbox(
+        container=container, api_key=api_key, api_base=api_base, client=client, **_forward_kwargs(kwargs)
+    )
+    container.ended_at = time.time()  # rebind-ok: the handle carries its own final cost after delete
+    final: Final = reported if reported.source == "provider" else estimate_sandbox_cost(container)
+    container.final_cost = final  # rebind-ok: the handle carries its own final cost after delete
     return deleted
 
 
@@ -150,10 +167,11 @@ async def adelete_sandbox(
     container: ContainerHandle | str,
     api_key: str | None = None,
     api_base: str | None = None,
+    client: AsyncHTTPHandler | None = None,
     **kwargs: object,
 ) -> bool:
     _update_logging(kwargs, provider, "delete_sandbox")
-    return await _delete_with_final_cost(_get_config(provider), container, api_key, api_base, _forward_kwargs(kwargs))
+    return await _delete_with_final_cost(_get_config(provider), container, api_key, api_base, client, kwargs)
 
 
 @client
@@ -164,6 +182,7 @@ async def acode_interpreter_tool(
     timeout: int | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
+    client: AsyncHTTPHandler | None = None,
     **kwargs: object,
 ) -> CodeExecutionResult:
     _update_logging(kwargs, provider, "code_interpreter_tool")
@@ -175,14 +194,17 @@ async def acode_interpreter_tool(
         timeout=timeout,
         api_key=api_key,
         api_base=api_base,
+        client=client,
         **forwarded,
     )
     try:
-        result: Final = await config.arun_code(container=container, code=code, api_key=api_key, **forwarded)
+        result: Final = await config.arun_code(
+            container=container, code=code, api_key=api_key, client=client, **forwarded
+        )
     except BaseException:
-        await _delete_ephemeral(config, container, api_key, api_base, forwarded)
+        await _delete_ephemeral(config, container, api_key, api_base, client, kwargs)
         raise
-    await _delete_ephemeral(config, container, api_key, api_base, forwarded)
+    await _delete_ephemeral(config, container, api_key, api_base, client, kwargs)
     if container.final_cost is not None and container.final_cost.cost_usd is not None:
         result.hidden_params["response_cost"] = container.final_cost.cost_usd
     return result
@@ -193,9 +215,10 @@ async def _delete_ephemeral(
     container: ContainerHandle,
     api_key: str | None,
     api_base: str | None,
-    forwarded: Mapping[str, object],
+    client: AsyncHTTPHandler | None,
+    kwargs: Mapping[str, object],
 ) -> None:
     try:
-        await _delete_with_final_cost(config, container, api_key, api_base, forwarded)
+        await _delete_with_final_cost(config, container, api_key, api_base, client, kwargs)
     except Exception as e:
         verbose_logger.debug("sandbox: failed to delete ephemeral container: %s", e)

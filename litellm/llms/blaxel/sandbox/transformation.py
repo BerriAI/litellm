@@ -19,9 +19,8 @@ from litellm.llms.base_llm.sandbox.transformation import (
     ContainerHandle,
     shell_command,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.custom_http import httpxSpecialProvider
 
 BLAXEL_API_BASE: Final = "https://api.blaxel.ai/v0"
 BLAXEL_DEFAULT_IMAGE: Final = "blaxel/base-image:latest"
@@ -32,20 +31,20 @@ MEMORY_MB_PER_VCPU: Final = 2048
 
 
 class _Metadata(BaseModel):
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True, frozen=True)
 
     name: str
     url: str
 
 
 class _Created(BaseModel):
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True, frozen=True)
 
     metadata: _Metadata
 
 
 class _Process(BaseModel):
-    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True, frozen=True)
 
     stdout: str = ""
     stderr: str = ""
@@ -53,16 +52,17 @@ class _Process(BaseModel):
 
 
 class BlaxelSandboxConfig(BaseSandboxConfig):
-    def _http(self, client: AsyncHTTPHandler | None) -> AsyncHTTPHandler:
-        return client or get_async_httpx_client(llm_provider=httpxSpecialProvider.Sandbox)
-
-    def validate_environment(self, api_key: str | None = None, **kwargs: object) -> str:
+    def validate_environment(
+        self,
+        api_key: str | None = None,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
+    ) -> str:
         key: Final = api_key or get_secret_str("BL_API_KEY")
         if not key:
             raise ValueError("Blaxel API key not set. Set BL_API_KEY or pass api_key=...")
         return key
 
-    def _headers(self, container: ContainerHandle | str | None, api_key: str | None) -> dict[str, str]:
+    def _headers(self, container: ContainerHandle | str | None, api_key: str | None) -> Mapping[str, str]:
         hidden: Final[Mapping[str, object]] = container.hidden_params if isinstance(container, ContainerHandle) else {}
         key: Final = api_key or hidden.get("api_key") or self.validate_environment()
         workspace: Final = hidden.get("workspace") or get_secret_str("BL_WORKSPACE")
@@ -78,7 +78,7 @@ class BlaxelSandboxConfig(BaseSandboxConfig):
         api_base: str | None = None,
         memory_mb: int = DEFAULT_MEMORY_MB,
         client: AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> ContainerHandle:
         base: Final = api_base or BLAXEL_API_BASE
         headers: Final = self._headers(None, api_key)
@@ -121,7 +121,7 @@ class BlaxelSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         language: str = "python",
         client: AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> CodeExecutionResult:
         url: Final = container.hidden_params.get("url") if isinstance(container, ContainerHandle) else None
         if not url:
@@ -144,7 +144,7 @@ class BlaxelSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> bool:
         hidden: Final[Mapping[str, object]] = container.hidden_params if isinstance(container, ContainerHandle) else {}
         base: Final = str(api_base or hidden.get("api_base") or BLAXEL_API_BASE)

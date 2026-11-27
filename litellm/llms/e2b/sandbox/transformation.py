@@ -25,10 +25,8 @@ from litellm.llms.base_llm.sandbox.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
-    get_async_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.custom_http import httpxSpecialProvider
 
 E2B_API_BASE: Final = "https://api.e2b.app"
 E2B_DEFAULT_TEMPLATE: Final = "code-interpreter-v1"
@@ -45,11 +43,6 @@ _TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_err
 
 
 class E2BSandboxConfig(BaseSandboxConfig):
-    def _http(self, client: AsyncHTTPHandler | None) -> AsyncHTTPHandler:
-        if client is not None:
-            return client
-        return get_async_httpx_client(llm_provider=httpxSpecialProvider.Sandbox)
-
     def validate_environment(self, api_key: str | None = None, **kwargs: object) -> str:
         key: Final = api_key or get_secret_str("E2B_API_KEY")
         if not key:

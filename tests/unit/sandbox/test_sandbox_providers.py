@@ -318,7 +318,9 @@ async def test_modal_lifecycle_goes_through_the_sdk(monkeypatch):
         Client=types.SimpleNamespace(from_credentials=_FakeAio(lambda token_id, secret: (token_id, secret))),
         App=types.SimpleNamespace(lookup=_FakeAio(lambda name, **kwargs: name)),
         Image=types.SimpleNamespace(debian_slim=lambda: "slim", from_registry=lambda tag: tag),
-        Sandbox=types.SimpleNamespace(create=_FakeAio(create)),
+        Sandbox=types.SimpleNamespace(
+            create=_FakeAio(create), from_id=_FakeAio(lambda sandbox_id, client: _FakeModalSandbox(record))
+        ),
     )
     monkeypatch.setitem(sys.modules, "modal", fake_modal)
 
