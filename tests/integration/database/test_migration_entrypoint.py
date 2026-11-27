@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 import pytest
 import yaml
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.mcp import paginated_mcp_peer
 from integration._support.process import owned_proxy
@@ -106,17 +106,71 @@ def test_migration_entrypoint_upgrades_an_older_schema_so_the_proxy_serves_mcp_t
             assert tools.json()["tools"] == [], tools.text
 
 
-def catalog_query_count(database_url: str) -> int:
+def catalog_query_count(database_url: str, where_pattern: str = "%") -> int:
     rows: Final = read_rows(
         "SELECT coalesce(sum(calls), 0)::bigint AS calls FROM pg_stat_statements "
         "WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) "
         "AND query LIKE %s",
-        ('SELECT%FROM%"LiteLLM_MCPServerTable"%',),
+        (f'SELECT%FROM%"LiteLLM_MCPServerTable"%{where_pattern}',),
         database_url=database_url,
     )
     calls: Final = rows[0]["calls"]
     assert isinstance(calls, int)
     return calls
+
+
+def test_scheduled_reload_skips_unchanged_yaml_catalog_and_reloads_after_db_write(
+    gateway: Gateway, tmp_path: Path, record_property: Callable[[str, int], None]
+) -> None:
+    full_catalog_read: Final = '%WHERE%"approval_status"%'
+    scheduled_backfill_read: Final = '%WHERE%"oauth2_flow" IS NULL%'
+    with fresh_database() as database_url, paginated_mcp_peer(page_size=3) as peer:
+        deploy_pending_migrations(database_url)
+        config: Final = tmp_path / "yaml-mcp.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [],
+                    "mcp_servers": {"pages": {"url": peer.url, "transport": "http", "server_id": str(uuid.uuid4())}},
+                    "general_settings": {
+                        "master_key": gateway.key,
+                        "store_model_in_db": True,
+                        "proxy_config_reload_interval_seconds": 3,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        environment: Final = {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true"}
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+            with owned_proxy(gateway, tmp_path / "scheduled", environment, config=config, database_setup=()) as proxy:
+                initial_reads: Final = catalog_query_count(database_url, full_catalog_read)
+                assert initial_reads > 0
+                initial_ticks: Final = catalog_query_count(database_url, scheduled_backfill_read)
+                eventually(
+                    lambda: catalog_query_count(database_url, scheduled_backfill_read),
+                    lambda calls: calls >= initial_ticks + 3,
+                    seconds=30,
+                )
+                unchanged_reads: Final = catalog_query_count(database_url, full_catalog_read) - initial_reads
+                record_property("full_catalog_reads_after_three_unchanged_ticks", unchanged_reads)
+                assert unchanged_reads == 0
+
+                connection.execute('DELETE FROM "LiteLLM_MCPServerTable" WHERE FALSE')
+                changed_reads: Final = (
+                    eventually(
+                        lambda: catalog_query_count(database_url, full_catalog_read),
+                        lambda calls: calls > initial_reads,
+                        seconds=30,
+                    )
+                    - initial_reads
+                )
+                record_property("full_catalog_reads_after_revision_changes", changed_reads)
+                assert changed_reads == 1
+                tools: Final = proxy.request("GET", "/mcp-rest/tools/list", params={"mcp_server_name": "pages"})
+                assert tools.status_code == 200, tools.text
+                assert len(tools.json()["tools"]) == 3, tools.text
 
 
 def yaml_catalog_reloads(gateway: Gateway, database_url: str) -> int:
