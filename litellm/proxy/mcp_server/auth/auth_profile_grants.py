@@ -123,11 +123,30 @@ async def _readable_key_permission(caller: UserAPIKeyAuth) -> LiteLLM_ObjectPerm
         return None
 
 
+def _scope_needs_key_grants(mcp_servers: Sequence[str]) -> bool:
+    if not mcp_servers:
+        return False
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    get_server: Final = getattr(global_mcp_server_manager, "get_mcp_server_by_id", None)
+    if get_server is None:
+        return True
+    for server_id in mcp_servers:
+        server = get_server(server_id)
+        if server is None or server.additional_auth or server.auth_profiles_unreadable:
+            return True
+    return False
+
+
 async def toolset_scope_permission(
     caller: UserAPIKeyAuth, mcp_servers: Sequence[str], mcp_tool_permissions: Mapping[str, list[str]]
 ) -> LiteLLM_ObjectPermissionTable:
     """The permission that pins a key with no loaded permission row to a toolset, keeping the key's profile grants."""
-    key: Final = await _readable_key_permission(caller)
+    key: Final = (
+        await _readable_key_permission(caller)
+        if caller.object_permission_id is not None and _scope_needs_key_grants(mcp_servers)
+        else None
+    )
     grants: Final = (
         {"mcp_auth_profiles": key.mcp_auth_profiles}
         if key is not None and "mcp_auth_profiles" in key.model_fields_set
