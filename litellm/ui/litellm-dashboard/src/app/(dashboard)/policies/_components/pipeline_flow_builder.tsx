@@ -1,6 +1,8 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { Controller, useWatch } from "react-hook-form";
 import type { ParseKeys, TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +27,8 @@ import {
 } from "@/components/networking";
 import { COMPLIANCE_FRAMEWORK_LABEL_KEYS, getComplianceDatasetPrompts, getFrameworks } from "@/data/compliancePrompts";
 import type { CompliancePrompt } from "@/data/compliancePrompts";
+import { buildPolicyFlowPayload, createDefaultStep, policyToFlowFormValues } from "./pipelineFlowMapper";
+import { createPipelineFlowSchema, type PipelineFlowFormValues } from "./pipelineFlowSchema";
 
 const DEFAULT_VERSION_STATUS = "draft";
 
@@ -57,16 +61,6 @@ function actionLabel(action: string, t: TFunction): string {
   return key ? t(key) : action;
 }
 
-function createDefaultStep(): PipelineStep {
-  return {
-    guardrail: "",
-    on_pass: "next",
-    on_fail: "block",
-    pass_data: false,
-    modify_response_message: null,
-  };
-}
-
 function insertStep(steps: PipelineStep[], atIndex: number): PipelineStep[] {
   const newSteps = [...steps];
   newSteps.splice(atIndex, 0, createDefaultStep());
@@ -82,34 +76,6 @@ function removeStep(steps: PipelineStep[], index: number): PipelineStep[] {
 
 function updateStepAtIndex(steps: PipelineStep[], index: number, updated: Partial<PipelineStep>): PipelineStep[] {
   return steps.map((s, i) => (i === index ? { ...s, ...updated } : s));
-}
-
-/**
- * Derives a pipeline from a policy. When the policy has a pipeline, use it.
- * When it only has guardrails_add (legacy/simple form), convert those guardrails
- * into pipeline steps in order.
- */
-function derivePipelineFromPolicy(policy: Policy | null | undefined): GuardrailPipeline {
-  if (!policy) {
-    return { mode: "pre_call", steps: [createDefaultStep()] };
-  }
-  if (policy.pipeline?.steps?.length) {
-    return policy.pipeline;
-  }
-  const guardrails = policy.guardrails_add || [];
-  if (guardrails.length > 0) {
-    return {
-      mode: policy.pipeline?.mode ?? "pre_call",
-      steps: guardrails.map((g) => ({
-        guardrail: g,
-        on_pass: "next" as const,
-        on_fail: "block" as const,
-        pass_data: false,
-        modify_response_message: null,
-      })),
-    };
-  }
-  return { mode: "pre_call", steps: [createDefaultStep()] };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1549,27 +1515,26 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   const isEditing = !!editingPolicy?.policy_id;
   const showVersionsSidebar = !!editingPolicy?.policy_name;
 
-  const [policyName, setPolicyName] = useState(editingPolicy?.policy_name || "");
-  const [description, setDescription] = useState(editingPolicy?.description || "");
+  const schema = useMemo(() => createPipelineFlowSchema(t), [t]);
+  const form = useZodForm(schema, { defaultValues: policyToFlowFormValues(editingPolicy) });
+  const policyName = useWatch({ control: form.control, name: "policy_name" });
+  const pipeline = useWatch({ control: form.control, name: "pipeline" });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showTestPanel, setShowTestPanel] = useState(false);
-  const [pipeline, setPipeline] = useState<GuardrailPipeline>(() => derivePipelineFromPolicy(editingPolicy));
   const [versions, setVersions] = useState<Policy[]>([]);
   const [isVersionsLoading, setIsVersionsLoading] = useState(false);
   const [isCreatingVersion, setIsCreatingVersion] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
 
-  // Sync local state when editingPolicy changes (e.g. user switched version)
   React.useEffect(() => {
-    setPolicyName(editingPolicy?.policy_name || "");
-    setDescription(editingPolicy?.description || "");
-    setPipeline(derivePipelineFromPolicy(editingPolicy));
+    form.reset(policyToFlowFormValues(editingPolicy));
   }, [
     editingPolicy?.policy_id,
     editingPolicy?.policy_name,
     editingPolicy?.description,
     editingPolicy?.pipeline,
     editingPolicy?.guardrails_add,
+    form,
   ]);
 
   // Fetch versions when editing an existing policy by name
@@ -1659,33 +1624,15 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
     }
   };
 
-  const handleSave = async () => {
-    if (!policyName.trim()) {
-      toast.error(t("policies.flowBuilder.page.toasts.nameRequired"));
-      return;
-    }
+  const submitPolicyFlow = async (values: PipelineFlowFormValues) => {
     if (!accessToken) {
       toast.error(t("policies.flowBuilder.page.toasts.noAccessToken"));
       return;
     }
 
-    const emptySteps = pipeline.steps.filter((s) => !s.guardrail);
-    if (emptySteps.length > 0) {
-      toast.error(t("policies.flowBuilder.page.toasts.guardrailRequired"));
-      return;
-    }
-
     setIsSubmitting(true);
     try {
-      const guardrailsFromPipeline = pipeline.steps.map((s) => s.guardrail).filter(Boolean);
-
-      const data: PolicyCreateRequest | PolicyUpdateRequest = {
-        policy_name: policyName,
-        description: description || undefined,
-        guardrails_add: guardrailsFromPipeline,
-        guardrails_remove: [],
-        pipeline: pipeline,
-      };
+      const data = buildPolicyFlowPayload(values);
 
       if (isEditing && editingPolicy) {
         await updatePolicy(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
@@ -1708,6 +1655,20 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
       setIsSubmitting(false);
     }
   };
+
+  const handleSave = form.handleSubmit(submitPolicyFlow, (errors) => {
+    if (errors.policy_name?.message) {
+      toast.error(errors.policy_name.message);
+      return;
+    }
+    if (!accessToken) {
+      toast.error(t("policies.flowBuilder.page.toasts.noAccessToken"));
+      return;
+    }
+    if (errors.pipeline?.message) {
+      toast.error(errors.pipeline.message);
+    }
+  });
 
   return (
     <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-muted">
@@ -1741,12 +1702,18 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
             {t("policies.flowBuilder.page.breadcrumb")}
           </span>
           <span style={{ fontSize: 14, color: "var(--color-border)" }}>/</span>
-          <Input
-            placeholder={t("policies.flowBuilder.page.namePlaceholder")}
-            value={policyName}
-            onChange={(e) => setPolicyName(e.target.value)}
-            disabled={isEditing}
-            style={{ width: 240 }}
+          <Controller
+            control={form.control}
+            name="policy_name"
+            render={({ field }) => (
+              <Input
+                placeholder={t("policies.flowBuilder.page.namePlaceholder")}
+                value={field.value}
+                onChange={(e) => field.onChange(e.target.value)}
+                disabled={isEditing}
+                style={{ width: 240 }}
+              />
+            )}
           />
           <span
             style={{
@@ -1784,11 +1751,17 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           flexShrink: 0,
         }}
       >
-        <Input
-          placeholder={t("policies.flowBuilder.page.descriptionPlaceholder")}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          style={{ maxWidth: 500 }}
+        <Controller
+          control={form.control}
+          name="description"
+          render={({ field }) => (
+            <Input
+              placeholder={t("policies.flowBuilder.page.descriptionPlaceholder")}
+              value={field.value}
+              onChange={(e) => field.onChange(e.target.value)}
+              style={{ maxWidth: 500 }}
+            />
+          )}
         />
       </div>
 
@@ -1820,7 +1793,17 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           }}
         >
           <div style={{ maxWidth: 760, width: "100%" }}>
-            <PipelineFlowBuilder pipeline={pipeline} onChange={setPipeline} availableGuardrails={availableGuardrails} />
+            <Controller
+              control={form.control}
+              name="pipeline"
+              render={({ field }) => (
+                <PipelineFlowBuilder
+                  pipeline={field.value}
+                  onChange={field.onChange}
+                  availableGuardrails={availableGuardrails}
+                />
+              )}
+            />
           </div>
         </div>
 
@@ -1832,5 +1815,4 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   );
 };
 
-export { createDefaultStep };
 export default PipelineFlowBuilder;
