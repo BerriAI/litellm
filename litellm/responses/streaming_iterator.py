@@ -14,8 +14,9 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, cast, overload, runtime_checkable
 
+import anyio
 import httpx
-from openai._streaming import SSEDecoder
+from openai._streaming import ServerSentEvent, SSEDecoder
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 from typing_extensions import TypeIs
@@ -24,13 +25,19 @@ import litellm
 from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
+    RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS,
+    RESPONSES_API_UNCLAIMED_STREAM_CLOSE_GRACE_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, process_response_headers
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_params
-from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
+from litellm.litellm_core_utils.internal_call_metadata import (
+    is_background_response,
+    requests_background,
+    without_budget_reservation,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -206,6 +213,16 @@ def _spawn_logging_task(
     return task
 
 
+_UNCLAIMED_STREAM_CLOSES: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdlib strong-ref set for rooted tasks
+
+
+def _spawn_rooted(coroutine: Coroutine[object, object, None]) -> asyncio.Task[None]:
+    task: Final = asyncio.get_running_loop().create_task(coroutine)
+    _UNCLAIMED_STREAM_CLOSES.add(task)
+    task.add_done_callback(_UNCLAIMED_STREAM_CLOSES.discard)
+    return task
+
+
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
     {
         "server_error": 500,
@@ -370,6 +387,9 @@ class BaseResponsesAPIStreamingIterator:
         self._created_response: ResponsesAPIResponse | None = None
         self._completed_response_cached = False
         self._completed_response_logged = False
+        self._reading_on_after_consumer_left = False
+        self._ended_in_a_failed_response = False
+        self._success_handed_to_logging = False
         self._completed_response_cache_hit: bool | None = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
@@ -625,6 +645,7 @@ class BaseResponsesAPIStreamingIterator:
                 start_time=self.start_time,
                 end_time=end_time,
             )
+        self._success_handed_to_logging = True
         self._run_post_success_hooks(end_time=end_time)
 
     def _restore_provider_response_headers(self, logging_response: object) -> None:
@@ -674,6 +695,7 @@ class BaseResponsesAPIStreamingIterator:
             getattr(self.completed_response, "response", None) if self.completed_response else None
         )
         error_info: Final = getattr(response_obj, "error", None) if response_obj else None
+        self._ended_in_a_failed_response = True
         self._record_failed_response_usage(response_obj)
         self._handle_failure(self._map_error_event_exception(error_info))
 
@@ -952,8 +974,9 @@ class BaseResponsesAPIStreamingIterator:
         Trigger failure handlers before bubbling the exception.
         Only calls handlers once even if called multiple times.
         """
-        # Prevent double-calling failure handlers
-        if self._failure_handled:
+        # Prevent double-calling failure handlers. A failure while reading on after the consumer left is no
+        # failure of the request: the stream stays a cut one, billed and released by the disconnect cleanup.
+        if self._failure_handled or self._reading_on_after_consumer_left:
             return
         self._failure_handled = True
 
@@ -1025,13 +1048,18 @@ class BaseResponsesAPIStreamingIterator:
         Its response is the response.created payload (it carries the served
         service_tier) plus the text and tool arguments relayed so far, with counted
         usage since the provider never sent any. None when nothing was relayed yet
-        or the stream already reached its terminal event and billed itself.
+        or the stream already reached its terminal event and billed itself. A response
+        the provider failed while the stream was read on has no failure log, so it is
+        billed here, with the usage the provider reported on that event when it reported one.
         """
         created: Final = self._created_response
-        generated: Final = self._generated_content + self._generated_tool_arguments
-        if self.completed_response is not None or created is None or not generated:
+        if created is None or self._billed_without_disconnect():
             return None
-        usage: Final = _estimate_usage_safely(
+        generated: Final = self._generated_content + self._generated_tool_arguments
+        reported: Final = self._usage_of_the_response_failed_while_read_on()
+        if reported is None and not generated:
+            return None
+        usage: Final = reported or _estimate_usage_safely(
             self.model or "", self.request_data.get("input"), self.request_data, generated
         )
         if usage is None:
@@ -1045,6 +1073,23 @@ class BaseResponsesAPIStreamingIterator:
         )
         stamp_responses_usage_cost(partial, self.logging_obj)
         return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
+
+    def _billed_without_disconnect(self) -> bool:
+        return self.completed_response is not None and not self._failed_while_read_on()
+
+    def _failed_while_read_on(self) -> bool:
+        """The terminal event read after the consumer left reached no log: the provider failed it, or logging it raised."""
+        if not self._reading_on_after_consumer_left:
+            return False
+        return self._ended_in_a_failed_response or (
+            self._completed_response_logged and not self._success_handed_to_logging
+        )
+
+    def _usage_of_the_response_failed_while_read_on(self) -> ResponseAPIUsage | None:
+        if not self._failed_while_read_on():
+            return None
+        failed: Final[object] = getattr(self.completed_response, "response", None)
+        return _usage_as_model(getattr(failed, "usage", None))
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
@@ -1128,6 +1173,10 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             call_type,
         )
         self.stream_iterator = SSEDecoder().aiter_bytes(response.aiter_bytes())
+        self._outlives_its_consumer = False
+        self._settled_after_consumer_left = False
+        self._pending_upstream_read: asyncio.Future[ServerSentEvent | None] | None = None
+        self._unclaimed_close: asyncio.Task[None] | None = None
 
     def __aiter__(self):
         return self
@@ -1140,16 +1189,87 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             raise
 
     async def aclose(self) -> None:
+        if not self._outlives_its_consumer or self._settled_after_consumer_left or self._reached_its_end():
+            await self._close_upstream()
+            return
+        if self._unclaimed_close is None:
+            self._unclaimed_close = _spawn_rooted(self._close_unless_settled())
+
+    def outlive_consumer_until_settled(self) -> None:
+        """
+        A cancelled httpx read closes the provider's connection, and the wrappers around this stream close it
+        while a client disconnect unwinds them, so the provider's terminal usage would never arrive.
+        Once this is called, every event is read in its own task and aclose() holds the connection open
+        until settle_after_consumer_left() decides whether to read on, or the grace period runs out.
+        """
+        self._outlives_its_consumer = True
+
+    async def settle_after_consumer_left(self, *, drain: bool) -> bool:
+        """
+        With drain, keep reading the provider's stream so its terminal event bills the usage the provider
+        reports (reasoning tokens and the cached split included) instead of a local count; True when that
+        event was logged as a success, here or before the consumer left. Otherwise close the stream.
+        """
+        self._settled_after_consumer_left = True
+        if self._unclaimed_close is not None:
+            self._unclaimed_close.cancel()
+        if not drain or not self._can_be_read_on():
+            await self._close_upstream()
+            return drain and self._success_handed_to_logging
+        self._reading_on_after_consumer_left = True
+        with anyio.move_on_after(RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS):
+            try:
+                while self.completed_response is None:
+                    await self.__anext__()
+            except (StopAsyncIteration, Exception) as e:  # noqa: BLE001  # the cleanup bills what was relayed, as for any cut stream
+                verbose_logger.debug("Responses API stream ended while draining after a client disconnect: %r", e)
+        await self._close_upstream()
+        return self._success_handed_to_logging
+
+    def _can_be_read_on(self) -> bool:
+        if not self._outlives_its_consumer or self._reached_its_end():
+            return False
+        return not (requests_background(self.request_data) or is_background_response(self._created_response))
+
+    def _reached_its_end(self) -> bool:
+        return self.finished or self.completed_response is not None or self._failure_handled
+
+    async def _close_unless_settled(self) -> None:
+        await asyncio.sleep(RESPONSES_API_UNCLAIMED_STREAM_CLOSE_GRACE_SECONDS)
+        if not self._settled_after_consumer_left:
+            self._settled_after_consumer_left = True
+            await self._close_upstream()
+
+    async def _close_upstream(self) -> None:
+        pending: Final = self._pending_upstream_read
+        if pending is not None and not pending.cancel() and not pending.cancelled():
+            pending.exception()
         await self.response.aclose()
+
+    async def _read_upstream_event(self) -> ServerSentEvent | None:
+        if not self._outlives_its_consumer:
+            return await anext(self.stream_iterator, None)
+        pending: Final = self._pending_upstream_read or asyncio.ensure_future(anext(self.stream_iterator, None))
+        self._pending_upstream_read = pending
+        try:
+            event: Final = await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            if pending.cancelled():
+                self._pending_upstream_read = None
+            raise
+        except Exception:
+            self._pending_upstream_read = None
+            raise
+        self._pending_upstream_read = None
+        return event
 
     async def _next_event(self) -> ResponsesAPIStreamingResponse:
         try:
             self._check_max_streaming_duration()
             while True:
                 # Get the next chunk from the stream
-                try:
-                    sse = await self.stream_iterator.__anext__()
-                except StopAsyncIteration:
+                sse = await self._read_upstream_event()
+                if sse is None:
                     self.finished = True
                     self._raise_if_ended_without_terminal_event()
                     raise StopAsyncIteration
@@ -1722,6 +1842,26 @@ def partial_billed_for_both_deployments(primary: PricedPartial, fallback: Priced
         ),
         _cost_breakdown_of_both_deployments(primary, fallback),
     )
+
+
+@runtime_checkable
+class OutlivesItsConsumer(Protocol):
+    def outlive_consumer_until_settled(self) -> None: ...
+
+    def settle_after_consumer_left(self, *, drain: bool) -> Awaitable[bool]: ...
+
+
+def keep_responses_stream_open_for_disconnect_drain(stream: object) -> None:
+    """Have the Responses API stream behind a proxy or router wrapper stay open when its consumer is cancelled."""
+    if isinstance(stream, OutlivesItsConsumer):
+        stream.outlive_consumer_until_settled()
+
+
+async def settle_responses_stream_after_consumer_left(stream: object, *, drain: bool) -> bool:
+    """Read the stream kept open above on to the provider's terminal usage (drain), or close it. True when drained."""
+    if not isinstance(stream, OutlivesItsConsumer):
+        return False
+    return await stream.settle_after_consumer_left(drain=drain)
 
 
 def _partial_output_items(generated_text: str) -> Sequence[GenericResponseOutputItem]:
