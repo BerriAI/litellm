@@ -528,14 +528,13 @@ class ResponsesAPIRequestUtils:
         if response_id is None:
             return responses_api_response
 
-        if ResponsesAPIRequestUtils._is_litellm_encoded_response_id(response_id):
-            return responses_api_response
-
-        updated_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        updated_id: Final = ResponsesAPIRequestUtils.encode_responses_api_response_id(
             model_id=model_id,
             custom_llm_provider=custom_llm_provider,
             response_id=response_id,
         )
+        if updated_id == response_id:
+            return responses_api_response
 
         if isinstance(responses_api_response, dict):
             responses_api_response["id"] = updated_id
@@ -874,6 +873,22 @@ class ResponsesAPIRequestUtils:
                 for block in value
             )
         return False
+
+    @staticmethod
+    def encode_responses_api_response_id(
+        response_id: str,
+        *,
+        custom_llm_provider: str | None,
+        model_id: object,
+    ) -> str:
+        """Encode a response ID or preserve it if it already carries LiteLLM routing."""
+        if ResponsesAPIRequestUtils._is_litellm_encoded_response_id(response_id):
+            return response_id
+        return ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider=custom_llm_provider,
+            model_id=model_id,
+            response_id=response_id,
+        )
 
     @staticmethod
     def _build_responses_api_response_id(

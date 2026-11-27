@@ -221,7 +221,7 @@ def _load_json_value(payload: str | bytes) -> object:
 
 def _model_id_from_metadata(litellm_metadata: Mapping[str, object] | None) -> str | None:
     model_info: Final = litellm_metadata.get("model_info") if litellm_metadata else None
-    model_id: Final = model_info.get("id") if _is_json_object(model_info) else None
+    model_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
     return model_id if isinstance(model_id, str) else None
 
 
@@ -549,11 +549,28 @@ class BaseResponsesAPIStreamingIterator:
                     parsed_chunk={**typed_chunk, **tool_input_fix} if tool_input_fix else typed_chunk,
                     logging_obj=self.logging_obj,
                 )
+                _stream_model_id: Final = _model_id_from_metadata(self.litellm_metadata)
+                response_reference: Final[object] = getattr(transformed_chunk, "response_id", None)
+                # Some upstreams include a response_id on item and delta events.
+                # Route those references in the same namespace as response.id.
+                routed_chunk: Final = (
+                    transformed_chunk.model_copy(
+                        update={
+                            "response_id": ResponsesAPIRequestUtils.encode_responses_api_response_id(
+                                response_reference,
+                                custom_llm_provider=self.custom_llm_provider,
+                                model_id=_stream_model_id,
+                            )
+                        }
+                    )
+                    if isinstance(response_reference, str) and response_reference
+                    else transformed_chunk
+                )
                 affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
                 openai_responses_api_chunk: Final = (
-                    transformed_chunk
+                    routed_chunk
                     if affinity_model_id is None
-                    else ResponsesAPIRequestUtils.encode_stream_event_for_affinity(transformed_chunk, affinity_model_id)
+                    else ResponsesAPIRequestUtils.encode_stream_event_for_affinity(routed_chunk, affinity_model_id)
                 )
 
                 # Only when the SSE JSON carries a response body (delta events do not).
@@ -583,7 +600,6 @@ class BaseResponsesAPIStreamingIterator:
                         self._generated_tool_arguments += _args_delta
                 if _event_type in _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS:
                     self._started_tool_call = True
-                _stream_model_id: Final = _model_id_from_metadata(self.litellm_metadata)
                 if _event_type in (
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,

@@ -50,7 +50,7 @@ from litellm.responses import streaming_iterator as streaming_module
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import CallTypes
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 
 def _sse_event(payload: dict) -> bytes:
@@ -739,6 +739,95 @@ async def test_streamed_reasoning_item_keeps_one_id_and_replays_as_one_input_ite
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reference_kind", ["raw", "encoded", "other", "omitted"])
+@pytest.mark.parametrize("model_info", [{"id": "dep-1"}, MappingProxyType({"id": "dep-1"})])
+async def test_stream_routes_response_references_without_changing_tool_identity(
+    reference_kind: str, model_info: Mapping[str, object]
+) -> None:
+    response_id: Final = "resp_tool"
+    metadata: Final = {"model_info": model_info}
+    encoded: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+        {"id": response_id}, custom_llm_provider="openai", litellm_metadata=metadata
+    )
+    upstream_reference: Final = {"raw": response_id, "encoded": encoded["id"], "other": "resp_other"}.get(
+        reference_kind
+    )
+    reference: Final = {} if upstream_reference is None else {"response_id": upstream_reference}
+
+    tool: Final = {
+        "type": "function_call",
+        "id": "fc_tool",
+        "call_id": "call_tool",
+        "name": "read_marker",
+        "arguments": "{}",
+        "status": "completed",
+    }
+    payload: Final = {**_reasoning_response_body("completed", [tool]), "id": response_id}
+    iterator: Final = _make_iterator(
+        sse_events=[
+            _sse_event(
+                {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": {**payload, "status": "in_progress", "output": []},
+                }
+            ),
+            _sse_event(
+                {
+                    "type": "response.output_item.added",
+                    "sequence_number": 1,
+                    "output_index": 0,
+                    "item": {**tool, "arguments": "", "status": "in_progress"},
+                    **reference,
+                }
+            ),
+            _sse_event(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "sequence_number": 2,
+                    "item_id": "fc_tool",
+                    "output_index": 0,
+                    "delta": "{}",
+                    **reference,
+                }
+            ),
+            _sse_event(
+                {
+                    "type": "response.output_item.done",
+                    "sequence_number": 3,
+                    "output_index": 0,
+                    "item": tool,
+                    **reference,
+                }
+            ),
+            _sse_event({"type": "response.completed", "sequence_number": 4, "response": payload}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=OpenAIResponsesAPIConfig(),
+        litellm_metadata=metadata,
+    )
+
+    records: Final = [event.model_dump(exclude_none=True) async for event in iterator]
+    created, added, delta, done, completed = records
+    routed_id: Final = created["response"]["id"]
+    assert completed["response"]["id"] == routed_id
+    assert done["item"] == completed["response"]["output"][0] == tool
+    assert added["item"]["call_id"] == tool["call_id"]
+    assert added["item"]["id"] == delta["item_id"] == tool["id"]
+    if reference_kind == "omitted":
+        assert all("response_id" not in event for event in (added, delta, done))
+    elif reference_kind == "other":
+        assert added["response_id"] == delta["response_id"] == done["response_id"] != routed_id
+        assert ResponsesAPIRequestUtils.decode_responses_api_response_id(done["response_id"]) == {
+            "response_id": "resp_other",
+            "model_id": "dep-1",
+            "custom_llm_provider": "openai",
+        }
+    else:
+        assert added["response_id"] == delta["response_id"] == done["response_id"] == routed_id
+
+
+@pytest.mark.asyncio
 async def test_output_item_added_without_an_item_streams_through_under_affinity():
     iterator: Final = _make_iterator(
         sse_events=[
@@ -1081,7 +1170,7 @@ def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypat
     write must survive loop shutdown just like the chat-completions one.
     """
     import asyncio
-    from types import SimpleNamespace
+    from types import MappingProxyType, SimpleNamespace
 
     import litellm
     from litellm.types.utils import CallTypes

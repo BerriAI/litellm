@@ -410,16 +410,17 @@ class ResponsesIDSecurity(CustomLogger):
 
         return encrypt
 
-    def _streamed_response_id_advertiser(
+    def _streamed_response_id_rewriter(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         request_data: Mapping[str, object],
-    ) -> Callable[[str], str] | None:
+    ) -> Callable[[BaseLiteLLMOpenAIResponseObject], BaseLiteLLMOpenAIResponseObject] | None:
         if not _streams_response_ids(user_api_key_dict.request_route):
             return None
         if self._general_settings_reader().get("disable_responses_id_security", False):
             return None
-        encrypt: Final = self._response_id_encrypter(user_api_key_dict, request_cache={})
+        request_cache: Final[dict[str, str]] = {}
+        encrypt: Final = self._response_id_encrypter(user_api_key_dict, request_cache=request_cache)
         if encrypt is None:
             return None
         logging_obj: Final = request_data.get("litellm_logging_obj")
@@ -431,7 +432,20 @@ class ResponsesIDSecurity(CustomLogger):
                 logging_obj.client_facing_response_id = logged_id
             return _held_id_naming(original_id, held_ids) or logged_id
 
-        return advertise
+        def rewrite_event(event: BaseLiteLLMOpenAIResponseObject) -> BaseLiteLLMOpenAIResponseObject:
+            advertised_event: Final = _rewrite_advertised_id(event, advertise)
+            reference: Final[object] = getattr(advertised_event, "response_id", None)
+            if not isinstance(reference, str):
+                return advertised_event
+            # Only reuse a protected ID already issued for this stream. A reference
+            # to another response must not mint an ID for it.
+            logged_id: Final = request_cache.get(reference)
+            if logged_id is None:
+                return advertised_event
+            advertised_id: Final = _held_id_naming(reference, held_ids) or logged_id
+            return advertised_event.model_copy(update={"response_id": advertised_id})
+
+        return rewrite_event
 
     def _ids_the_caller_holds(self, addressed_id: object) -> Mapping[str, str]:
         if not isinstance(addressed_id, str) or not self._is_encrypted_response_id(addressed_id):
@@ -468,13 +482,9 @@ class ResponsesIDSecurity(CustomLogger):
     async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: "UserAPIKeyAuth", response: AsyncIterable[object], request_data: dict[str, object]
     ) -> AsyncGenerator[object, None]:
-        advertise: Final = self._streamed_response_id_advertiser(user_api_key_dict, request_data)
+        rewrite: Final = self._streamed_response_id_rewriter(user_api_key_dict, request_data)
         async for chunk in response:
-            yield (
-                _rewrite_advertised_id(chunk, advertise)
-                if advertise is not None and isinstance(chunk, BaseLiteLLMOpenAIResponseObject)
-                else chunk
-            )
+            yield rewrite(chunk) if rewrite is not None and isinstance(chunk, BaseLiteLLMOpenAIResponseObject) else chunk
 
 
 def decrypted_response_id(response_id: str) -> str:
