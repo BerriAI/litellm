@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
+fips = []
 google-sdk = []
 # Exposes fakes such as `google::OnGce` to other crates' tests, so they can log in without a
 # network. Enable it only from `[dev-dependencies]` or another crate's own `test-support`
