@@ -547,6 +547,8 @@ mod tests {
     #[case::every_model_pins_any_deployment(&["*"], "priv", &["priv"])]
     #[case::every_proxy_model_pins_any_deployment(&["all-proxy-models"], "priv", &["priv"])]
     #[case::the_group_name_stays_kept_to_the_callers_access_group(&["public"], "shared", &["pub"])]
+    #[case::every_model_beside_an_access_group_keeps_the_whole_group(&["public", "*"], "shared", &["pub", "priv"])]
+    #[case::every_proxy_model_beside_an_access_group_keeps_the_whole_group(&["public", "all-proxy-models"], "shared", &["pub", "priv"])]
     fn pinned_deployment_respects_caller_access_groups(
         shared_group: Registry,
         #[case] allowed: &[&str],

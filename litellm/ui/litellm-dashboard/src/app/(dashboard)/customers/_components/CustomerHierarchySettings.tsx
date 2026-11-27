@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Controller } from "react-hook-form";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Trash2 } from "lucide-react";
@@ -12,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { customerEntityId, type CustomerHierarchyEntity, type Organization } from "./customerHierarchyForms";
 
-import { useCustomerHierarchyForm } from "./useCustomerHierarchyForm";
+import { useHierarchySettingsForm } from "./customer-hierarchy-edit/useHierarchySettingsForm";
 import CustomerHierarchyBudgetFields from "./CustomerHierarchyBudgetFields";
 
 interface Props {
@@ -57,8 +58,8 @@ const DELETE_MESSAGES = {
 function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
-  const form = useCustomerHierarchyForm(entity, organization, onSaved);
-  const { fields, update, reset, dirty, error, save } = form;
+  const form = useHierarchySettingsForm(entity, organization, onSaved);
+  const { control, alias, updateBudget, resetChanges, dirty, error, save, setError } = form;
   const [deleting, setDeleting] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -97,10 +98,20 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="hierarchy-alias">{t("customerPortal.hierarchy.alias")}</Label>
-                <Input
-                  id="hierarchy-alias"
-                  value={fields.alias}
-                  onChange={(event) => update("alias", event.target.value)}
+                <Controller
+                  control={control}
+                  name="alias"
+                  render={({ field }) => (
+                    <Input
+                      id="hierarchy-alias"
+                      ref={field.ref}
+                      value={field.value}
+                      onChange={(event) => {
+                        field.onChange(event);
+                        setError(null);
+                      }}
+                    />
+                  )}
                 />
               </div>
               <div className="space-y-1.5">
@@ -110,12 +121,18 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
             </div>
           </section>
 
-          <CustomerHierarchyBudgetFields
-            kind={entity.kind}
-            organization={organization}
-            fields={fields}
-            onChange={update}
-            idPrefix="customer-hierarchy"
+          <Controller
+            control={control}
+            name="budget"
+            render={({ field }) => (
+              <CustomerHierarchyBudgetFields
+                kind={entity.kind}
+                organization={organization}
+                fields={{ alias, ...field.value }}
+                onChange={updateBudget}
+                idPrefix="customer-hierarchy"
+              />
+            )}
           />
         </fieldset>
         {error && (
@@ -124,7 +141,7 @@ function SettingsForm({ entity, organization, onSaved, onDeleted }: Props) {
           </p>
         )}
         <div className="flex justify-end gap-2 border-t pt-4">
-          <Button type="button" variant="outline" disabled={pending || !dirty} onClick={reset}>
+          <Button type="button" variant="outline" disabled={pending || !dirty} onClick={resetChanges}>
             {t("customerPortal.hierarchy.reset")}
           </Button>
           <Button type="submit" disabled={pending || !dirty}>

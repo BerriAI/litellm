@@ -507,7 +507,7 @@ class DataDogLogger(
                 )
 
             # Build headers
-            headers: Final = {}
+            headers: Final[dict[str, str]] = {}  # mutable-ok: built here, sent as is
             # Add API key if available (required for direct API, optional for agent)
             if self.DD_API_KEY:
                 headers["DD-API-KEY"] = self.DD_API_KEY

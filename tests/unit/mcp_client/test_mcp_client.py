@@ -2771,72 +2771,89 @@ def test_public_mcp_import_preserves_incompatible_sdk_error() -> None:
     assert "litellm[mcp]" not in str(caught.value)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("grouped", (False, True))
 @pytest.mark.parametrize("raise_on_error", (False, True))
 @pytest.mark.parametrize("termination", ("ok", "failure", "hang"))
-async def test_outer_deadline_delivers_session_termination(
-    termination: str, grouped: bool, raise_on_error: bool
-) -> None:
-    deleted: Final = asyncio.Event()
-    started: Final = asyncio.Event()
-    caller_deadline: Final[asyncio.Future[anyio.CancelScope]] = asyncio.get_running_loop().create_future()
+def test_outer_deadline_delivers_session_termination(termination: str, grouped: bool, raise_on_error: bool) -> None:
+    loop: Final = AutojumpClockLoop()
 
-    async def respond(request: httpx2.Request) -> httpx2.Response:
-        await anyio.lowlevel.checkpoint()
-        if request.method == "DELETE":
-            first_termination: Final = not deleted.is_set()
-            deleted.set()
-            if termination == "hang" and first_termination:
-                await anyio.sleep_forever()
-            return httpx2.Response(500 if termination == "failure" else 200)
-        if request.method == "GET":
-            return httpx2.Response(405)
-        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
-        if not isinstance(payload, JSONRPCRequest):
-            return httpx2.Response(202)
-        if payload.method == "initialize":
-            return httpx2.Response(
-                200,
-                headers={"mcp-session-id": "cancel-owned-session"},
-                json={
-                    "jsonrpc": "2.0",
-                    "id": payload.id,
-                    "result": {
-                        "protocolVersion": "2025-11-25",
-                        "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "cancellation-peer", "version": "1"},
+    async def scenario() -> None:
+        deleted: Final = asyncio.Event()
+        started: Final = asyncio.Event()
+        caller_deadline: Final[asyncio.Future[anyio.CancelScope]] = asyncio.get_running_loop().create_future()
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            await anyio.lowlevel.checkpoint()
+            if request.method == "DELETE":
+                first_termination: Final = not deleted.is_set()
+                deleted.set()
+                if termination == "hang" and first_termination:
+                    await anyio.sleep_forever()
+                return httpx2.Response(500 if termination == "failure" else 200)
+            if request.method == "GET":
+                return httpx2.Response(405)
+            payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+            if not isinstance(payload, JSONRPCRequest):
+                return httpx2.Response(202)
+            if payload.method == "initialize":
+                return httpx2.Response(
+                    200,
+                    headers={"mcp-session-id": "cancel-owned-session"},
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": payload.id,
+                        "result": {
+                            "protocolVersion": "2025-11-25",
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "cancellation-peer", "version": "1"},
+                        },
                     },
-                },
-            )
-        if payload.method == "tools/list":
-            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"tools": []}})
-        started.set()
-        caller_deadline.result().deadline = anyio.current_time()
-        await anyio.sleep_forever()
-        raise AssertionError("cancelled request resumed")
+                )
+            if payload.method == "tools/list":
+                return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"tools": []}})
+            started.set()
+            caller_deadline.result().deadline = anyio.current_time()
+            await anyio.sleep_forever()
+            raise AssertionError("cancelled request resumed")
 
-    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
+        client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
 
-    async def invoke() -> None:
-        with anyio.fail_after(None) as deadline:
-            caller_deadline.set_result(deadline)
-            pending: Final = client.call_tool(
-                CallToolRequestParams(name="slow", arguments={}), raise_on_error=raise_on_error
-            )
-            if grouped:
-                await asyncio.gather(pending)
-            else:
-                await pending
+        async def invoke() -> None:
+            with anyio.fail_after(None) as deadline:
+                caller_deadline.set_result(deadline)
+                pending: Final = client.call_tool(
+                    CallToolRequestParams(name="slow", arguments={}), raise_on_error=raise_on_error
+                )
+                if grouped:
+                    await asyncio.gather(pending)
+                else:
+                    await pending
 
-    with anyio.fail_after(20):
-        with pytest.raises(TimeoutError):
-            await invoke()
-    assert started.is_set()
-    assert deleted.is_set(), "Cancellation must deliver DELETE before returning to the caller"
+        async def run_the_clock_past_the_cleanup_bound() -> None:
+            await deleted.wait()
+            for seconds in (5, 1.5, 20):
+                loop.advance(seconds)
+                for _ in range(10_000):
+                    await anyio.lowlevel.checkpoint()
 
-    assert anyio.current_time() - caller_deadline.result().deadline < 6.5
-    assert await client.list_tools(raise_on_error=True) == []
+        clock: Final = asyncio.create_task(run_the_clock_past_the_cleanup_bound()) if termination == "hang" else None
+        try:
+            with anyio.fail_after(20):
+                with pytest.raises(TimeoutError):
+                    await invoke()
+        finally:
+            if clock is not None:
+                clock.cancel()
+        assert started.is_set()
+        assert deleted.is_set(), "Cancellation must deliver DELETE before returning to the caller"
+
+        assert anyio.current_time() - caller_deadline.result().deadline < 6.5
+        assert await client.list_tools(raise_on_error=True) == []
+
+    try:
+        loop.run_until_complete(scenario())
+    finally:
+        loop.close()
 
 
 @pytest.mark.asyncio

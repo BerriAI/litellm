@@ -71,11 +71,11 @@ class SearchAPIConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """

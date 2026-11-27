@@ -89,6 +89,7 @@ class ArgillaLogger(CustomBatchLogger):
             self.batch_size = int(_batch_size)
         asyncio.create_task(self.periodic_flush())
         self.flush_lock = asyncio.Lock()
+        self.log_queue: list[object]  # mutable-ok: the batch logger appends to this queue
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def validate_argilla_transformation_object(self, argilla_transformation_object: Mapping[str, object]):

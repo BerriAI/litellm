@@ -149,7 +149,9 @@ class BaseResponsesAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
         return {}
 
     @abstractmethod
