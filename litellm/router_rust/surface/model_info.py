@@ -55,7 +55,6 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
 )
 from litellm.litellm_core_utils.routing_common_utils import team_may_use_deployment
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.redis.stores.router_usage import RouterUsage, UsageCounter
 from litellm.router_python_host import python_host
 from litellm.router_utils.model_group_pricing import deployment_pricing
@@ -655,8 +654,6 @@ class HostModelInfo:
                 )
             case "pattern_models":
                 return self._pattern_models(str(step["name"]), wire)
-            case "bedrock_base":
-                return get_bedrock_base_model(str(step["model_id"]))
             case "discovered":
                 return wire.to_wire(dict(self._core_get_discovered_model_info(wire.from_wire(step["id"]), model)))  # pyright: ignore[reportArgumentType]  # the deployment's id, as configured
             case "log":

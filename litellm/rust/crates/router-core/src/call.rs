@@ -23,6 +23,7 @@ use crate::{
     host_index::python_str,
     lookup::Lookup,
     mock::MockFailure,
+    model_info::provider_model_id,
     outcome::{OutcomeCallbacks, OutcomeWrite},
     precall::{PreCallFacts, named_model},
     prerouting::{PreRoute, PreRouted},
@@ -351,15 +352,11 @@ fn retried_failure(error: &Error) -> Option<Cow<'_, AttemptError>> {
     }
 }
 
-fn served_model<H: RouterHost>(host: &H, deployment: &Deployment) -> String {
-    let named = named_model(deployment);
-    let model_id = named.rsplit_once('/').map_or(named.as_str(), |(_, id)| id);
-    host.provider_model_id(model_id, deployment.provider())
-        .to_owned()
+fn served_model(deployment: &Deployment) -> String {
+    provider_model_id(&named_model(deployment), deployment.provider()).to_owned()
 }
 
-fn serving_the_refused_model<'a, H: RouterHost>(
-    host: &'a H,
+fn serving_the_refused_model<'a>(
     snapshot: &RouterStateSnapshot,
     refused: &'a str,
     candidates: &'a Candidates,
@@ -368,12 +365,12 @@ fn serving_the_refused_model<'a, H: RouterHost>(
         .healthy
         .iter()
         .find(|d| d.id == refused)
-        .map(|d| served_model(host, d))
+        .map(|d| served_model(d))
         .or_else(|| {
             snapshot
                 .registry
                 .deployment(refused)
-                .map(|deployment| served_model(host, &deployment))
+                .map(|deployment| served_model(&deployment))
         });
     let refused_window = candidates.pre_call.max_input_tokens(refused);
     let has_a_larger_window = move |d: &Deployment| {
@@ -386,8 +383,7 @@ fn serving_the_refused_model<'a, H: RouterHost>(
         .healthy
         .iter()
         .filter(move |d| {
-            d.id == refused
-                || (model.as_ref() == Some(&served_model(host, d)) && !has_a_larger_window(d))
+            d.id == refused || (model.as_ref() == Some(&served_model(d)) && !has_a_larger_window(d))
         })
         .map(|d| d.id.clone())
 }
@@ -1312,7 +1308,7 @@ impl<H: RouterHost> Call<'_, H> {
             _ => return 0,
         };
         let serving: Vec<String> =
-            serving_the_refused_model(self.host, snapshot, refused, &candidates).collect();
+            serving_the_refused_model(snapshot, refused, &candidates).collect();
         let untried = candidates
             .healthy
             .iter()

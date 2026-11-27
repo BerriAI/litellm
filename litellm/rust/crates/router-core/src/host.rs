@@ -256,8 +256,6 @@ pub enum ModelInfoLookup {
     /// The deployments a wildcard pattern routes `name` to: answered with `[{id, model}]`, or
     /// `None` when no pattern matches.
     PatternModels { name: String },
-    /// The base model a bedrock model id names (`get_bedrock_base_model`).
-    BedrockBase { model_id: String },
     /// The limits the background model-info refresh discovered for deployment `id`.
     Discovered { id: Value },
     /// The queried deployment's own `model_info`, read when the merge reaches it (a malformed one
@@ -763,11 +761,6 @@ pub trait RouterHost: Send + Sync {
     ) -> impl Future<Output = Result<PreCallFacts, Error>> + Send {
         let _ = (ctx, candidates);
         async { Ok(PreCallFacts::default()) }
-    }
-
-    fn provider_model_id<'a>(&self, model_id: &'a str, provider: &str) -> &'a str {
-        let _ = provider;
-        model_id
     }
 
     /// `f"{provider}/{model}"` for `ctx.name`, which `PatternMatchRouter.get_pattern` tries when

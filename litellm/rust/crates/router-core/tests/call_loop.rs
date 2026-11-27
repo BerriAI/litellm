@@ -2184,6 +2184,38 @@ async fn a_context_window_error_skips_every_deployment_serving_the_refused_model
 }
 
 #[rstest]
+#[case::a_bedrock_cross_region_profile_of_it("bedrock/us.anthropic.claude-a:0", 1)]
+#[case::a_bedrock_throughput_tier_of_it("bedrock/anthropic.claude-a:0:51k", 1)]
+#[case::another_providers_model_spelled_like_a_profile("openai/us.anthropic.claude-a:0", 2)]
+#[tokio::test]
+async fn a_context_window_error_reads_the_refused_model_by_its_bedrock_base_model(
+    #[case] second: &str,
+    #[case] tried: usize,
+) {
+    let first = second
+        .split_once('/')
+        .map_or("bedrock", |(provider, _)| provider);
+    let config = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": format!("{first}/anthropic.claude-a:0")}, "model_info": {"id": "a1"}},
+            {"model_name": "primary", "litellm_params": {"model": second}, "model_info": {"id": "a2"}},
+        ]
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost {
+        first_failure: Mutex::new(Some(context_window())),
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 3}),
+        host.clone(),
+    );
+    let _ = router.call(Op::from("acompletion"), request()).await;
+    assert_eq!(host.selected().len(), tried);
+}
+
+#[rstest]
 #[case::a_larger_window(vec![("p1", 200_000), ("p2", 1_000_000)], &["p1", "p2"])]
 #[case::the_same_window(vec![("p1", 200_000), ("p2", 200_000)], &["p1"])]
 #[case::a_smaller_window(vec![("p1", 200_000), ("p2", 100_000)], &["p1"])]

@@ -6,7 +6,7 @@ mod tests;
 
 pub use bedrock::{
     bedrock_base_model, bedrock_model_name_from_arn, is_bedrock_cross_region_profile_of,
-    split_bedrock_region_path, strip_bedrock_routing_prefix,
+    is_bedrock_region, split_bedrock_region_path, strip_bedrock_routing_prefix,
 };
 pub use image::*;
 

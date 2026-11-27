@@ -9,10 +9,9 @@ use crate::bedrock::common_utils::{
 };
 use crate::bedrock_mantle::messages::transformation::mantle_capability_lookup;
 use fancy_regex::Regex;
-use litellm_auth_aws::is_bedrock_region;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_llms_types::formats::messages::EffortLevel;
-use litellm_model_catalog::{Catalog, wire::Fields};
+use litellm_model_catalog::{Catalog, is_bedrock_region, wire::Fields};
 use litellm_python_compat::{json::from_json, truthy::truthy};
 use serde::Deserialize;
 use serde_json::Value;

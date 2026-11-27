@@ -10,6 +10,7 @@
 //! Values the host cannot spell as JSON travel as opaque tokens ([`is_opaque`]): the merge moves
 //! them between layers without reading them, and the host restores them.
 
+use litellm_cost::candidates::bedrock::bedrock_base_model;
 use serde_json::{Map, Number, Value};
 
 use crate::{
@@ -154,18 +155,12 @@ async fn log(host: &impl RegistryHost, level: LogLevel, message: String) -> Resu
 
 /// `_provider_model_id`: the model id a cost-map key or base model names, bedrock base model ids
 /// normalized.
-async fn provider_model_id(
-    host: &impl RegistryHost,
-    name: &str,
-    provider: &str,
-) -> Result<String, Error> {
-    let model_id = name.rsplit('/').next().unwrap_or(name).to_owned();
-    if !provider.starts_with("bedrock") {
-        return Ok(model_id);
-    }
-    match lookup(host, ModelInfoLookup::BedrockBase { model_id }).await? {
-        Value::String(base) => Ok(base),
-        _ => Err(malformed("bedrock_base")),
+pub(crate) fn provider_model_id<'a>(name: &'a str, provider: &str) -> &'a str {
+    let model_id = name.rsplit('/').next().unwrap_or(name);
+    if provider.starts_with("bedrock") {
+        bedrock_base_model(model_id)
+    } else {
+        model_id
     }
 }
 
@@ -223,11 +218,9 @@ async fn base_model_widened_window(
         Some(_) => return Err(raised("AttributeError", "key")),
         None => return Err(raised("KeyError", "key")),
     };
-    let route_id = provider_model_id(host, &route_key, provider).await?;
-    let base_id = provider_model_id(host, base_model, provider).await?;
-    let unversioned = base_id
-        .split_once('@')
-        .map_or(base_id.as_str(), |(id, _)| id);
+    let route_id = provider_model_id(&route_key, provider);
+    let base_id = provider_model_id(base_model, provider);
+    let unversioned = base_id.split_once('@').map_or(base_id, |(id, _)| id);
     if route_id != base_id && route_id != unversioned {
         return Ok(None);
     }

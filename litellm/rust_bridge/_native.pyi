@@ -3097,7 +3097,6 @@ class _ModelInfoStep(_Step):
         "cost_entry",
         "provider",
         "pattern_models",
-        "bedrock_base",
         "discovered",
         "user_model_info",
         "log",
