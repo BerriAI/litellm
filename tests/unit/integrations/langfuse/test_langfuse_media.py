@@ -493,14 +493,15 @@ def test_drain_reports_uploads_still_running_at_the_deadline():
 
 
 def test_media_that_does_not_fit_in_the_queue_is_not_uploaded_while_the_rest_is(caplog):
-    requests: list[httpx.Request] = []
-    uploader = _uploader(_langfuse(requests, upload_url=None), max_queued_bytes=9)
+    release, started = threading.Event(), threading.Event()
+    uploader = _blocked_uploader(release, started, max_queued_bytes=9)
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         uploader.submit((_upload(), _upload()))
+        assert started.wait(5)
+        release.set()
         assert uploader.drain(5_000) is True
 
-    assert len(requests) == 1
     assert uploader.failed_uploads == 1
     assert "the upload queue is full" in caplog.text
 

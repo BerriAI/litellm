@@ -234,7 +234,7 @@ class MediaUploader:
         self._max_queued_bytes: Final = max_queued_bytes
         self._backlog = self._started_backlog()
         self.failed_uploads = 0
-        self._failures: Final = threading.Lock()
+        self._failures = threading.Lock()
         _LIVE_UPLOADERS.add(self)
 
     def _started_backlog(self) -> _Backlog:
@@ -243,7 +243,9 @@ class MediaUploader:
         return backlog
 
     def restart_in_forked_child(self) -> None:
+        """The child gets its own locks too: one a parent thread held at the fork would never be released in it."""
         self._backlog.closed.set()
+        self._failures = threading.Lock()
         self._backlog = self._started_backlog()
 
     def submit(self, uploads: Sequence[MediaUpload]) -> None:
