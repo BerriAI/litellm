@@ -106,18 +106,12 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
             custom_llm_provider="vertex_ai",
         )
 
-        default_headers: Final[dict[str, object]] = {  # mutable-ok: Authorization is reassigned below
+        return {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
             "X-Goog-User-Project": project_id,
+            **without_caller_labels_header(headers),
         }
-
-        # If 'Authorization' is provided in headers, it overrides the default.
-        if "Authorization" in headers:
-            default_headers["Authorization"] = headers["Authorization"]
-
-        # Merge other headers, overriding any default ones except Authorization
-        return {**default_headers, **without_caller_labels_header(headers)}
 
     def transform_rerank_request(
         self,

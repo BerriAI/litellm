@@ -20,6 +20,7 @@ import { StdioDisabledBanner } from "./StdioAvailability";
 import { getMaskedAndFullUrl, getMCPNetworkAccess } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
+import { useMcpServerTab } from "./useMcpServersUrlState";
 
 interface MCPServerViewProps {
   mcpServer: MCPServer;
@@ -32,13 +33,9 @@ interface MCPServerViewProps {
   isViewOnly?: boolean;
   availableAccessGroups: string[];
   existingServers?: MCPServer[];
-  initialTabIndex?: number;
   stdioEnabled?: boolean;
 }
 
-// True when this render is the return from the edit-settings OAuth redirect for this
-// server: the edit form wrote its UI-state snapshot before redirecting. Used to open
-// the editing Settings tab on first render instead of defaulting to Overview.
 function isReturningFromEditOAuth(isProxyAdmin: boolean, serverId: string): boolean {
   if (typeof window === "undefined" || !isProxyAdmin) {
     return false;
@@ -65,23 +62,19 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   isViewOnly = false,
   availableAccessGroups,
   existingServers,
-  initialTabIndex = 0,
   stdioEnabled = true,
 }) => {
-  // Open the editing Settings tab on first render when returning from the edit OAuth
-  // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const canEdit = isProxyAdmin && !isViewOnly && !mcpServer.is_config;
-  const returningFromEditOAuth = isReturningFromEditOAuth(canEdit, mcpServer.server_id);
-  const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
+  const [editing, setEditing] = useState(() => isEditing || isReturningFromEditOAuth(canEdit, mcpServer.server_id));
   const [showFullUrl, setShowFullUrl] = useState(false);
   const networkAccess = getMCPNetworkAccess(mcpServer, t);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
-  const editFormShowsStdioBanner = selectedTabIndex === 2 && editing && canEdit;
-  const showStdioBanner = mcpServer.transport === TRANSPORT.STDIO && !stdioEnabled && !editFormShowsStdioBanner;
   const canViewUserCredentials = userRole !== null && isProxyAdminTierRole(userRole);
+  const [serverTab, setServerTab] = useMcpServerTab({ isProxyAdmin, canViewUserCredentials });
+  const editFormShowsStdioBanner = serverTab === "settings" && editing && canEdit;
+  const showStdioBanner = mcpServer.transport === TRANSPORT.STDIO && !stdioEnabled && !editFormShowsStdioBanner;
   const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole) && !isViewOnly;
 
   const handleSuccess = (updated: MCPServer) => {
@@ -155,28 +148,28 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 
       {showStdioBanner && <StdioDisabledBanner />}
 
-      <Tabs value={String(selectedTabIndex)} onValueChange={(v: unknown) => setSelectedTabIndex(Number(v))}>
+      <Tabs value={serverTab} onValueChange={setServerTab}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-          <TabsTrigger value="0" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("mcpServers.serverView.tabs.overview")}
           </TabsTrigger>
-          <TabsTrigger value="1" className="flex-none rounded-none px-4 py-2">
+          <TabsTrigger value="tools" className="flex-none rounded-none px-4 py-2">
             {t("mcpServers.serverView.tabs.tools")}
           </TabsTrigger>
           {isProxyAdmin && (
-            <TabsTrigger value="2" className="flex-none rounded-none px-4 py-2">
+            <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
               {t("mcpServers.serverView.tabs.settings")}
             </TabsTrigger>
           )}
           {canViewUserCredentials && (
-            <TabsTrigger value="3" className="flex-none rounded-none px-4 py-2">
+            <TabsTrigger value="user-credentials" className="flex-none rounded-none px-4 py-2">
               {t("mcpServers.serverView.tabs.userCredentials")}
             </TabsTrigger>
           )}
         </TabsList>
 
         {/* Overview Panel */}
-        <TabsContent value="0" keepMounted>
+        <TabsContent value="overview" keepMounted>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Card className="p-4">
               <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
@@ -233,7 +226,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabsContent>
 
         {/* Tool Panel */}
-        <TabsContent value="1" keepMounted>
+        <TabsContent value="tools" keepMounted>
           <MCPToolsViewer
             serverId={mcpServer.server_id}
             accessToken={accessToken}
@@ -250,7 +243,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabsContent>
 
         {/* Settings Panel */}
-        <TabsContent value="2" keepMounted>
+        <TabsContent value="settings" keepMounted>
           <Card className="p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-medium">{t("mcpServers.serverView.settings.title")}</h2>
@@ -461,7 +454,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabsContent>
 
         {canViewUserCredentials && (
-          <TabsContent value="3">
+          <TabsContent value="user-credentials">
             <Card className="p-6">
               <MCPServerUserCredentialsPanel
                 serverId={mcpServer.server_id}

@@ -27,6 +27,13 @@ import { Card } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cn } from "@/lib/cva.config";
+import { useMcpToolUrlState } from "./useMcpServersUrlState";
+
+interface ToolOutcome {
+  toolName: string;
+  result: MCPContent[] | null;
+  error: Error | null;
+}
 
 const MCPToolsViewer = ({
   serverId,
@@ -41,10 +48,8 @@ const MCPToolsViewer = ({
   extraHeaders,
 }: MCPToolsViewerProps) => {
   const { t } = useTranslation();
-  const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
-  const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
-  const [toolError, setToolError] = useState<Error | null>(null);
-  const [toolSearchTerm, setToolSearchTerm] = useState("");
+  const [{ tool: selectedToolName, tool_search: toolSearchTerm }, setToolUrlState] = useMcpToolUrlState();
+  const [toolOutcome, setToolOutcome] = useState<ToolOutcome | null>(null);
 
   // State for passthrough headers
   const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
@@ -246,13 +251,11 @@ const MCPToolsViewer = ({
         throw error;
       }
     },
-    onSuccess: (data) => {
-      setToolResult(data.content);
-      setToolError(null);
+    onSuccess: (data, args) => {
+      setToolOutcome({ toolName: args.tool.name, result: data.content, error: null });
     },
-    onError: (error: Error & { status?: number; response?: { status?: number } }) => {
-      setToolError(error);
-      setToolResult(null);
+    onError: (error: Error & { status?: number; response?: { status?: number } }, args) => {
+      setToolOutcome({ toolName: args.tool.name, result: null, error });
       // On 401, clear the cached token so the auth gate is shown again
       if (error?.status === 401 || (error as any)?.response?.status === 401) {
         removeToken(serverId, userID);
@@ -262,6 +265,13 @@ const MCPToolsViewer = ({
   });
 
   const toolsData = mcpToolsResponse?.tools || [];
+  const selectedTool = toolsData.find((tool: MCPTool) => tool.name === selectedToolName) ?? null;
+  const pickTool = (toolName: string) => {
+    setToolOutcome(null);
+    if (toolName === selectedToolName) return;
+    void setToolUrlState({ tool: toolName });
+  };
+  const selectedOutcome = toolOutcome?.toolName === selectedToolName ? toolOutcome : null;
 
   const toolsError = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
   // authorization_code only: a 401 from the list call means the stored credential is unusable and
@@ -426,7 +436,7 @@ const MCPToolsViewer = ({
                           <InputGroupInput
                             placeholder={t("mcpServers.tools.searchPlaceholder")}
                             value={toolSearchTerm}
-                            onChange={(e) => setToolSearchTerm(e.target.value)}
+                            onChange={(e) => void setToolUrlState({ tool_search: e.target.value })}
                           />
                         </InputGroup>
                       </div>
@@ -499,11 +509,7 @@ const MCPToolsViewer = ({
                                     ? "border-primary bg-accent ring-1 ring-ring"
                                     : "border-border bg-card",
                                 )}
-                                onClick={() => {
-                                  setSelectedTool(tool);
-                                  setToolResult(null);
-                                  setToolError(null);
-                                }}
+                                onClick={() => pickTool(tool.name)}
                               >
                                 <div className="flex items-start space-x-2">
                                   {tool.mcp_info.logo_url && (
@@ -571,10 +577,10 @@ const MCPToolsViewer = ({
                     onSubmit={(args) => {
                       executeTool({ tool: selectedTool, arguments: args });
                     }}
-                    result={toolResult}
-                    error={toolError}
+                    result={selectedOutcome?.result ?? null}
+                    error={selectedOutcome?.error ?? null}
                     isLoading={isCallingTool}
-                    onClose={() => setSelectedTool(null)}
+                    onClose={() => void setToolUrlState({ tool: null })}
                   />
                 </div>
               )}

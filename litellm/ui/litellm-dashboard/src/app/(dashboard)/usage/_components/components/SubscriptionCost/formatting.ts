@@ -1,4 +1,5 @@
 import type { ParseKeys } from "i18next";
+import i18n from "@/i18n/i18n";
 import type { BillingPeriod } from "./types";
 
 export const ATTRIBUTION_RULE: ParseKeys = "usage.subscriptionCost.attributionRule";
@@ -10,15 +11,15 @@ const parseLocalDay = (day: string): Date => {
   return new Date(year, month - 1, date);
 };
 
-export const formatBillingPeriod = ({ start, end }: BillingPeriod): string => {
+export const formatBillingPeriod = ({ start, end }: BillingPeriod, language = i18n.language): string => {
   const startDate = parseLocalDay(start);
   const endDate = parseLocalDay(end);
-  const startLabel = startDate.toLocaleDateString("en-US", {
+  const startLabel = startDate.toLocaleDateString(language, {
     month: "short",
     day: "numeric",
     year: startDate.getFullYear() !== endDate.getFullYear() ? "numeric" : undefined,
   });
-  const endLabel = endDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const endLabel = endDate.toLocaleDateString(language, { month: "short", day: "numeric", year: "numeric" });
   return `${startLabel} - ${endLabel}`;
 };
 

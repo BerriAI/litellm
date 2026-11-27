@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useState } from "react";
 import { useQuery, type QueryKey } from "@tanstack/react-query";
 import { Controller } from "react-hook-form";
@@ -83,7 +84,7 @@ function SubmissionSummary({
   submission: SkillSubmission;
   scope: Pick<SubmissionReviewProps, "accessToken" | "userRole" | "isViewOnly">;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const users = useUserIdentityLookup([submission.submitted_by, submission.reviewed_by], scope);
   const reviewed = submission.status === "approved" || submission.status === "rejected";
   return (
@@ -107,7 +108,7 @@ function SubmissionSummary({
         <p className="text-sm text-muted-foreground" title={submission.reviewed_by ?? undefined}>
           {t(submission.status === "approved" ? "skills.submissions.approvedBy" : "skills.submissions.rejectedBy", {
             name: userIdentityLabel(submission.reviewed_by, users),
-            date: new Date(submission.reviewed_at).toLocaleString(),
+            date: displayTimestamp(new Date(submission.reviewed_at), locale.language),
           })}
         </p>
       )}
@@ -405,7 +406,7 @@ export default function SkillSubmissions({
   adminView,
   onChanged,
 }: SkillSubmissionsProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { pagination, onPaginationChange } = useUrlTableState(SUBMISSION_TABLE_STATE);
   const { pageIndex, pageSize } = pagination;
@@ -455,7 +456,7 @@ export default function SkillSubmissions({
               <p className="text-sm text-muted-foreground">{submission.proposal.description}</p>
               <p className="text-xs text-muted-foreground" title={submission.submitted_by}>
                 {t("skills.submissions.submittedBy", { name: userIdentityLabel(submission.submitted_by, users) })} ·{" "}
-                {new Date(submission.created_at).toLocaleString()}
+                {displayTimestamp(new Date(submission.created_at), locale.language)}
               </p>
               {submission.rejection_reason && (
                 <p className="text-sm text-destructive">

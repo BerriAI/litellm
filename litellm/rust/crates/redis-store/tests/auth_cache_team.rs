@@ -96,12 +96,26 @@ const FULL_ENTRY: &str = concat!(
     r#" "last_refreshed_at": null}"#,
 );
 
+const DEFAULTS_ENTRY: &str = concat!(
+    r#"{"team_alias": null, "team_id": "defaults", "organization_id": "org", "admins": [], "mem"#,
+    r#"bers": [], "members_with_roles": [], "team_member_permissions": ["/key/generate"], "meta"#,
+    r#"data": {}, "tpm_limit": 100, "rpm_limit": 10, "tpd_limit": null, "max_budget": 10.0, "so"#,
+    r#"ft_budget": null, "budget_duration": "30d", "budget_limits": null, "models": [], "blocke"#,
+    r#"d": false, "router_settings": {}, "access_group_ids": ["wanted"], "default_team_member_m"#,
+    r#"odels": [], "spend": 0.0, "max_parallel_requests": null, "budget_reset_at": "2026-12-01T"#,
+    r#"00:00:00Z", "model_id": null, "model_spend": {}, "model_max_budget": {}, "policies": [],"#,
+    r#" "allow_team_guardrail_config": false, "litellm_model_table": null, "object_permission":"#,
+    r#" null, "object_permission_id": null, "updated_at": "2026-11-27T08:00:00Z", "created_at":"#,
+    r#" "2026-11-27T08:00:00Z", "last_refreshed_at": null}"#,
+);
+
 #[rstest]
 #[case::as_created("created", CREATED_ENTRY)]
 #[case::every_column_set("full", FULL_ENTRY)]
 #[case::json_nulls("nulls", NULLS_ENTRY)]
 #[case::json_text("text", TEXT_ENTRY)]
 #[case::stamped_by_the_host_that_cached_it("stamped", STAMPED_ENTRY)]
+#[case::upserted_with_defaults("defaults", DEFAULTS_ENTRY)]
 #[tokio::test]
 async fn a_team_entry_python_wrote_is_read_typed_and_written_back_in_the_same_bytes(
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,

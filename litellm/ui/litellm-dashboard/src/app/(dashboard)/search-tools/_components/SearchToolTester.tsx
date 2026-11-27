@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import React, { useState } from "react";
 import { ExternalLink, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -25,7 +26,7 @@ interface SearchToolTesterProps {
 }
 
 export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolName, accessToken, className = "" }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [searchHistory, setSearchHistory] = useState<
@@ -69,7 +70,7 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
   };
 
   const formatTimestamp = (timestamp: number): string => {
-    return new Date(timestamp).toLocaleString();
+    return displayTimestamp(new Date(timestamp), locale.language);
   };
 
   const clearHistory = () => {

@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import {
   getGuardrailInfo,
   getGuardrailProviderSpecificParams,
@@ -71,7 +72,7 @@ export interface GuardrailInfoProps {
 }
 
 const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose, onDeleted, accessToken, isAdmin }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [guardrailData, setGuardrailData] = useState<any>(null);
   const [guardrailProviderSpecificParams, setGuardrailProviderSpecificParams] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -343,7 +344,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     );
   }
 
-  const formatDate = (dateString?: string) => (dateString ? new Date(dateString).toLocaleString() : "-");
+  const formatDate = (dateString?: string) =>
+    dateString ? displayTimestamp(new Date(dateString), locale.language) : "-";
 
   // Format the provider display name and logo
   const { logo, displayName } = getGuardrailLogoAndName(guardrailData.litellm_params?.guardrail || "");

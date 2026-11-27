@@ -1,10 +1,13 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { I18nextProvider } from "react-i18next";
 import type { ChatMessage } from "@/components/chat/types";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import { toast } from "@/lib/toast";
 import { AriaAnswer } from "./AriaAnswer";
 import { createAriaAnswerDocument, exportAriaAnswer } from "./answerExport";
-import type { UsageChart } from "./usageChart";
+import { buildUsageChart, usageChartSource, type UsageChart } from "./usageChart";
 
 vi.mock("./answerExport", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./answerExport")>()),
@@ -20,8 +23,8 @@ const message: ChatMessage = {
 const chart: UsageChart = {
   kind: "bar",
   title: "Spend by model",
-  period: "2026-10-19 to 2026-10-23 (UTC)",
-  scope: "Your usage",
+  period: { start: "2026-10-19", end: "2026-10-23" },
+  scope: "yours",
   unit: "usd",
   total: 4,
   data: [
@@ -58,6 +61,35 @@ describe("AriaAnswer", () => {
     expect(within(figure).getByText("Your usage · 2026-10-19 to 2026-10-23 (UTC)")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Spend overview" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /copy/i })).not.toBeInTheDocument();
+  });
+
+  it("should localize chart filters, the UTC date range and the request unit", async () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    await locale.changeLanguage("zh-CN");
+    const filters = {
+      start_date: "2026-10-19",
+      end_date: "2026-10-23",
+      user_id: "user@team",
+      team_ids: "team-a",
+      tags: "prod · db",
+    };
+    const source = usageChartSource(
+      { daily: [{ date: "2026-10-19", api_requests: 4 }], top_models: [], top_providers: [] },
+      filters,
+      { mode: "admin" },
+    )!;
+    render(
+      <I18nextProvider i18n={locale}>
+        <AriaAnswer message={message} chart={buildUsageChart(source, "daily_requests")} />
+      </I18nextProvider>,
+    );
+    const figure = screen.getByRole("figure", { name: "每日请求数" });
+    expect(
+      within(figure).getByText("用户 user@team · 团队 team-a · 标签 prod · db · 2026-10-19 至 2026-10-23（UTC）"),
+    ).toBeInTheDocument();
+    expect(within(figure).getByRole("columnheader", { name: "请求" })).toBeInTheDocument();
+    expect(within(figure).getByText("4", { selector: "p" })).toHaveTextContent(/4\s*请求/);
   });
 
   it("should export the current question, explanation and chart without including adjacent receipts", () => {

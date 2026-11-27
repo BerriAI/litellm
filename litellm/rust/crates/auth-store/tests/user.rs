@@ -8,9 +8,9 @@ mod support;
 
 use std::sync::Arc;
 
-use litellm_auth_store::{Error, UserDatabase};
+use litellm_auth_store::{Error, SignedIn, UserDatabase};
 use litellm_db_testing::MigratedPostgres;
-use litellm_repositories::{Side, SignIn, UserRepository};
+use litellm_repositories::{Inserted, NewUserDefaults, Side, SignIn, SsoLink, UserRepository};
 use rstest::{fixture, rstest};
 use sqlx::PgPool;
 
@@ -280,5 +280,341 @@ async fn a_user_row_the_model_refuses_fails_the_read(
         matches!(&refused, Err(Error::Row { column: named, within: under }) if *named == column && *under == within),
         "{:?}",
         refused.err()
+    );
+}
+
+fn sign_in(
+    user_id: &str,
+    sso_user_id: Option<&str>,
+    user_email: Option<&str>,
+    links_any_user: bool,
+) -> SignIn {
+    SignIn {
+        user_id: user_id.to_owned(),
+        sso_user_id: sso_user_id.map(str::to_owned),
+        user_email: user_email.map(str::to_owned),
+        email_verified: None,
+        links_any_user,
+    }
+}
+
+async fn stored_sso_user_id(pool: &PgPool, user_id: &str) -> Option<String> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assertion reads are outside the compile-checked query set"
+    )]
+    let read =
+        sqlx::query_scalar(r#"SELECT sso_user_id FROM "LiteLLM_UserTable" WHERE user_id = $1"#);
+    read.bind(user_id).fetch_one(pool).await.unwrap()
+}
+
+/// Python caches the row it read before linking its own id as its SSO id, so the entry still has
+/// none while the row now holds it.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_that_links_its_own_id_is_the_entry_python_caches_for_the_row_as_read(
+    #[future(awt)] users: Users,
+) {
+    let signed_in = users
+        .database
+        .sign_in(
+            &sign_in("created", Some("created"), None, false),
+            Side::Read,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let stored = stored_sso_user_id(users.postgres.pool(), "created").await;
+
+    assert_eq!(
+        (
+            dumped(signed_in.user).as_str(),
+            signed_in.sso_link,
+            signed_in.owes_email,
+            stored.as_deref()
+        ),
+        (CREATED_ENTRY, SsoLink::Linked, false, Some("created"))
+    );
+}
+
+/// `full` holds `sso` and `full@example.com`, `created` holds neither, and `emailed` holds only
+/// `emailed@example.com`.
+#[rstest]
+#[case::by_id_alone(
+    sign_in("full", None, None, false),
+    "full",
+    Some("sso"),
+    SsoLink::Unchanged,
+    false
+)]
+#[case::by_id_with_an_email_the_row_lacks(
+    sign_in("created", None, Some("created@example.com"), false),
+    "created",
+    None,
+    SsoLink::Unchanged,
+    true
+)]
+#[case::by_id_with_the_email_the_row_holds(
+    sign_in("full", None, Some("full@example.com"), false),
+    "full",
+    Some("sso"),
+    SsoLink::Unchanged,
+    false
+)]
+#[case::by_id_under_links_any_user_leaves_its_own_id_unlinked(
+    sign_in("created", Some("created"), None, true),
+    "created",
+    None,
+    SsoLink::Unchanged,
+    false
+)]
+#[case::by_sso_id(
+    sign_in("new", Some("sso"), None, false),
+    "full",
+    Some("sso"),
+    SsoLink::Unchanged,
+    false
+)]
+#[case::by_email_links_the_sso_id_in_line(
+    sign_in("new", Some("sso-new"), Some("Emailed@Example.com"), false),
+    "emailed",
+    Some("sso-new"),
+    SsoLink::Linked,
+    false
+)]
+#[case::by_email_under_links_any_user_links_in_the_background(
+    sign_in("new", Some("sso-new"), Some("full@example.com"), true),
+    "full",
+    Some("sso"),
+    SsoLink::Pending,
+    false
+)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_reads_the_user_it_resolves_to_with_what_it_linked_and_owes(
+    #[future(awt)] users: Users,
+    #[case] signing_in: SignIn,
+    #[case] user_id: &str,
+    #[case] sso_user_id: Option<&str>,
+    #[case] sso_link: SsoLink,
+    #[case] owes_email: bool,
+) {
+    execute(
+        users.postgres.pool(),
+        r#"INSERT INTO "LiteLLM_UserTable" (user_id, user_email, created_at, updated_at)
+           VALUES ('emailed', 'emailed@example.com', '2026-11-01 00:00:00', '2026-11-01 00:00:00')"#,
+    )
+    .await;
+
+    let SignedIn {
+        user,
+        sso_link: linked,
+        owes_email: owed,
+    } = users
+        .database
+        .sign_in(&signing_in, Side::Read)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        (
+            user.user_id.as_str(),
+            user.sso_user_id.as_deref(),
+            linked,
+            owed
+        ),
+        (user_id, sso_user_id, sso_link, owes_email)
+    );
+}
+
+#[rstest]
+#[case::by_id_alone(sign_in("gone", None, None, false))]
+#[case::by_an_sso_id_and_an_email_no_row_holds(sign_in(
+    "gone",
+    Some("sso-gone"),
+    Some("gone@example.com"),
+    false
+))]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_no_row_answers_is_not_found(
+    #[future(awt)] users: Users,
+    #[case] signing_in: SignIn,
+) {
+    let read = users
+        .database
+        .sign_in(&signing_in, Side::Read)
+        .await
+        .unwrap();
+
+    assert!(read.is_none());
+}
+
+async fn stored_entry(users: &Users, user_id: &str) -> Option<String> {
+    users
+        .database
+        .user(user_id, Side::Writer)
+        .await
+        .unwrap()
+        .map(dumped)
+}
+
+/// A write returns the entry a read of the row it stored returns, which is what both hosts cache
+/// after it, so the write's shape can never drift from the read's pinned one.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_inserted_user_is_the_entry_for_the_row_as_stored(#[future(awt)] users: Users) {
+    let defaults = NewUserDefaults {
+        user_role: Some("internal_user".to_owned()),
+        max_budget: Some(5.0),
+        models: Some(vec!["claude".to_owned()]),
+        ..NewUserDefaults::default()
+    };
+
+    let inserted = users
+        .database
+        .insert(
+            &sign_in("new", Some("sso-new"), Some("new@example.com"), false),
+            &defaults,
+        )
+        .await
+        .unwrap();
+
+    let Inserted::Created(entry) = inserted else {
+        panic!("the insert lost to no one: {inserted:?}");
+    };
+    assert_eq!(
+        (
+            entry.user_role.as_deref(),
+            entry.max_budget,
+            entry.models.clone(),
+            entry.sso_user_id.as_deref(),
+            entry.user_email.as_deref(),
+        ),
+        (
+            Some("internal_user"),
+            Some(5.0),
+            vec!["claude".to_owned()],
+            Some("sso-new"),
+            Some("new@example.com")
+        )
+    );
+    assert_eq!(Some(dumped(entry)), stored_entry(&users, "new").await);
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_insert_that_loses_to_a_stored_user_is_the_entry_for_the_row_that_won(
+    #[future(awt)] users: Users,
+) {
+    let inserted = users
+        .database
+        .insert(
+            &sign_in("full", None, None, false),
+            &NewUserDefaults::default(),
+        )
+        .await
+        .unwrap();
+
+    let Inserted::Conflict(Some(entry)) = inserted else {
+        panic!("the insert did not lose to the stored user: {inserted:?}");
+    };
+    assert_eq!(dumped(entry), FULL_ENTRY);
+}
+
+#[rstest]
+#[case::fills_a_missing_email("created", "created@example.com", false, Some("created@example.com"))]
+#[case::keeps_a_stored_email("full", "other@example.com", false, Some("full@example.com"))]
+#[case::refuses_an_email_another_user_holds("created", "Full@Example.com", false, None)]
+#[case::links_any_user_takes_a_held_email(
+    "created",
+    "full@example.com",
+    true,
+    Some("full@example.com")
+)]
+#[case::missing_row("gone", "gone@example.com", false, None)]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_email_backfill_is_the_entry_for_the_row_as_stored(
+    #[future(awt)] users: Users,
+    #[case] user_id: &str,
+    #[case] user_email: &str,
+    #[case] links_any_user: bool,
+    #[case] stored_email: Option<&str>,
+) {
+    let backfilled = users
+        .database
+        .backfill_email(user_id, user_email, links_any_user)
+        .await
+        .unwrap();
+
+    let stored = stored_entry(&users, user_id).await;
+    let email = backfilled.as_ref().and_then(|user| user.user_email.clone());
+    let is_stored = backfilled
+        .map(dumped)
+        .is_some_and(|entry| Some(entry) == stored);
+    assert_eq!(
+        (email.as_deref(), is_stored),
+        (stored_email, stored_email.is_some())
+    );
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_role_set_is_the_entry_for_the_row_as_stored(#[future(awt)] users: Users) {
+    let updated = users
+        .database
+        .set_role("full", "proxy_admin")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(updated.user_role.as_deref(), Some("proxy_admin"));
+    assert_eq!(Some(dumped(updated)), stored_entry(&users, "full").await);
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_role_set_on_a_user_no_row_has_is_not_found(#[future(awt)] users: Users) {
+    let updated = users
+        .database
+        .set_role("gone", "proxy_admin")
+        .await
+        .unwrap();
+
+    assert_eq!(updated, None);
+}
+
+/// A backfill that waits on another sign-in's backfill of the same row, which then commits,
+/// returns the row that sign-in stored rather than nothing.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_email_backfill_that_loses_to_a_concurrent_one_is_the_entry_for_the_row_that_won(
+    #[future(awt)] users: Users,
+) {
+    let mut winner = users.postgres.pool().begin().await.unwrap();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Fixture statements are outside the compile-checked query set"
+    )]
+    let fill = sqlx::query(
+        r#"UPDATE "LiteLLM_UserTable" SET user_email = 'created@example.com' WHERE user_id = 'created'"#,
+    );
+    fill.execute(&mut *winner).await.unwrap();
+    let database = Arc::new(users.database);
+    let losing = tokio::spawn({
+        let database = database.clone();
+        async move {
+            database
+                .backfill_email("created", "created@example.com", false)
+                .await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    winner.commit().await.unwrap();
+
+    let backfilled = losing.await.unwrap().unwrap();
+
+    assert_eq!(
+        backfilled.and_then(|user| user.user_email),
+        Some("created@example.com".to_owned())
     );
 }

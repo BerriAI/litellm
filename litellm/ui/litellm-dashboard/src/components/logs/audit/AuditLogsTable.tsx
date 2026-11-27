@@ -17,7 +17,13 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import i18n from "@/i18n/i18n";
 
-import { AUDIT_TABLE_NAME_DISPLAY, AuditLogEntry, getAuditLogsTableColumns } from "./AuditLogsTableColumns";
+import {
+  AUDIT_ACTION_OPTIONS,
+  AUDIT_TABLE_NAME_DISPLAY,
+  AuditLogEntry,
+  auditActionLabel,
+  getAuditLogsTableColumns,
+} from "./AuditLogsTableColumns";
 
 interface AuditLogsTableProps {
   data: AuditLogEntry[];
@@ -41,14 +47,6 @@ interface FilterOption {
   value: string;
 }
 
-const ACTION_OPTIONS: readonly FilterOption[] = [
-  { labelKey: "logs.audit.actionOptions.created", value: "created" },
-  { labelKey: "logs.audit.actionOptions.updated", value: "updated" },
-  { labelKey: "logs.audit.actionOptions.deleted", value: "deleted" },
-  { labelKey: "logs.audit.actionOptions.rotated", value: "rotated" },
-  { labelKey: "logs.audit.actionOptions.killSwitchFired", value: "kill_switch_fired" },
-];
-
 const TABLE_OPTIONS: readonly FilterOption[] = [
   { labelKey: "logs.audit.tableNames.keys", value: "LiteLLM_VerificationToken" },
   { labelKey: "logs.audit.tableNames.teams", value: "LiteLLM_TeamTable" },
@@ -61,7 +59,7 @@ const TABLE_OPTIONS: readonly FilterOption[] = [
 
 const ACTION_FILTER_ITEMS: readonly FilterOption[] = [
   { value: ALL_VALUE, labelKey: "logs.audit.table.allActions" },
-  ...ACTION_OPTIONS,
+  ...AUDIT_ACTION_OPTIONS,
 ];
 
 const TABLE_FILTER_ITEMS: readonly FilterOption[] = [
@@ -81,8 +79,7 @@ const FILTER_LABELS: Record<string, ParseKeys> = {
 const formatFilterValue = (columnId: string, value: unknown, t: TFunction = i18n.t.bind(i18n)): string => {
   const raw = String(value);
   if (columnId === "action") {
-    const action = ACTION_OPTIONS.find((option) => option.value === raw);
-    return action ? t(action.labelKey) : raw;
+    return auditActionLabel(raw, t);
   }
   if (columnId === "table_name") {
     return Object.hasOwn(AUDIT_TABLE_NAME_DISPLAY, raw) ? t(AUDIT_TABLE_NAME_DISPLAY[raw]) : raw;
@@ -213,7 +210,7 @@ export function AuditLogsTable({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={ALL_VALUE}>{t("logs.audit.table.allActions")}</SelectItem>
-                      {ACTION_OPTIONS.map((option) => (
+                      {AUDIT_ACTION_OPTIONS.map((option) => (
                         <SelectItem key={option.value} value={option.value}>
                           {t(option.labelKey)}
                         </SelectItem>
