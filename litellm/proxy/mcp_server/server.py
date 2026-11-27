@@ -1942,25 +1942,26 @@ if MCP_AVAILABLE:
         allowed_server_ids: Set[str] | None,
     ) -> Mapping[str, MCPServer]:
         manager: Final = operations.global_mcp_server_manager
-        authorized_ids: Final[Set[str] | None] = (
+        authorized_ids: Final[Set[str]] = (
             frozenset(await manager.get_allowed_mcp_servers(user_api_key_auth))
             if user_api_key_auth is not None
-            else None
+            else frozenset()
         )
         found: Final = ((name, manager.get_mcp_server_by_name(name, client_ip=client_ip)) for name in mcp_servers or ())
         in_scope: Final = tuple(
             (name, server)
             for name, server in found
-            if server is not None
-            and (allowed_server_ids is None or server.server_id in allowed_server_ids)
-            and (authorized_ids is None or server.server_id in authorized_ids)
+            if server is not None and (allowed_server_ids is None or server.server_id in allowed_server_ids)
         )
-        usable, _ = await operations.split_usable_mcp_servers(
-            tuple(server for _, server in in_scope), user_api_key_auth
-        )
+        to_resolve: Final = tuple(server for _, server in in_scope if server.server_id in authorized_ids)
+        usable, _ = await operations.split_usable_mcp_servers(to_resolve, user_api_key_auth)
         by_id: Final = {server.server_id: server for server in usable}
         return types.MappingProxyType(
-            {name: by_id[server.server_id] for name, server in in_scope if server.server_id in by_id}
+            {
+                name: by_id[server.server_id] if server.server_id in authorized_ids else server
+                for name, server in in_scope
+                if server.server_id not in authorized_ids or server.server_id in by_id
+            }
         )
 
     @catalog_operation(lambda: operations.global_mcp_server_manager)

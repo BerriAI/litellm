@@ -3754,5 +3754,6 @@ async def test_connect_targets_skips_unauthorized_servers_before_profile_resolut
 
     usable: Final = await mcp_server._usable_connect_targets(["tickets"], caller_granted("bots"), None, None)
 
-    assert usable == {}
+    assert list(usable) == ["tickets"]
+    assert not usable["tickets"].uses_auth_profile
     split_called.assert_awaited_once_with((), caller_granted("bots"))
