@@ -100,7 +100,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 inference,
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
-                keys: None,
+                auth_store: None,
                 spend_logs: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
@@ -252,7 +252,7 @@ async fn holding_keys(python: SocketAddr, config: &str, keys: Option<AuthStore>)
         .await
         .unwrap();
     let state = litellm_gateway::AppState {
-        keys: keys.map(Arc::new).or(state.keys.clone()),
+        auth_store: keys.map(Arc::new).or(state.auth_store.clone()),
         ..state
     };
     let admit = Arc::new(litellm_gateway::Admit::new(
