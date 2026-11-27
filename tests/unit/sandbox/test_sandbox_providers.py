@@ -493,6 +493,14 @@ async def test_tensorlake_refuses_a_bare_id_that_could_change_the_host(sandbox_i
 
     with pytest.raises(ValueError, match="Invalid Tensorlake sandbox id"):
         await litellm.arun_code(provider="tensorlake", container=sandbox_id, code="1", api_key="k", client=client)
+    with pytest.raises(ValueError, match="Invalid Tensorlake sandbox id"):
+        await litellm.arun_code(
+            provider="tensorlake",
+            container=ContainerHandle(id=sandbox_id, provider="tensorlake"),
+            code="1",
+            api_key="k",
+            client=client,
+        )
     assert client.calls == []
 
 

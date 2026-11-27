@@ -119,11 +119,13 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
         **kwargs: object,  # kwargs-ok: provider options pass through the shared sandbox entrypoints
     ) -> CodeExecutionResult:
         key: Final = self._key(container, api_key)
-        if not isinstance(container, ContainerHandle) and not _SANDBOX_ID.fullmatch(container):
-            raise ValueError("Invalid Tensorlake sandbox id.")
-        sandbox_url: Final = (
+        known_url: Final = (
             str(container.hidden_params.get("sandbox_url") or "") if isinstance(container, ContainerHandle) else ""
-        ) or f"https://{container.id if isinstance(container, ContainerHandle) else container}.sandbox.tensorlake.ai"
+        )
+        sandbox_id: Final = container.id if isinstance(container, ContainerHandle) else container
+        if not known_url and not _SANDBOX_ID.fullmatch(sandbox_id):
+            raise ValueError("Invalid Tensorlake sandbox id.")
+        sandbox_url: Final = known_url or f"https://{sandbox_id}.sandbox.tensorlake.ai"
         processes: Final = f"{sandbox_url.rstrip('/')}/api/v1/processes"
         headers: Final = {"Authorization": f"Bearer {key}"}
         http: Final = self._http(client)
