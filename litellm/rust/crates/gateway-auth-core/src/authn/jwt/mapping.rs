@@ -259,16 +259,20 @@ pub(crate) async fn resolve<H: AuthHost>(
     let needs_db = JwtDenial::MappingNeedsDb { behavior };
 
     let shared_claim = pending.claim();
-    let mut cached_claim = shared_claim;
     let cached = host.cached_key_mapping(shared_claim).await?;
-    let mut cached = CachedMapping::read(cached.as_ref());
-    if settings.config.disables_global_key_mapping_fallback(issuer)
-        && !matches!(cached, Some(CachedMapping::Key(_)))
+    let shared = CachedMapping::read(cached.as_ref());
+    let (cached_claim, cached) = if settings.config.disables_global_key_mapping_fallback(issuer)
+        && !matches!(shared, Some(CachedMapping::Key(_)))
     {
-        cached_claim.strict = true;
-        let strict = host.cached_key_mapping(cached_claim).await?;
-        cached = CachedMapping::read(strict.as_ref());
-    }
+        let strict_claim = MappedClaim {
+            strict: true,
+            ..shared_claim
+        };
+        let strict = host.cached_key_mapping(strict_claim).await?;
+        (strict_claim, CachedMapping::read(strict.as_ref()))
+    } else {
+        (shared_claim, shared)
+    };
     match cached {
         Some(CachedMapping::ProxyAdmin) if behavior == Behavior::AutoRegister => {
             return Ok(Resolved::Unmapped);
