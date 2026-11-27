@@ -3,11 +3,16 @@
 The cooldown path (`litellm.router_utils.cooldown_callbacks.router_cooldown_event_callback`) and the call paths
 (`PrometheusLogger.set_llm_deployment_success_metrics` / `set_llm_deployment_failure_metrics`) both go through
 this module, so setting a deployment to complete outage and clearing it on recovery write the same series.
+
+Labels are read from the deployment record, never from the request. The router stamps its attribution into
+`metadata` for some endpoints and `litellm_metadata` for others, and a caller can write both dicts, so the only
+values a series may carry are the ones the configured deployment itself holds. A request naming an id the
+registry does not know keeps its deployment labels empty, which bounds cardinality to the configured deployments.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -23,12 +28,56 @@ class DeploymentStateIdentity:
     api_provider: str
 
 
+EMPTY_IDENTITY: Final = DeploymentStateIdentity("", "", "", "")
+
+_METADATA_FIELDS: Final = ("metadata", "litellm_metadata")
+
+
 def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
 def _mapping(value: object) -> Mapping[str, object]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _metadata_buckets(request_kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    litellm_params: Final = _mapping(request_kwargs.get("litellm_params"))
+    logged: Final = _mapping(request_kwargs.get("standard_logging_object"))
+    named: Final = (
+        *(_mapping(litellm_params.get(field)) for field in _METADATA_FIELDS),
+        *(_mapping(request_kwargs.get(field)) for field in _METADATA_FIELDS),
+        _mapping(logged.get("metadata")),
+        _mapping(request_kwargs.get("model_info")),
+    )
+    return tuple(bucket for bucket in named if bucket)
+
+
+def _model_infos(request_kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    found: Final = tuple(_mapping(bucket.get("model_info")) for bucket in _metadata_buckets(request_kwargs))
+    return tuple(info for info in (*found, _mapping(request_kwargs.get("model_info"))) if info)
+
+
+def _candidate_model_ids(request_kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    """Every id a request claims, a request-scoped id's configured original first."""
+    infos: Final = _model_infos(request_kwargs)
+    logged: Final = _mapping(request_kwargs.get("standard_logging_object"))
+    claimed: Final = (
+        *(_text(info.get("original_model_id")) for info in infos),
+        *(_text(info.get("id")) for info in infos),
+        _text(logged.get("model_id")),
+    )
+    return tuple(dict.fromkeys(candidate for candidate in claimed if candidate))
+
+
+def resolve_deployment(
+    request_kwargs: Mapping[str, object], lookup: Callable[[str], Deployment | None]
+) -> Deployment | None:
+    """The configured deployment a request names, or None when it names none the registry knows."""
+    return next(
+        (found for candidate in _candidate_model_ids(request_kwargs) if (found := lookup(candidate)) is not None),
+        None,
+    )
 
 
 def normalize_api_base(api_base: str | None) -> str:
@@ -55,52 +104,37 @@ def resolve_api_provider(model: str, declared_provider: object) -> str:
     return provider or ""
 
 
-def _router_stamped_metadata(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
-    """The metadata dict `update_kwargs_with_deployment` stamped the deployment attribution into.
-
-    That is `litellm_metadata` for batch, file and generic API calls, and `metadata` for everything else, so a
-    caller that sends the other dict cannot shadow the router's own values.
-    """
-    from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
-
-    bucket_name: Final = get_router_metadata_variable_name(
-        _text(_mapping(request_kwargs.get("standard_logging_object")).get("call_type"))
-    )
-    other_name: Final = "metadata" if bucket_name == "litellm_metadata" else "litellm_metadata"
-    litellm_params: Final = _mapping(request_kwargs.get("litellm_params"))
-    stamped: Final = _mapping(litellm_params.get(bucket_name)) or _mapping(request_kwargs.get(bucket_name))
-    if stamped:
-        return stamped
-    return _mapping(litellm_params.get(other_name)) or _mapping(request_kwargs.get(other_name))
-
-
-def identity_from_request_kwargs(request_kwargs: Mapping[str, object]) -> DeploymentStateIdentity:
+def identity_from_request_kwargs(
+    request_kwargs: Mapping[str, object], lookup: Callable[[str], Deployment | None] | None = None
+) -> DeploymentStateIdentity:
     """Identity of the deployment a logged call was routed to, matching `identity_from_deployment`.
 
-    The router stamps `deployment`, `api_base` and `model_info` onto the call's metadata when it picks a
-    deployment, and those are the values the cooldown path derives from the deployment record itself. A stamped
-    empty `api_base` means the deployment configures none, which is not the same as metadata being absent, so the
-    key's presence decides whether the call-time value is a fallback.
+    `lookup` is the router registry, the only attribution a caller cannot write. Without it, as in-process
+    `litellm.Router` callbacks, the request's own stamped metadata is read, which no proxy caller can reach.
     """
+    if lookup is not None:
+        deployment: Final = resolve_deployment(request_kwargs, lookup)
+        return EMPTY_IDENTITY if deployment is None else identity_from_deployment(deployment)
+    return _stamped_identity(request_kwargs)
+
+
+def _stamped_identity(request_kwargs: Mapping[str, object]) -> DeploymentStateIdentity:
+    stamped: Final = next((bucket for bucket in _metadata_buckets(request_kwargs) if "model_info" in bucket), {})
     litellm_params: Final = _mapping(request_kwargs.get("litellm_params"))
-    metadata: Final = _router_stamped_metadata(request_kwargs)
     logged: Final = _mapping(request_kwargs.get("standard_logging_object"))
-    litellm_model_name: Final = (
-        _text(metadata.get("deployment")) or _text(request_kwargs.get("model")) or _text(logged.get("model")) or ""
-    )
+    model_info: Final = _mapping(stamped.get("model_info"))
+    litellm_model_name: Final = _text(stamped.get("deployment")) or _text(request_kwargs.get("model")) or ""
     api_base: Final = (
-        normalize_api_base(_text(metadata.get("api_base")))
-        if "api_base" in metadata
+        normalize_api_base(_text(stamped.get("api_base")))
+        if "api_base" in stamped
         else normalize_api_base(_text(litellm_params.get("api_base")) or _text(logged.get("api_base")))
     )
-    model_info: Final = _mapping(metadata.get("model_info"))
     return DeploymentStateIdentity(
         litellm_model_name=litellm_model_name,
         model_id=(
             _text(model_info.get("original_model_id"))
             or _text(logged.get("model_id"))
             or _text(model_info.get("id"))
-            or _text(_mapping(request_kwargs.get("model_info")).get("id"))
             or ""
         ),
         api_base=api_base,
@@ -114,21 +148,9 @@ def identity_from_request_kwargs(request_kwargs: Mapping[str, object]) -> Deploy
 def identity_from_deployment(deployment: Deployment) -> DeploymentStateIdentity:
     """Identity of a deployment record, matching `identity_from_request_kwargs` for a call it serves."""
     litellm_params: Final = deployment.litellm_params
-    litellm_model_name: Final = litellm_params.model or ""
-    return _identity(
-        litellm_model_name=litellm_model_name,
-        model_id=deployment.model_info.id,
-        api_base=litellm_params.api_base,
-        declared_provider=litellm_params.get("custom_llm_provider"),
-    )
-
-
-def _identity(
-    *, litellm_model_name: str, model_id: object, api_base: str | None, declared_provider: object
-) -> DeploymentStateIdentity:
     return DeploymentStateIdentity(
-        litellm_model_name=litellm_model_name,
-        model_id="" if model_id is None else str(model_id),
-        api_base=normalize_api_base(api_base),
-        api_provider=resolve_api_provider(litellm_model_name, declared_provider),
+        litellm_model_name=litellm_params.model or "",
+        model_id="" if deployment.model_info.id is None else str(deployment.model_info.id),
+        api_base=normalize_api_base(litellm_params.api_base),
+        api_provider=resolve_api_provider(litellm_params.model or "", litellm_params.get("custom_llm_provider")),
     )

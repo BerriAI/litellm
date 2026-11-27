@@ -2,7 +2,7 @@
 Unit tests for prometheus metric labels configuration
 """
 
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 import pytest
 from pydantic import JsonValue
@@ -12,6 +12,9 @@ from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
 )
+
+if TYPE_CHECKING:
+    from litellm.types.router import Deployment
 
 
 def _clear_prometheus_registry() -> None:
@@ -901,6 +904,51 @@ async def test_failed_requests_metric_names_the_deployment_that_failed(monkeypat
             (sample.labels["model_id"], sample.labels["model_group"], sample.labels["api_base"], sample.value)
             for sample in samples
         ] == [("deployment-abc123", "client-alias", "http://vllm.internal:8000/v1", 1.0)]
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_failed_requests_metric_labels_an_anthropic_messages_call_from_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On the generic route the caller's `metadata` and the logged `model_group` are both writable, so the
+    labels have to come from the deployment record the id resolves to."""
+    from fastapi import HTTPException
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    _served_deployment(monkeypatch)
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "served-a",
+        "metadata": {"model_group": "caller-group", "model_info": {"id": "dep-a"}},
+        "litellm_params": {
+            "metadata": {
+                "deployment": "caller-chosen",
+                "api_base": "http://caller.example/v1",
+                "model_info": {"id": "caller-id"},
+            }
+        },
+        "standard_logging_object": {
+            "call_type": "anthropic_messages",
+            "model_id": "dep-a",
+            "model_group": "caller-group",
+            "api_base": "http://caller.example/v1/messages",
+        },
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=500, detail="upstream failed"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        samples: Final = _collected_samples("litellm_proxy_failed_requests_metric_total")
+        assert [
+            (sample.labels["model_id"], sample.labels["model_group"], sample.labels["api_base"])
+            for sample in samples
+        ] == [("dep-a", "served-a", "http://127.0.0.1:9/v1")]
     finally:
         _clear_prometheus_registry()
 
@@ -1962,15 +2010,47 @@ def test_deployment_latency_per_output_token_emits_model_group_from_enum_values(
         _clear_prometheus_registry()
 
 
-def test_deployment_state_identity_reads_the_bucket_the_router_stamped() -> None:
-    """A batch call's router stamp lives in `litellm_metadata`, so the caller's `metadata` must not shadow it."""
+def _served_deployment(monkeypatch: pytest.MonkeyPatch, *, model_id: str = "dep-a") -> "Deployment":
+    from litellm import Router
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "served-a",
+                    "litellm_params": {
+                        "model": "hosted_vllm/served-a",
+                        "api_base": "http://127.0.0.1:9/v1",
+                        "api_key": "test-key",
+                    },
+                    "model_info": {"id": model_id},
+                }
+            ]
+        ),
+    )
+    return proxy_server.llm_router.registry().deployment(model_id)
+
+
+def test_deployment_state_identity_ignores_caller_metadata_whatever_bucket_it_lands_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/v1/messages` goes through the generic route, which stamps `litellm_metadata` while logging
+    `anthropic_messages`. Both dicts are caller-writable, so neither may decide the series."""
     from litellm.integrations.prometheus_helpers import deployment_identity
 
+    deployment: Final = _served_deployment(monkeypatch)
     identity: Final = deployment_identity.identity_from_request_kwargs(
         {
             "model": "served-a",
+            "metadata": {
+                "deployment": "caller-chosen",
+                "api_base": "http://caller.example/v1",
+                "model_info": {"id": "caller-id"},
+            },
             "litellm_params": {
-                "custom_llm_provider": "hosted_vllm",
                 "metadata": {
                     "deployment": "caller-chosen",
                     "api_base": "http://caller.example/v1",
@@ -1982,8 +2062,9 @@ def test_deployment_state_identity_reads_the_bucket_the_router_stamped() -> None
                     "model_info": {"id": "dep-a"},
                 },
             },
-            "standard_logging_object": {"call_type": "acreate_batch", "model_id": "dep-a"},
-        }
+            "standard_logging_object": {"call_type": "anthropic_messages", "model_id": "dep-a"},
+        },
+        lambda model_id: deployment if model_id == "dep-a" else None,
     )
 
     assert identity == deployment_identity.DeploymentStateIdentity(
@@ -1994,25 +2075,53 @@ def test_deployment_state_identity_reads_the_bucket_the_router_stamped() -> None
     )
 
 
-def test_deployment_state_identity_prefers_the_configured_id_over_a_request_scoped_one() -> None:
+def test_deployment_state_identity_prefers_the_configured_id_over_a_request_scoped_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Forwarded client credentials give the call a generated model id; cooldown knows only the configured one."""
     from litellm.integrations.prometheus_helpers import deployment_identity
 
+    deployment: Final = _served_deployment(monkeypatch)
     identity: Final = deployment_identity.identity_from_request_kwargs(
         {
             "model": "served-a",
             "litellm_params": {
-                "custom_llm_provider": "hosted_vllm",
                 "metadata": {
                     "deployment": "hosted_vllm/served-a",
                     "api_base": "http://127.0.0.1:9/v1",
                     "model_info": {"id": "a7f3c2d1", "original_model_id": "dep-a"},
-                },
+                }
             },
-        }
+        },
+        lambda model_id: deployment if model_id == "dep-a" else None,
     )
 
     assert identity.model_id == "dep-a"
+
+
+def test_a_request_naming_no_registered_deployment_gets_no_deployment_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller-chosen id the registry does not know cannot become a series label."""
+    from litellm.integrations.prometheus_helpers import deployment_identity
+
+    _served_deployment(monkeypatch)
+    identity: Final = deployment_identity.identity_from_request_kwargs(
+        {
+            "model": "served-a",
+            "litellm_params": {
+                "metadata": {
+                    "deployment": "caller-chosen",
+                    "api_base": "http://caller.example/v1",
+                    "model_info": {"id": "caller-id"},
+                }
+            },
+            "standard_logging_object": {"call_type": "anthropic_messages", "model_id": "caller-id"},
+        },
+        lambda model_id: None,
+    )
+
+    assert identity == deployment_identity.EMPTY_IDENTITY
 
 
 def test_declared_provider_is_used_without_inferring_one(monkeypatch: pytest.MonkeyPatch) -> None:

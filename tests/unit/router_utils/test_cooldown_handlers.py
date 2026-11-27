@@ -3488,12 +3488,15 @@ async def test_cooldown_recovery_and_partial_outage_write_one_deployment_state_s
 
 
 @pytest.mark.asyncio
-async def test_deployment_state_series_ignores_caller_metadata_on_the_router_bucket(prometheus_callback):
-    """A batch call is stamped in `litellm_metadata`, so a caller-sent `metadata` must not split the series.
+async def test_deployment_state_series_ignores_caller_metadata_on_the_router_bucket(prometheus_callback, monkeypatch):
+    """A generic route is stamped in `litellm_metadata` while logging its own call type, so a caller-sent
+    `metadata` must not decide the series.
 
-    The caller's keys reach `litellm_params.metadata` and only the router's own bucket holds the deployment it
-    picked, so reading the wrong bucket labels the outage with caller-chosen values and the recovery misses it.
+    The caller's keys reach `litellm_params.metadata`, so labels have to come from the deployment record the
+    request's id resolves to, or the outage lands on caller-chosen values and the recovery misses it.
     """
+    from litellm.proxy import proxy_server
+
     router: Final = Router(
         model_list=[
             {
@@ -3503,7 +3506,8 @@ async def test_deployment_state_series_ignores_caller_metadata_on_the_router_buc
             }
         ]
     )
-    payload: Final = {**_logged_payload("failure"), "call_type": "acreate_batch"}
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    payload: Final = {**_logged_payload("failure"), "call_type": "anthropic_messages"}
     caller_metadata: Final = {
         "deployment": "caller-chosen",
         "api_base": "http://caller.example/v1",
@@ -3544,7 +3548,7 @@ async def test_deployment_state_series_ignores_caller_metadata_on_the_router_buc
     prometheus_callback.set_llm_deployment_success_metrics(
         request_kwargs={
             **routed_kwargs,
-            "standard_logging_object": {**_logged_payload("success"), "call_type": "acreate_batch"},
+            "standard_logging_object": {**_logged_payload("success"), "call_type": "anthropic_messages"},
         },
         start_time=start_time,
         end_time=start_time + datetime.timedelta(seconds=1),

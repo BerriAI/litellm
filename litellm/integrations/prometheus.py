@@ -675,37 +675,35 @@ def _failed_request_deployment(
 ) -> _FailedRequestDeployment:
     """Deployment a failed proxy request reached, labelled the way the deployment-scoped metrics label it.
 
-    ``standard_logging_object`` is the only deployment attribution a failure carries that the caller cannot write:
-    the failure hook discards the caller's copy and lifts the proxy's own payload in its place. Every other
-    deployment field in ``request_data`` on a request that never reached a deployment is the caller's request
-    body, so labels read from there can be minted by anyone holding an invalid key. A request with no routed
-    attribution therefore keeps its deployment labels empty, and its model group is bounded the same way
-    ``requested_model`` is.
+    Labels come from the deployment record the request's ids resolve to in the router registry, never from the
+    request body, which a caller holding an invalid key can write. A request naming no registered deployment
+    keeps its deployment labels empty.
     """
     logged: Final = _logged_fields(request_data.get("standard_logging_object"))
-    model_id: Final = (
-        None
-        if isinstance(original_exception, MalformedRequestFieldError)
-        else _first_label_text(logged.get("model_id"))
-    )
-    model_group: Final = _first_label_text(logged.get("model_group"))
-    if model_id is None:
+    if isinstance(original_exception, MalformedRequestFieldError):
+        return _FailedRequestDeployment(model_id=None, model_group=None, api_base=None)
+    lookup: Final = _registry_lookup()
+    if lookup is None:
         return _FailedRequestDeployment(
-            model_id=None, model_group=_bounded_requested_model_label(model_group), api_base=None
+            model_id=_first_label_text(logged.get("model_id")),
+            model_group=_bounded_requested_model_label(_first_label_text(logged.get("model_group"))),
+            api_base=None,
         )
-    deployment: Final = _answered_deployment(model_id)
-    identity: Final = None if deployment is None else deployment_identity.identity_from_deployment(deployment)
+    deployment: Final = deployment_identity.resolve_deployment(request_data, lookup)
+    if deployment is None:
+        return _FailedRequestDeployment(model_id=None, model_group=None, api_base=None)
+    identity: Final = deployment_identity.identity_from_deployment(deployment)
     return _FailedRequestDeployment(
-        model_id=model_id,
-        model_group=model_group,
-        api_base=None if identity is None else identity.api_base or None,
+        model_id=identity.model_id or None,
+        model_group=deployment.model_name or None,
+        api_base=identity.api_base or None,
     )
 
 
-def _answered_deployment(model_id: str) -> Deployment | None:
-    """The configured deployment behind a router-built model id, so its labels are read from config."""
+def _registry_lookup() -> Callable[[str], Deployment | None] | None:
+    """The router registry, the deployment attribution a caller cannot write."""
     llm_router: Final = _get_proxy_llm_router()
-    return None if llm_router is None else llm_router.registry().deployment(model_id)
+    return None if llm_router is None else llm_router.registry().deployment
 
 
 class PrometheusLogger(CustomLogger):
@@ -3694,7 +3692,9 @@ class PrometheusLogger(CustomLogger):
             """
             # Only mark a deployment outage when one was actually picked.
             if deployment_selected:
-                failure_identity: Final = deployment_identity.identity_from_request_kwargs(request_kwargs)
+                failure_identity: Final = deployment_identity.identity_from_request_kwargs(
+                    request_kwargs, _registry_lookup()
+                )
                 self._set_deployment_state_after_failure(
                     refused_prompt=refused_prompt,
                     litellm_model_name=failure_identity.litellm_model_name,
@@ -3885,7 +3885,7 @@ class PrometheusLogger(CustomLogger):
 
             _litellm_params: Final = request_kwargs.get("litellm_params", {}) or {}
             _model_info: Final = get_litellm_metadata_from_kwargs(request_kwargs).get("model_info") or {}
-            identity: Final = deployment_identity.identity_from_request_kwargs(request_kwargs)
+            identity: Final = deployment_identity.identity_from_request_kwargs(request_kwargs, _registry_lookup())
 
             if _model_info or _litellm_params:
                 self._set_deployment_tpm_rpm_limit_metrics(
