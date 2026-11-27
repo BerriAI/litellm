@@ -312,11 +312,11 @@ def _resolve_resource_path_owner(
         for server, listing in listings
         if any(_resource_uri_without_query(str(resource.uri)) == requested for resource in listing)
     )
-    if not any(owner.resource_uri_match == "path_only" for owner in owners):
-        return None
-    if len(owners) > 1:
+    if len(owners) == 1:
+        return owners[0] if owners[0].resource_uri_match == "path_only" else None
+    if any(owner.resource_uri_match == "path_only" for owner in owners):
         return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in owners))
-    return owners[0]
+    return None
 
 
 def _withhold_fanned_out_caller_authorization(
@@ -331,7 +331,7 @@ def _withhold_fanned_out_caller_authorization(
     return extra_headers
 
 
-def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl) -> NoReturn:
+def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl | str) -> NoReturn:
     match failure:
         case _ResourceOwnerRateLimited(error=error):
             raise error
@@ -3301,7 +3301,7 @@ async def mcp_get_prompt(
 
 
 async def mcp_read_resource(
-    url: AnyUrl,
+    url: AnyUrl | str,
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
     mcp_servers: list[str] | None = None,

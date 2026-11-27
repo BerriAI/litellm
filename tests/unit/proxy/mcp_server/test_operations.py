@@ -362,7 +362,7 @@ async def test_resource_read_uri_match_policy(
     from mcp.types import INVALID_REQUEST, ReadResourceRequest, ReadResourceRequestParams
 
     forwarded_reads: Final[asyncio.Queue[tuple[str, str]]] = asyncio.Queue()
-    message: Final = TypeAdapter(JSONRPCMessage)
+    message: Final = TypeAdapter[JSONRPCMessage](JSONRPCMessage)
 
     async def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
@@ -396,7 +396,8 @@ async def test_resource_read_uri_match_policy(
                 },
             )
         assert payload.method == "resources/read"
-        read_uri: Final = str((payload.params or {}).get("uri", ""))
+        read_uri: Final[object] = (payload.params or {}).get("uri")
+        assert isinstance(read_uri, str)
         forwarded_reads.put_nowait((request.url.host, read_uri))
         return httpx2.Response(
             200,
@@ -474,7 +475,7 @@ async def test_resource_read_continuation_preserves_requested_uri(monkeypatch: p
     advertised_uri: Final = "ui://widget/app.html?v=2"
     list_calls: Final[asyncio.Queue[str]] = asyncio.Queue()
     read_calls: Final[asyncio.Queue[tuple[str, str, object]]] = asyncio.Queue()
-    messages: Final = TypeAdapter(JSONRPCMessage)
+    messages: Final = TypeAdapter[JSONRPCMessage](JSONRPCMessage)
 
     async def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
@@ -510,8 +511,9 @@ async def test_resource_read_continuation_preserves_requested_uri(monkeypatch: p
             )
         assert payload.method == "resources/read"
         params: Final = payload.params or {}
-        uri: Final = str(params.get("uri", ""))
-        request_state: Final = params.get("requestState")
+        uri: Final[object] = params.get("uri")
+        assert isinstance(uri, str)
+        request_state: Final[object] = params.get("requestState")
         read_calls.put_nowait((host, uri, request_state))
         if request_state is None:
             return httpx2.Response(
@@ -540,8 +542,8 @@ async def test_resource_read_continuation_preserves_requested_uri(monkeypatch: p
         )
 
     manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
-    for name in ("owner", "other"):
-        server: Final = MCPServer(
+    servers: Final = tuple(
+        MCPServer(
             server_id=f"{name}-id",
             name=name,
             url=f"https://{name}.example/mcp",
@@ -551,6 +553,9 @@ async def test_resource_read_continuation_preserves_requested_uri(monkeypatch: p
             allow_all_keys=True,
             mcp_info={"resource_uri_match": "path_only"} if name == "owner" else None,
         )
+        for name in ("owner", "other")
+    )
+    for server in servers:
         monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
@@ -955,7 +960,7 @@ async def test_prompt_sampling_receives_explicit_operation_caller_headers_and_ip
 
     from litellm.proxy.mcp_server import operations
     from litellm.types.mcp import MCPTransport
-    from litellm.types.mcp_server.mcp_server_manager import MCPResourceURIMatch, MCPServer
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     upstream = MCPServer(
         server_id="explicit-prompt",
@@ -1440,7 +1445,7 @@ async def test_catalog_helpers_preserve_context_results_and_failure_policy(metho
 
     from litellm.proxy.mcp_server import operations, server
     from litellm.types.mcp import MCPTransport
-    from litellm.types.mcp_server.mcp_server_manager import MCPResourceURIMatch, MCPServer
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     operation, handler_name, manager_method, payload, collection = _catalog_case(method)
     caller = UserAPIKeyAuth(user_id="catalog-caller")
