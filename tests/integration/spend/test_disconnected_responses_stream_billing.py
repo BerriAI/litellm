@@ -119,3 +119,124 @@ def test_a_responses_stream_cut_mid_answer_bills_the_input_and_cache_tokens_anth
         error_information: Final = object_value(parsed["error_information"])
         assert (error_information["error_code"], error_information["error_class"]) == ("499", "ClientDisconnected")
         assert len(wire.drain()) == 1
+
+
+OPENAI_MODEL: Final = "gpt-5.4-nano"
+OPENAI_INPUT_TOKENS: Final = 1200
+OPENAI_CACHED_INPUT_TOKENS: Final = 1024
+OPENAI_OUTPUT_TOKENS: Final = 900
+OPENAI_REASONING_TOKENS: Final = 832
+
+
+def _openai_event(payload: dict[str, JsonValue]) -> bytes:
+    return f"event: {payload['type']}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n".encode()
+
+
+def _openai_response(response_id: str, status: str, usage: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 1700000000,
+        "model": OPENAI_MODEL,
+        "status": status,
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": usage,
+    }
+
+
+@pytest.mark.timeout(120)
+def test_a_native_responses_stream_cut_before_any_output_bills_the_usage_openai_reports_at_the_end(
+    gateway: Gateway,
+) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.target.endswith("/responses"), request.target
+        response_id: Final = f"resp_{uuid.uuid4().hex}"
+        return Reply(
+            content_type="text/event-stream",
+            chunks=(
+                _openai_event(
+                    {
+                        "type": "response.created",
+                        "sequence_number": 0,
+                        "response": _openai_response(response_id, "in_progress", None),
+                    }
+                ),
+                _openai_event(
+                    {
+                        "type": "response.output_item.added",
+                        "sequence_number": 1,
+                        "output_index": 0,
+                        "item": {"id": "rs_reasoning", "type": "reasoning", "summary": []},
+                    }
+                ),
+                _openai_event(
+                    {
+                        "type": "response.completed",
+                        "sequence_number": 2,
+                        "response": _openai_response(
+                            response_id,
+                            "completed",
+                            {
+                                "input_tokens": OPENAI_INPUT_TOKENS,
+                                "input_tokens_details": {"cached_tokens": OPENAI_CACHED_INPUT_TOKENS},
+                                "output_tokens": OPENAI_OUTPUT_TOKENS,
+                                "output_tokens_details": {"reasoning_tokens": OPENAI_REASONING_TOKENS},
+                                "total_tokens": OPENAI_INPUT_TOKENS + OPENAI_OUTPUT_TOKENS,
+                            },
+                        ),
+                    }
+                ),
+            ),
+            pause_between_chunks=1.0,
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"openai/{OPENAI_MODEL}",
+            api_base=wire.url,
+            api_key="synthetic-openai-key",
+            input_cost_per_token=INPUT_RATE,
+            output_cost_per_token=OUTPUT_RATE,
+            cache_read_input_token_cost=CACHE_READ_RATE,
+        )
+        key: Final = scenario.key(models=[model])
+        with gateway.client.stream(
+            "POST",
+            "/v1/responses",
+            json={"model": model, "input": "disconnect control", "stream": True, "reasoning": {"effort": "high"}},
+            headers={"Authorization": f"Bearer {key}"},
+        ) as response:
+            assert response.status_code == 200, response.read().decode()
+            created: Final = next(line for line in response.iter_lines() if line.startswith("data:"))
+            assert json.loads(created.removeprefix("data:"))["type"] == "response.created", created
+
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT status, prompt_tokens, completion_tokens, spend, metadata FROM "LiteLLM_SpendLogs" '
+                "WHERE api_key=%s",
+                (sha256(key.encode()).hexdigest(),),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        row: Final = rows[0]
+        assert (row["status"], row["prompt_tokens"], row["completion_tokens"]) == (
+            "success",
+            OPENAI_INPUT_TOKENS,
+            OPENAI_OUTPUT_TOKENS,
+        ), row
+        assert float(str(row["spend"])) == pytest.approx(
+            (OPENAI_INPUT_TOKENS - OPENAI_CACHED_INPUT_TOKENS) * INPUT_RATE
+            + OPENAI_CACHED_INPUT_TOKENS * CACHE_READ_RATE
+            + OPENAI_OUTPUT_TOKENS * OUTPUT_RATE
+        ), row
+        metadata: Final = row["metadata"]
+        parsed: Final = object_value(json.loads(metadata) if isinstance(metadata, str) else metadata)
+        usage: Final = object_value(parsed["usage_object"])
+        assert object_value(usage["completion_tokens_details"])["reasoning_tokens"] == OPENAI_REASONING_TOKENS, usage
+        error_information: Final = object_value(parsed["error_information"])
+        assert (error_information["error_code"], error_information["error_class"]) == ("499", "ClientDisconnected")
+        assert len(wire.drain()) == 1

@@ -43,30 +43,34 @@ jobs:
         with:
           stale-cost-map: ${{ steps.cost-map-only.outputs.decision == 'run' }}
 
-  dashboard-build:
-    name: dashboard-build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          persist-credentials: false
-
-      - name: Build the dashboard stage
-        run: docker build --target ui-builder -f litellm/deploy/docker/Dockerfile .
-
   core-checks:
-    name: py${{ matrix.python-version }}
+    name: ${{ matrix.name }}
     needs: rust-bridge
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
+        include:
+          - name: core-checks
+            interpreters: |
+              3.10
+              3.11
+              3.12
+              3.13
+            core-versions: "3.10 3.11 3.12 3.13"
+            all-extras-versions: "3.12 3.13"
+            uv-cache-suffix: smoke-core-checks
+          - name: py3.14
+            interpreters: "3.14"
+            core-versions: "3.14"
+          - name: py3.15
+            interpreters: "3.15"
+            core-versions: "3.15"
     env:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      CORE_VERSIONS: ${{ matrix.core-versions }}
+      ALL_EXTRAS_VERSIONS: ${{ matrix.all-extras-versions }}
     steps:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -76,26 +80,19 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.interpreters }}
 
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
           rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
+          cache-suffix: ${{ matrix.uv-cache-suffix }}
 
       - name: Download the Rust bridge
         uses: ./.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
-
-      - name: Install dependencies
-        env:
-          PYTHON_VERSION: ${{ matrix.python-version }}
-        run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python "$PYTHON_VERSION" --no-install-project
-          uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/litellm-*.whl
-          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
 
       - name: Create the loopback-only network namespace
         run: |
@@ -109,86 +106,46 @@ jobs:
           chmod +x "${RUNNER_TEMP}/in-netns"
           echo "IN_NETNS=${RUNNER_TEMP}/in-netns" >> "${GITHUB_ENV}"
 
-      - name: Verify namespace isolation
-        run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py verify-isolation
-
-      - name: Verify interpreter version
-        env:
-          EXPECTED_PYTHON: ${{ matrix.python-version }}
-        run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py interpreter --expect "$EXPECTED_PYTHON"
-
-      - name: Import and CLI checks
-        run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py cli
-
-      - name: Routing and UUID compatibility
-        run: >-
-          $IN_NETNS .venv/bin/python -m pytest
-          tests/unit/router_strategy/test_complexity_router.py::TestCustomDimensions
-          tests/unit/test_uuid_helper.py -q
-
-      - name: Proxy startup check
-        run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py proxy-startup --diagnostics-dir "${RUNNER_TEMP}/smoke-diagnostics"
+      - name: Install and check every interpreter
+        run: |
+          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
+          install_core() {
+            UV_PROJECT_ENVIRONMENT=".venv-$1" .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python "$1" --no-install-project &&
+            uv pip install --no-deps --python ".venv-$1/bin/python" rust-bridge-dist/litellm-*.whl
+          }
+          install_all_extras() {
+            UV_PROJECT_ENVIRONMENT=".venv-all-extras-$1" .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python "$1" --no-install-project --no-install-package litellm-proxy &&
+            uv pip install --no-deps --python ".venv-all-extras-$1/bin/python" rust-bridge-dist/*.whl
+          }
+          smoke_core() {
+            local python=".venv-$1/bin/python"
+            $IN_NETNS "$python" .github/scripts/run_merge_smoke.py verify-isolation &&
+            $IN_NETNS "$python" .github/scripts/run_merge_smoke.py interpreter --expect "$1" &&
+            $IN_NETNS "$python" .github/scripts/run_merge_smoke.py cli &&
+            $IN_NETNS "$python" -m pytest tests/unit/router_strategy/test_complexity_router.py::TestCustomDimensions tests/unit/test_uuid_helper.py -q &&
+            $IN_NETNS "$python" .github/scripts/run_merge_smoke.py proxy-startup --diagnostics-dir "${RUNNER_TEMP}/smoke-diagnostics/py$1"
+          }
+          import_all_extras() {
+            ".venv-all-extras-$1/bin/python" -c "import litellm, litellm.proxy.proxy_server, litellm_enterprise"
+          }
+          export -f install_core install_all_extras smoke_core import_all_extras
+          {
+            for version in ${CORE_VERSIONS}; do echo "install_core ${version} && smoke_core ${version}"; done
+            for version in ${ALL_EXTRAS_VERSIONS}; do echo "install_all_extras ${version} && import_all_extras ${version}"; done
+          } | python3 .github/scripts/ci/run_parallel_checks.py --jobs 8
 
       - name: Upload smoke diagnostics
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: merge-smoke-diagnostics-py${{ matrix.python-version }}
+          name: merge-smoke-diagnostics-${{ matrix.name }}
           path: ${{ runner.temp }}/smoke-diagnostics
           if-no-files-found: ignore
 
       - name: Remove the network namespace
         if: always()
         run: sudo ip netns delete smoke
-
-      - name: Keep only source-built wheels in the uv cache
-        if: always() && github.ref == 'refs/heads/main'
-        run: uv cache prune --ci
-
-  all-extras:
-    name: all-extras-py${{ matrix.python-version }}
-    needs: rust-bridge
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.13"]
-    env:
-      LITELLM_LOCAL_MODEL_COST_MAP: "True"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
-        with:
-          version: "0.10.9"
-          rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
-
-      - name: Download the Rust bridge
-        uses: ./.github/actions/rust-bridge
-        with:
-          artifact: ${{ needs.rust-bridge.outputs.artifact }}
-
-      - name: Install every extra and dependency group
-        env:
-          PYTHON_VERSION: ${{ matrix.python-version }}
-        run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python "$PYTHON_VERSION" --no-install-project --no-install-package litellm-proxy
-          uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
-          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
-
-      - name: Import the SDK, the proxy server and the enterprise package
-        run: .venv/bin/python -c "import litellm, litellm.proxy.proxy_server, litellm_enterprise"
 
       - name: Keep only source-built wheels in the uv cache
         if: always() && github.ref == 'refs/heads/main'
@@ -372,7 +329,7 @@ jobs:
 
   smoke-passed:
     name: smoke passed
-    needs: [rust-bridge, dashboard-build, core-checks, all-extras]
+    needs: [rust-bridge, core-checks]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
