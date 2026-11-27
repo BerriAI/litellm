@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Response
 
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.models.vault import (
     VAULT_SECRET_NAME_PATTERN,
     VaultSecretDeleteResponse,
@@ -55,6 +56,13 @@ def _authenticated_user_id(user_api_key_dict: UserAPIKeyAuth) -> str:
         raise HTTPException(
             status_code=401,
             detail="The secrets vault needs a key that belongs to a user",
+        )
+    if user_api_key_dict.impersonated_by is not None:
+        raise HTTPException(status_code=403, detail="The secrets vault cannot be used while impersonating a user")
+    if user_api_key_dict.team_id not in (None, UI_SESSION_TOKEN_TEAM_ID):
+        raise HTTPException(
+            status_code=403,
+            detail="The secrets vault cannot be used with a team key. Use a personal key instead",
         )
     return user_id
 
@@ -146,7 +154,7 @@ async def reveal_secret(
                 status_code=500,
                 detail=f"Secret '{secret_name}' could not be decrypted with the current salt key",
             )
-        accessed_at: Final = await mark_vault_secret_accessed(client, user_id, secret_name)
+        accessed_at: Final = await mark_vault_secret_accessed(client, user_id, secret_name, row.updated_at)
         fastapi_response.headers["Cache-Control"] = _NO_STORE  # rebind-ok: FastAPI only exposes response headers here
         return VaultSecretRevealed(
             secret_name=row.secret_name,

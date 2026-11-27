@@ -180,6 +180,10 @@ def _membership_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamM
     return tx.litellm_teammembership  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
 
 
+def _vault_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_VaultSecrets]":
+    return tx.litellm_vaultsecrets  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
+
 def _token_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
     return tx.litellm_verificationtoken  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
 
@@ -456,6 +460,7 @@ async def _delete_user_rows(
     )
     await _org_membership_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
     await _membership_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
+    await _vault_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
     deleted_users: Final = await _user_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
     return _DeletedUserRows(keys=deleted_keys, users=deleted_users)
 

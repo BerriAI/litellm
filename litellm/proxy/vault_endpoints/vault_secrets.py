@@ -84,11 +84,12 @@ async def mark_vault_secret_accessed(
     prisma_client: "PrismaClient",
     user_id: str,
     secret_name: str,
+    updated_at: datetime,
 ) -> datetime:
     accessed_at: Final = datetime.now(timezone.utc)
     await _table(prisma_client).update_many(
         where={"user_id": user_id, "secret_name": secret_name},
-        data={"last_accessed_at": accessed_at},
+        data={"last_accessed_at": accessed_at, "updated_at": updated_at},  # a read must not look like a write
     )
     return accessed_at
 

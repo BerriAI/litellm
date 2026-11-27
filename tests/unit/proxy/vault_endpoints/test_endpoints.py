@@ -13,8 +13,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
+from litellm.proxy.vault_endpoints.vault_secrets import decrypt_vault_secret
 
 _CREATED: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_AUTO_UPDATED: Final = datetime(2026, 1, 2, tzinfo=timezone.utc)
 
 
 class _VaultTable:
@@ -49,7 +51,7 @@ class _VaultTable:
         key: Final = (where["user_id"], where["secret_name"])
         if key not in self.rows:
             return 0
-        self.rows[key] = SimpleNamespace(**{**vars(self.rows[key]), **data})
+        self.rows[key] = SimpleNamespace(**{**vars(self.rows[key]), "updated_at": _AUTO_UPDATED, **data})
         return 1
 
     async def delete_many(self, where):
@@ -71,8 +73,8 @@ def table(monkeypatch) -> _VaultTable:
 
 @pytest.fixture
 def as_user() -> Iterator[object]:
-    def client_for(user_id: str | None) -> TestClient:
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id=user_id)
+    def client_for(user_id: str | None, **auth: str) -> TestClient:
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id=user_id).model_copy(update=auth)
         return TestClient(app)
 
     yield client_for
@@ -141,6 +143,38 @@ def test_reveal_records_when_the_secret_was_last_accessed(table, as_user):
     listed_at: Final = alice.get("/vault/secrets").json()["secrets"][0]["last_accessed_at"]
     assert listed_at is not None
     assert datetime.fromisoformat(revealed.json()["last_accessed_at"]) == datetime.fromisoformat(listed_at)
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [{"team_id": "team-1"}, {"impersonated_by": "service-key"}],
+    ids=["team key", "impersonating key"],
+)
+def test_key_that_someone_other_than_the_owner_can_hold_cannot_reach_the_vault(table, as_user, auth):
+    as_user("alice").put("/vault/secrets/API_KEY", json={"value": "v"})
+    borrowed: Final = as_user("alice", **auth)
+
+    assert borrowed.get("/vault/secrets").status_code == 403
+    assert borrowed.get("/vault/secrets/API_KEY").status_code == 403
+    assert borrowed.put("/vault/secrets/API_KEY", json={"value": "x"}).status_code == 403
+    assert borrowed.delete("/vault/secrets/API_KEY").status_code == 403
+    assert decrypt_vault_secret(table.rows[("alice", "API_KEY")].value_b64) == "v"
+
+
+def test_dashboard_session_key_can_reach_the_vault(table, as_user):
+    session: Final = as_user("alice", team_id="litellm-dashboard")
+
+    assert session.put("/vault/secrets/API_KEY", json={"value": "v"}).status_code == 200
+    assert session.get("/vault/secrets/API_KEY").json()["value"] == "v"
+
+
+def test_reveal_does_not_change_when_the_secret_was_last_updated(table, as_user):
+    alice: Final = as_user("alice")
+    written: Final = alice.put("/vault/secrets/API_KEY", json={"value": "v"}).json()
+
+    alice.get("/vault/secrets/API_KEY")
+
+    assert alice.get("/vault/secrets").json()["secrets"][0]["updated_at"] == written["updated_at"]
 
 
 def test_delete_removes_the_secret_and_is_idempotent(table, as_user):

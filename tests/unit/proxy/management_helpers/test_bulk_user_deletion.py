@@ -128,6 +128,7 @@ class _Db:
         tokens: Sequence[Mapping[str, object]] = (),
         invitations: Sequence[Mapping[str, object]] = (),
         org_memberships: Sequence[Mapping[str, object]] = (),
+        vault_secrets: Sequence[Mapping[str, object]] = (),
         after_user_read: Callable[[dict[str, _UserRow]], None] = lambda _: None,
     ) -> None:
         self.litellm_usertable = _UserTable(users, after_user_read)
@@ -137,6 +138,7 @@ class _Db:
         self.litellm_deletedverificationtoken = _Rows()
         self.litellm_invitationlink = _Rows(invitations)
         self.litellm_organizationmembership = _Rows(org_memberships)
+        self.litellm_vaultsecrets = _Rows(vault_secrets)
 
 
 class _Tx:
@@ -156,6 +158,7 @@ class _Tx:
         self.litellm_deletedverificationtoken = db.litellm_deletedverificationtoken
         self.litellm_invitationlink = db.litellm_invitationlink
         self.litellm_organizationmembership = db.litellm_organizationmembership
+        self.litellm_vaultsecrets = db.litellm_vaultsecrets
         self._on_lock = on_lock
         self._fail_locks = fail_locks
         self.locks: list[str] = []
@@ -202,13 +205,14 @@ class _FakePrisma:
         tokens: Sequence[Mapping[str, object]] = (),
         invitations: Sequence[Mapping[str, object]] = (),
         org_memberships: Sequence[Mapping[str, object]] = (),
+        vault_secrets: Sequence[Mapping[str, object]] = (),
         on_lock: Callable[[str], None] = lambda _: None,
         fail_locks: frozenset[str] = frozenset(),
         fail_commit: bool = False,
         on_user_lock: Callable[[_Db], None] = lambda _: None,
         after_user_read: Callable[[dict[str, _UserRow]], None] = lambda _: None,
     ) -> None:
-        self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships, after_user_read)
+        self.db = _Db(users, teams, memberships, tokens, invitations, org_memberships, vault_secrets, after_user_read)
         self._on_lock = on_lock
         self._on_user_lock = on_user_lock
         self._fail_locks = fail_locks
@@ -315,6 +319,7 @@ async def test_bulk_delete_removes_users_from_every_team_and_store():
             {"id": "i3", "user_id": "keep", "created_by": "admin", "updated_by": "admin"},
         ],
         org_memberships=[{"user_id": "u1", "organization_id": "o1", "user_role": "internal_user"}],
+        vault_secrets=[{"user_id": "u1", "secret_name": "A"}, {"user_id": "keep", "secret_name": "B"}],
     )
 
     results = await _delete(prisma, ["u1", "u2"])
@@ -330,6 +335,7 @@ async def test_bulk_delete_removes_users_from_every_team_and_store():
     assert [t["token"] for t in prisma.db.litellm_verificationtoken.rows] == ["k2"]
     assert [t["token"] for t in prisma.db.litellm_deletedverificationtoken.rows] == ["k1"]
     assert [i["id"] for i in prisma.db.litellm_invitationlink.rows] == ["i3"]
+    assert prisma.db.litellm_vaultsecrets.rows == [{"user_id": "keep", "secret_name": "B"}]
     assert prisma.db.litellm_organizationmembership.rows == []
     assert prisma.locks == ["t1", "t2"] and prisma.roster_reads == ["t1", "t2"]
 
@@ -724,7 +730,9 @@ async def test_user_deletes_drop_the_committed_spend_of_the_users_they_deleted(
     spend: Final = FakeSpendCounters(
         redis=None, memory={"spend:committed:user:u1": 7.0, "spend:committed:user:keep": 3.0}
     )
-    mocker.patch("litellm.proxy.proxy_server.spend_counter_store", spend.store())  # test-quality-ok: substitute the spend counter dependency
+    mocker.patch(
+        "litellm.proxy.proxy_server.spend_counter_store", spend.store()
+    )  # test-quality-ok: substitute the spend counter dependency
     prisma: Final = _FakePrisma(users=[_user("u1"), _user("keep")])
 
     _ = await delete(prisma, ["u1"])
