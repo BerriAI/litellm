@@ -7,7 +7,7 @@ import os
 import secrets
 import sys
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -110,14 +110,43 @@ _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.Cont
 )
 
 
+class _SkipPassedSwitch:
+    """When this process saw ``general_settings.guardrail_log_skip_passed`` turn on."""
+
+    def __init__(self) -> None:
+        self.seen_off: bool = False
+        self.on_since: datetime | None = None
+
+
+_SKIP_PASSED_SWITCH: Final = _SkipPassedSwitch()
+_BEFORE_ANY_REQUEST: Final = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def passed_runs_skipped_since() -> datetime | None:
+    """The time from which ``general_settings.guardrail_log_skip_passed`` has been on in this
+    process, None while it is off. A run logged while the setting was off carries no
+    ``guardrail_action``, so the request log writer skips passed runs only for requests that
+    started at or after this time. A process that never saw the setting off returns the earliest
+    time."""
+    if "litellm.proxy.proxy_server" not in sys.modules:
+        return None
+    from litellm.proxy.proxy_server import current_general_settings
+
+    if current_general_settings().get("guardrail_log_skip_passed") is not True:
+        _SKIP_PASSED_SWITCH.seen_off = True
+        _SKIP_PASSED_SWITCH.on_since = None
+        return None
+    if _SKIP_PASSED_SWITCH.on_since is None:
+        _SKIP_PASSED_SWITCH.on_since = (
+            datetime.now(timezone.utc) if _SKIP_PASSED_SWITCH.seen_off else _BEFORE_ANY_REQUEST
+        )
+    return _SKIP_PASSED_SWITCH.on_since
+
+
 def acting_runs_are_logged() -> bool:
     """True when ``general_settings.guardrail_log_skip_passed`` is on. Only then does a run that
     acted with a success status log a ``guardrail_action``, which keeps its request log row."""
-    if "litellm.proxy.proxy_server" not in sys.modules:
-        return False
-    from litellm.proxy.proxy_server import current_general_settings
-
-    return current_general_settings().get("guardrail_log_skip_passed") is True
+    return passed_runs_skipped_since() is not None
 
 
 # The run the current hook last logged, so a guardrail that logs its verdict and then rejects

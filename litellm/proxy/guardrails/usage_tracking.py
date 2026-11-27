@@ -18,6 +18,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
+from litellm.integrations.custom_guardrail import passed_runs_skipped_since
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import billed_guardrail_cost_by_unit
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
@@ -258,11 +259,13 @@ def _parse_guardrail_info_from_payload(payload: Mapping[str, object]) -> Sequenc
     return info
 
 
+def _as_utc(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
 def _date_str(dt: datetime) -> str:
     """YYYY-MM-DD in UTC."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    return _as_utc(dt).strftime("%Y-%m-%d")
 
 
 def _parse_payload_start_time(payload: Mapping[str, object]) -> datetime | None:
@@ -423,9 +426,7 @@ async def _record_guardrail_usage(
         }
     )
     index_rows_by_key: Final[dict[tuple[str, str], dict[str, object]]] = {}
-    from litellm.proxy.proxy_server import current_general_settings
-
-    skip_passed: Final = current_general_settings().get("guardrail_log_skip_passed") is True
+    skipped_since: Final = passed_runs_skipped_since()
     kept_index_keys: Final[set[tuple[str, str]]] = set()  # mutable-ok: filled by the pass that builds index_rows_by_key
 
     for payload in (row for row in logs_to_process if row.get("accounting_log_disabled") is not True):
@@ -434,6 +435,7 @@ async def _record_guardrail_usage(
         if not isinstance(request_id, str) or not request_id or start_time is None:
             continue
         date_key = _date_str(start_time)
+        skip_passed = skipped_since is not None and _as_utc(start_time) >= skipped_since
 
         entries = _parse_guardrail_info_from_payload(payload)
         ids_by_name = MappingProxyType(

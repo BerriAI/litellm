@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import chain
 from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
@@ -702,6 +702,15 @@ def _indexed(prisma: MagicMock) -> list[tuple[str, str, str | None]]:
 
 
 def _skip_passed(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
+    """Set the setting on a process that has never seen it off."""
+    from litellm.integrations import custom_guardrail
+
+    monkeypatch.setattr(custom_guardrail._SKIP_PASSED_SWITCH, "seen_off", False)
+    monkeypatch.setattr(custom_guardrail._SKIP_PASSED_SWITCH, "on_since", None)
+    _set_skip_passed(monkeypatch, value)
+
+
+def _set_skip_passed(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", value)
@@ -796,6 +805,29 @@ async def test_guardrail_log_skip_passed_keeps_a_run_that_acted_with_a_passed_st
     await process_spend_logs_guardrail_usage(prisma, logs)
 
     assert [request_id for request_id, _, _ in _indexed(prisma)] == kept
+
+
+@pytest.mark.asyncio
+async def test_guardrail_log_skip_passed_keeps_the_rows_of_requests_that_started_before_it_turned_on(monkeypatch):
+    """A run logged while the setting was off carries no action, so its row must survive a flush
+    that happens after the setting turns on."""
+    from litellm.integrations.custom_guardrail import passed_runs_skipped_since
+
+    _skip_passed(monkeypatch, False)
+    assert passed_runs_skipped_since() is None
+    _set_skip_passed(monkeypatch, True)
+    turned_on_at: Final = passed_runs_skipped_since()
+    assert turned_on_at is not None
+    passed: Final = [{"guardrail_id": "g", "guardrail_status": "success"}]
+    logs: Final = [
+        {**_entries_payload("queued-before", passed), "startTime": turned_on_at - timedelta(seconds=1)},
+        {**_entries_payload("started-after", passed), "startTime": datetime.now(timezone.utc)},
+    ]
+    prisma: Final = _prisma()
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert [request_id for request_id, _, _ in _indexed(prisma)] == ["queued-before"]
 
 
 @pytest.mark.asyncio
