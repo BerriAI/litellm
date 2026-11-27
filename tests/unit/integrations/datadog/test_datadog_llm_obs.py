@@ -143,7 +143,6 @@ def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMOb
     assert "function" not in message["tool_calls"][0]
 
 
-
 def test_claude_server_tool_calls_are_reported_before_client_tool_calls(logger: DataDogLLMObsLogger) -> None:
     payload: Final = build(
         logger,
@@ -177,6 +176,7 @@ def test_claude_server_tool_calls_are_reported_before_client_tool_calls(logger: 
             "type": "function",
         },
     ]
+
 
 def test_tool_call_identifiers_that_are_not_strings_are_blanked_not_stringified(logger: DataDogLLMObsLogger) -> None:
     payload = build(
@@ -1235,3 +1235,114 @@ def test_tool_arguments_ship_as_an_object_only_when_they_decode_to_one(
     )
 
     assert payload["meta"]["output"]["messages"][0]["tool_calls"][0]["arguments"] == shipped
+
+
+def build_responses_payload(output: Any) -> dict[str, Any]:
+    """A `/v1/responses` call as the callback receives it: the Responses body, chat-shaped usage."""
+    payload = build_payload()
+    payload["standard_logging_object"]["call_type"] = "aresponses"
+    payload["standard_logging_object"]["response"] = {
+        "id": "resp_abc123",
+        "object": "response",
+        "status": "completed",
+        "model": "gpt-5",
+        "output": output,
+        "usage": {"prompt_tokens": 4447, "completion_tokens": 507, "total_tokens": 4954},
+    }
+    return payload
+
+
+def build_responses(logger: DataDogLLMObsLogger, output: Any) -> dict[str, Any]:
+    start = datetime(2026, 9, 1, 12, 0, 0)
+    payload = logger.create_llm_obs_payload(build_responses_payload(output), start, start + timedelta(seconds=2))
+    return json.loads(safe_dumps(payload))
+
+
+RESPONSES_TEXT_ITEM: dict[str, Any] = {
+    "type": "message",
+    "id": "msg_abc123",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "It is 18C in Paris.", "annotations": []}],
+}
+
+RESPONSES_FUNCTION_CALL_ITEM: dict[str, Any] = {
+    "type": "function_call",
+    "id": "fc_abc123",
+    "call_id": "call_abc123",
+    "name": "get_weather",
+    "arguments": '{"city":"Paris","unit":"c"}',
+    "status": "completed",
+}
+
+
+def test_a_responses_api_answer_is_reported_as_the_span_output(logger: DataDogLLMObsLogger) -> None:
+    """`/v1/responses` logs `output` items rather than `choices`, and the answer must still reach Datadog."""
+    payload = build_responses(logger, [RESPONSES_TEXT_ITEM])
+
+    assert payload["meta"]["output"]["messages"] == [{"role": "assistant", "content": "It is 18C in Paris."}]
+
+
+def test_a_responses_api_function_call_uses_the_datadog_tool_call_schema(logger: DataDogLLMObsLogger) -> None:
+    """The call is keyed by `call_id`, the id the caller answers with, so Datadog can pair the result to it."""
+    payload = build_responses(logger, [RESPONSES_TEXT_ITEM, RESPONSES_FUNCTION_CALL_ITEM])
+
+    (message,) = payload["meta"]["output"]["messages"]
+    assert message["content"] == "It is 18C in Paris."
+    assert message["tool_calls"] == [
+        {
+            "name": "get_weather",
+            "arguments": {"city": "Paris", "unit": "c"},
+            "tool_id": "call_abc123",
+            "type": "function",
+        }
+    ]
+
+
+def test_a_responses_api_reasoning_summary_reaches_the_output_message(logger: DataDogLLMObsLogger) -> None:
+    reasoning = {
+        "type": "reasoning",
+        "id": "rs_abc123",
+        "summary": [{"type": "summary_text", "text": "Look up the forecast."}],
+    }
+    payload = build_responses(logger, [reasoning, RESPONSES_TEXT_ITEM])
+
+    (message,) = payload["meta"]["output"]["messages"]
+    assert message["reasoning_content"] == "Look up the forecast."
+    assert message["content"] == "It is 18C in Paris."
+
+
+@pytest.mark.parametrize(
+    "output",
+    [[], None, "not a list", [{"type": "message"}]],
+    ids=["no items", "missing", "not a list", "malformed item"],
+)
+def test_a_responses_api_body_with_no_readable_output_still_ships_the_span(
+    logger: DataDogLLMObsLogger, output: Any
+) -> None:
+    payload = build_responses(logger, output)
+
+    assert payload["meta"]["output"]["messages"] == []
+    assert payload["metrics"]["output_tokens"] == 507
+
+
+def test_redaction_covers_a_responses_api_answer_and_its_tool_arguments() -> None:
+    result = _redacted_span_as_the_proxy_builds_it(
+        build_responses_payload([RESPONSES_TEXT_ITEM, RESPONSES_FUNCTION_CALL_ITEM])
+    )
+
+    assert result["meta"]["output"]["messages"] == [
+        {
+            "role": "assistant",
+            "content": "redacted-by-litellm",
+            "tool_calls": [
+                {
+                    "name": "get_weather",
+                    "arguments": "redacted-by-litellm",
+                    "tool_id": "call_abc123",
+                    "type": "function",
+                }
+            ],
+        }
+    ]
+    assert "Paris" not in safe_dumps(result)

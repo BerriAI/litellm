@@ -1633,6 +1633,30 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return dict(with_long_instructions_in_input(request_data))
 
     @staticmethod
+    def chat_message_from_logged_responses_output(response: Mapping[str, object]) -> Mapping[str, object] | None:
+        """
+        The assistant message a logged Responses API body amounts to, or None.
+
+        A logging callback receives a ``/v1/responses`` body as plain dicts, where the chat
+        bridge reads typed output items. This reads them back into those types and folds them
+        with the rule the bridge serves chat clients with, so a logger shows a Responses call
+        the way it shows a chat one.
+        """
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        try:
+            # Only the output list is read as the Responses type: the logged body carries
+            # chat-shaped usage, which that type rejects
+            parsed: Final[BaseModel] = ResponsesAPIResponse.model_validate(
+                {"id": "", "created_at": 0, "output": response.get("output")}
+            )
+        except ValidationError:
+            return None
+        output_items: Final[Sequence[object]] = as_object_list(getattr(parsed, "output", None)) or ()
+        choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(output_items)
+        return _STREAM_ITEM.validate_python(choices[0].message.model_dump()) if choices else None
+
+    @staticmethod
     def _convert_response_output_to_choices(
         output_items: Sequence[object],
         handle_raw_dict_callback: Callable[..., tuple["Choices | None", int]] | None = None,

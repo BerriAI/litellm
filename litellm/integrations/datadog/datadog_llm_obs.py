@@ -859,6 +859,17 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             except (KeyError, IndexError, TypeError):
                 # In case of any error accessing the response structure, return empty list
                 return ()
+        if call_type in [CallTypes.responses.value, CallTypes.aresponses.value] and isinstance(response_obj, dict):
+            # Imported here because the bridge module imports the logging core, which loads this logger
+            from litellm.completion_extras.litellm_responses_transformation.transformation import (
+                LiteLLMResponsesTransformationHandler,
+            )
+
+            # `/v1/responses` logs `output` items rather than `choices`
+            message: Final = LiteLLMResponsesTransformationHandler.chat_message_from_logged_responses_output(
+                _JSON_OBJECT.validate_python(response_obj)
+            )
+            return _to_dd_messages([dict(message)]) if message is not None else ()
         return ()
 
     def _get_datadog_span_kind(
