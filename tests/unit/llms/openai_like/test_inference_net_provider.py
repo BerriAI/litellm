@@ -44,8 +44,36 @@ def test_inference_net_is_a_registered_provider():
     assert set(litellm.models_by_provider["inference_net"]) == set(INFERENCE_NET_MODELS)
 
 
+@pytest.mark.parametrize(
+    ("env", "expected_key"),
+    [
+        ({"INFERENCE_API_KEY": "primary-key"}, "primary-key"),
+        ({"INFERENCE_NET_API_KEY": "fallback-key"}, "fallback-key"),
+        ({"INFERENCE_API_KEY": "primary-key", "INFERENCE_NET_API_KEY": "fallback-key"}, "primary-key"),
+    ],
+    ids=["primary-only", "fallback-only", "primary-wins"],
+)
+def test_inference_net_reads_either_api_key_env(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], expected_key: str
+):
+    monkeypatch.delenv("INFERENCE_API_KEY", raising=False)
+    monkeypatch.delenv("INFERENCE_NET_API_KEY", raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    _, provider, api_key, _ = get_llm_provider(
+        model="inference_net/deepseek-v4.1-flash",
+        custom_llm_provider=None,
+        api_base=None,
+        api_key=None,
+    )
+
+    assert provider == "inference_net"
+    assert api_key == expected_key
+
+
 def test_inference_net_provider_resolution_keeps_slashes_in_model_ids(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("INFERENCE_NET_API_KEY", "inference-net-test-key")
+    monkeypatch.setenv("INFERENCE_API_KEY", "inference-net-test-key")
     monkeypatch.delenv("INFERENCE_NET_API_BASE", raising=False)
 
     model, provider, api_key, api_base = get_llm_provider(
@@ -62,7 +90,7 @@ def test_inference_net_provider_resolution_keeps_slashes_in_model_ids(monkeypatc
 
 
 def test_inference_net_api_base_env_overrides_default(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("INFERENCE_NET_API_KEY", "inference-net-test-key")
+    monkeypatch.setenv("INFERENCE_API_KEY", "inference-net-test-key")
     monkeypatch.setenv("INFERENCE_NET_API_BASE", "https://us.api.inference.net/v1")
 
     _, provider, _, api_base = get_llm_provider(
@@ -77,7 +105,7 @@ def test_inference_net_api_base_env_overrides_default(monkeypatch: pytest.Monkey
 
 
 def test_inference_net_api_base_autodetects_provider(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("INFERENCE_NET_API_KEY", "inference-net-test-key")
+    monkeypatch.setenv("INFERENCE_API_KEY", "inference-net-test-key")
 
     _, provider, api_key, _ = get_llm_provider(
         model="deepseek-v4.1-flash",

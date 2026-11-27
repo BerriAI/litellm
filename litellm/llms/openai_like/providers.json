@@ -379,7 +379,7 @@
   },
   "inference_net": {
     "base_url": "https://api.inference.net/v1",
-    "api_key_env": "INFERENCE_NET_API_KEY",
+    "api_key_env": ["INFERENCE_API_KEY", "INFERENCE_NET_API_KEY"],
     "api_base_env": "INFERENCE_NET_API_BASE"
   },
   "wally": {
