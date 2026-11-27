@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import without
+from litellm.router_rust.invoke.cache_controls import report_ignored_cache_controls, with_model_cache_controls
 from litellm.router_rust.invoke.endpoints import PLANS, EndpointCore
 from litellm.router_rust.invoke.shaping import as_dict, update_kwargs_with_deployment
 
@@ -21,10 +22,10 @@ _PROMPT_MANAGEMENT_PARAMS: Final = frozenset(
 def is_prompt_management_model(core: EndpointCore, model: str) -> bool:
     """`_is_prompt_management_model`: one deployment, whose model's provider prefix is a known
     custom-logger-compatible callback."""
-    model_list: Final = core.group_deployments(model_name=model)
-    if model_list is None or len(model_list) != 1:
+    members: Final = core.group_members(model)
+    if members is None or len(members) != 1:
         return False
-    litellm_model: Final = as_dict(model_list[0].get("litellm_params")).get("model")
+    litellm_model: Final = members[0][1]
     if not isinstance(litellm_model, str) or "/" not in litellm_model:
         return False
     known: Final = core.host.dynamic().known_custom_logger_compatible_callbacks
@@ -76,7 +77,7 @@ async def prompt_management_acompletion(
         core.shaping,
         deployment,
         kwargs,  # pyright: ignore[reportUnknownArgumentType]  # the request kwargs
-        cache=core.routing_cache,
+        usage=core.router_usage,
         splits_stream_timeout=True,
     )
     params: Final = as_dict(deployment.get("litellm_params"))
@@ -102,8 +103,9 @@ async def prompt_management_acompletion(
         request_kwargs=kwargs,
         injected_for_every_deployment=True,
     )
-    filtered_data: Final = without(data, *_PROMPT_MANAGEMENT_PARAMS)
-    final: Final[dict[str, object]] = {**filtered_data, **kwargs, **optional_params}  # pyright: ignore[reportUnknownVariableType]  # mutable-ok: the call's kwargs
+    cache_params, cache_kwargs, ignored = with_model_cache_controls(data, kwargs)  # pyright: ignore[reportUnknownArgumentType]  # the request kwargs
+    filtered_data: Final = without(cache_params, *_PROMPT_MANAGEMENT_PARAMS)
+    final: Final[dict[str, object]] = {**filtered_data, **cache_kwargs, **optional_params}  # pyright: ignore[reportUnknownVariableType]  # mutable-ok: the call's kwargs
     final["model"] = rendered_model
     final["messages"] = rendered_messages
     final["litellm_logging_obj"] = logging_obj
@@ -113,7 +115,9 @@ async def prompt_management_acompletion(
     target_list: Final = core.group_deployments(model_name=str(rendered_model))  # pyright: ignore[reportUnknownArgumentType]  # the core's host registry
     if target_list is None or len(target_list) == 0:  # a direct call to the rendered model
         _ = final.pop("original_function")
-        return await core.host.invoke("acompletion")(**final)  # pyright: ignore[reportUnknownMemberType]  # the core's host
+        response: Final = await core.host.invoke("acompletion")(**final)  # pyright: ignore[reportUnknownMemberType]  # the core's host
+        report_ignored_cache_controls(response, ignored)
+        return response
     timeouts: Final = {
         key: value
         for key, value in (
@@ -126,4 +130,6 @@ async def prompt_management_acompletion(
         if value is not None
     }
     routed: Final = without(final, "timeout", "stream_timeout")
-    return await core.drive(PLANS["acompletion"], {**routed, **timeouts}, prepared_already=True)
+    routed_response: Final = await core.drive(PLANS["acompletion"], {**routed, **timeouts}, prepared_already=True)
+    report_ignored_cache_controls(routed_response, ignored)
+    return routed_response

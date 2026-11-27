@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH deleted AS (\n    DELETE FROM \"LiteLLM_VerificationToken\"\n    WHERE user_id = $1\n      AND team_id = $2\n    RETURNING *\n), archived AS (\n    INSERT INTO \"LiteLLM_DeletedVerificationToken\" (\n        id, access_group_ids, agent_id, aliases, allowed_cache_controls, allowed_routes, auto_rotate, blocked,\n        budget_duration, budget_fallbacks, budget_id, budget_reset_at, config, created_at, created_by, expires,\n        key_alias, key_id, key_name, key_rotation_at, key_type, last_active, last_rotation_at, max_budget,\n        max_parallel_requests, metadata, model_max_budget, model_spend, models, object_permission_id,\n        organization_id, permissions, policies, project_id, rotation_count, rotation_interval, router_settings,\n        rpm_limit, settings_updated_at, soft_budget_cooldown, spend, team_id, token, total_spend, tpd_limit,\n        tpm_limit, updated_at, updated_by, user_id, deleted_at\n    )\n    SELECT gen_random_uuid()::text,\n           COALESCE(access_group_ids, '{}'), agent_id, aliases, COALESCE(allowed_cache_controls, '{}'),\n           COALESCE(allowed_routes, '{}'), auto_rotate, blocked, budget_duration, budget_fallbacks, budget_id,\n           budget_reset_at, config, created_at, created_by, expires, key_alias, key_id, key_name, key_rotation_at,\n           key_type, last_active, last_rotation_at, max_budget, max_parallel_requests, metadata, model_max_budget,\n           model_spend, COALESCE(models, '{}'), object_permission_id, organization_id, permissions,\n           COALESCE(policies, '{}'), project_id, rotation_count, rotation_interval, router_settings, rpm_limit,\n           settings_updated_at, soft_budget_cooldown, spend, team_id, token, total_spend, tpd_limit, tpm_limit,\n           updated_at, updated_by, user_id, NOW() AT TIME ZONE 'UTC'\n    FROM deleted\n)\nSELECT d.token AS \"token!\",\n       m.jwt_issuer AS \"jwt_issuer?\",\n       m.jwt_claim_name AS \"jwt_claim_name?\",\n       m.jwt_claim_value AS \"jwt_claim_value?\"\nFROM deleted AS d\nLEFT JOIN \"LiteLLM_JWTKeyMapping\" AS m ON m.token = d.token\nORDER BY d.token\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "token!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "token"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "jwt_issuer?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_JWTKeyMapping\"",
+            "name": "jwt_issuer"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "jwt_claim_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_JWTKeyMapping\"",
+            "name": "jwt_claim_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "jwt_claim_value?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_JWTKeyMapping\"",
+            "name": "jwt_claim_value"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6302fff5c185d0a8720dd837d2813780ddc8932c86b8cca6c5d31c55307469bb"
+}

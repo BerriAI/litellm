@@ -5,19 +5,19 @@ Computes cosine similarity between the query embedding and each message embeddin
 """
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.caching.dual_cache import DualCache
 
 
-def _extract_content(message: dict) -> str:
+def _extract_content(message: Mapping[str, object]) -> str:
     """Extract text content from a message dict."""
     content: Final = message.get("content", "")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: Final = []
+        parts: Final[list[str]] = []
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
                 parts.append(part.get("text", ""))
@@ -47,7 +47,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 def embedding_score_messages(
     query: str,
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     model: str,
     cache: DualCache | None = None,
     embedding_model_params: Mapping[str, object] | None = None,

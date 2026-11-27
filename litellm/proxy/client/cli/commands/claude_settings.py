@@ -3,17 +3,23 @@
 `lite up` and `lite autoroute start` patch this file temporarily and restore it on
 exit; `lite configure claude` patches it persistently and records how to undo it.
 All of them need the same merge, and `up` already imports from `auth`, so the
-shared parts live here rather than in any one command module. The credential is
-always a static token in `env.ANTHROPIC_AUTH_TOKEN`: Claude Code's `apiKeyHelper`
-would spawn a `lite` process on every credential refresh, and that process touches
-the keychain, so nothing here writes one; a helper left by an earlier version is
-owned like any other key and stripped.
+shared parts live here rather than in any one command module. The credential is a
+static token in `env.ANTHROPIC_AUTH_TOKEN`, except for a login `lite` renews on its own,
+which gets an `apiKeyHelper` running `lite auth print-token`: Claude Code reruns it
+every few minutes, so the key it sends follows each renewal. A helper is owned like
+any other key, so writing one credential strips the other, and it blanks
+`env.ANTHROPIC_AUTH_TOKEN`, since a token exported in the shell would win over it.
 """
 
 import hashlib
 import json
+import ntpath
+import os
+import posixpath
 import shlex
+import shutil
 import sys
+import sysconfig
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
@@ -42,6 +48,8 @@ from .cmd_quoting import quote_for_cmd
 
 ENV_KEY: Final = "env"
 API_KEY_HELPER_KEY: Final = "apiKeyHelper"
+OTEL_HEADERS_HELPER_KEY: Final = "otelHeadersHelper"
+OTEL_HEADERS_HELPER_FLAG: Final = "--otel-headers"
 MODEL_KEY: Final = "model"
 STATUS_LINE_KEY: Final = "statusLine"
 ANTHROPIC_BASE_URL_KEY: Final = "ANTHROPIC_BASE_URL"
@@ -52,6 +60,31 @@ ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 ENABLE_GATEWAY_MODEL_DISCOVERY_KEY: Final = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
 ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
 ANTHROPIC_MODEL_KEY: Final = "ANTHROPIC_MODEL"
+OTLP_ENDPOINT_KEY: Final = "OTEL_EXPORTER_OTLP_ENDPOINT"
+OTLP_HEADERS_KEY: Final = "OTEL_EXPORTER_OTLP_HEADERS"
+# Per-signal settings win over the two above, so one left in place would send the gateway key to its collector
+OTLP_SIGNAL_KEYS: Final = (
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+)
+TELEMETRY_ENV: Final = MappingProxyType(
+    {
+        "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+        "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+        "CLAUDE_CODE_PROPAGATE_TRACEPARENT": "1",
+        "OTEL_TRACES_EXPORTER": "otlp",
+        "OTEL_LOGS_EXPORTER": "otlp",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_LOG_USER_PROMPTS": "1",
+        "OTEL_LOG_ASSISTANT_RESPONSES": "1",
+        "OTEL_LOG_TOOL_DETAILS": "1",
+        "OTEL_LOG_TOOL_CONTENT": "1",
+    }
+)
 ANTHROPIC_DEFAULT_MODEL_ENV_KEYS: Final = (
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -65,8 +98,12 @@ OWNED_ENV_KEYS: Final = (
     ANTHROPIC_AUTH_TOKEN_KEY,
     ANTHROPIC_API_KEY_KEY,
     ANTHROPIC_MODEL_KEY,
+    *TELEMETRY_ENV,
+    OTLP_ENDPOINT_KEY,
+    OTLP_HEADERS_KEY,
+    *OTLP_SIGNAL_KEYS,
 )
-OWNED_TOP_LEVEL_KEYS: Final = (API_KEY_HELPER_KEY, MODEL_KEY, STATUS_LINE_KEY)
+OWNED_TOP_LEVEL_KEYS: Final = (API_KEY_HELPER_KEY, OTEL_HEADERS_HELPER_KEY, MODEL_KEY, STATUS_LINE_KEY)
 OWNED_PATHS: Final = (*(f"{ENV_KEY}.{key}" for key in OWNED_ENV_KEYS), *OWNED_TOP_LEVEL_KEYS)
 _CREDENTIAL_ENV_KEYS: Final = frozenset((ANTHROPIC_API_KEY_KEY, ANTHROPIC_AUTH_TOKEN_KEY))
 _CREDENTIAL_PATHS: Final = (*(f"{ENV_KEY}.{key}" for key in sorted(_CREDENTIAL_ENV_KEYS)), API_KEY_HELPER_KEY)
@@ -76,6 +113,9 @@ STARTING_MODEL_ROLE: Final = "the /model picker's default row, the model Claude 
 
 CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
 CLAUDE_CONFIG_DIR_ENV: Final = "CLAUDE_CONFIG_DIR"
+OVERLAY_FILE_NAME: Final = "litellm-subscription-overlay.json"
+LAUNCH_KEY_OVERLAY_PREFIX: Final = "litellm-launch-key-overlay-"
+_LAUNCH_SETTINGS_FILE_PATTERNS: Final = (OVERLAY_FILE_NAME, f"{LAUNCH_KEY_OVERLAY_PREFIX}*.json")
 BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
 AUTOROUTE_BACKUP_PATH: Final = Path.home() / ".litellm" / "autorouter" / "claude_settings_backup.json"
 CONFIGURE_STATE_PATH: Final = Path.home() / ".litellm" / "claude_configure_state.json"
@@ -112,6 +152,25 @@ def claude_settings_path(environ: Mapping[str, str]) -> Path:
     return Path(config_dir).expanduser() / "settings.json"
 
 
+def _unlink(path: Path) -> OSError | None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as error:
+        return error
+    return None
+
+
+def remove_launch_settings_files(config_dir: Path) -> None:
+    """Delete the `--settings` files `lite claude` launched Claude Code with, since each holds a LiteLLM key.
+    Claude Code reads that file only as it starts, so a session already running keeps working."""
+    found: Final = tuple(chain.from_iterable(config_dir.glob(pattern) for pattern in _LAUNCH_SETTINGS_FILE_PATTERNS))
+    failures: Final = tuple((path, error) for path in found if (error := _unlink(path)) is not None)
+    if len(found) > len(failures):
+        click.echo(f"Removed the settings files holding a LiteLLM key that `lite claude` left in {config_dir}.")
+    for path, error in failures:
+        click.echo(f"Could not remove {path}, which holds a LiteLLM key: {error}. Delete it yourself.", err=True)
+
+
 def _is_default_settings_file(settings_path: Path) -> bool:
     return settings_path.resolve() == CLAUDE_SETTINGS_PATH.resolve()
 
@@ -136,6 +195,16 @@ class StaticToken:
     """A long-lived virtual key, written into env.ANTHROPIC_AUTH_TOKEN."""
 
     token: str
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKeyHelper:
+    """A `lite auth print-token` command Claude Code reruns for a fresh key, written into the top-level apiKeyHelper."""
+
+    command: str
+
+
+ClaudeCredential: TypeAlias = StaticToken | ApiKeyHelper
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,6 +374,56 @@ def _land(
         raise ClaudeSettingsError(f"Could not {'remove' if staged is None else 'write'} {path}: {e}") from e
 
 
+def installed_executable(
+    name: str,
+    scripts_dir: str = sysconfig.get_path("scripts"),
+    environ: Mapping[str, str] = os.environ,
+    platform: str = sys.platform,
+) -> str | None:
+    """This interpreter's own `name` first, since a version manager's shim earlier on PATH may run a Python
+    that lacks it. Each directory is checked by full path, since `shutil.which` on Windows searches the
+    current directory before the ones it is given, and a repo could plant its own `lite.exe` there."""
+    file_name: Final = f"{name}.exe" if platform.startswith("win") else name
+    directories: Final = (scripts_dir, *environ.get("PATH", os.defpath).split(os.pathsep))
+    candidates: Final = (shutil.which(os.path.join(directory, file_name)) for directory in directories if directory)
+    return next((found for found in candidates if found is not None), None)
+
+
+_HELPER_SUBCOMMAND: Final = ("auth", "print-token")
+
+
+def _helper_args(base_url: str) -> tuple[str, ...]:
+    return ("--base-url", base_url.rstrip("/"), *_HELPER_SUBCOMMAND)
+
+
+def lite_api_key_helper(
+    base_url: str, platform: str = sys.platform, which: Callable[[str], str | None] = installed_executable
+) -> ApiKeyHelper | None:
+    """Quoted for the shell Claude Code runs it in, `sh` on POSIX and cmd.exe on Windows, with an absolute path
+    so the directory Claude Code starts in cannot pick another `lite`."""
+    lite_path: Final = which("lite")
+    if lite_path is None:
+        return None
+    windows: Final = platform.startswith("win")
+    quote: Final = quote_for_cmd if windows else shlex.quote
+    absolute_path: Final = (ntpath if windows else posixpath).abspath(lite_path)
+    return ApiKeyHelper(" ".join(quote(token) for token in (absolute_path, *_helper_args(base_url))))
+
+
+def _runs_lite_with(command: JsonValue, args: tuple[str, ...]) -> bool:
+    return isinstance(command, str) and any(
+        command.endswith(" " + " ".join(quote(token) for token in args)) for quote in (shlex.quote, quote_for_cmd)
+    )
+
+
+def is_lite_api_key_helper(command: JsonValue) -> bool:
+    return _runs_lite_with(command, _HELPER_SUBCOMMAND)
+
+
+def is_lite_api_key_helper_for(command: JsonValue, base_url: str) -> bool:
+    return _runs_lite_with(command, _helper_args(base_url))
+
+
 def statusline_command(script_path: Path, platform: str = sys.platform) -> str:
     """This interpreter, not a bare `python3`: it is the one the apiKeyHelper already depends on."""
     quote: Final = quote_for_cmd if platform.startswith("win") else shlex.quote
@@ -375,10 +494,35 @@ def with_status_line(settings: Mapping[str, JsonValue], command: str) -> Mapping
     return dict(chain(settings.items(), ((STATUS_LINE_KEY, entry),)))
 
 
+# What a session said and did. Like the two switches above, a value the user already set is kept, so an opt out
+# such as OTEL_LOG_USER_PROMPTS=0 survives configure
+TELEMETRY_CONTENT_KEYS: Final = (
+    "OTEL_LOG_USER_PROMPTS",
+    "OTEL_LOG_ASSISTANT_RESPONSES",
+    "OTEL_LOG_TOOL_DETAILS",
+    "OTEL_LOG_TOOL_CONTENT",
+)
+
+
+def _telemetry_env(base_url: str, credential: ClaudeCredential) -> tuple[tuple[str, str], ...]:
+    """Claude Code's own traces and logs, sent to the gateway that takes its model calls and under the same
+    key: Lens shows a session from these alone. A StaticToken goes in the headers variable. An ApiKeyHelper
+    key changes on renewal, so its headers come from `otelHeadersHelper`, which Claude Code reruns."""
+    return (
+        *((key, value) for key, value in TELEMETRY_ENV.items() if key not in TELEMETRY_CONTENT_KEYS),
+        (OTLP_ENDPOINT_KEY, base_url.rstrip("/")),
+        *(
+            ((OTLP_HEADERS_KEY, f"Authorization=Bearer {credential.token}"),)
+            if isinstance(credential, StaticToken)
+            else ()
+        ),
+    )
+
+
 def merge_claude_settings(
     settings: Mapping[str, JsonValue],
     base_url: str,
-    credential: StaticToken,
+    credential: ClaudeCredential,
     default_model: str | None = None,
     tier_model: str | None = None,
     *,
@@ -386,10 +530,12 @@ def merge_claude_settings(
 ) -> Mapping[str, JsonValue]:
     """Return a new settings mapping wired to route Claude Code through the proxy.
 
-    The token lands in env.ANTHROPIC_AUTH_TOKEN; the other credential slots (a stray ANTHROPIC_API_KEY,
-    an apiKeyHelper) are removed, since Claude Code given two credentials may send the wrong one.
+    A StaticToken lands in env.ANTHROPIC_AUTH_TOKEN, an ApiKeyHelper in the top-level apiKeyHelper with
+    env.ANTHROPIC_AUTH_TOKEN blank, since Claude Code reads a blank one as unset and an ANTHROPIC_AUTH_TOKEN
+    exported in the shell would otherwise win over the helper. The other credential slots are removed either
+    way, since Claude Code given two credentials may send the wrong one.
     ENABLE_TOOL_SEARCH and CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY get their defaults only when
-    missing. `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
+    missing. Claude Code's trace and log telemetry is turned on, pointed at the proxy (see _telemetry_env). `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
     `tier_model` is `lite autoroute start`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
     group. Apart from those tier keys, exactly OWNED_PATHS are touched.
     """
@@ -400,9 +546,16 @@ def merge_claude_settings(
             (
                 (ENABLE_TOOL_SEARCH_KEY, ENABLE_TOOL_SEARCH_VALUE),
                 (ENABLE_GATEWAY_MODEL_DISCOVERY_KEY, ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE),
+                *((key, TELEMETRY_ENV[key]) for key in TELEMETRY_CONTENT_KEYS),
             ),
-            ((key, value) for key, value in current_env.items() if key not in _CREDENTIAL_ENV_KEYS),
-            ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")), (ANTHROPIC_AUTH_TOKEN_KEY, credential.token)),
+            (
+                (key, value)
+                for key, value in current_env.items()
+                if key not in _CREDENTIAL_ENV_KEYS and key not in (OTLP_HEADERS_KEY, *OTLP_SIGNAL_KEYS)
+            ),
+            ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")),),
+            ((ANTHROPIC_AUTH_TOKEN_KEY, credential.token if isinstance(credential, StaticToken) else ""),),
+            _telemetry_env(base_url, credential),
             ((ANTHROPIC_MODEL_KEY, default_model),) if default_model is not None else (),
             ((key, tier_model) for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS if tier_model is not None),
         )
@@ -412,9 +565,15 @@ def merge_claude_settings(
             (
                 (key, value)
                 for key, value in (with_status_line(settings, status_line) if status_line else settings).items()
-                if key not in (API_KEY_HELPER_KEY, ENV_KEY)
+                if key not in (API_KEY_HELPER_KEY, OTEL_HEADERS_HELPER_KEY, ENV_KEY)
             ),
             ((ENV_KEY, env),),
+            (
+                (API_KEY_HELPER_KEY, credential.command),
+                (OTEL_HEADERS_HELPER_KEY, f"{credential.command} {OTEL_HEADERS_HELPER_FLAG}"),
+            )
+            if isinstance(credential, ApiKeyHelper)
+            else (),
             ((MODEL_KEY, default_model),) if default_model is not None else (),
         )
     )
@@ -520,7 +679,7 @@ def preflight_claude_settings(settings_path: Path) -> None:
 
 def configure_claude_settings(
     base_url: str,
-    credential: StaticToken,
+    credential: ClaudeCredential,
     model: ModelChoice,
     settings_path: Path,
     state_path: Path,
@@ -663,7 +822,11 @@ __all__ = (
     "ENABLE_TOOL_SEARCH_KEY",
     "ENABLE_TOOL_SEARCH_VALUE",
     "ENV_KEY",
+    "LAUNCH_KEY_OVERLAY_PREFIX",
     "MODEL_KEY",
+    "OTEL_HEADERS_HELPER_FLAG",
+    "OTEL_HEADERS_HELPER_KEY",
+    "OVERLAY_FILE_NAME",
     "OWNED_ENV_KEYS",
     "OWNED_PATHS",
     "OWNED_TOP_LEVEL_KEYS",
@@ -671,6 +834,8 @@ __all__ = (
     "STARTING_MODEL_ROLE",
     "STATUSLINE_SCRIPT_PATH",
     "STATUS_LINE_KEY",
+    "ApiKeyHelper",
+    "ClaudeCredential",
     "ClaudeSettingsError",
     "ConfigureReceipt",
     "KeepModel",
@@ -685,10 +850,15 @@ __all__ = (
     "claude_settings_path",
     "configure_claude_settings",
     "configure_state_path",
+    "installed_executable",
+    "is_lite_api_key_helper",
+    "is_lite_api_key_helper_for",
+    "lite_api_key_helper",
     "load_json_or_empty",
     "merge_claude_settings",
     "read_configure_receipt",
     "refuse_while_owned",
+    "remove_launch_settings_files",
     "settings_file_owners",
     "unconfigure_claude_settings",
     "write_claude_settings",

@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.prompts.init_prompts import PromptSpec
@@ -15,7 +16,7 @@ class PromptManagementClient(TypedDict):
     prompt_id: str | None
     prompt_template: list[AllMessageValues]
     prompt_template_model: str | None
-    prompt_template_optional_params: dict[str, Any] | None
+    prompt_template_optional_params: ReadOnly[Mapping[str, object] | None]
     completed_messages: list[AllMessageValues] | None
 
 
@@ -33,6 +34,8 @@ def resolve_prompt_manager_ignore_flags(
 
 
 class PromptManagementBase(ABC):
+    ignore_prompt_manager_optional_params: bool | None = False
+
     @property
     @abstractmethod
     def integration_name(self) -> str:
@@ -52,7 +55,7 @@ class PromptManagementBase(ABC):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -63,7 +66,7 @@ class PromptManagementBase(ABC):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -81,7 +84,7 @@ class PromptManagementBase(ABC):
     def compile_prompt(
         self,
         prompt_id: str,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         client_messages: list[AllMessageValues],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
@@ -108,7 +111,7 @@ class PromptManagementBase(ABC):
     async def async_compile_prompt(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         client_messages: list[AllMessageValues],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
@@ -142,11 +145,11 @@ class PromptManagementBase(ABC):
         self,
         prompt_template: PromptManagementClient,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         model: str,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ):
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         completed_messages: Final = prompt_template["completed_messages"] or messages
 
         prompt_template_optional_params: Final = prompt_template["prompt_template_optional_params"] or {}
@@ -167,16 +170,16 @@ class PromptManagementBase(ABC):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         if prompt_id is None:
             return model, messages, non_default_params
         if not self.should_run_prompt_management(
@@ -198,7 +201,8 @@ class PromptManagementBase(ABC):
         resolved_ignore_model, resolved_ignore_optional_params = resolve_prompt_manager_ignore_flags(
             prompt_spec=prompt_spec,
             ignore_prompt_manager_model=ignore_prompt_manager_model,
-            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params
+            or self.ignore_prompt_manager_optional_params,
         )
         return self.post_compile_prompt_processing(
             prompt_template=prompt_template,
@@ -213,9 +217,9 @@ class PromptManagementBase(ABC):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: "LiteLLMLoggingObj",
         prompt_spec: PromptSpec | None = None,
@@ -224,7 +228,7 @@ class PromptManagementBase(ABC):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         if not self.should_run_prompt_management(
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
@@ -245,7 +249,8 @@ class PromptManagementBase(ABC):
         resolved_ignore_model, resolved_ignore_optional_params = resolve_prompt_manager_ignore_flags(
             prompt_spec=prompt_spec,
             ignore_prompt_manager_model=ignore_prompt_manager_model,
-            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params
+            or self.ignore_prompt_manager_optional_params,
         )
         return self.post_compile_prompt_processing(
             prompt_template=prompt_template,

@@ -1,11 +1,14 @@
 import base64
+import fnmatch
+import functools
 import itertools
 import logging
 import mimetypes
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from enum import IntEnum
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -17,17 +20,32 @@ from typing import (
     get_args,
     runtime_checkable,
 )
+from urllib.parse import unquote, urlparse
 
 from pydantic import TypeAdapter
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
+from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    iter_items,
+    require_attributes,
+    subscript,
+)
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
+from litellm.llms.gemini.files.utils import gemini_file_id
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_V1_URI_PREFIX
 from litellm.proxy._types import ProxyException
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
 )
+from litellm.router_api import RoutingContext
 from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
@@ -39,6 +57,7 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
+    from litellm.router_api import RouterRegistry
     from litellm.types.utils import LiteLLMBatch
 
 
@@ -103,6 +122,13 @@ class ManagedResourceAccessChecker(Protocol):
     ) -> bool: ...
 
 
+@dataclass(frozen=True, slots=True)
+class TeamProviderDeployment:
+    deployment_id: str
+    public_model_name: str
+    credentials: Mapping[str, object]
+
+
 @runtime_checkable
 class ManagedFileIdResolver(Protocol):
     async def get_unified_file_ids_for_provider_file_ids(
@@ -135,6 +161,86 @@ class ManagedBatchOutputFileWriter(Protocol):
     ) -> None:
         """Register file metadata, optionally fetching provider details."""
         ...
+
+
+@runtime_checkable
+class ManagedFileModelMappingReader(Protocol):
+    async def get_model_file_id_mapping(
+        self,
+        file_ids: Sequence[str],
+        litellm_parent_otel_span: "Span | None",
+    ) -> Mapping[str, Mapping[str, str]]: ...
+
+
+@runtime_checkable
+class ManagedProviderFileRegistrar(Protocol):
+    async def register_provider_file(
+        self,
+        *,
+        provider_file_id: str,
+        content_type: str,
+        deployment: TeamProviderDeployment,
+        owner: "UserAPIKeyAuth",
+        llm_router: "Router | None",
+    ) -> str | None: ...
+
+
+async def managed_file_copy_on_deployment(
+    file_id: str,
+    deployment: TeamProviderDeployment | None,
+    managed_files_obj: object | None,
+    litellm_parent_otel_span: "Span | None",
+) -> str | None:
+    if deployment is None or not isinstance(managed_files_obj, ManagedFileModelMappingReader):
+        return None
+    mappings: Final = await managed_files_obj.get_model_file_id_mapping((file_id,), litellm_parent_otel_span)
+    model_mappings: Final = mappings.get(file_id)
+    return None if model_mappings is None else model_mappings.get(deployment.deployment_id)
+
+
+def provider_file_id_from_managed_id(managed_file_id: str) -> str:
+    decoded_id: Final = is_base64_encoded_unified_id(managed_file_id)
+    if not decoded_id:
+        return managed_file_id
+
+    match: Final = re.search(r"(?:^|;)llm_output_file_id,([^;]+)", decoded_id)
+    return match.group(1).strip() if match else managed_file_id
+
+
+async def _unified_file_ids_or_empty_on_db_failure(
+    managed_files_obj: ManagedFileIdResolver,
+    provider_file_ids: Sequence[str],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> Mapping[str, str]:
+    try:
+        return await managed_files_obj.get_unified_file_ids_for_provider_file_ids(
+            provider_file_ids=provider_file_ids,
+            user_api_key_dict=user_api_key_dict,
+        )
+    except Exception as e:
+        if not PrismaDBExceptionHandler.is_database_infrastructure_error(e):
+            raise
+        verbose_proxy_logger.warning("Managed file id lookup failed, keeping provider file ids: %s", e)
+        return MappingProxyType({})
+
+
+async def managed_file_ids_for_provider_file_ids(
+    provider_file_ids: Sequence[str],
+    managed_files_obj: object | None,
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> Mapping[str, str]:
+    if not provider_file_ids or not isinstance(managed_files_obj, ManagedFileIdResolver):
+        return MappingProxyType({})
+    id_map: Final = await _unified_file_ids_or_empty_on_db_failure(
+        managed_files_obj, tuple(dict.fromkeys(provider_file_ids)), user_api_key_dict
+    )
+    return MappingProxyType(
+        {
+            provider_file_id: managed_file_id
+            for provider_file_id, managed_file_id in id_map.items()
+            if provider_file_id_from_managed_id(managed_file_id) == provider_file_id
+        }
+    )
 
 
 def is_base64_encoded_unified_file_id(b64_uid: object) -> str | Literal[False]:
@@ -230,7 +336,13 @@ def is_litellm_executed_batch(decoded_unified_batch_id: str) -> bool:
     return bool(marker) and batch_id.startswith(LITELLM_EXECUTED_BATCH_ID_PREFIX)
 
 
-def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file", "batch"] = "file") -> str:
+class _FileIdLike(Protocol):
+    def startswith(self, prefix: str, /) -> object: ...
+
+
+def encode_file_id_with_model(
+    file_id: str | _FileIdLike, model: str, id_type: Literal["file", "batch"] = "file"
+) -> str:
     """
     Encode a file/batch ID with model routing information.
 
@@ -284,7 +396,10 @@ def encode_batch_response_ids(response, model: str) -> None:
             setattr(
                 response,
                 attr,
-                encode_file_id_with_model(file_id=getattr(response, attr), model=model),
+                encode_file_id_with_model(
+                    file_id=require_attributes(attribute_or_none(response, attr), _FileIdLike, "startswith"),
+                    model=model,
+                ),
             )
 
 
@@ -347,6 +462,57 @@ def get_original_file_id(encoded_id: str) -> str:
         return encoded_id
 
 
+def provider_upload_model_id(custom_llm_provider: str) -> str:
+    return f"_provider_upload_{custom_llm_provider}"
+
+
+_GEMINI_FILES_HOST: Final = "generativelanguage.googleapis.com"
+
+
+def canonical_provider_file_id(file_id: str) -> str:
+    """The one spelling of a provider file id that ownership rows store and look up, so ``files/abc``,
+    ``files%2Fabc``, ``abc/`` and the Gemini file URL all resolve to the bare ``abc``. Every other URL or URI
+    (``s3://``, ``gs://``, a storage blob URL) is returned unchanged, so an upload whose name happens to contain
+    ``files/<id>`` never indexes someone else's ``<id>``."""
+    decoded: Final = unquote(file_id).strip()
+    is_url: Final = "://" in decoded
+    if is_url and urlparse(decoded).hostname != _GEMINI_FILES_HOST:
+        return file_id
+    path: Final = urlparse(decoded).path if is_url else decoded
+    files_index: Final = path.find("files/")
+    bare: Final = (path[files_index:] if files_index != -1 else path).strip("/").removeprefix("files/").strip("/")
+    return bare or decoded
+
+
+_GEMINI_FILES_URL: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+
+
+def _gemini_files_tail(file_id: str) -> str:
+    return gemini_file_id(file_id) if file_id.startswith(("http://", "https://")) or "files/" in file_id else ""
+
+
+def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
+    for bare_id in bare_ids:
+        yield bare_id
+        yield f"files/{bare_id}"
+        yield f"{_GEMINI_FILES_URL}{bare_id}"
+        yield f"{GEMINI_FILES_API_V1_URI_PREFIX}{bare_id}"
+
+
+def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
+    """Every spelling an ownership row may hold for ``file_id``: as sent, unwrapped from a model-encoded id and
+    canonicalized, reduced the way Gemini reduces it, plus the ``files/`` and Gemini URL forms that upload rows
+    stored before ids were canonicalized."""
+    original: Final = get_original_file_id(file_id)
+    reductions: Final = (
+        canonical_provider_file_id(original),
+        _gemini_files_tail(unquote(original)),
+        _gemini_files_tail(original),
+    )
+    bare_ids: Final = tuple(dict.fromkeys(bare for bare in reductions if bare))
+    return tuple(dict.fromkeys((file_id, *_iter_stored_forms(bare_ids))))
+
+
 def is_model_embedded_id(file_id: str) -> bool:
     """
     Check if a file/batch ID has model routing information embedded.
@@ -361,7 +527,7 @@ def is_model_embedded_id(file_id: str) -> bool:
 
 def extract_model_from_sources(
     file_id: str,
-    request,  # FastAPI Request object
+    request: "Request",  # FastAPI Request object
     data: dict | None = None,
 ) -> tuple[str | None, str | None]:
     """
@@ -394,7 +560,7 @@ def extract_model_from_sources(
 
 
 def get_credentials_for_model(
-    llm_router,  # Router instance
+    llm_router: Optional["Router"],  # Router instance
     model_id: str,
     operation_context: str = "file operation",
 ):
@@ -463,6 +629,178 @@ async def authorize_model_for_key(
     )
 
 
+async def team_deployment_the_caller_may_use(
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+) -> TeamProviderDeployment | None:
+    if llm_router is None:
+        return None
+    return await _first_team_deployment_the_caller_may_use(
+        _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider),
+        custom_llm_provider,
+        llm_router,
+        user_api_key_dict,
+    )
+
+
+async def model_less_team_deployment(
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+) -> TeamProviderDeployment | None:
+    """
+    The team's own deployment for a provider-scoped call that names no model.
+
+    A key without its own model allowlist gets the team's first deployment for
+    the provider, and a restricted key the first one whose model it reaches the
+    deployment by passes the key, team, org and project checks a chat request
+    would get.
+    """
+    if llm_router is None:
+        return None
+    return await _model_less_pick(
+        _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider),
+        custom_llm_provider,
+        llm_router,
+        user_api_key_dict,
+    )
+
+
+async def model_less_provider_credentials(
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+) -> Mapping[str, object] | None:
+    """
+    Upstream credentials for a provider-scoped call that names no model
+    (e.g. GET /v1/files).
+
+    The team's own deployments for the provider win, picked the way
+    ``model_less_team_deployment`` picks them, so a restricted key none of them
+    passes gets None rather than another deployment's key. Without a team
+    deployment for the provider, any deployment the caller is granted for it
+    answers. None means the caller falls back to environment credentials.
+    """
+    if llm_router is None:
+        return None
+    team_deployments: Final = _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
+    if not team_deployments:
+        return _accessible_provider_credentials(llm_router, user_api_key_dict, custom_llm_provider)
+    team_deployment: Final = await _model_less_pick(
+        team_deployments, custom_llm_provider, llm_router, user_api_key_dict
+    )
+    return None if team_deployment is None else team_deployment.credentials
+
+
+async def team_deployment_as_the_caller_reaches_it(
+    deployment: TeamProviderDeployment | None,
+    custom_llm_provider: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> TeamProviderDeployment | None:
+    if deployment is None:
+        return None
+    model: Final = await model_the_caller_may_use_team_deployment_by(
+        deployment.public_model_name, custom_llm_provider, llm_router, user_api_key_dict
+    )
+    return None if model is None else replace(deployment, public_model_name=model)
+
+
+async def caller_may_use_team_model(
+    public_model_name: str,
+    custom_llm_provider: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> bool:
+    return (
+        await model_the_caller_may_use_team_deployment_by(
+            public_model_name, custom_llm_provider, llm_router, user_api_key_dict
+        )
+        is not None
+    )
+
+
+async def model_the_caller_may_use_team_deployment_by(
+    public_model_name: str,
+    custom_llm_provider: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> str | None:
+    key_model_allowlist: Final = () if llm_router is None else _key_model_allowlist(llm_router, user_api_key_dict)
+    models: Final = (
+        itertools.chain(
+            _models_the_key_reaches_deployment_by(
+                public_model_name,
+                key_model_allowlist,
+                (*(user_api_key_dict.team_models or ()), *await _project_models(user_api_key_dict)),
+                custom_llm_provider,
+            ),
+            () if _key_reaches(public_model_name, key_model_allowlist) else (public_model_name,),
+        )
+        if key_model_allowlist
+        else (public_model_name,)
+    )
+    for model in models:
+        if await caller_may_use_model(model, llm_router, user_api_key_dict):
+            return model
+    return None
+
+
+async def _project_models(user_api_key_dict: "UserAPIKeyAuth") -> tuple[str, ...]:
+    from litellm.proxy.auth.auth_checks import get_project_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    if user_api_key_dict.project_id is None:
+        return ()
+    project: Final = await get_project_object(
+        project_id=user_api_key_dict.project_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    return () if project is None else tuple(project.models)
+
+
+async def caller_may_use_model(
+    model: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> bool:
+    try:
+        await authorize_model_for_key(model, llm_router, user_api_key_dict)
+    except ProxyException:
+        return False
+    return True
+
+
+async def _model_less_pick(
+    team_deployments: Sequence[TeamProviderDeployment],
+    custom_llm_provider: str,
+    llm_router: "Router",
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> TeamProviderDeployment | None:
+    if not _key_model_allowlist(llm_router, user_api_key_dict):
+        return next(iter(team_deployments), None)
+    return await _first_team_deployment_the_caller_may_use(
+        team_deployments, custom_llm_provider, llm_router, user_api_key_dict
+    )
+
+
+async def _first_team_deployment_the_caller_may_use(
+    team_deployments: Sequence[TeamProviderDeployment],
+    custom_llm_provider: str,
+    llm_router: "Router",
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> TeamProviderDeployment | None:
+    for deployment in team_deployments:
+        if await caller_may_use_team_model(
+            deployment.public_model_name, custom_llm_provider, llm_router, user_api_key_dict
+        ):
+            return deployment
+    return None
+
+
 async def get_authorized_credentials_for_model(
     llm_router: Optional["Router"],
     model_id: str,
@@ -478,28 +816,160 @@ async def get_authorized_credentials_for_model(
     )
 
 
-def deployment_drop_params(
+def batch_row_model_for_deployment(deployment_model: str, custom_llm_provider: str) -> str:
+    return get_llm_provider(model=deployment_model, custom_llm_provider=custom_llm_provider)[0]
+
+
+def _deployment_drop_params(llm_router: "Router", model_id: str) -> bool | str | None:
+    deployment: Final = llm_router.registry().credentials(model_id, form="deployment")
+    return deployment.litellm_params.drop_params if deployment is not None else None
+
+
+def _as_drop_params(drop_params: object) -> Mapping[str, bool | str]:
+    return MappingProxyType({"drop_params": drop_params} if isinstance(drop_params, (bool, str)) else {})
+
+
+def router_default_drop_params(
+    llm_router: Optional["Router"], request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    if llm_router is None or request.get("drop_params") is not None:
+        return MappingProxyType({})
+    return _as_drop_params(RoutingContext(llm_router).default_litellm_params().get("drop_params"))
+
+
+def configured_drop_params(
     llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
 ) -> Mapping[str, bool | str]:
-    deployment: Final = (
-        llm_router.registry().credentials(model_id, form="deployment")
-        if llm_router is not None and "drop_params" not in request
-        else None
+    router_default: Final = router_default_drop_params(llm_router, request)
+    if llm_router is None or request.get("drop_params") is not None or router_default:
+        return router_default
+    return _as_drop_params(_deployment_drop_params(llm_router, model_id))
+
+
+def _key_model_allowlist(llm_router: "Router", user_api_key_dict: "UserAPIKeyAuth") -> tuple[str, ...]:
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    raw_key_models: Final = user_api_key_dict.models or []
+    sentinel_values: Final = {
+        SpecialModelNames.all_proxy_models.value,
+        SpecialModelNames.all_team_models.value,
+    }
+    if not raw_key_models or set(raw_key_models) & sentinel_values:
+        return ()
+    registry: Final = llm_router.registry()
+    return tuple(
+        dict.fromkeys(
+            get_key_models(
+                user_api_key_dict=user_api_key_dict,
+                proxy_model_list=registry.names(team_id=user_api_key_dict.team_id),
+                model_access_groups=registry.access_groups(),
+            )
+        )
     )
-    drop_params: Final = deployment.litellm_params.drop_params if deployment is not None else None
-    return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
 
 
-def _key_allowlist_covers(public_model_name: str, key_model_allowlist: Sequence[str]) -> bool:
+def _key_reaches(model: str, key_model_allowlist: Sequence[str]) -> bool:
     from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
 
-    if public_model_name in key_model_allowlist:
-        return True
-    if model_matches_any_wildcard_pattern_in_list(model=public_model_name, allowed_model_list=key_model_allowlist):
-        return True
-    return any(
-        model_matches_any_wildcard_pattern_in_list(model=key_model, allowed_model_list=(public_model_name,))
+    return model in key_model_allowlist or model_matches_any_wildcard_pattern_in_list(
+        model=model, allowed_model_list=key_model_allowlist
+    )
+
+
+def _models_the_key_names_for(public_model_name: str, key_model_allowlist: Sequence[str]) -> tuple[str, ...]:
+    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
+
+    key_models_under_the_deployment: Final = tuple(
+        key_model
         for key_model in key_model_allowlist
+        if "*" not in key_model
+        and key_model != public_model_name
+        and model_matches_any_wildcard_pattern_in_list(model=key_model, allowed_model_list=(public_model_name,))
+    )
+    if _key_reaches(public_model_name, key_model_allowlist):
+        return (public_model_name, *key_models_under_the_deployment)
+    return key_models_under_the_deployment
+
+
+def _models_the_key_reaches_deployment_by(
+    public_model_name: str,
+    key_model_allowlist: Sequence[str],
+    allowed_models: Sequence[str],
+    custom_llm_provider: str,
+) -> Iterator[str]:
+    named: Final = _models_the_key_names_for(public_model_name, key_model_allowlist)
+    yield from named
+    if "*" not in public_model_name:
+        return
+    yield from (
+        model
+        for model in _models_only_wildcards_reach(
+            public_model_name, key_model_allowlist, allowed_models, custom_llm_provider
+        )
+        if model not in named
+    )
+
+
+def _models_only_wildcards_reach(
+    public_model_name: str,
+    key_model_allowlist: Sequence[str],
+    allowed_models: Sequence[str],
+    custom_llm_provider: str,
+) -> tuple[str, ...]:
+    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
+
+    key_patterns: Final = tuple(model for model in key_model_allowlist if "*" in model)
+    allowed_patterns: Final = tuple(model for model in allowed_models if "*" in model)
+    allowed_models_under_the_deployment: Final = (
+        model
+        for model in allowed_models
+        if "*" not in model
+        and model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=key_patterns)
+        and model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=(public_model_name,))
+    )
+    known_models_both_wildcards_reach: Final = itertools.chain.from_iterable(
+        _models_both_wildcards_reach(key_pattern, public_model_name, allowed_patterns, custom_llm_provider)
+        for key_pattern in key_patterns
+    )
+    return tuple(dict.fromkeys(itertools.chain(allowed_models_under_the_deployment, known_models_both_wildcards_reach)))
+
+
+def _spelled_like(model: str, pattern: str, custom_llm_provider: str) -> bool:
+    return fnmatch.fnmatchcase(model, pattern) or fnmatch.fnmatchcase(f"{custom_llm_provider}/{model}", pattern)
+
+
+def _models_both_wildcards_reach(
+    key_pattern: str, public_model_name: str, allowed_patterns: Sequence[str], custom_llm_provider: str
+) -> Iterator[str]:
+    import litellm
+    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
+
+    def _reached_by_both(model: str) -> bool:
+        return model_matches_any_wildcard_pattern_in_list(
+            model=model, allowed_model_list=(key_pattern,)
+        ) and model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=(public_model_name,))
+
+    known_models_spelled_like_both: Final = sorted(
+        model
+        for model in litellm.models_by_provider.get(custom_llm_provider, ())
+        if _spelled_like(model, key_pattern, custom_llm_provider)
+        and _spelled_like(model, public_model_name, custom_llm_provider)
+    )
+    first_known_model_per_allowed_pattern: Final = (
+        next(
+            (
+                model
+                for model in known_models_spelled_like_both
+                if _spelled_like(model, allowed_pattern, custom_llm_provider) and _reached_by_both(model)
+            ),
+            None,
+        )
+        for allowed_pattern in (*allowed_patterns, "*")
+    )
+    return itertools.chain(
+        (model for model in first_known_model_per_allowed_pattern if model is not None),
+        (model for model in (key_pattern.replace("*", ""),) if _reached_by_both(model)),
     )
 
 
@@ -507,12 +977,16 @@ _CONFIG_FILE_RANK: Final = datetime.min.replace(tzinfo=timezone.utc)
 _UNKNOWN_CREATION_TIME: Final = datetime.max.replace(tzinfo=timezone.utc)
 
 
-class _RouterDeployment(TypedDict):
-    model_name: ReadOnly[NotRequired[str]]
-    model_info: ReadOnly[Mapping[str, object]]
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
-def _team_deployment_rank(model_info: Mapping[str, object], deployment_id: str) -> tuple[datetime, str]:
+class _KeyReach(IntEnum):
+    NAMED = 0
+    SHARED = 1
+
+
+def _team_deployment_rank(model_info: _SupportsGet, deployment_id: str) -> tuple[datetime, str]:
     if model_info.get("db_model") is not True:
         return _CONFIG_FILE_RANK, ""
     created_at: Final = model_info.get("created_at")
@@ -521,142 +995,122 @@ def _team_deployment_rank(model_info: Mapping[str, object], deployment_id: str) 
     return (created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)), deployment_id
 
 
-def _by_team_deployment_rank(order: tuple[tuple[datetime, str], str]) -> tuple[datetime, str]:
-    return order[0]
+@dataclass(frozen=True, slots=True)
+class _TeamDeploymentOrder:
+    key_reach: _KeyReach
+    rank: tuple[datetime, str]
+    deployment_id: str
+    public_model_name: str
 
 
-def get_team_provider_credentials(
-    llm_router: Optional["Router"],
+def _by_team_deployment_rank(order: _TeamDeploymentOrder) -> tuple[_KeyReach, datetime, str]:
+    return order.key_reach, *order.rank
+
+
+def _provider_credentials(
+    registry: "RouterRegistry", model_id: str, team_id: str | None, custom_llm_provider: str
+) -> Mapping[str, object] | None:
+    credentials: Final = as_str_mapping(registry.credentials(model_id, form="with_provider", team_id=team_id))
+    if credentials is None or credentials.get("custom_llm_provider") != custom_llm_provider:
+        return None
+    return MappingProxyType({key: value for key, value in credentials.items() if key != "model"})
+
+
+def _team_provider_deployments(
+    llm_router: "Router",
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
-    *,
-    include_accessible_deployments: bool = True,
-) -> dict | None:
-    """
-    Resolve upstream credentials for a provider-scoped file operation
-    (e.g. GET /v1/files), which doesn't pin a model.
+) -> tuple[TeamProviderDeployment, ...]:
+    team_id: Final = user_api_key_dict.team_id
+    if team_id is None:
+        return ()
+    registry: Final = llm_router.registry()
+    key_model_allowlist: Final = _key_model_allowlist(llm_router, user_api_key_dict)
+    team_models: Final = user_api_key_dict.team_models or ()
 
-    Priority:
-    1. The team's own (BYOK) deployment for this provider — a deployment whose
-       ``model_info.team_id`` matches the caller's team. This keeps team-scoped
-       listings on the team's own provider account/key instead of a shared
-       global one.
-    2. Fallback: any deployment the caller is granted access to for this
-       provider, matching wildcard grants against deployed model names without
-       listing any provider's catalog, and expanding the all-proxy-models sentinel.
-       Skipped when ``include_accessible_deployments`` is False.
+    @functools.cache
+    def _key_reach(public_model_name: str) -> _KeyReach | None:
+        if not key_model_allowlist or _models_the_key_names_for(public_model_name, key_model_allowlist):
+            return _KeyReach.NAMED
+        shared_model: Final = next(
+            _models_the_key_reaches_deployment_by(
+                public_model_name, key_model_allowlist, team_models, custom_llm_provider
+            ),
+            None,
+        )
+        return None if shared_model is None else _KeyReach.SHARED
 
-    Credential lookup is scoped to both the team's allowlist and the key's own
-    model allowlist (``user_api_key_dict.models``), so neither a team nor a
-    restricted key within a team can resolve a provider key for a deployment
-    it isn't authorized to use. A key restricted to an explicit model list
-    only narrows the team scope, matching a wildcard on either side the way
-    request authorization does (a key allowed ``gpt-4o`` may use the team's
-    ``openai/*`` deployment); sentinel-bearing keys (all-proxy-models /
-    all-team-models) defer to the team scope instead of widening past it.
-    Returns None when the router is unavailable or no authorized deployment
-    matches, so the caller can fall back to default credential resolution.
-    """
-    if llm_router is None:
-        return None
+    def _usable_team_deployment_order(deployment: object) -> _TeamDeploymentOrder | None:
+        model_info: Final = require_attributes(subscript(deployment, "model_info"), _SupportsGet, "get")
+        if model_info.get("team_id") != team_id:
+            return None
+        public_model_name: Final = model_info.get("team_public_model_name") or require_attributes(
+            deployment, _SupportsGet, "get"
+        ).get("model_name")
+        deployment_id: Final = model_info.get("id")
+        if not isinstance(public_model_name, str) or not isinstance(deployment_id, str):
+            return None
+        key_reach: Final = _key_reach(public_model_name)
+        if key_reach is None:
+            return None
+        return _TeamDeploymentOrder(
+            key_reach, _team_deployment_rank(model_info, deployment_id), deployment_id, public_model_name
+        )
 
+    # Deployments the key's own allowlist names come before ones it reaches only through a model
+    # both wildcards cover. Within each, config file deployments win, kept in file order by the
+    # stable sort, then DB ones oldest first, then by lowest id, so adding a deployment never moves
+    # the team off the one it already uses, and every worker picks the same one in any DB load or
+    # edit order.
+    team_deployment_orders: Final = sorted(
+        (
+            order
+            for deployment in iter_items(registry.all() or [])
+            if (order := _usable_team_deployment_order(deployment)) is not None
+        ),
+        key=_by_team_deployment_rank,
+    )
+    return tuple(
+        TeamProviderDeployment(order.deployment_id, order.public_model_name, credentials)
+        for order in team_deployment_orders
+        if (credentials := _provider_credentials(registry, order.deployment_id, team_id, custom_llm_provider))
+        is not None
+    )
+
+
+def _accessible_provider_credentials(
+    llm_router: "Router",
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+) -> Mapping[str, object] | None:
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
-    from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
+    from litellm.proxy.auth.model_checks import get_complete_model_list
 
     team_id: Final = user_api_key_dict.team_id
     team_models: Final = user_api_key_dict.team_models or []
-
     registry: Final = llm_router.registry()
     proxy_model_list: Final = registry.names(team_id=team_id)
-    model_access_groups: Final = registry.access_groups()
 
-    raw_key_models: Final = user_api_key_dict.models or []
-    sentinel_values: Final = {
-        SpecialModelNames.all_proxy_models.value,
-        SpecialModelNames.all_team_models.value,
-    }
-    key_is_restricted: Final = bool(raw_key_models) and not (set(raw_key_models) & sentinel_values)
-    key_model_allowlist: Final = (
-        tuple(
-            dict.fromkeys(
-                get_key_models(
-                    user_api_key_dict=user_api_key_dict,
-                    proxy_model_list=proxy_model_list,
-                    model_access_groups=model_access_groups,
-                )
-            )
-        )
-        if key_is_restricted
-        else ()
-    )
-
-    def _key_may_use(public_model_name: object) -> bool:
-        if not key_model_allowlist:
-            return True
-        return isinstance(public_model_name, str) and _key_allowlist_covers(public_model_name, key_model_allowlist)
-
-    def _provider_credentials(model_id: str) -> dict[str, object] | None:
-        credentials: Final = registry.credentials(model_id, form="with_provider", team_id=team_id)
-        if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
-            return {key: value for key, value in credentials.items() if key != "model"}
-        return None
-
-    def _usable_team_deployment_order(deployment: _RouterDeployment) -> tuple[tuple[datetime, str], str] | None:
-        model_info: Final[Mapping[str, object]] = deployment["model_info"]
-        if model_info.get("team_id") != team_id:
-            return None
-        if not _key_may_use(model_info.get("team_public_model_name") or deployment.get("model_name")):
-            return None
-        deployment_id: Final = model_info.get("id")
-        if not isinstance(deployment_id, str):
-            return None
-        return _team_deployment_rank(model_info, deployment_id), deployment_id
-
-    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id. Config file
-    #    deployments win, kept in file order by the stable sort, then DB ones oldest first, then
-    #    by lowest id, so adding a deployment never moves the team off the one it already uses,
-    #    and every worker picks the same one in any DB load or edit order.
-    if team_id is not None:
-        team_deployment_orders: Final = sorted(
-            (
-                order
-                for deployment in registry.all() or []
-                if (order := _usable_team_deployment_order(deployment)) is not None
-            ),
-            key=_by_team_deployment_rank,
-        )
-        team_deployment_ids: Final = tuple(deployment_id for _, deployment_id in team_deployment_orders)
-        team_credentials: Final = next(
-            (credentials for credentials in map(_provider_credentials, team_deployment_ids) if credentials is not None),
-            None,
-        )
-        if team_credentials is not None:
-            return team_credentials
-
-    if not include_accessible_deployments:
-        return None
-
-    # 2. Fall back to deployments the caller is allowed to access. The key's
-    #    effective allowlist (sentinels and access groups already expanded by
-    #    get_key_models) wins when set; otherwise the team's allowlist applies.
-    #    The all-proxy-models sentinel isn't expanded by
-    #    get_complete_model_list, so normalize it to an empty allowlist, which
-    #    defers to the team-scoped proxy model list. A team or key with a
-    #    restricted allowlist (e.g. anthropic only) therefore never resolves
-    #    another provider's key.
+    # The key's effective allowlist (sentinels and access groups already
+    # expanded by get_key_models) wins when set; otherwise the team's allowlist
+    # applies. The all-proxy-models sentinel isn't expanded by
+    # get_complete_model_list, so normalize it to an empty allowlist, which
+    # defers to the team-scoped proxy model list. A team or key with a
+    # restricted allowlist (e.g. anthropic only) therefore never resolves
+    # another provider's key.
     grants_all_models: Final = SpecialModelNames.all_proxy_models.value in team_models
     effective_team_models: Final = [] if grants_all_models else team_models
 
     granted_models: Final = get_complete_model_list(
-        key_models=list(key_model_allowlist),
+        key_models=list(_key_model_allowlist(llm_router, user_api_key_dict)),
         team_models=effective_team_models,
         proxy_model_list=proxy_model_list,
         user_model=None,
         infer_model_from_keys=False,
         return_wildcard_routes=True,
         llm_router=llm_router,
-        model_access_groups=model_access_groups,
+        model_access_groups=registry.access_groups(),
         include_model_access_groups=True,
         team_id=team_id,
         expand_wildcard_routes=False,
@@ -671,10 +1125,8 @@ def get_team_provider_credentials(
     return next(
         (
             credentials
-            for credentials in map(
-                _provider_credentials, dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
-            )
-            if credentials is not None
+            for model_id in dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
+            if (credentials := _provider_credentials(registry, model_id, team_id, custom_llm_provider)) is not None
         ),
         None,
     )
@@ -706,6 +1158,10 @@ def _request_api_key(data: Mapping[str, object]) -> str | None:
     )
 
 
+def carries_explicit_credentials(data: Mapping[str, object]) -> bool:
+    return any(_non_blank_string(data.get(key)) is not None for key in EXPLICIT_CREDENTIAL_KEYS)
+
+
 def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str]:
     api_key: Final = _request_api_key(data)
     if api_key is None:
@@ -716,54 +1172,31 @@ def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str
     return MappingProxyType({"api_key": api_key, "api_base": api_base})
 
 
-def apply_team_provider_credentials(
+async def apply_team_provider_credentials(
     data: dict,  # mutable-ok: credentials are merged into the request payload in place, same contract as prepare_data_with_credentials
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
+    *,
+    keep_request_buckets: bool = False,
 ) -> None:
     """
     Resolve credentials for a provider-only request (no model pinned) via
-    ``get_team_provider_credentials`` and merge them into ``data`` in-place.
+    ``model_less_provider_credentials`` and merge them into ``data`` in-place.
     Leaves ``data`` untouched when no authorized deployment matches, so the
     caller falls back to environment-variable credentials exactly as before.
     An ``api_key`` the request carries itself (a provider key forwarded with
     ``forward_llm_provider_auth_headers``) replaces the deployment's, and the
     request's ``api_base`` replaces the deployment's only alongside that key.
     """
-    credentials: Final = get_team_provider_credentials(
-        llm_router=llm_router,
-        user_api_key_dict=user_api_key_dict,
-        custom_llm_provider=custom_llm_provider,
+    credentials: Final = await model_less_provider_credentials(llm_router, user_api_key_dict, custom_llm_provider)
+    if credentials is None:
+        return
+    prepare_data_with_credentials(
+        data=data,
+        credentials={**credentials, **explicit_request_credentials(data)},
+        keep_request_buckets=keep_request_buckets,
     )
-    if credentials is None:
-        return
-    prepare_data_with_credentials(data=data, credentials={**credentials, **explicit_request_credentials(data)})
-
-
-def add_internal_model_credentials(
-    data: dict,
-    llm_router: "Router",
-    model_id: str | None,
-) -> None:
-    """
-    Attach the deployment's immutable server-side credential snapshot to a router-routed
-    batch call (in-place).
-
-    Cost accounting for a completed batch reads the batch's output file, and the Bedrock
-    file config resolves its bucket only from this snapshot, never from a request param,
-    because the bucket is what managed file ids are validated against. Without it that
-    read fails and the batch's cost is never recorded.
-    """
-    if model_id is None:
-        return
-    try:
-        credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
-    except Exception:  # noqa: BLE001  # the snapshot only enables cost accounting; a batch whose deployment no longer resolves must still be retrievable
-        return
-    if credentials is None:
-        return
-    data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
 
 
 def add_deployment_model_info(
@@ -787,11 +1220,16 @@ def add_deployment_model_info(
     }
 
 
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_NO_REQUEST_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,
     file_id: str | None = None,
-    include_internal_credentials: bool = False,
+    *,
+    keep_request_buckets: bool = False,
 ) -> None:
     """
     Update data dictionary with model credentials (in-place).
@@ -800,12 +1238,15 @@ def prepare_data_with_credentials(
         data: Data dictionary to update
         credentials: Credentials from router
         file_id: Optional original file_id to set (for decoded file IDs)
-        include_internal_credentials: Preserve an immutable server-side snapshot
-            for code paths that must distinguish proxy config from request params.
+        keep_request_buckets: Keep an S3 bucket the request already carries over the deployment's. Only
+            file upload and batch create set it, after checking the bucket against the caller's allowlist.
+            Reads keep the deployment's bucket so a request cannot widen which buckets a file id may point at.
     """
-    data.update(credentials)
-    if include_internal_credentials:
-        data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
+    request_fields: Final = _REQUEST_FIELDS.validate_python(data) if keep_request_buckets else _NO_REQUEST_FIELDS
+    request_buckets: Final = MappingProxyType(
+        {key: request_fields[key] for key in REQUEST_S3_BUCKET_PARAMS if key in request_fields}
+    )
+    data.update({**credentials, **request_buckets})
     data.pop("custom_llm_provider", None)
 
     if file_id is not None:
@@ -814,11 +1255,12 @@ def prepare_data_with_credentials(
 
 async def handle_model_based_routing(
     file_id: str,
-    request,  # FastAPI Request object
-    llm_router,  # Router instance
-    data: dict,
+    request: "Request",  # FastAPI Request object
+    llm_router: Optional["Router"],  # Router instance
+    data: dict[str, object],
     user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
+    resolves_managed_file_ids: bool = False,
 ) -> tuple[bool, str | None, str | None, dict | None]:
     """
     Orchestrate model-based credential routing for file operations.
@@ -827,6 +1269,11 @@ async def handle_model_based_routing(
     param or body field), so it is authorized against the caller's key, team, org and
     project grants before any deployment credentials are resolved.
 
+    A LiteLLM managed file id is not model-routed when this proxy resolves managed file ids
+    itself, since its managed files hook maps it to the provider file id of each deployment
+    it lives on. A proxy without that hook, like one with no database chained to another
+    LiteLLM proxy, still forwards the id to the named model, which may own it.
+
     Args:
         file_id: File ID (may contain embedded model info)
         request: FastAPI request object
@@ -834,6 +1281,7 @@ async def handle_model_based_routing(
         data: Request data dictionary
         user_api_key_dict: The authenticated caller
         check_file_id_encoding: Whether to check for embedded model in file_id
+        resolves_managed_file_ids: Whether this proxy's managed files hook is loaded
 
     Returns:
         Tuple of (should_use_model_routing, model_used, original_file_id, credentials)
@@ -846,6 +1294,9 @@ async def handle_model_based_routing(
         HTTPException: If router unavailable or model not found
         ProxyException: If the caller is not allowed to use the model
     """
+    if resolves_managed_file_ids and is_base64_encoded_unified_file_id(file_id):
+        return False, None, None, None
+
     model_from_id, model_from_param = extract_model_from_sources(
         file_id=file_id,
         request=request,
@@ -1092,7 +1543,7 @@ class FileCreationParams:
 
 async def extract_file_creation_params(
     request: "Request",
-    request_body: dict | None = None,
+    request_body: dict[str, object] | None = None,
     target_model_names_form: str | None = None,
     target_storage_form: str | None = None,
 ) -> FileCreationParams:
@@ -1185,7 +1636,7 @@ async def _extract_target_model_names_from_form(request: "Request") -> list[str]
         if _is_target_model_names_key(key) and isinstance(value, str):
             names.extend(_extract_target_model_names_simple(value))
 
-    seen: Final = set()
+    seen: Final[set[str]] = set()
     result: Final[list[str]] = []
     for name in names:
         if name and name not in seen:
@@ -1273,6 +1724,17 @@ async def validate_managed_id_requirement(
             ),
         )
 
+    await authorize_managed_resource_id(resource_id, resource_kind, user_api_key_dict, managed_files_obj)
+
+
+async def authorize_managed_resource_id(
+    resource_id: str,
+    resource_kind: Literal["file", "batch", "fine-tuning job"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    managed_files_obj: object | None,
+) -> None:
+    from fastapi import HTTPException
+
     if not isinstance(managed_files_obj, ManagedResourceAccessChecker):
         raise HTTPException(
             status_code=500,
@@ -1311,7 +1773,7 @@ def _extract_model_param(request: "Request", request_body: dict) -> str | None:
 
 
 def _batch_response_model_id_candidates(
-    response,
+    response: object,
     unified_batch_id: str | Literal[False] | None,
 ) -> tuple[str, ...]:
     response_id: Final = getattr(response, "id", None)
@@ -1372,7 +1834,7 @@ def _batch_owner_auth_from_db_object(db_batch_object: object) -> "UserAPIKeyAuth
     return UserAPIKeyAuth(user_id=created_by, team_id=raw_team_id if isinstance(raw_team_id, str) else None)
 
 
-async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
+async def resolve_input_file_id_to_unified(response: "LiteLLMBatch", prisma_client: "PrismaClient | None") -> None:
     """
     If the batch response contains a raw provider input_file_id (not already a
     unified ID), look up the corresponding unified file ID from the managed file
@@ -1394,7 +1856,7 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
             pass
 
 
-async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
+async def resolve_output_file_ids_to_unified(response: "LiteLLMBatch", prisma_client: "PrismaClient | None") -> None:
     """
     If the batch response contains raw provider output_file_id or error_file_id
     (not already unified IDs), look up the corresponding unified file IDs from
@@ -1403,7 +1865,7 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
     if not prisma_client:
         return
     for attr in ("output_file_id", "error_file_id"):
-        raw_id = getattr(response, attr, None)
+        raw_id = attribute_or_none(response, attr)
         if not raw_id or is_base64_encoded_unified_file_id(raw_id):
             continue
         try:
@@ -1506,9 +1968,9 @@ async def ensure_batch_response_managed_file_ids(
 async def get_batch_from_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
-    managed_files_obj,
-    prisma_client,
-    verbose_proxy_logger,
+    managed_files_obj: object | None,
+    prisma_client: "PrismaClient | None",
+    verbose_proxy_logger: logging.Logger,
 ):
     """
     Try to retrieve batch object from ManagedObjectTable for consistent state.
@@ -1575,6 +2037,10 @@ async def get_batch_from_database(
         return None, None
 
 
+class _BatchCostJobScheduler(Protocol):
+    def get_job(self, job_id: str, /) -> object: ...
+
+
 def batch_cost_poller_is_active() -> bool:
     """
     Whether the CheckBatchCost poller will account for a managed batch's cost itself.
@@ -1595,16 +2061,23 @@ def batch_cost_poller_is_active() -> bool:
     try:
         import litellm.proxy.proxy_server as proxy_server_module
 
-        scheduler = getattr(proxy_server_module, "scheduler", None)
+        scheduler: Final[_BatchCostJobScheduler | None] = getattr(proxy_server_module, "scheduler", None)
         if scheduler is None:
             return False
-        job = scheduler.get_job("check_batch_cost_job")
+        job: Final = scheduler.get_job("check_batch_cost_job")
         if job is None:
             return False
         poller = getattr(getattr(job, "func", None), "__self__", None)
         return getattr(poller, "batch_processed_support_confirmed", False) is True
     except Exception:  # noqa: BLE001  # scheduler backends raise varied types from get_job; an unreadable scheduler means the poller cannot be relied on
         return False
+
+
+def created_batch_endpoint(provider_batch: "LiteLLMBatch", stored_batch: "LiteLLMBatch | None") -> str:
+    if stored_batch is None or not stored_batch.endpoint:
+        return provider_batch.endpoint
+    provider_named_the_endpoint: Final = provider_batch.endpoint not in ("", "/v1/chat/completions")
+    return provider_batch.endpoint if provider_named_the_endpoint else stored_batch.endpoint
 
 
 def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
@@ -1626,13 +2099,13 @@ def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
 async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
-    response,
-    managed_files_obj,
-    prisma_client,
-    verbose_proxy_logger,
+    response: "LiteLLMBatch",
+    managed_files_obj: object | None,
+    prisma_client: "PrismaClient | None",
+    verbose_proxy_logger: logging.Logger,
     db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     operation: str = "update",
-    user_api_key_dict=None,
+    user_api_key_dict: "UserAPIKeyAuth | None" = None,
     poller_owns_accounting: bool | None = None,
 ):
     """

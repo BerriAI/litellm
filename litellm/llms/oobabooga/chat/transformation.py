@@ -1,4 +1,5 @@
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -34,10 +35,10 @@ class OobaboogaConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -71,24 +72,31 @@ class OobaboogaConfig(OpenAIGPTConfig):
 
         model_response.created = int(time.time())
         model_response.model = model
+        validated_counts: Final = Usage.model_validate(
+            {
+                "prompt_tokens": completion_response["usage"]["prompt_tokens"] or 0,
+                "completion_tokens": completion_response["usage"]["completion_tokens"] or 0,
+                "total_tokens": completion_response["usage"]["total_tokens"] or 0,
+            }
+        )
         usage: Final = Usage(
-            prompt_tokens=completion_response["usage"]["prompt_tokens"],
-            completion_tokens=completion_response["usage"]["completion_tokens"],
-            total_tokens=completion_response["usage"]["total_tokens"],
+            prompt_tokens=validated_counts.prompt_tokens,
+            completion_tokens=validated_counts.completion_tokens,
+            total_tokens=validated_counts.total_tokens,
         )
         setattr(model_response, "usage", usage)
         return model_response
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         headers = {
             "accept": "application/json",
             "content-type": "application/json",

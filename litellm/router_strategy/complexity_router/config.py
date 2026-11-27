@@ -8,7 +8,7 @@ All values are configurable via proxy config.yaml.
 import math
 import re
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
@@ -274,11 +274,20 @@ class ComplexityTierModel(LiteLLMBaseModel):
         return dict(value)
 
 
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _as_list_or_tuple(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, (list, tuple)) else None
+
+
 def _normalize_tier_entries(
     raw_value: object,
-    tier: str,
+    tier: object,
 ) -> tuple[str | list[str], tuple[ComplexityTierModel, ...]]:
-    raw_entries: Final = raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,)
+    sequence: Final = _as_list_or_tuple(raw_value)
+    raw_entries: Final = sequence if sequence is not None else (raw_value,)
     entries: Final = tuple(
         ComplexityTierModel(model_name=entry) if isinstance(entry, str) else ComplexityTierModel.model_validate(entry)
         for entry in raw_entries
@@ -286,7 +295,7 @@ def _normalize_tier_entries(
     model_names: Final = tuple(entry.model_name for entry in entries)
     if len(model_names) != len(frozenset(model_names)):
         raise ValueError(f"tier {tier} contains duplicate model_name values; each pool entry needs distinct parameters")
-    normalized: Final = entries[0].model_name if not isinstance(raw_value, (list, tuple)) else list(model_names)
+    normalized: Final = entries[0].model_name if sequence is None else list(model_names)
     return normalized, entries
 
 
@@ -414,9 +423,14 @@ PLAN_MODE_SYSTEM_SENTINELS: Final[tuple[str, ...]] = ('You are currently running
 # never a paraphrase: a sentinel that matches nothing costs a substring scan per request and reads
 # as coverage the router does not have. These are client-owned strings that drift with client
 # releases, so operators extend coverage via housekeeping_patterns rather than editing these.
+# The agent progress summary and the next-prompt suggestion were captured from Claude Code 2.1.316
+# on 2026-11-09 (#50444). Both ride the conversation they describe, so only the sentinel tells them
+# apart when the client does not send the x-claude-code-request-class hint.
 HOUSEKEEPING_ASK_SENTINELS: Final[tuple[str, ...]] = (
     "Write the title in the predominant language of the session",
     "You are coming up with a succinct title for a coding session",
+    "Describe your most recent action in 3-5 words using present tense",
+    "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]",
 )
 PLAN_MODE_TOOL_NAME: Final[str] = "exit_plan_mode"
 
@@ -543,6 +557,15 @@ class ClassifierLLMConfig(LiteLLMBaseModel):
     timeout_ms: int = Field(
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
+    )
+    max_output_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional output token limit for LLM classifier calls. Leave unset to keep the classifier "
+            "deployment or provider default. When set, overrides the deployment limit. "
+            "Leave room for reasoning tokens when reasoning_effort is set."
+        ),
     )
     circuit_breaker_enabled: bool = Field(
         default=True,
@@ -1260,6 +1283,16 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "may not name the highest one, since that would make the LLM classifier unreachable."
         ),
     )
+    heuristic_first_max_context_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        strict=True,
+        description=(
+            "Optional conversation-size limit for heuristic_first. Above this estimate, call the LLM classifier "
+            "even for a short current ask. Counts text and tool-result bodies at roughly four characters per token. "
+            "Unset preserves the local shortcut. Existing session and user-turn pins still take precedence."
+        ),
+    )
     hybrid_boundary_margin: float | None = Field(
         default=None,
         ge=0,
@@ -1496,8 +1529,9 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
         default=None,
         description=(
             "Additional case-sensitive literal sentinels that mark a request as client "
-            "housekeeping, on top of the built-in conversation-title ones. For clients whose "
-            "wording the built-ins don't cover, or after a client release changes its strings."
+            "housekeeping, on top of the built-in conversation-title, agent-summary and "
+            "prompt-suggestion ones. For clients whose wording the built-ins don't cover, or "
+            "after a client release changes its strings."
         ),
     )
 
@@ -1651,6 +1685,29 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "idle time for the session's routing decisions rather than total session length"
         ),
     )
+    conversation_header: str | None = Field(
+        default=None,
+        description=(
+            "Request header whose value names the application conversation for session_affinity, "
+            "deployment_affinity and user_turn pin reuse, instead of the request's session_id. The name "
+            "matches case-insensitively and the value is used as-is, so short and case-sensitive ids work. "
+            "A request without a usable value (header missing, empty, or a redacted credential header, and "
+            "any SDK call without proxy request headers) gets no conversation-based reuse from this router and "
+            "never falls back to its session_id. A separately enabled Router-level session_affinity pre-call "
+            "check keeps its own session_id behavior. Spend logs and traces keep the request's own session_id. "
+            "Unset keeps the session_id behavior"
+        ),
+    )
+
+    @field_validator("conversation_header")
+    @classmethod
+    def _normalize_conversation_header(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name: Final = value.strip().lower()
+        if not name:
+            raise ValueError("conversation_header must be a non-empty header name")
+        return name
 
     plugins: list[RoutingPlugin] | None = Field(
         default=None,
@@ -1675,14 +1732,16 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
     @field_validator("tiers", mode="before")
     @classmethod
     def _coerce_tier_values(cls, value: object) -> object:
-        if not isinstance(value, dict):
+        mapping: Final = _as_dict(value)
+        if mapping is None:
             return value
-        coerced: Final[dict[str, object]] = {}
-        for key, item in value.items():
+        coerced: Final[dict[object, object]] = {}
+        for key, item in mapping.items():
+            sequence = _as_list_or_tuple(item)
             if isinstance(item, str):
                 coerced[key] = item
-            elif isinstance(item, (list, tuple)):
-                coerced[key] = list(item)
+            elif sequence is not None:
+                coerced[key] = list(sequence)
             else:
                 coerced[key] = item
         return coerced
@@ -1690,12 +1749,13 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_tier_model_configs(cls, value: object) -> object:
-        if not isinstance(value, dict):
+        mapping: Final = _as_dict(value)
+        if mapping is None:
             return value
-        raw_tiers: Final = value.get("tiers")
-        if not isinstance(raw_tiers, dict):
+        raw_tiers: Final = _as_dict(mapping.get("tiers"))
+        if raw_tiers is None:
             return value
-        existing_configs: Final = value.get("tier_model_configs")
+        existing_configs: Final = mapping.get("tier_model_configs")
         normalized_entries: Final = MappingProxyType(
             {tier: _normalize_tier_entries(raw_value, tier) for tier, raw_value in raw_tiers.items()}
         )
@@ -1731,7 +1791,7 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             }
         )
         return {
-            **value,
+            **mapping,
             "tiers": normalized_tiers,
             "tier_model_configs": tier_model_configs,
         }
@@ -1942,6 +2002,12 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
                 f"custom_dimensions regex work estimate is {work}; the limit across the router is "
                 f"{MAX_CUSTOM_DIMENSIONS_WORK}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_heuristic_first_context_limit(self) -> "ComplexityRouterConfig":
+        if self.heuristic_first_max_context_tokens is not None and self.classifier_type != "heuristic_first":
+            raise ValueError("heuristic_first_max_context_tokens requires classifier_type 'heuristic_first'")
         return self
 
     @field_validator("heuristic_first_max_tier", mode="before")

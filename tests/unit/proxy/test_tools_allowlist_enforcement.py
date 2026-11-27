@@ -6,6 +6,7 @@ Covers:
 - extract_request_tool_names: OpenAI chat, responses, Anthropic, generate_content, MCP
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -119,6 +120,13 @@ class TestExtractRequestToolNames:
             "hidden_fn",
         ]
 
+    def test_anthropic_mcp_servers_count_under_their_name(self):
+        data: Final = {
+            "mcp_servers": [{"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}],
+            "tools": [{"type": "mcp_toolset", "mcp_server_name": "deepwiki"}, {"name": "lookup"}],
+        }
+        assert extract_request_tool_names("/v1/messages", data) == ["lookup", "deepwiki"]
+
     def test_generate_content_tools(self):
         data = {
             "tools": [
@@ -229,6 +237,23 @@ class TestCheckToolsAllowlist:
         assert "run_sql" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
+    async def test_mcp_server_outside_the_allowlist_raises_on_messages_route(self):
+        token: Final = _token(metadata={"allowed_tools": ["lookup"]})
+        body: Final = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "mcp_servers": [{"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}],
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/messages",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "deepwiki" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
     async def test_disallowed_custom_tool_raises_on_responses_route(self):
         token = _token(metadata={"allowed_tools": ["other_tool"]})
         body = {"tools": [{"type": "custom", "name": "restricted_tool"}]}
@@ -241,6 +266,42 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "restricted_tool" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("allowed_tools", "denied"),
+        [
+            pytest.param(["get_weather"], True, id="forbidden"),
+            pytest.param(["get_weather", "delete_user"], False, id="allowed"),
+        ],
+    )
+    async def test_tool_defined_in_an_additional_tools_input_item_is_checked_on_responses_route(
+        self, allowed_tools: list[str], denied: bool
+    ) -> None:
+        body = {
+            "model": "fireworks_ai/glm-5p3",
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{"type": "function", "name": "delete_user", "parameters": {"type": "object"}}],
+                },
+                {"type": "message", "role": "user", "content": "Delete user 42"},
+            ],
+        }
+        check = check_tools_allowlist(
+            request_body=body,
+            valid_token=_token(metadata={"allowed_tools": allowed_tools}),
+            team_object=None,
+            route="/v1/responses",
+        )
+        if not denied:
+            await check
+            return
+        with pytest.raises(ProxyException) as exc_info:
+            await check
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "delete_user" in str(exc_info.value.message)
 
     @pytest.mark.parametrize(
         "loaded_tool",

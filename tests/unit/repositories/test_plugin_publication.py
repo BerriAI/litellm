@@ -16,6 +16,7 @@ from litellm.models.plugin_upload import (
     PluginPublication,
     PluginPublicationBase,
     PluginPublicationError,
+    PluginReview,
     PublishedPlugin,
 )
 from litellm.repositories.plugin_publication import (
@@ -65,7 +66,7 @@ def publication_tx() -> MagicMock:
     tx: Final = MagicMock()
     tx.query_raw = AsyncMock(return_value=())
     tx.litellm_claudecodeplugintable.find_unique = AsyncMock(return_value=LiteLLM_ClaudeCodePluginTable(
-        id="skill-id", name="skill", version="1.0.0", enabled=False,
+        id="skill-id", name="skill", version="1.0.0", enabled=False, anonymous_download_count=0,
         updated_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
         manifest_json=json.dumps({"source": {"source": "archive", "sha256": hashlib.sha256(content).hexdigest()}}),
     ))
@@ -144,6 +145,44 @@ async def test_first_legacy_update_preserves_its_original_snapshot(
     }
     assert replacement.kwargs["data"] == {
         "plugin_id": current.id, "version": result.version, "description": "replacement",
-        "manifest_json": json.dumps({"source": source, "version": result.version}),
+        "manifest_json": json.dumps({"source": source, "version": result.version, "_litellm_published_by": "admin"}),
         "published_at": result.updated_at, "published_by": "admin", "content": None, "archive_available": False,
     }
+
+
+@pytest.mark.parametrize("same_source", (True, False))
+@pytest.mark.parametrize("review", [None, PluginReview("reviewer@example.test", False)])
+@pytest.mark.asyncio
+async def test_publication_preserves_only_trusted_review_for_unchanged_source(
+    publication_tx: MagicMock, review: PluginReview | None, same_source: bool,
+) -> None:
+    original = publication_tx.litellm_claudecodeplugintable.find_unique.return_value
+    stored_review = {"approved_by": "original-reviewer", "security_scan_passed": True}
+    stored_manifest = {**json.loads(original.manifest_json), "_litellm_review": stored_review}
+    current = original.model_copy(update={"manifest_json": json.dumps(stored_manifest)})
+    publication_tx.litellm_claudecodeplugintable.find_unique.return_value = current
+
+    async def update(where: Mapping[str, str], data: Mapping[str, object]) -> LiteLLM_ClaudeCodePluginTable:
+        return current.model_copy(update=dict(data))
+
+    publication_tx.litellm_claudecodeplugintable.update.side_effect = update
+    result = await publish_plugin(
+        cast(PluginPublicationTransaction, publication_tx),
+        PluginPublication("skill", None, "updated", {
+            "_litellm_review": {"approved_by": "forged", "security_scan_passed": True},
+            "source": stored_manifest["source"] if same_source else {"source": "github", "repo": "example/skills"},
+        }, "author", review=review),
+        PluginPublicationBase(current.id, current.updated_at),
+    )
+    assert isinstance(result, PublishedPlugin)
+    manifest = json.loads(publication_tx.litellm_claudecodeplugintable.update.call_args.kwargs["data"]["manifest_json"])
+    assert manifest["_litellm_published_by"] == (review.approved_by if review else "author")
+    expected = (
+        {"approved_by": review.approved_by, "security_scan_passed": review.security_scan_passed} if review
+        else stored_review if same_source else None
+    )
+    assert manifest.get("_litellm_review") == expected
+    assert (None if result.review is None else {
+        "approved_by": result.review.approved_by, "security_scan_passed": result.review.security_scan_passed,
+    }) == expected
+    assert json.loads(publication_tx.litellm_claudecodepluginversion.create.call_args.kwargs["data"]["manifest_json"]).get("_litellm_review") == expected

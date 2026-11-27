@@ -1,11 +1,12 @@
 """Support for OpenAI gpt-5 model family."""
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from typing import ClassVar, Final
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.utils import (
     declared_value_factory,
     has_catalog_entry,
@@ -37,6 +38,44 @@ def refused_reasoning_effort_warning(*, suggest_declared_levels: bool, suggest_b
     )
 
 
+def _effort_level(sent_effort: object) -> str | None:
+    match sent_effort:
+        case str(level) | {"effort": str(level)}:
+            return level
+        case _:
+            return None
+
+
+def _sent_effort_level(sent_params: Mapping[str, object]) -> str | None:
+    match sent_params:
+        case {"extra_body": {"reasoning_effort": sent_effort}}:
+            return _effort_level(sent_effort)
+        case {"reasoning_effort": sent_effort}:
+            return _effort_level(sent_effort)
+        case _:
+            return None
+
+
+@dataclass(slots=True)
+class DeferredReasoningDropWarnings:
+    logger: WarningLogger
+    held: tuple[tuple[str, tuple[object, ...]], ...] = ()
+
+    def warning(self, msg: str, /, *args: object) -> None:
+        self.held = (*self.held, (msg, args))
+
+    def log_unless_dropped_effort_sent(self, sent_params: Mapping[str, object]) -> None:
+        sent_effort: Final = _sent_effort_level(sent_params)
+        held: Final = self.held
+        self.held = ()
+        for msg, args in held:
+            match args:
+                case ("reasoning_effort", dropped_effort, *_) if dropped_effort == sent_effort:
+                    continue
+                case _:
+                    self.logger.warning(msg, *args)
+
+
 def _catalogue_declares_default_effort() -> bool:
     """Whether the loaded cost map carries default_reasoning_effort for ANY entry.
 
@@ -56,7 +95,7 @@ def _catalogue_declares_default_effort() -> bool:
 
 
 def _normalize_reasoning_effort_for_chat_completion(
-    value: str | dict | None,
+    value: object,
 ) -> str | None:
     """Convert reasoning_effort to the string format expected by OpenAI chat completion API.
 
@@ -72,7 +111,7 @@ def _normalize_reasoning_effort_for_chat_completion(
     return None
 
 
-def get_effort_level(value: str | dict | None) -> str | None:
+def get_effort_level(value: object) -> str | None:
     """Extract the effective effort level from reasoning_effort (string or dict).
 
     Use this for guards that compare effort level (e.g. xhigh validation, "none" checks).
@@ -91,10 +130,21 @@ def get_effort_level(value: str | dict | None) -> str | None:
 _get_effort_level = get_effort_level
 
 GPT_REASONING_SERIES_MARKERS: Final = ("gpt-5", "gpt-6")
+OPENAI_CHAT_LATEST_ALIAS: Final = "chat-latest"
+GPT_CHAT_LATEST_DEPLOYMENT_MARKER: Final = "gpt-chat-latest"
 
 
 def unsupported_reasoning_effort_message(param: str, level: str, model: str) -> str:
     return f"{param}={level} is not supported for {model}. To drop unsupported params set `litellm.drop_params = True`"
+
+
+def is_chat_latest_name(model: str) -> bool:
+    normalized: Final = model.split("/")[-1]
+    return normalized == OPENAI_CHAT_LATEST_ALIAS or GPT_CHAT_LATEST_DEPLOYMENT_MARKER in normalized
+
+
+def is_openai_chat_latest_model(model: str) -> bool:
+    return is_chat_latest_name(model) and OpenAIGPTConfig.is_openai_catalog_model(model.removeprefix("openai/"))
 
 
 def is_gpt_reasoning_series_name(model: str) -> bool:
@@ -118,7 +168,13 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        return is_gpt_reasoning_series_name(model)
+        return is_gpt_reasoning_series_name(model) or is_chat_latest_name(model)
+
+    @classmethod
+    def is_openai_gpt_5_model(cls, model: str) -> bool:
+        """The family check for the openai provider, where a chat-latest name OpenAI does not serve is a
+        proxy alias or another gateway's model, so it keeps the unknown-model handling."""
+        return is_openai_chat_latest_model(model) if is_chat_latest_name(model) else cls.is_model_gpt_5_model(model)
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:
@@ -251,21 +307,38 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
 
     @classmethod
+    def row_declared_reasoning_efforts(cls, model: str) -> tuple[str, ...] | None:
+        from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_map_key
+
+        own_levels: Final = declared_reasoning_efforts_for_map_key(cls._model_map_lookup_name(model))
+        if own_levels is None and is_chat_latest_name(model):
+            return declared_reasoning_efforts_for_map_key(OPENAI_CHAT_LATEST_ALIAS)
+        return own_levels
+
+    @classmethod
     def refuses_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """The chat gate for any requested effort level, read off the model's map row alone.
 
-        An opt-in level (xhigh here; Azure adds none) is refused unless the row says true, since
-        the providers rejected it on most of the family when it arrived. Every other level is
+        A row that lists its levels in reasoning_effort_levels answers whole, max included, since
+        that list is how the map describes a model whose set the per-level flags cannot express
+        (chat-latest takes medium alone, and no flag can turn high off). A chat-latest deployment name
+        with no row of its own reads the chat-latest row, since its name is what put it in this family.
+
+        Otherwise an opt-in level (xhigh here; Azure adds none) is refused unless the row says true,
+        since the providers rejected it on most of the family when it arrived. Every other level is
         refused only when the row says false: a model the map never heard of, or a row without the
         flag, keeps forwarding what it was sent, and a level with no flag at all (medium, high) is
         never refused. So a new model in the family needs its map row and no code change, the
-        row's supports_<level>_reasoning_effort flags being the whole contract.
+        row being the whole contract.
 
-        A route-specific level (max) is never refused by either gate: the same model honors it
-        on Responses and refuses it on Chat Completions, so one row flag cannot gate it on
-        either route. Chat forwards it for the Responses bridge and a plain chat call gets the
+        A route-specific level (max) is never refused by the flags on either gate: the same model
+        honors it on Responses and refuses it on Chat Completions, so one row flag cannot gate it
+        on either route. Chat forwards it for the Responses bridge and a plain chat call gets the
         provider's own 400, exactly as before the gate read every level.
         """
+        declared: Final = cls.row_declared_reasoning_efforts(model)
+        if declared is not None:
+            return level not in declared
         if level in cls.ROUTE_SPECIFIC_REASONING_EFFORTS:
             return False
         if level in cls.OPT_IN_REASONING_EFFORTS:
@@ -274,12 +347,16 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def row_disables_reasoning_effort_level(cls, model: str, level: str) -> bool:
-        """The Responses gate: opt-out for every level except the route-specific ones."""
+        """The Responses gate: the row's declared levels when it lists them, else opt-out for
+        every level except the route-specific ones."""
+        declared: Final = cls.row_declared_reasoning_efforts(model)
+        if declared is not None:
+            return level not in declared
         if level in cls.ROUTE_SPECIFIC_REASONING_EFFORTS:
             return False
         return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         if self.is_model_gpt_5_search_model(model):
             return [
                 "max_tokens",
@@ -302,7 +379,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         base_gpt_series_params: Final = super().get_supported_openai_params(model=model)
         gpt_5_only_params: Final = ["reasoning_effort", "verbosity"]
         base_gpt_series_params.extend(gpt_5_only_params)
-        if not supports_tool_choice(model=model):
+        if not is_chat_latest_name(model) and not supports_tool_choice(model=model):
             base_gpt_series_params.remove("tool_choice")
 
         non_supported_params: Final = [
@@ -324,13 +401,14 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         *,
         declared_reasoning_efforts: Collection[str] | None = None,
-    ) -> dict:
+        reasoning_drop_logger: WarningLogger = verbose_logger,
+    ) -> dict[str, object]:
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
                 optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
@@ -364,7 +442,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             and self.refuses_reasoning_effort_level(model, requested_effort)
         ):
             if litellm.drop_params or drop_params:
-                verbose_logger.warning(
+                reasoning_drop_logger.warning(
                     refused_reasoning_effort_warning(
                         suggest_declared_levels=declared_reasoning_efforts is not None,
                         suggest_base_model=self.LOOKS_UP_BASE_MODEL
@@ -416,7 +494,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                     )
 
         if "temperature" in non_default_params:
-            temperature_value: Final[float | None] = non_default_params.pop("temperature")
+            temperature_value: Final = non_default_params.pop("temperature")
             if temperature_value is not None:
                 # a non-default temperature rides on the effort resolving to "none", not on
                 # the model merely supporting it

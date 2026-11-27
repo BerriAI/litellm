@@ -32,7 +32,7 @@ class ScimTransformations:
             raise HTTPException(status_code=500, detail={"error": "No database connected"})
 
         # Get user's teams/groups
-        groups: Final = []
+        groups: Final[list[SCIMUserGroup]] = []
         team_ids: Final[list[str]] = user.teams or []  # mutable-ok: scim reads the user row's team ids
         for team_id in team_ids:
             team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
@@ -43,7 +43,7 @@ class ScimTransformations:
         user_created_at: Final = user.created_at.isoformat() if user.created_at else None
         user_updated_at: Final = user.updated_at.isoformat() if user.updated_at else None
 
-        emails: Final = []
+        emails: Final[list[SCIMUserEmail]] = []
         # Only add email if it's a valid email address (contains @)
         # user_email can be a UUID when users are created without an email
         if user.user_email and "@" in user.user_email:

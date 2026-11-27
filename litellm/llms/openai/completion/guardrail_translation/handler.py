@@ -92,8 +92,8 @@ class OpenAITextCompletionHandler(BaseTranslation):
 
         elif isinstance(prompt, list):
             # List of string prompts (batch completion)
-            texts_to_check: Final = []
-            text_indices: Final = []  # Track which prompts are strings
+            texts_to_check: Final[list[str]] = []
+            text_indices: Final[list[int]] = []  # Track which prompts are strings
 
             for idx, p in enumerate(prompt):
                 if isinstance(p, str):
@@ -159,7 +159,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
             return response
 
         # Collect all texts to check
-        texts_to_check: Final = []
+        texts_to_check: Final[list[str]] = []
         choice_indices: Final = []
 
         for idx, choice in enumerate(response.choices):
@@ -244,6 +244,10 @@ class OpenAITextCompletionHandler(BaseTranslation):
             return None
         assembled: Final = self._assemble_ended_stream(chunks)
         return StreamingScanKey(texts=tuple(text for _, text in _choice_texts(assembled)), stream_ended=True)
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        """Text completions carry no tool calls."""
+        return False
 
     def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
         chunks: Final = _text_completion_chunks(responses_so_far)

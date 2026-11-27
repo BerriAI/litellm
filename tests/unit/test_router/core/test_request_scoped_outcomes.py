@@ -8,8 +8,10 @@ check's cooldown and a failed fallback hop's cooldown.
 
 import asyncio
 from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime, timezone
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
@@ -17,6 +19,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router import Router
 from litellm.router_core import RouterCore
+from litellm.router_rust.core import RustCore
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost
 from tests.unit.test_router.core.retries_health_helpers import (
     MESSAGES,
@@ -25,6 +28,7 @@ from tests.unit.test_router.core.retries_health_helpers import (
     attempt_sync,
     cooled_down,
     fresh,
+    usage_since,
 )
 from tests.unit.test_router.core.scripted_host import Call, deployment, rate_limit, server_error
 from tests.unit.test_router.core.streaming_helpers import chat_stream, collect_texts, request_logging
@@ -128,9 +132,10 @@ def successes(core: RouterCore, deployment_id: str) -> object:
 
 
 async def settle() -> None:
-    """Let the recording tasks a stream's end scheduled run."""
-    for _ in range(20):
-        await asyncio.sleep(0)
+    """Wait for the logging and recording tasks a finished stream scheduled, and any tasks they schedule."""
+    while pending := asyncio.all_tasks() - {asyncio.current_task()}:
+        _, still_running = await asyncio.wait(pending, timeout=5)
+        assert not still_running, still_running
 
 
 # --- a router still on the process lists ------------------------------------------------------
@@ -221,8 +226,12 @@ def test_a_sync_failure_records_nothing(
 
 @RELEASES
 async def test_a_success_counts_its_usage_and_no_success(
-    make_core: MakeCore, host: RequestLoggingHost, release: Callable[[RouterCore], None]
+    make_core: MakeCore,
+    host: RequestLoggingHost,
+    release: Callable[[RouterCore], None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     core: Final = weighted_pair(make_core, rpm=100)
     release(core)
 
@@ -230,13 +239,17 @@ async def test_a_success_counts_its_usage_and_no_success(
 
     assert not isinstance(answered, Exception)
     assert successes(core, "d1") is None
-    assert await core.health().usage("g") == (10, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (10, 1)
 
 
 @RELEASES
 async def test_a_sync_success_counts_its_usage_and_no_success(
-    make_core: MakeCore, host: RequestLoggingHost, release: Callable[[RouterCore], None]
+    make_core: MakeCore,
+    host: RequestLoggingHost,
+    release: Callable[[RouterCore], None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     core: Final = weighted_pair(make_core, rpm=100)
     release(core)
 
@@ -244,7 +257,7 @@ async def test_a_sync_success_counts_its_usage_and_no_success(
 
     assert not isinstance(answered, Exception)
     assert successes(core, "d1") is None
-    assert await core.health().usage("g") == (10, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (10, 1)
 
 
 async def test_an_endpoint_outside_make_call_counts_no_usage(make_core: MakeCore, host: RequestLoggingHost) -> None:
@@ -259,8 +272,12 @@ async def test_an_endpoint_outside_make_call_counts_no_usage(make_core: MakeCore
 
 @RELEASES
 async def test_a_stream_counts_its_request_when_it_opens_and_nothing_when_it_ends(
-    make_core: MakeCore, host: RequestLoggingHost, release: Callable[[RouterCore], None]
+    make_core: MakeCore,
+    host: RequestLoggingHost,
+    release: Callable[[RouterCore], None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     host.answer("openai/d1", chat_stream("hello", usage=USAGE, logged=True))
     core: Final = weighted_pair(make_core, rpm=100)
     release(core)
@@ -270,7 +287,7 @@ async def test_a_stream_counts_its_request_when_it_opens_and_nothing_when_it_end
     await settle()
 
     assert successes(core, "d1") is None
-    assert await core.health().usage("g") == (0, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (0, 1)
 
 
 @RELEASES
@@ -347,13 +364,96 @@ async def test_failed_fallback_hops_with_no_logging_object_are_not_counted(
     assert core.health().failures_this_minute("b") == 0
 
 
+@pytest.mark.parametrize(
+    ("params", "error", "counted", "cooled"),
+    [
+        pytest.param(
+            {"token_exchange_endpoint": "https://identity.example.com/token"},
+            litellm.AuthenticationError("rejected", "microsoft_365_copilot", "copilot"),
+            0,
+            False,
+            id="oauth-401",
+        ),
+        pytest.param(
+            {"token_exchange_endpoint": "https://identity.example.com/token"},
+            litellm.PermissionDeniedError(
+                "rejected",
+                "microsoft_365_copilot",
+                "copilot",
+                response=httpx.Response(403, request=httpx.Request("POST", "https://provider.example.com")),
+            ),
+            0,
+            False,
+            id="oauth-403",
+        ),
+        pytest.param(
+            {"api_key": "sk-shared"},
+            litellm.AuthenticationError("rejected", "openai", "b"),
+            1,
+            True,
+            id="api-key-auth",
+        ),
+        pytest.param(
+            {"model": "github_copilot/gpt-4o", "api_key": "sk-shared"},
+            litellm.AuthenticationError("rejected", "github_copilot", "gpt-4o"),
+            1,
+            True,
+            id="shared-auth",
+        ),
+        pytest.param(
+            {"model": "github_copilot/gpt-4o", "github_copilot_auth_type": "per_user_oauth"},
+            litellm.RateLimitError("limited", "github_copilot", "gpt-4o"),
+            1,
+            False,
+            id="per-user-rate-limit",
+        ),
+        pytest.param(
+            {"model": "github_copilot/gpt-4o", "api_key": "sk-shared"},
+            litellm.RateLimitError("limited", "github_copilot", "gpt-4o"),
+            1,
+            True,
+            id="shared-rate-limit",
+        ),
+    ],
+)
+async def test_a_blocked_fallback_failure_respects_the_deployments_auth_scope(
+    make_core: MakeCore,
+    host: RequestLoggingHost,
+    params: Mapping[str, object],
+    error: Exception,
+    counted: int,
+    cooled: bool,
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("a", "a"), deployment("b", "b", **params), deployment("c", "c")],
+        fallbacks=[{"a": ["b"]}, {"b": ["c"]}],
+        num_retries=0,
+        allowed_fails=0,
+    )
+    assert isinstance(core, RustCore)
+    logging_obj: Final = request_logging()
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = datetime(2026, 1, 1)
+    logging_obj.mark_logging_complete("async_failure")
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = datetime(2026, 1, 2)
+    setattr(error, "failed_deployment_id", "b")
+
+    core.trigger_fallback_cooldown({"litellm_logging_obj": logging_obj}, error, generic=False)
+
+    assert core.health().failures_this_minute("b") == counted
+    assert ("b" in cooled_down(core, ["b"])) is cooled
+
+
 # --- a binding, for its request alone -----------------------------------------------------------
 
 
 @pytest.mark.parametrize("release", [observed, retired], ids=["observe", "retire"])
 async def test_a_binding_records_a_failure_for_that_request_only(
-    make_core: MakeCore, host: RequestLoggingHost, release: Callable[[RouterCore], None]
+    make_core: MakeCore,
+    host: RequestLoggingHost,
+    release: Callable[[RouterCore], None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     core: Final = weighted_pair(make_core)
     host.answer("openai/d1", fresh(server_error))
     release(core)
@@ -368,7 +468,7 @@ async def test_a_binding_records_a_failure_for_that_request_only(
 
     assert list(cooled_down(core, ["d1", "d2"])) == ["d1"]
     assert core.health().failures_this_minute("d1") == 1
-    assert await core.health().usage("g") == (None, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (None, 1)
 
 
 async def test_a_binding_records_an_async_success(make_core: MakeCore, host: RequestLoggingHost) -> None:
@@ -382,8 +482,11 @@ async def test_a_binding_records_an_async_success(make_core: MakeCore, host: Req
     assert successes(core, "d1") == 1
 
 
-async def test_a_binding_leaves_a_sync_success_uncounted(make_core: MakeCore, host: RequestLoggingHost) -> None:
+async def test_a_binding_leaves_a_sync_success_uncounted(
+    make_core: MakeCore, host: RequestLoggingHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """``_core_bind_to_request_logging`` does not bind ``sync_deployment_callback_on_success``."""
+    started: Final = datetime.now(timezone.utc)
     core: Final = weighted_pair(make_core, rpm=100)
     observed(core)
     bound: Final = request_logging()
@@ -392,7 +495,7 @@ async def test_a_binding_leaves_a_sync_success_uncounted(make_core: MakeCore, ho
     _ = attempt_sync(core, litellm_logging_obj=bound)
 
     assert successes(core, "d1") is None
-    assert await core.health().usage("g") == (10, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (10, 1)
 
 
 async def test_a_binding_records_a_sync_failure_with_no_request(make_core: MakeCore, host: RequestLoggingHost) -> None:
@@ -409,7 +512,10 @@ async def test_a_binding_records_a_sync_failure_with_no_request(make_core: MakeC
     assert await core.health().usage("g") == (None, None)
 
 
-async def test_a_binding_records_a_stream_that_ends(make_core: MakeCore, host: RequestLoggingHost) -> None:
+async def test_a_binding_records_a_stream_that_ends(
+    make_core: MakeCore, host: RequestLoggingHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: Final = datetime.now(timezone.utc)
     host.answer("openai/d1", chat_stream("hello", usage=USAGE, logged=True))
     core: Final = weighted_pair(make_core, rpm=100)
     observed(core)
@@ -423,10 +529,13 @@ async def test_a_binding_records_a_stream_that_ends(make_core: MakeCore, host: R
     await settle()
 
     assert successes(core, "d1") == 1
-    assert await core.health().usage("g") == (12, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (12, 1)
 
 
-async def test_a_binding_records_a_stream_failing_after_content(make_core: MakeCore, host: RequestLoggingHost) -> None:
+async def test_a_binding_records_a_stream_failing_after_content(
+    make_core: MakeCore, host: RequestLoggingHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: Final = datetime.now(timezone.utc)
     host.answer("openai/d1", chat_stream("partial", error=rate_limit(message="mid stream"), logged=True))
     core: Final = weighted_pair(make_core)
     observed(core)
@@ -443,7 +552,7 @@ async def test_a_binding_records_a_stream_failing_after_content(make_core: MakeC
     assert list(cooled_down(core, ["d1", "d2"])) == ["d1"]
     assert core.health().failures_this_minute("d1") == 1
     # No limit on the deployment, so the open counted nothing: the failure is the one request.
-    assert await core.health().usage("g") == (None, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (None, 1)
 
 
 # --- retire ----------------------------------------------------------------------------------------

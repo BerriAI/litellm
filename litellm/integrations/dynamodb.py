@@ -49,7 +49,14 @@ class DyanmoDBLogger:
 
     _async_log_event = async_log_event
 
-    def log_event(self, kwargs: Mapping[str, object], response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj,
+        start_time: datetime,
+        end_time: datetime,
+        print_verbose: Callable[[str], object],
+    ):
         try:
             print_verbose(f"DynamoDB Logging - Enters logging function for model {kwargs}")
 

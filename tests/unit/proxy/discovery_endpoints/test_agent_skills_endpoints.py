@@ -97,7 +97,7 @@ def hub_record(
     digest: Final = hashlib.sha256(wrapper).hexdigest()
     return (
         prisma_models.LiteLLM_ClaudeCodePluginTable(
-            id=f"hub-{name}", name=name, enabled=True, manifest_json=json.dumps({
+            id=f"hub-{name}", name=name, enabled=True, anonymous_download_count=0, manifest_json=json.dumps({
                 "source": {
                     "source": "archive", "sha256": digest,
                     "url": f"http://testserver/claude-code/plugins/{name}/archive/{digest}.zip",
@@ -112,6 +112,7 @@ def hub_record(
 def hub_repository(*names: str) -> PluginUploadRepository:
     records: Final = tuple(hub_record(name) for name in names)
     prisma: Final = MagicMock()
+    prisma.writer_db.execute_raw = AsyncMock(return_value=1)
     plugins: Final = prisma.writer_db.litellm_claudecodeplugintable
     plugins.find_many = AsyncMock(return_value=[record for record, _ in records])
 

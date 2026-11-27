@@ -32,6 +32,18 @@ class _ToolCallEvent(NamedTuple):
     """None where the surface reports no error status, and never counted as an error."""
 
 
+def _as_list(value: object) -> Sequence[object] | None:
+    if isinstance(value, list):
+        return value
+    return None
+
+
+def _as_mapping(value: object) -> Mapping[object, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
 def _json_arguments(raw: str) -> object:
     try:
         return _DECODED_ARGUMENTS.validate_python(json.loads(raw))
@@ -52,14 +64,15 @@ def _tool_call_signature(name: str, raw_arguments: object) -> tuple[str, str]:
 
 def _iter_tool_result_error_pairs(messages: Sequence[Mapping[str, object]]) -> Iterator[tuple[str, bool]]:
     for msg in messages:
-        content = msg.get("content")
-        if msg.get("role") != "user" or not isinstance(content, list):
+        content = _as_list(msg.get("content"))
+        if msg.get("role") != "user" or content is None:
             continue
         for part in content:
-            if isinstance(part, Mapping) and part.get("type") == "tool_result":
-                call_id = part.get("tool_use_id")
+            block = _as_mapping(part)
+            if block is not None and block.get("type") == "tool_result":
+                call_id = block.get("tool_use_id")
                 if isinstance(call_id, str):
-                    yield call_id, bool(part.get("is_error", False))
+                    yield call_id, bool(block.get("is_error", False))
 
 
 def _iter_tool_call_events_newest_first(messages: Sequence[Mapping[str, object]]) -> Iterator[_ToolCallEvent]:
@@ -67,24 +80,26 @@ def _iter_tool_call_events_newest_first(messages: Sequence[Mapping[str, object]]
     for msg in reversed(messages):
         if msg.get("role") != "assistant":
             continue
-        content = msg.get("content")
-        if isinstance(content, list):
+        content = _as_list(msg.get("content"))
+        if content is not None:
             for part in reversed(content):
-                if not (isinstance(part, Mapping) and part.get("type") == "tool_use"):
+                block = _as_mapping(part)
+                if not (block is not None and block.get("type") == "tool_use"):
                     continue
-                name = part.get("name")
+                name = block.get("name")
                 if isinstance(name, str):
-                    call_id = part.get("id")
+                    call_id = block.get("id")
                     yield _ToolCallEvent(
-                        signature=_tool_call_signature(name, part.get("input")),
+                        signature=_tool_call_signature(name, block.get("input")),
                         is_error=error_by_call_id.get(call_id) if isinstance(call_id, str) else None,
                     )
-        tool_calls = msg.get("tool_calls")
-        if not isinstance(tool_calls, list):
+        tool_calls = _as_list(msg.get("tool_calls"))
+        if tool_calls is None:
             continue
         for call in reversed(tool_calls):
-            function = call.get("function") if isinstance(call, Mapping) else None
-            name = function.get("name") if isinstance(function, Mapping) else None
+            call_fields = _as_mapping(call)
+            function = _as_mapping(call_fields.get("function")) if call_fields is not None else None
+            name = function.get("name") if function is not None else None
             if isinstance(name, str):
                 yield _ToolCallEvent(
                     signature=_tool_call_signature(name, function.get("arguments") if function else None),

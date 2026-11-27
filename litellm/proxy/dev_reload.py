@@ -13,10 +13,13 @@ from socket import socket
 from typing import Final, Literal
 
 from pydantic import ConfigDict, ImportString, JsonValue, TypeAdapter, with_config
-from typing_extensions import ReadOnly, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from uvicorn import Config, Server
 from uvicorn import config as uvicorn_config
 from uvicorn.supervisors import ChangeReload, Multiprocess
+
+from litellm.proxy.shutdown.recycling_uvicorn_pool import RecyclingWorkerPool
+from litellm.proxy.shutdown.recycling_uvicorn_server import RecyclingUvicornServer
 
 
 @with_config(ConfigDict(extra="allow"))
@@ -36,12 +39,14 @@ class ServerOptions(TypedDict, total=False):
     limit_concurrency: ReadOnly[int]
     ssl_keyfile: ReadOnly[str]
     ssl_certfile: ReadOnly[str]
+    h11_max_incomplete_event_size: ReadOnly[int]
     loop: ReadOnly[Literal["none", "auto", "asyncio", "uvloop"]]
 
 
 @with_config(ConfigDict(extra="allow"))
 class ReloadOptions(ServerOptions):
     app: Required[ReadOnly[str]]
+    factory: NotRequired[ReadOnly[bool]]
     reload: ReadOnly[bool]
     reload_dirs: ReadOnly[tuple[str, ...]]
     reload_includes: ReadOnly[tuple[str, ...]]
@@ -92,7 +97,9 @@ def load_worker_app(import_path: str, worker_app_factory: bool) -> Callable[...,
 def pool_config(options: ReloadOptions, workers: int, worker_overrides: Mapping[str, object] | None = None) -> Config:
     overrides: Final = worker_overrides or {}
     worker_app: Final = TypeAdapter(str).validate_python(overrides.get("app", options["app"]))
-    worker_app_factory: Final = TypeAdapter(bool).validate_python(overrides.get("factory", False))
+    worker_app_factory: Final = TypeAdapter(bool).validate_python(
+        overrides.get("factory", options.get("factory", False))
+    )
     return Config(
         partial(load_worker_app, worker_app, worker_app_factory),
         factory=True,
@@ -132,21 +139,56 @@ class ReloadWorkerPool(Multiprocess):
             process.kill()
 
 
+class RecyclingReloadWorkerPool(ReloadWorkerPool, RecyclingWorkerPool):
+    pass
+
+
 def _run_worker_pool(config: Config, sockets: Sequence[socket] | None) -> None:
     shared_sockets: Final = list(sockets or ())
+    recycling: Final = config.limit_max_requests is not None
+    server_class: Final = RecyclingUvicornServer if recycling else Server
     pool: Final = (
         ReloadWorkerPool(
             config=config,
-            target=Server(config=config).run,  # pyright: ignore[reportCallIssue]  # Older uvicorn versions require target
+            target=server_class(config=config).run,  # pyright: ignore[reportCallIssue]  # Older uvicorn versions require target
             sockets=shared_sockets,
         )
         if "target" in signature(Multiprocess).parameters
-        else ReloadWorkerPool(config=config, sockets=shared_sockets)
+        else (RecyclingReloadWorkerPool if recycling else ReloadWorkerPool)(config=config, sockets=shared_sockets)
     )
     reloader: Final = multiprocessing.parent_process()
     if reloader is not None:
         threading.Thread(target=stop_pool_when_reloader_exits, args=(reloader, pool.should_exit), daemon=True).start()
     pool.run()
+
+
+def run_uvicorn_with_recycling(options: ReloadOptions, workers: int) -> None:
+    config: Final = Config(
+        options["app"],
+        factory=options.get("factory", False),
+        reload=options.get("reload", False),
+        reload_dirs=list(options.get("reload_dirs", ())),
+        reload_includes=list(options.get("reload_includes", ())),
+        workers=workers,
+        **server_options(options),  # pyright: ignore[reportArgumentType]  # uvicorn types the float graceful shutdown timeout as int
+    )
+    server: Final = RecyclingUvicornServer(config=config)
+    try:
+        if config.should_reload or config.workers > 1:
+            with config.bind_socket() as shared_socket:
+                sockets: Final = [shared_socket]
+                if config.should_reload:
+                    ChangeReload(config, target=server.run, sockets=sockets).run()
+                elif "target" in signature(Multiprocess).parameters:
+                    Multiprocess(config, target=server.run, sockets=sockets).run()  # pyright: ignore[reportCallIssue]  # Older uvicorn versions require target
+                else:
+                    RecyclingWorkerPool(config, sockets=sockets).run()
+        else:
+            server.run()
+    except KeyboardInterrupt:
+        pass
+    if not server.started and not config.should_reload and config.workers == 1:
+        sys.exit(getattr(uvicorn_config, "STARTUP_FAILURE", 3))
 
 
 def run_multi_worker_reload(

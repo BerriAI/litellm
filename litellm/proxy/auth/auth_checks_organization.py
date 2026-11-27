@@ -2,7 +2,7 @@
 Auth Checks for Organizations
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 
 from fastapi import status
@@ -134,7 +134,7 @@ def get_user_organization_info(
 
 
 def user_is_org_admin(
-    request_data: dict,
+    request_data: Mapping[str, object],
     user_object: LiteLLM_UserTable | None = None,
 ) -> bool:
     """
@@ -151,7 +151,7 @@ def user_is_org_admin(
         return False
 
     # Collect candidate org IDs from both fields
-    candidate_org_ids: Final[list[str]] = []
+    candidate_org_ids: Final[list[object]] = []
     singular: Final = request_data.get("organization_id", None)
     if singular is not None:
         candidate_org_ids.append(singular)
@@ -188,7 +188,7 @@ async def add_team_org_context_to_request_body(
     request_body: dict,
     fetch_team_org_id: Callable[[str], Awaitable[str | None]],
     route_template: str | None = None,
-) -> dict:
+) -> dict[str, object]:
     """
     Return a copy of request_body with organization_id resolved from the target
     team when the route identifies the team by team_id and the caller did not

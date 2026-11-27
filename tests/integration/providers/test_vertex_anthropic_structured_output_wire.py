@@ -24,11 +24,11 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, list_value, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.ports import allocate_port
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.upstream import aws_event_stream_frame
-from integration._support.vertex import service_account_json
+from integration._support.vertex import assert_vertex_authorization, service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
-from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -48,7 +48,7 @@ _THINKING_OFF_TOOL_MODEL: Final = "claude-opus-4-8"
 _UNMAPPED_MODEL: Final = "claude-scripted-9"
 _BEDROCK_INVOKE_MODEL: Final = "anthropic.claude-sonnet-5"
 _BEDROCK_TOOL_PATH_MODEL: Final = "anthropic.claude-opus-4-8"
-_BEDROCK_JSON_TOOL_MODEL: Final = "us.anthropic.claude-opus-4-8"
+_BEDROCK_JSON_TOOL_MODEL: Final = "us.anthropic.claude-opus-4-7"
 _THINKING_SIGNATURE: Final = "c2NyaXB0ZWQtc2lnbmF0dXJl"
 _PROJECT: Final = "scripted-project"
 _LOCATION: Final = "us-east5"
@@ -219,7 +219,6 @@ _PASS_THROUGH_ROUTES: Final = (
     "cohere",
     "vllm",
     "mistral",
-    "typesafe",
     "openrouter",
     "azure",
     "openai",
@@ -561,7 +560,7 @@ def _structured(body: Mapping[str, JsonValue]) -> bool:
 def _peer(request: Request) -> Reply:
     vertex: Final = request.target.startswith(_VERTEX_MODELS)
     if vertex:
-        assert request.headers["authorization"] == "Bearer scripted-token", request.headers
+        assert_vertex_authorization(request.headers["authorization"], _PROJECT)
     elif not _scripted_target(request):
         return _error(404, f"unscripted target {request.target}")
     body: Final = _JSON_OBJECT.validate_json(request.body)
@@ -605,6 +604,7 @@ def _delivered(wire: Wire) -> tuple[_Delivery, ...]:
     return tuple(
         _Delivery(request.target, request.headers.get("anthropic-beta"), _JSON_OBJECT.validate_json(request.body))
         for request in wire.drain()
+        if _scripted_target(request)
     )
 
 
@@ -979,8 +979,6 @@ def _pass_through_call(route: str, marker: str, key: str) -> _PassThroughCall:
             return _PassThroughCall("/vllm/v1/chat/completions", chat, "/v1/chat/completions", bearer)
         case "mistral":
             return _PassThroughCall("/mistral/v1/chat/completions", chat, "/v1/chat/completions", bearer)
-        case "typesafe":
-            return _PassThroughCall("/typesafe/v1/chat/completions", chat, "/v1/chat/completions", bearer)
         case "openrouter":
             return _PassThroughCall("/openrouter/v1/chat/completions", chat, "/v1/chat/completions", bearer)
         case "azure":
@@ -2095,6 +2093,29 @@ def test_vertex_chat_malformed_response_format_schema_keeps_the_tool_input(
         assert content == _tool_input(shape, marker_hex), response.text
         _one_delivery(wire, marker_hex)
         assert gateway.request("GET", "/health/liveliness").status_code == 200
+
+
+@pytest.mark.parametrize("marker_hex", ["e66127078448420083852775e765081e", "e6612707841e0000000000000000051e"])
+def test_vertex_chat_malformed_schema_stream_keeps_numeric_fragments_verbatim(
+    gateway: Gateway, marker_hex: str
+) -> None:
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            _chat_body(
+                model,
+                f"wrapped {marker_hex}",
+                stream=True,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "risk", "schema": {"type": "object", "properties": None}},
+                },
+            ),
+        )
+        assert _stream_text(response) == _tool_text("wrapped", marker_hex), response.text
+        _one_delivery(wire, marker_hex)
 
 
 @pytest.mark.parametrize("status", [400, 403, 404])

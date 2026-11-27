@@ -22,6 +22,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._internal_context import internal_sub_call
 from litellm.cost_calculator import vector_store_search_cost
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
@@ -36,10 +37,19 @@ from litellm.types.rag import (
     RAGIngestResponse,
 )
 from litellm.types.utils import ModelResponse
+from litellm.types.vector_stores import VectorStoreSearchResponse
 from litellm.utils import client
 
 if TYPE_CHECKING:
     from litellm import Router
+
+
+def _router_of(value: object, method: str) -> Router | None:
+    if value is None:
+        return None
+    from litellm import Router
+
+    return require_attributes(value, Router, method)
 
 
 # Registry of provider-specific ingestion classes
@@ -150,7 +160,7 @@ async def aingest(
     file_url: str | None = None,
     file_id: str | None = None,
     timeout: float | httpx.Timeout | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> RAGIngestResponse:
     """
     Async: Ingest a document into a vector store.
@@ -215,10 +225,10 @@ async def _execute_query_pipeline(
     model: str,
     messages: list[AllMessageValues],
     retrieval_config: Mapping[str, object],
-    rerank: dict[str, Any] | None = None,
+    rerank: Mapping[str, Any] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse:
     """
     Execute the RAG query pipeline.
@@ -229,7 +239,7 @@ async def _execute_query_pipeline(
 
     # Extract router from kwargs - use it for completion if available
     # to properly resolve virtual model names
-    router: Final[Router | None] = kwargs.pop("router", None)
+    router: Final = _router_of(kwargs.pop("router", None), "acompletion")
 
     # 1. Extract query from last user message
     query_text: Final = RAGQuery.extract_query_from_messages(messages)
@@ -257,7 +267,7 @@ async def _execute_query_pipeline(
         {**provider_search_params, **kwargs, **filter_search_params, **store_search_params}
     )
     with internal_sub_call(parent_request_id):
-        search_response: Final = await litellm.vector_stores.asearch(
+        search_response: Final[VectorStoreSearchResponse] = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
             query=query_text,
             max_num_results=retrieval_config.get("top_k", 10),
@@ -351,10 +361,10 @@ async def aquery(
     model: str,
     messages: list[AllMessageValues],
     retrieval_config: Mapping[str, object],
-    rerank: dict[str, Any] | None = None,
+    rerank: Mapping[str, object] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse:
     """
     Async: Query a RAG pipeline.
@@ -400,10 +410,10 @@ def query(
     model: str,
     messages: list[AllMessageValues],
     retrieval_config: Mapping[str, object],
-    rerank: dict[str, Any] | None = None,
+    rerank: Mapping[str, object] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse | Coroutine[None, None, ModelResponse]:
     """
     Query a RAG pipeline.
@@ -452,7 +462,7 @@ def ingest(
     file_url: str | None = None,
     file_id: str | None = None,
     timeout: float | httpx.Timeout | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> RAGIngestResponse | Coroutine[None, None, RAGIngestResponse]:
     """
     Ingest a document into a vector store.
@@ -482,7 +492,7 @@ def ingest(
     local_vars: Final = locals()
     try:
         _is_async: Final = kwargs.pop("aingest", False) is True
-        router: Final[Router | None] = kwargs.get("router")
+        router: Final = _router_of(kwargs.get("router"), "aembedding")
 
         # Convert file dict to file_data tuple if provided
         if file is not None and file_data is None:

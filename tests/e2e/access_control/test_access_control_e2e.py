@@ -30,7 +30,7 @@ from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 
 pytestmark = pytest.mark.e2e
 
-ALLOWED_MODEL = "gemini-2.5-flash"
+ALLOWED_MODEL = "gemini-3.8-flash"
 DISALLOWED_MODEL = "gpt-5.5"
 VIRTUAL_KEY_BACKEND = "anthropic/claude-haiku-4-5-20251001"
 EMBEDDING_MODEL = "openai-text-embedding-3-small"

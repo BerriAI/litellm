@@ -1,10 +1,13 @@
+from collections.abc import Awaitable, Callable
 from typing import Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
 from litellm.caching import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import subscript
 from litellm.litellm_core_utils.prompt_templates import factory as ptf
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -23,17 +26,24 @@ class WatsonXAIError(BaseLLMException):
 
 
 iam_token_cache: Final = InMemoryCache()
+_IAM_TOKEN_RESPONSE: Final = TypeAdapter(object)
+
+
+def _ttl_with_buffer(expires_in: object) -> float:
+    if isinstance(expires_in, (int, float)):
+        return expires_in - 10
+    raise TypeError(f"unsupported operand type(s) for -: '{type(expires_in).__name__}' and 'int'")
 
 
 def get_watsonx_iam_url():
     return get_secret_str("WATSONX_IAM_URL") or "https://iam.cloud.ibm.com/identity/token"
 
 
-def generate_iam_token(api_key=None, **params) -> str:
-    result: str | None = iam_token_cache.get_cache(api_key)
+def generate_iam_token(api_key: str | None = None, **params: object) -> str:
+    result: object = iam_token_cache.get_cache(api_key)
 
     if result is None:
-        headers: Final = {}
+        headers: Final[dict[str, str]] = {}
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         if api_key is None:
             api_key = (
@@ -58,13 +68,13 @@ def generate_iam_token(api_key=None, **params) -> str:
         )
         response: Final = litellm.module_level_client.post(url=iam_token_url, data=data, headers=headers)
         response.raise_for_status()
-        json_data: Final = response.json()
+        json_data: Final = _IAM_TOKEN_RESPONSE.validate_python(response.json())
 
-        result = json_data["access_token"]
+        result = subscript(json_data, "access_token")
         iam_token_cache.set_cache(
             key=api_key,
             value=result,
-            ttl=json_data["expires_in"] - 10,  # leave some buffer
+            ttl=_ttl_with_buffer(subscript(json_data, "expires_in")),
         )
 
     return cast(str, result)
@@ -131,7 +141,7 @@ async def _aconvert_watsonx_messages_core(
     messages: list[AllMessageValues],
     provider: str,
     custom_prompt_dict: dict,
-    apply_template_fn,
+    apply_template_fn: Callable[..., Awaitable[str | None]],
 ) -> str:
     """Async core logic for converting watsonx messages to prompt"""
     from litellm.types.llms.watsonx import WatsonXModelPattern
@@ -163,7 +173,7 @@ def _convert_watsonx_messages_core(
     messages: list[AllMessageValues],
     provider: str,
     custom_prompt_dict: dict,
-    apply_template_fn,
+    apply_template_fn: Callable[..., str | None],
 ) -> str:
     """Sync core logic for converting watsonx messages to prompt"""
     from litellm.types.llms.watsonx import WatsonXModelPattern
@@ -194,7 +204,7 @@ async def aconvert_watsonx_messages_to_prompt(
     model: str,
     messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: dict,
+    custom_prompt_dict: dict[str, object],
 ) -> str:
     """Async version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -212,7 +222,7 @@ def convert_watsonx_messages_to_prompt(
     model: str,
     messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: dict,
+    custom_prompt_dict: dict[str, object],
 ) -> str:
     """Sync version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -230,11 +240,11 @@ def convert_watsonx_messages_to_prompt(
 class IBMWatsonXMixin:
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -339,8 +349,8 @@ class IBMWatsonXMixin:
             )
         return WatsonXCredentials(api_key=api_key, api_base=api_base, token=cast(str | None, token))
 
-    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
-        payload: Final[dict] = {}
+    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict[str, object]:
+        payload: Final[dict[str, object]] = {}
         if model.startswith("deployment/"):
             return {}  # Deployment models do not support 'space_id' or 'project_id' in their payload
         payload["model_id"] = model

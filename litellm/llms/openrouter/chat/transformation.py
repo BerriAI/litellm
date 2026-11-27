@@ -31,6 +31,32 @@ if TYPE_CHECKING:
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
+_RESPONSE_CHOICES: Final = TypeAdapter(tuple[Mapping[str, object], ...], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _non_streaming_error(response: Mapping[str, object], headers: httpx.Headers) -> OpenRouterException | None:
+    choices: Final = _RESPONSE_CHOICES.validate_python(response.get("choices") or ())
+    choice: Final = next(
+        (choice for choice in choices if choice.get("finish_reason") == "error" or choice.get("error")), None
+    )
+    if choice is None:
+        return None
+    error: Final = choice.get("error")
+    details: Final[Mapping[str, object]] = _JSON_OBJECT.validate_python(error) if isinstance(error, Mapping) else {}
+    code: Final = details.get("code")
+    message: Final = details.get("message")
+    return OpenRouterException(
+        status_code=code if isinstance(code, int) and 400 <= code < 600 else 502,
+        message=(
+            message
+            if isinstance(message, str) and message
+            else "OpenRouter returned finish_reason 'error': the provider failed during generation"
+        ),
+        headers=headers,
+        body=dict(response),
+    )
+
+
 class CacheControlSupportedModels(str, Enum):
     """Models that support cache_control in content blocks."""
 
@@ -47,7 +73,7 @@ def openrouter_model_supports_cache_control(model: str) -> bool:
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Include reasoning parameters regardless of model-map capabilities.
         """
@@ -57,10 +83,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         # OpenRouter expects "xhigh" instead of "max" for reasoning_effort.
         if non_default_params.get("reasoning_effort") == "max":
             non_default_params = {**non_default_params, "reasoning_effort": "xhigh"}
@@ -148,9 +174,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform the overall request to be sent to the API.
 
@@ -177,10 +203,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -210,8 +236,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
         # Extract cost from OpenRouter response body
         # OpenRouter returns cost information in the usage object when usage.include=true
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         try:
-            response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
             response_provider: Final = response_json.get("provider")
             if isinstance(response_provider, str) and response_provider:
                 set_hidden_params(
@@ -243,9 +269,17 @@ class OpenrouterConfig(OpenAIGPTConfig):
             # If we can't extract cost, continue without it - don't fail the response
             pass
 
+        response_error: Final = _non_streaming_error(response_json, raw_response.headers)
+        if response_error is not None:
+            failed_attempt: Final = logging_obj.served_round(model_response)
+            logging_obj.record_served_rounds_for_failure(() if failed_attempt is None else (failed_attempt,))
+            raise response_error
+
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return OpenRouterException(
             message=error_message,
             status_code=status_code,
@@ -284,6 +318,7 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                     message=error_message["message"],
                     status_code=error_message["code"],
                     headers=error_message["metadata"].get("headers", {}),
+                    body=error_chunk if isinstance(error_chunk, dict) else None,
                 )
 
             new_choices: Final = []

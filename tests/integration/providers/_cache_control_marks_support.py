@@ -464,6 +464,7 @@ def owned_config(
     *,
     litellm_settings: Mapping[str, JsonValue] = MappingProxyType({}),
     router_settings: Mapping[str, JsonValue] = MappingProxyType({}),
+    general_settings: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Path:
     config: Final = _JSON_OBJECT.validate_python(
         yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
@@ -473,6 +474,7 @@ def owned_config(
         "model_list": list(model_list),
         "litellm_settings": {**object_value(config["litellm_settings"]), **litellm_settings},
         "router_settings": {**object_value(config["router_settings"]), "num_retries": 0, **router_settings},
+        "general_settings": {**object_value(config["general_settings"]), **general_settings},
     }
     path: Final = directory / f"cache-control-marks-{uuid.uuid4().hex}.yaml"
     path.write_text(yaml.safe_dump(merged))

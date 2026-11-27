@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Final
 
 import httpx
+from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -32,6 +33,10 @@ from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
 GUARDRAIL_NAME: Final = "ibm_guardrails"
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class IBMGuardrailDetector(CustomGuardrail):
     def __init__(
         self,
@@ -45,7 +50,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         score_threshold: float | None = None,
         block_on_detection: bool = True,
         verify_ssl: bool = True,
-        **kwargs,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -83,13 +88,16 @@ class IBMGuardrailDetector(CustomGuardrail):
         self.guardrail_name = guardrail_name
         self.guardrail_provider = "ibm_guardrails"
 
-        # store kwargs as optional_params
-        self.optional_params = kwargs
-
         # Set supported event hooks
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        options: Final[_CustomGuardrailOptions] = {
+            **kwargs,
+            "supported_event_hooks": kwargs.get("supported_event_hooks", list(self.get_supported_event_hooks())),
+        }
 
-        super().__init__(guardrail_name=guardrail_name, **kwargs)
+        # store kwargs as optional_params
+        self.optional_params = options
+
+        super().__init__(guardrail_name=guardrail_name, **options)
 
         verbose_proxy_logger.debug(
             "IBM Guardrail Detector initialized with guardrail_name: %s, detector_id: %s, is_detector_server: %s",
@@ -102,7 +110,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         self,
         contents: list[str],
         event_type: GuardrailEventHooks,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> list[list[IBMDetectorDetection]]:
         """
         Call IBM Detector Server directly.
@@ -193,7 +201,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         self,
         content: str,
         event_type: GuardrailEventHooks,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> list[IBMDetectorDetection]:
         """
         Call IBM FMS Guardrails Orchestrator.
@@ -414,9 +422,9 @@ class IBMGuardrailDetector(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Runs before the LLM API call
         Runs on only Input
@@ -483,7 +491,7 @@ class IBMGuardrailDetector(CustomGuardrail):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ):
@@ -552,9 +560,9 @@ class IBMGuardrailDetector(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: object,
     ):
         """
         Runs on response from LLM API call
@@ -648,7 +656,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[ModelResponseStream],
-        request_data: dict,
+        request_data: Mapping[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Passes the entire stream to the guardrail

@@ -6,6 +6,7 @@ Canonical definition for ``litellm_mcpservertable``. Re-exported from
 """
 
 import enum
+import json
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
@@ -15,7 +16,12 @@ from pydantic import Field, ValidationInfo, field_validator
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.mcp import MCPAuthType, MCPCredentials, MCPTransportType
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool, parse_pinned_tools
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPInfo,
+    MCPServerEventsConfig,
+    PinnedMCPTool,
+    parse_pinned_tools,
+)
 
 
 class MCPEnvVarScope(str, enum.Enum):
@@ -112,6 +118,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
     rpm: int | None = None
+    events: MCPServerEventsConfig | None = None
     approval_status: str | None = Field(
         default="active",
         description="Approval status: 'pending_review', 'active', 'rejected'",
@@ -120,6 +127,11 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     submitted_at: datetime | None = None
     reviewed_at: datetime | None = None
     review_notes: str | None = None
+
+    @field_validator("events", mode="before")
+    @classmethod
+    def decode_stored_events(cls, value: object) -> object:
+        return json.loads(value) if isinstance(value, str) and value else value
 
     @field_validator("pinned_tools", mode="before")
     @classmethod

@@ -55,7 +55,7 @@ async def test_bearer_only_sdk_sync_async_requests_do_not_require_aws_credential
     }.items():
         monkeypatch.setenv(name, value)
     with wire_server(bearer_peer) as wire:
-        with pytest.raises(litellm.APIConnectionError, match=r"config profile .* could not be found"):
+        with pytest.raises(litellm.AuthenticationError, match=r"config profile .* could not be found"):
             await asyncio.to_thread(
                 litellm.completion,
                 model=MODEL,

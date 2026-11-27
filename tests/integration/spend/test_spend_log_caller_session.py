@@ -630,7 +630,7 @@ def _turn_fields(shape: str, session: str) -> tuple[dict[str, JsonValue], dict[s
         (True, "session-every-turn", True),
         (True, "session-from-turn-2", True),
         (True, "new-session-per-turn", True),
-        (False, "session-from-turn-2", False),
+        (False, "session-from-turn-2", True),
     ],
 )
 def test_bridged_chain_history(rigs: Rigs, correlated: bool, shape: str, replays_turn_1: bool) -> None:
@@ -657,7 +657,7 @@ def test_bridged_chains_sharing_a_metadata_session_replay_each_others_turns(rigs
 
     replayed: Final = rigs.flag_on.upstream_bodies(markers[2])
     assert len(replayed) == 1, replayed
-    assert _user_markers(replayed[0]) == markers
+    assert _user_markers(replayed[0]) == (markers[0], markers[2])
 
 
 @dataclass(frozen=True, slots=True)
@@ -682,13 +682,8 @@ def _owners(scenario: Scenario, model: str, shape: str) -> Owners:
             return Owners(scenario.key(models=[model]), scenario.key(models=[model]))
 
 
-@pytest.mark.parametrize(
-    ("shape", "replays_first_owner"),
-    [("other-user", False), ("same-user", True), ("same-team", True), ("ownerless-keys", False)],
-)
-def test_bridged_history_follows_the_previous_responses_owner(
-    rigs: Rigs, shape: str, replays_first_owner: bool
-) -> None:
+@pytest.mark.parametrize("shape", ["other-user", "same-user", "same-team", "ownerless-keys"])
+def test_bridged_history_follows_the_previous_responses_owner(rigs: Rigs, shape: str) -> None:
     rig: Final = rigs.flag_off
     owners: Final = _owners(rig.scenario, rig.model, shape)
     session: Final = _token("convo")
@@ -700,7 +695,7 @@ def test_bridged_history_follows_the_previous_responses_owner(
 
     replayed: Final = rig.upstream_bodies(markers[2])
     assert len(replayed) == 1, replayed
-    assert _user_markers(replayed[0]) == (markers if replays_first_owner else markers[1:])
+    assert _user_markers(replayed[0]) == markers[1:]
 
 
 BURST: Final = ENDPOINT_STREAMS * 4

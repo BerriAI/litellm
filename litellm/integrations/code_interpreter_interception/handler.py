@@ -13,11 +13,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, runtime_checkable
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_in_auto_mode,
+    allowed_tools_tool_choice_with_builtin_as_function,
+)
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.llms.base_llm.sandbox.transformation import (
     CodeExecutionResult,
     ContainerHandle,
@@ -56,6 +62,7 @@ _CONVERTED_STREAM_KEY: Final = "_code_interpreter_interception_converted_stream"
 _LITELLM_METADATA_KEY: Final = "litellm_metadata"
 _CACHE_TTL_SECONDS: Final = 15 * 60
 _SESSION_SCOPED_PER_IDENTITY_CAP: Final = 10
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class CodeExecutionToolCall(TypedDict, total=False):
@@ -75,7 +82,7 @@ class CodeInterpreterCall(TypedDict):
     id: str
     type: Literal["code_interpreter_call"]
     status: Literal["completed", "failed"]
-    code: str
+    code: ReadOnly[object]
     container_id: str | None
     outputs: list[CodeInterpreterLogOutput]
 
@@ -173,6 +180,10 @@ def _sandbox_unavailable(step: str, error: Exception, output: str = _SANDBOX_UNA
         "CodeInterpreterInterception: %s failed, answering the tool call with the failure: %s", step, error
     )
     return _SandboxUnavailable(output=output)
+
+
+def _is_code_interpreter_tool(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") == "code_interpreter"
 
 
 def _output_item_type(item: object) -> object:
@@ -302,7 +313,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         if not kwargs.get("_agentic_loop_depth") and not _bridged_from_responses(kwargs, call_type):
             kwargs.pop(_INTERCEPTION_ACTIVE_KEY, None)
             kwargs.pop(_SANDBOX_KEY, None)
@@ -343,8 +354,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             (function_tool if isinstance(tool, dict) and tool.get("type") == "code_interpreter" else tool)
             for tool in tools
         ]
-        if self._tool_choice_targets_code_interpreter(kwargs.get("tool_choice")):
-            kwargs["tool_choice"] = self._get_function_tool_choice(call_type=call_type)
+        if "tool_choice" in kwargs:
+            kwargs["tool_choice"] = self._intercepted_tool_choice(kwargs["tool_choice"], call_type)
         return kwargs
 
     @staticmethod
@@ -428,6 +439,14 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             or (isinstance(function, dict) and function.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME)
         )
 
+    @classmethod
+    def _intercepted_tool_choice(cls, tool_choice: object, call_type: CallTypes | None) -> object:
+        if cls._tool_choice_targets_code_interpreter(tool_choice):
+            return cls._get_function_tool_choice(call_type=call_type)
+        return allowed_tools_tool_choice_with_builtin_as_function(
+            tool_choice, _is_code_interpreter_tool, LITELLM_CODE_EXECUTION_TOOL_NAME
+        )
+
     def _resolve_provider(self, kwargs: dict[str, object]) -> str | None:
         provider: Final = kwargs.get("custom_llm_provider")
         if isinstance(provider, str) and provider:
@@ -444,12 +463,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         if not self.enabled:
             return False, {}
         if not kwargs.get(_INTERCEPTION_ACTIVE_KEY):
@@ -469,9 +488,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def async_build_agentic_loop_plan(
         self,
-        tools: dict,
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         response: object,
         anthropic_messages_provider_config: object,
         anthropic_messages_optional_request_params: dict[str, object],
@@ -558,9 +577,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def _build_chat_completion_agentic_loop_plan(
         self,
-        tools: dict[str, object],
+        tools: Mapping[str, object],
         model: str,
-        messages: list[dict],
+        messages: Sequence[Mapping[str, object]],
         optional_params: dict[str, object],
         kwargs: dict[str, object],
     ) -> AgenticLoopPlan:
@@ -621,7 +640,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
                 return None
 
     @staticmethod
-    def _agentic_tool_calls(tools: dict[str, object]) -> list[CodeExecutionToolCall]:
+    def _agentic_tool_calls(tools: Mapping[str, object]) -> list[CodeExecutionToolCall]:
         tool_calls: Final = tools.get("tool_calls")
         if not isinstance(tool_calls, list):
             return []
@@ -659,7 +678,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             },
         )
 
-    async def async_agentic_loop_cleanup_hook(self, plan: AgenticLoopPlan, kwargs: dict) -> None:
+    async def async_agentic_loop_cleanup_hook(self, plan: AgenticLoopPlan, kwargs: Mapping[str, object]) -> None:
         metadata: Final[dict[str, object]] = plan.metadata or {} if plan else {}
         if metadata.get("is_session_scoped"):
             return
@@ -694,11 +713,13 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     def _get_followup_optional_params(self, optional_params: dict[str, object]) -> dict[str, object]:
         drop_tool_choice: Final = self._tool_choice_targets_code_interpreter(optional_params.get("tool_choice"))
         return {
-            k: v for k, v in optional_params.items() if k != "tools" and not (k == "tool_choice" and drop_tool_choice)
+            k: allowed_tools_tool_choice_in_auto_mode(v) if k == "tool_choice" else v
+            for k, v in optional_params.items()
+            if k != "tools" and not (k == "tool_choice" and drop_tool_choice)
         }
 
     async def async_post_agentic_loop_response_hook(
-        self, response: object, plan: AgenticLoopPlan, kwargs: dict
+        self, response: object, plan: AgenticLoopPlan, kwargs: Mapping[str, object]
     ) -> object:
         metadata: Final[dict[str, object]] = plan.metadata or {} if plan else {}
         if not metadata.get("is_session_scoped"):
@@ -734,9 +755,11 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return items[:insert_at] + list(calls) + items[insert_at:]
 
     @staticmethod
-    def _parse_code(arguments: str) -> str:
+    def _parse_code(arguments: str) -> object:
         try:
-            return json.loads(arguments).get("code", "") if arguments else ""
+            return (
+                require_get(_DECODED_JSON.validate_python(json.loads(arguments))).get("code", "") if arguments else ""
+            )
         except (json.JSONDecodeError, TypeError, AttributeError):
             return ""
 

@@ -2,7 +2,7 @@
 Type definitions for Anthropic Skills API
 """
 
-from typing import Any
+from collections.abc import Sequence
 
 from typing_extensions import TypedDict
 
@@ -16,7 +16,7 @@ class CreateSkillRequest(TypedDict, total=False):
     display_title: str | None
     """Display title for the skill (optional)"""
 
-    files: list[Any] | None
+    files: Sequence[object] | None
     """Files to upload for the skill. All files must be in the same top-level directory and must include a SKILL.md file at the root."""
 
 
@@ -104,7 +104,7 @@ class CreateSkillVersionRequest(TypedDict, total=False):
     instructions: str | None
     """Instructions for this version"""
 
-    metadata: dict[str, Any] | None
+    metadata: dict[str, object] | None
     """Additional metadata"""
 
 
@@ -129,7 +129,7 @@ class SkillVersion(LiteLLMBaseModel):
     instructions: str | None = None
     """Instructions for this version"""
 
-    metadata: dict[str, Any] | None = None
+    metadata: dict[str, object] | None = None
     """Additional metadata"""
 
     type: str = "skill.version"
