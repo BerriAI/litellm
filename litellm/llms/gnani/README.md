@@ -89,4 +89,4 @@ curl --fail --silent --show-error --no-buffer http://localhost:4000/v1/audio/spe
   | ffplay -nodisp -autoexit -f s16le -ar 24000 -ch_layout mono -i pipe:0
 ```
 
-PCM, WAV, MP3 and G.711 support incremental delivery. Streamed WAV uses an unknown length in its RIFF and data headers. Use REST when a file reader requires the final length in the header. Gnani sends Ogg Opus in a single event at the end. An upstream error or disconnect before completion interrupts the audio stream. [Gnani streaming reference](https://docs.gnani.ai/api/TTS/tts-sse).
+PCM, WAV, MP3 and G.711 support incremental delivery. An empty native `audio_config` produces raw PCM. Streamed WAV uses an unknown length in its RIFF and data headers. Use REST when a file reader requires the final length in the header. Gnani sends Ogg Opus in a single event at the end. An upstream error or disconnect before completion interrupts the audio stream. [Gnani streaming reference](https://docs.gnani.ai/api/TTS/tts-sse).

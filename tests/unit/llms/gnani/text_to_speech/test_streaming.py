@@ -107,7 +107,8 @@ async def test_caller_can_release_a_stream_without_draining_it(read_first: bool)
 @pytest.mark.parametrize(
     ("config", "mime"),
     (
-        ({}, "audio/wav"),
+        ({}, "audio/pcm"),
+        ({"container": "wav"}, "audio/wav"),
         ({"container": "mp3"}, "audio/mpeg"),
         ({"container": "raw", "encoding": "pcm_alaw"}, "audio/alaw"),
         ({"container": "mulaw"}, "audio/basic"),

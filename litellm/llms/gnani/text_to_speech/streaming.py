@@ -97,7 +97,7 @@ class GnaniStreamingTextToSpeechConfig(GnaniTextToSpeechConfig):
 
     def __init__(self, params: Mapping[str, object]) -> None:
         config: Final = as_str_mapping(params.get("audio_config")) or {}
-        container: Final = str(config.get("container", "wav"))
+        container: Final = str(config.get("container", "raw"))
         output: Final = _ENCODINGS.get(str(config.get("encoding")), container) if container != "ogg" else container
         self._media_type: Final = _MEDIA_TYPES.get(output, "application/octet-stream")
 
