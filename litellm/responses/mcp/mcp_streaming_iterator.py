@@ -6,6 +6,7 @@ from typing_extensions import TypedDict as ExtraItemsTypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.agentic_loop_settings import validated_max_agentic_loops
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     NO_GATEWAY_TOOLS,
@@ -778,6 +779,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             _set_event_field(chunk, "response", merged_response)
         if self._round_billing is None:
             return chunk
+        if chunk.type == ResponsesAPIStreamEvents.RESPONSE_FAILED:
+            _set_event_field(chunk, "response", self._round_billing.merge_failed_response(merged_response))
+            return chunk
         if not self._round_billed_early():
             self._round_billing.complete_round(
                 chunk, response_obj, _output_items(merged_response), self._restore_round_headers
@@ -796,9 +800,13 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if not self.base_iterator or not hasattr(self.base_iterator, "__anext__"):
             raise StopAsyncIteration
 
-        chunk: Final[ResponsesAPIStreamingResponse] = await cast(  # cast-ok: hasattr __anext__ checked above
-            "AsyncIterator[ResponsesAPIStreamingResponse]", self.base_iterator
-        ).__anext__()
+        try:
+            chunk = await cast("AsyncIterator[ResponsesAPIStreamingResponse]", self.base_iterator).__anext__()
+        except MidStreamFallbackError:
+            terminal: Final[object] = getattr(self.base_iterator, "completed_response", None)
+            if not self._composed_output or not isinstance(terminal, ResponseFailedEvent):
+                raise
+            chunk = terminal
 
         if self._cached_response_id is None and hasattr(chunk, "response"):
             new_response: Final[ResponsesAPIResponse | None] = getattr(chunk, "response", None)

@@ -189,6 +189,12 @@ class StreamedRoundBilling:
         if getattr(logging_obj, DISPATCH_RELEASE, None) is None:
             setattr(logging_obj, DISPATCH_RELEASE, self._run_parked)
 
+    def merge_failed_response(self, response: ResponsesAPIResponse) -> ResponsesAPIResponse:
+        if self._billed is None:
+            return response
+        price: Final = self._price(response, None)
+        return self._billed.with_round(_priced(response, price), price.cost_breakdown, None).response
+
     def complete_round(
         self,
         completed: ResponsesAPIStreamingResponse,

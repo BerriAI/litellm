@@ -2829,6 +2829,32 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
 _FIXED_MARGIN: Final = 0.001
 
 
+@pytest.mark.asyncio
+async def test_provider_failed_after_mcp_preserves_receipts_and_bills_usage_once(respx_mock, monkeypatch):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    failed: Final = _streamed(
+        _ROUND_TWO_BODY, status="failed", error={"code": "server_error", "message": "Fixture failure"}
+    )
+    _serve_responses(respx_mock, monkeypatch, (_streamed(_ROUND_ONE_BODY), failed))
+    recorder: Final = _RoundRecorder()
+    events: Final = await _stream_auto_execute(_rounds_logging_obj(recorder, "mcp-stream-provider-failed"))
+    await _settle(lambda: len(recorder.failed) > 0)
+    terminal: Final = _final_response(events, "response.failed")
+    assert terminal.status == "failed"
+    assert len([
+        item for item in terminal.output
+        if (item.get("type") if isinstance(item, dict) else item.type) == "mcp_call"
+    ]) == 1
+    rows: Final = (*recorder.logged, *recorder.failed)
+    assert sum(row["prompt_tokens"] for row in rows) == 71 + 149
+    assert sum(row["completion_tokens"] for row in rows) == 19 + 5
+    assert sum(row["response_cost"] for row in rows) == pytest.approx(
+        _round_cost(_ROUND_ONE_BODY) + _round_cost(_ROUND_TWO_BODY) - _FIXED_MARGIN
+    )
+    assert terminal.usage is not None
+    assert (terminal.usage.input_tokens, terminal.usage.output_tokens) == (71 + 149, 19 + 5)
+
+
 def _streamed(body: Mapping[str, object], **terminal: object) -> httpx.Response:
     completed: Final = json.loads(json.dumps({**body, **terminal}, default=dict))
     opened: Final = {**completed, "status": "in_progress", "output": [], "usage": None}
