@@ -629,6 +629,16 @@ def stub_aws_sdk_client(monkeypatch):
 
 
 @pytest.fixture
+def stub_aws_signing(monkeypatch: pytest.MonkeyPatch) -> None:
+    frozen_credentials: Final = SimpleNamespace(access_key="k", secret_key="s", token=None)
+    credentials: Final = SimpleNamespace(get_frozen_credentials=lambda: frozen_credentials)
+    monkeypatch.setattr(
+        "litellm.llms.bedrock.realtime.handler.run_aws_signing",
+        AsyncMock(side_effect=[credentials, frozen_credentials]),
+    )
+
+
+@pytest.fixture
 def stub_aws_models(monkeypatch):
     package = types.ModuleType("aws_sdk_bedrock_runtime")
     models = types.ModuleType("aws_sdk_bedrock_runtime.models")
@@ -2359,7 +2369,7 @@ class TestBedrockRealtimeGuardrails:
 
     @pytest.mark.asyncio
     async def test_proxy_request_guardrails_and_key_reach_the_bedrock_session(
-        self, stub_aws_sdk_client: dict[str, object], monkeypatch: pytest.MonkeyPatch
+        self, stub_aws_sdk_client: dict[str, object], stub_aws_signing: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class ProxyLogging(FakeLogging):
             def update_from_kwargs(self, **kwargs: object) -> None:
@@ -2392,18 +2402,12 @@ class TestBedrockRealtimeGuardrails:
 
     @pytest.mark.asyncio
     async def test_a_key_that_opted_out_of_global_guardrails_is_not_screened(
-        self, stub_aws_sdk_client: dict[str, object], monkeypatch: pytest.MonkeyPatch
+        self, stub_aws_sdk_client: dict[str, object], stub_aws_signing: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class ProxyLogging(FakeLogging):
             def update_from_kwargs(self, **kwargs: object) -> None:
                 pass
 
-        frozen_credentials: Final = SimpleNamespace(access_key="k", secret_key="s", token=None)
-        credentials: Final = SimpleNamespace(get_frozen_credentials=lambda: frozen_credentials)
-        monkeypatch.setattr(
-            "litellm.llms.bedrock.realtime.handler.run_aws_signing",
-            AsyncMock(side_effect=[credentials, frozen_credentials]),
-        )
         guardrail: Final = self._guardrail()
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
         stream: Final = ScriptedBedrockStream([], receiver_type=DrainedThenOpenBedrockReceiver)
