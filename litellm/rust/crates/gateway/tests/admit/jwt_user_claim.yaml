@@ -1,8 +1,9 @@
-# With a user claim configured, a proxy admin JWT has the user it names read natively. A user
-# Python has nothing to write for is found, and its caller still goes to Python, since the native
-# spend log charges no user yet, and over its team when it also chooses one. A user the database
-# does not hold is one Python looks up by its sign-in, and any other JWT's user is read with its
-# membership, so neither is native.
+# With a user claim configured, the user a JWT names is read natively, with its membership of the
+# team the JWT chooses. A user Python has nothing to write for is found, and its caller still goes
+# to Python, since the native spend log charges no user yet, and over its team when it also
+# chooses one. A user that holds a budget, a user Python links the sign-in to, a user the database
+# does not hold, which Python looks up by its sign-in, and a team Python adds the user to are not
+# native.
 enterprise: true
 
 config:
@@ -17,12 +18,16 @@ config:
     litellm_jwtauth:
       admin_allowed_routes: [/v1/messages]
       user_id_jwt_field: sub
+      team_ids_jwt_field: groups
 
 teams:
-  team-1: {}
+  team-1: {members_with_roles: [{user_id: user-member, role: user}]}
 
 users:
   user-1: {sso_user_id: user-1}
+  user-capped: {sso_user_id: user-capped, max_budget: 10}
+  user-member: {sso_user_id: user-member, teams: [team-1]}
+  user-unlinked: {}
 
 requests:
   - name: a proxy admin JWT naming a user
@@ -54,6 +59,43 @@ requests:
 
   - name: a user JWT naming a user
     jwt: {claims: {sub: user-1}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: user
+
+  - name: a user JWT naming a user and choosing a team it belongs to
+    jwt: {claims: {sub: user-member, groups: [team-1]}}
+    headers: {x-litellm-team-id: team-1}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a user JWT choosing a team Python adds its user to
+    jwt: {claims: {sub: user-1, groups: [team-1]}}
+    headers: {x-litellm-team-id: team-1}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a user JWT naming a user with a budget
+    jwt: {claims: {sub: user-capped}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: max_budget
+
+  - name: a user JWT naming a user Python links its sign-in to
+    jwt: {claims: {sub: user-unlinked}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a user JWT naming a user the database does not hold
+    jwt: {claims: {sub: user-gone}}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential

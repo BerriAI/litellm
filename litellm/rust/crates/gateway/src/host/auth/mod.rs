@@ -456,12 +456,30 @@ impl AuthHost for NativeAuthHost {
             .or_else(declined)
     }
 
+    /// `GrantResolver.resolve_identity`: the user, then its membership of the team asked about,
+    /// under the id its row holds. A user that is not found ends it with no membership read.
     async fn resolve_user_identity(
         &self,
-        _: &UserLookup<'_>,
-        _: Option<&str>,
+        lookup: &UserLookup<'_>,
+        team_id: Option<&str>,
     ) -> Result<IdentityRead<NativeRows>, Error> {
-        declined("resolve_user_identity")
+        let UserRead::Found(user) = self.user(lookup).await? else {
+            return Ok(IdentityRead {
+                user: UserRead::Absent,
+                membership: None,
+            });
+        };
+        let membership = match team_id {
+            Some(team_id) => {
+                self.load_team_membership(&user.user_id, team_id, AffiliationRead::Jwt)
+                    .await?
+            }
+            None => None,
+        };
+        Ok(IdentityRead {
+            user: UserRead::Found(user),
+            membership,
+        })
     }
 
     /// The core asks for the cached team only to bring a key's own copy of the team's values up
@@ -658,13 +676,15 @@ impl AuthHost for NativeAuthHost {
         }
     }
 
+    /// A user this host found holds no per-model budget, since `affiliation::user` declines a row
+    /// with a `model_max_budget`, and Python's check reads nothing else.
     async fn jwt_user_model_budget(
         &self,
         _: &UserRecord,
         _: &str,
         _: Option<&str>,
     ) -> Result<(), Error> {
-        declined("jwt_user_model_budget")
+        Ok(())
     }
 
     async fn proxy_budget_alert(&self, _: &Key) -> Result<(), Error> {
@@ -2424,6 +2444,78 @@ router_settings:",
             .await;
 
         assert_eq!(read, Err(Error::HostDeclined));
+    }
+
+    #[rstest]
+    #[case::a_member_of_the_team_asked_about(
+        Some(json!({})),
+        looking_up(Some("user-1"), None),
+        Some("team"),
+        Ok((true, true)),
+        true
+    )]
+    #[case::a_user_who_is_no_member_of_another_team(
+        Some(json!({})),
+        looking_up(Some("user-1"), None),
+        Some("team-2"),
+        Ok((true, false)),
+        false
+    )]
+    #[case::no_team_asked_about(
+        Some(json!({})),
+        looking_up(Some("user-1"), None),
+        None,
+        Ok((true, false)),
+        false
+    )]
+    #[case::a_user_with_other_metadata(
+        Some(json!({"metadata": {"department": "eng"}})),
+        looking_up(Some("user-1"), None),
+        Some("team"),
+        Err(Error::HostDeclined),
+        false
+    )]
+    #[case::no_user(None, looking_up(None, None), Some("team"), Ok((false, false)), false)]
+    #[tokio::test]
+    async fn a_jwts_user_is_answered_with_its_membership_of_the_team_asked_about(
+        #[case] row: Option<Columns>,
+        #[case] lookup: UserLookup<'static>,
+        #[case] team_id: Option<&str>,
+        #[case] answered: Result<(bool, bool), Error>,
+        #[case] membership_read: bool,
+    ) {
+        let held = Held::start().await;
+        held.execute(PARENTS).await;
+        if let Some(columns) = row {
+            let row = json!({"user_id": "user-1", "sso_user_id": "user-1"})
+                .as_object()
+                .unwrap()
+                .clone()
+                .into_iter()
+                .chain(columns.as_object().unwrap().clone())
+                .collect();
+            held.insert_named("LiteLLM_UserTable", &Columns::Object(row))
+                .await;
+            held.insert_named(
+                "LiteLLM_TeamMembership",
+                &json!({"user_id": "user-1", "team_id": "team"}),
+            )
+            .await;
+        }
+        let cache = keys::memory_cache();
+
+        let read = affiliated(&cache, &held)
+            .resolve_user_identity(&lookup, team_id)
+            .await;
+
+        let cached = cache.get(None, &membership_object()).await.unwrap();
+        assert_eq!(
+            (
+                read.map(|read| (read.user.found().is_some(), read.membership.is_some())),
+                cached.is_some()
+            ),
+            (answered, membership_read)
+        );
     }
 
     /// `NO_TEAM_MEMBERSHIP_SENTINEL` in `litellm/proxy/common_utils/user_api_key_cache.py`.
