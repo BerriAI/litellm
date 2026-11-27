@@ -6796,6 +6796,28 @@ def test_decisions_cost_uses_mapped_model_when_vendor_echo_is_unmapped(
     assert cost == pytest.approx(100 * 0.000002 + 50 * 0.000004)
 
 
+@pytest.mark.parametrize("region", ("us", "eu", "apac"))
+@pytest.mark.parametrize("call_type", ("adecisions", "asystemone"))
+def test_foundry_decision_data_zone_uses_regional_input_price(
+    _local_model_cost_map: None, region: str, call_type: Literal["adecisions", "asystemone"]
+) -> None:
+    global_key: Final = "azure_ai/Microsoft-Decision-1.1"
+    regional_key: Final = f"azure_ai/{region}/Microsoft-Decision-1.1"
+    usage: Final = DecisionsUsage(input_tokens=100, output_tokens=50)
+    response: Final = DecisionsResponse(model="Microsoft-Decision-1.1", answers={}, usage=usage)
+    response.set_hidden_params({"provider_response_model": global_key})
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="azure_ai/my-data-zone-deployment",
+        custom_llm_provider="azure_ai",
+        base_model=regional_key,
+        call_type=call_type,
+    )
+
+    assert cost == pytest.approx(usage.input_tokens * litellm.model_cost[regional_key]["input_cost_per_token"])
+
+
 def test_completion_cost_prefers_private_provider_response_model(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

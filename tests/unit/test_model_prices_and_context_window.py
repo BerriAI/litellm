@@ -34,6 +34,23 @@ def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
 
 
+@pytest.mark.parametrize(
+    ("model", "provider", "mode"),
+    (
+        ("groq/meta-models/muse-spark-open", "groq", "chat"),
+        ("groq/minimaxai/minimax-m2.7", "groq", "chat"),
+        ("perplexity/google/gemini-4-neon", "perplexity", "responses"),
+        ("fireworks_ai/accounts/fireworks/models/inkling-2-mini", "fireworks_ai", "chat"),
+        ("databricks/databricks-gemini-nano-banana-2-1", "databricks", "chat"),
+    ),
+)
+def test_provider_model_info_resolves_in_its_published_mode(
+    local_model_cost_map: None, model: str, provider: str, mode: str
+) -> None:
+    info: Final = litellm.get_model_info(model)
+    assert (info["litellm_provider"], info["mode"]) == (provider, mode)
+
+
 @pytest.mark.parametrize("model", ("azure/gpt-audio-1.5-2026-02-23", "azure/gpt-audio-mini-2025-10-06"))
 def test_azure_audio_snapshot_capabilities_match_declared_modalities(model: str, local_model_cost_map: None) -> None:
     catalog: Final = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
