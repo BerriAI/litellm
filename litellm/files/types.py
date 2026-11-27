@@ -4,10 +4,29 @@ from typing import Literal, NamedTuple, TypedDict
 from typing_extensions import NotRequired, ReadOnly
 
 FileContentProvider = Literal[
-    "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "manus", "mistral"
+    "openai",
+    "azure",
+    "vertex_ai",
+    "bedrock",
+    "hosted_vllm",
+    "litellm_proxy",
+    "anthropic",
+    "manus",
+    "mistral",
+    "openrouter",
 ]
 FileRetrieveProvider = Literal[
-    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "litellm_proxy", "manus", "anthropic", "mistral", "xai"
+    "openai",
+    "azure",
+    "gemini",
+    "vertex_ai",
+    "hosted_vllm",
+    "litellm_proxy",
+    "manus",
+    "anthropic",
+    "mistral",
+    "xai",
+    "openrouter",
 ]
 
 

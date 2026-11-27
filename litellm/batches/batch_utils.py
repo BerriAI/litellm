@@ -64,7 +64,7 @@ def _uses_native_vertex_output(
 
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: Sequence[dict[str, object]],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral", "openrouter"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
@@ -75,7 +75,7 @@ async def calculate_batch_cost_and_usage(
 
 def batch_cost_and_usage(
     file_content_dictionary: Sequence[dict[str, object]],  # mutable-ok: the rows calculate_batch_cost_and_usage takes
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral", "openrouter"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
@@ -108,7 +108,7 @@ def batch_cost_and_usage(
 
 async def handle_completed_batch(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral", "openrouter"],
     model_name: str | None = None,
     litellm_params: dict[str, object] | None = None,
     model_info: ModelInfo | None = None,
@@ -206,7 +206,9 @@ class _BatchOutputLineStats:
 
 def _classify_output_line_stats(
     entries: Iterable[dict[str, object]],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral", "openrouter"
+    ],
     model_name: str | None,
     model_info: ModelInfo | None,
     vertex_location: str | None = None,
@@ -225,7 +227,9 @@ def _classify_output_line_stats(
 
 def _classify_output_line(
     entry: Mapping[str, object],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral", "openrouter"
+    ],
     model_name: str | None,
     model_info: ModelInfo | None,
     vertex_location: str | None,
@@ -251,7 +255,9 @@ def _failed_line_reports_usage(entry: Mapping[str, object], custom_llm_provider:
 
 def _safe_output_line_stats(
     entry: Mapping[str, object],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral", "openrouter"
+    ],
     model_name: str | None,
     model_info: ModelInfo | None,
     vertex_location: str | None = None,
@@ -274,7 +280,9 @@ def _safe_output_line_stats(
 
 def _compute_output_line_stats(
     entry: Mapping[str, object],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral", "openrouter"
+    ],
     model_name: str | None,
     model_info: ModelInfo | None,
     vertex_location: str | None = None,
@@ -326,7 +334,9 @@ def _ocr_usage_info_from_response_body(response_body: Mapping[str, object]) -> O
 def _output_line_cost_or_pending(
     response_body: Mapping[str, object],
     usage: Usage,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral", "openrouter"
+    ],
     model_name: str | None,
     response_model: str | None,
     model_info: ModelInfo | None,
@@ -374,7 +384,9 @@ def _batch_usage_by_model(usages: tuple[tuple[str | None, Usage | None], ...]) -
 def _output_line_cost(
     response_body: Mapping[str, object],
     usage: Usage,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral", "openrouter"
+    ],
     model_name: str | None,
     response_model: str | None,
     model_info: ModelInfo | None,
@@ -405,7 +417,9 @@ def _output_line_cost(
 
 def _aggregate_batch_cost_usage_models(
     entries: Iterable[dict[str, object]],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral", "openrouter"
+    ],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
@@ -568,7 +582,9 @@ def _provider_output_file_id(output_file_id: str) -> str:
 
 async def fetch_batch_managed_file_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral", "openrouter"
+    ] = "openai",
     litellm_params: Mapping[str, object] | None = None,
 ) -> bytes:
     """
@@ -602,7 +618,9 @@ _fetch_batch_managed_file_content: Final = fetch_batch_managed_file_content
 
 async def _fetch_batch_output_file_content(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral", "openrouter"
+    ] = "openai",
     litellm_params: Mapping[str, object] | None = None,
 ) -> bytes:
     """
@@ -624,7 +642,7 @@ async def _fetch_batch_output_file_content(
 
 async def count_error_file_failed_requests(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral", "openrouter"],
     litellm_params: Mapping[str, object] | None,
 ) -> int:
     """Count failed requests reported only in the batch's separate error file.

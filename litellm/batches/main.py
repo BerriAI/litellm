@@ -31,6 +31,7 @@ from litellm.llms.azure.batches.handler import AzureBatchesAPI
 from litellm.llms.bedrock.batches.handler import BedrockBatchesHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai.openai import OpenAIBatchesAPI
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 from litellm.llms.xai.batches.handler import XAIBatchesHandler
@@ -131,7 +132,7 @@ async def acreate_batch(
     ],
     input_file_id: str,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral", "xai"
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral", "xai", "openrouter"
     ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
@@ -195,7 +196,7 @@ def create_batch(
     ],
     input_file_id: str,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral", "xai"
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "mistral", "xai", "openrouter"
     ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
@@ -289,26 +290,15 @@ def create_batch(
         api_base: str | None = None
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or os.getenv("OPENAI_BASE_URL")
-                or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+            openai_creds = get_openai_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                organization=optional_params.organization,
+                custom_llm_provider=custom_llm_provider,
             )
-            organization: Final = (
-                optional_params.organization
-                or litellm.organization
-                or os.getenv("OPENAI_ORGANIZATION", None)
-                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-            )
-            # set API KEY
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
-                or os.getenv("OPENAI_API_KEY")
-            )
+            api_base = openai_creds.api_base
+            organization = openai_creds.organization
+            api_key = openai_creds.api_key
 
             response = openai_batches_instance.create_batch(
                 api_base=api_base,
@@ -390,7 +380,16 @@ def create_batch(
 async def aretrieve_batch(
     batch_id: str,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "mistral", "xai"
+        "openai",
+        "azure",
+        "vertex_ai",
+        "bedrock",
+        "hosted_vllm",
+        "litellm_proxy",
+        "anthropic",
+        "mistral",
+        "xai",
+        "openrouter",
     ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
@@ -438,7 +437,16 @@ def _handle_retrieve_batch_providers_without_provider_config(
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "mistral", "xai"
+        "openai",
+        "azure",
+        "vertex_ai",
+        "bedrock",
+        "hosted_vllm",
+        "litellm_proxy",
+        "anthropic",
+        "mistral",
+        "xai",
+        "openrouter",
     ] = "openai",
     logging_obj: LiteLLMLoggingObj | None = None,
 ):
@@ -453,26 +461,15 @@ def _handle_retrieve_batch_providers_without_provider_config(
     api_base: str | None = None
     if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
         # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
-        api_base = (
-            optional_params.api_base
-            or litellm.api_base
-            or os.getenv("OPENAI_BASE_URL")
-            or os.getenv("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+        openai_creds = get_openai_credentials(
+            api_base=optional_params.api_base,
+            api_key=optional_params.api_key,
+            organization=optional_params.organization,
+            custom_llm_provider=custom_llm_provider,
         )
-        organization: Final = (
-            optional_params.organization
-            or litellm.organization
-            or os.getenv("OPENAI_ORGANIZATION", None)
-            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-        )
-        # set API KEY
-        api_key = (
-            optional_params.api_key
-            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-            or litellm.openai_key
-            or os.getenv("OPENAI_API_KEY")
-        )
+        api_base = openai_creds.api_base
+        organization = openai_creds.organization
+        api_key = openai_creds.api_key
 
         response = openai_batches_instance.retrieve_batch(
             _is_async=_is_async,
@@ -574,7 +571,16 @@ def _handle_retrieve_batch_providers_without_provider_config(
 def retrieve_batch(
     batch_id: str,
     custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic", "mistral", "xai"
+        "openai",
+        "azure",
+        "vertex_ai",
+        "bedrock",
+        "hosted_vllm",
+        "litellm_proxy",
+        "anthropic",
+        "mistral",
+        "xai",
+        "openrouter",
     ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
@@ -808,19 +814,15 @@ def list_batches(
             )
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or os.getenv("OPENAI_BASE_URL")
-                or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+            openai_creds = get_openai_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                organization=optional_params.organization,
+                custom_llm_provider=custom_llm_provider,
             )
-            organization: Final = (
-                optional_params.organization
-                or litellm.organization
-                or os.getenv("OPENAI_ORGANIZATION", None)
-                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-            )
+            api_base = openai_creds.api_base
+            organization = openai_creds.organization
+            api_key = openai_creds.api_key
 
             response = openai_batches_instance.list_batches(
                 _is_async=_is_async,
@@ -903,7 +905,9 @@ def list_batches(
 async def acancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "xai"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "xai", "openrouter"
+    ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -949,7 +953,8 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "xai"] | str = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "xai", "openrouter"]
+    | str = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -1010,17 +1015,15 @@ def cancel_batch(
             )
         api_base: str | None = None
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or os.getenv("OPENAI_BASE_URL")
-                or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+            openai_creds = get_openai_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                organization=optional_params.organization,
+                custom_llm_provider=custom_llm_provider,
             )
-            organization: Final = (
-                optional_params.organization or litellm.organization or os.getenv("OPENAI_ORGANIZATION", None) or None
-            )
-            api_key = optional_params.api_key or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY")
+            api_base = openai_creds.api_base
+            organization = openai_creds.organization
+            api_key = openai_creds.api_key
 
             response = openai_batches_instance.cancel_batch(
                 _is_async=_is_async,

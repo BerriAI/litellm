@@ -697,8 +697,20 @@ def get_openai_credentials(
     api_base: str | None = None,
     api_key: str | None = None,
     organization: str | None = None,
+    custom_llm_provider: str | None = None,
 ) -> OpenAICredentials:
     """Resolve OpenAI credentials from params, litellm globals, and env vars."""
+    if custom_llm_provider == "openrouter":
+        from litellm.llms.openrouter.common_utils import OpenRouterModelInfo
+
+        resolved_api_base: Final = api_base or litellm.api_base or OpenRouterModelInfo.get_api_base()
+        resolved_api_key: Final = api_key or OpenRouterModelInfo.get_api_key()
+        return OpenAICredentials(
+            api_base=resolved_api_base,
+            api_key=resolved_api_key,
+            organization=organization,
+        )
+
     resolved_api_base: Final = (
         api_base
         or litellm.api_base
