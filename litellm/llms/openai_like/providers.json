@@ -397,5 +397,10 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "cayman-ai": {
+    "base_url": "http://50.114.206.42:8080/v1",
+    "api_key_env": "CAYMAN_API_KEY",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
