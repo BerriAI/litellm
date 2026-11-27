@@ -64,3 +64,23 @@ def test_followup_kwargs_carry_the_loop_bookkeeping_without_touching_the_inputs(
     assert fingerprints == ["earlier"]
     assert request_kwargs == {"_agentic_loop_depth": 0, "max_agentic_loops": 9}
     assert patch_kwargs == {"_agentic_loop_fingerprints": ["stale"]}
+
+
+def test_followup_kwargs_isolate_metadata_dicts_from_parent_request():
+    """Follow-up calls must receive fresh metadata copies without OTel's per-call dedupe state."""
+    parent_metadata: Final[dict[str, object]] = {"k": "v", "_otel_internal": {"spans_logged": {("x",): True}}}
+    parent_litellm_metadata: Final[dict[str, object]] = {"tag": "a", "_otel_internal": {"spans_logged": {}}}
+
+    followup: Final = _build(
+        request_kwargs={"metadata": parent_metadata, "litellm_metadata": parent_litellm_metadata},
+        patch_kwargs={},
+        request_params=set(),
+    )
+
+    assert followup["metadata"] == {"k": "v"}
+    assert followup["litellm_metadata"] == {"tag": "a"}
+    assert followup["metadata"] is not parent_metadata
+    assert followup["litellm_metadata"] is not parent_litellm_metadata
+    followup["metadata"]["_otel_internal"] = {"spans_logged": {("y",): True}}  # type: ignore[index]
+    assert parent_metadata["k"] == "v"
+    assert ("y",) not in parent_metadata["_otel_internal"]["spans_logged"]  # type: ignore[index]

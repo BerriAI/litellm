@@ -1736,3 +1736,245 @@ async def test_a_responses_request_bridged_to_claude_runs_the_code_and_ends_with
     assert provider.call_count == 2
     assert [run["code"] for run in sandbox.run_calls] == ["print(40 + 2)"]
     assert not [item for item in response.output if getattr(item, "type", None) == "function_call"]
+
+
+def _responses_payload(
+    *,
+    output: list[dict[str, object]],
+    input_tokens: int,
+    output_tokens: int,
+    response_id: str = "resp_1",
+) -> dict[str, object]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 1,
+        "model": "gpt-4o-mini",
+        "status": "completed",
+        "output": output,
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        },
+    }
+
+
+class _SuccessRecorder:
+    @staticmethod
+    def build():
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _Logger(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.events: list[tuple[dict[str, object], object]] = []
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                self.events.append((kwargs, response_obj))
+
+        return _Logger()
+
+
+def _mock_code_interpreter_responses_pair(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_responses_payload(
+                    response_id="resp_1",
+                    input_tokens=111,
+                    output_tokens=75,
+                    output=[
+                        {
+                            "type": "function_call",
+                            "id": "fc_1",
+                            "call_id": "call_1",
+                            "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                            "arguments": '{"code": "print(1)"}',
+                            "status": "completed",
+                        }
+                    ],
+                ),
+            ),
+            httpx.Response(
+                200,
+                json=_responses_payload(
+                    response_id="resp_2",
+                    input_tokens=254,
+                    output_tokens=60,
+                    output=[
+                        {
+                            "type": "message",
+                            "id": "msg_1",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "done", "annotations": []}],
+                        }
+                    ],
+                ),
+            ),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_metadata", (True, False), ids=("metadata", "no_metadata"))
+async def test_aresponses_code_interpreter_sums_usage_and_cost_across_rounds(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, with_metadata: bool
+) -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    exporter: Final = InMemorySpanExporter()
+    tracer_provider: Final = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    recorder: Final = _SuccessRecorder.build()
+    saved_callbacks: Final = list(litellm.callbacks)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox(stdout="1\n")),
+            OpenTelemetry(config=OpenTelemetryConfig(), tracer_provider=tracer_provider),
+            recorder,
+        ],
+    )
+    provider: Final = _mock_code_interpreter_responses_pair(respx_mock)
+
+    try:
+        extra: dict[str, object] = {"metadata": {"k": "v"}} if with_metadata else {}
+        response: Final = await litellm.aresponses(
+            model="openai/gpt-4o-mini",
+            input="hi",
+            api_key="sk-test",
+            tools=[{"type": "code_interpreter", "container": {"type": "auto"}}],
+            **extra,
+        )
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        litellm.callbacks = saved_callbacks
+
+    assert provider.call_count == 2
+    assert response.usage is not None
+    assert (response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens) == (365, 135, 500)
+
+    price: Final = litellm.model_cost["gpt-4o-mini"]
+    expected_cost: Final = 365 * price["input_cost_per_token"] + 135 * price["output_cost_per_token"]
+    assert response.hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+    spans: Final = [s for s in exporter.get_finished_spans() if s.name == "litellm_request"]
+    assert len(spans) == 1
+    assert spans[0].attributes["gen_ai.usage.input_tokens"] == 365
+    assert spans[0].attributes["gen_ai.usage.output_tokens"] == 135
+    assert spans[0].attributes["gen_ai.usage.total_tokens"] == 500
+
+    assert len(recorder.events) == 1
+    logged_kwargs, _ = recorder.events[0]
+    std_log: Final = logged_kwargs["standard_logging_object"]
+    assert (std_log["prompt_tokens"], std_log["completion_tokens"], std_log["total_tokens"]) == (365, 135, 500)
+    assert std_log["response_cost"] == pytest.approx(expected_cost)
+    assert std_log["cost_breakdown"]["total_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_aresponses_code_interpreter_converted_stream_reports_summed_usage(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SuccessRecorder.build()
+    saved_callbacks: Final = list(litellm.callbacks)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox(stdout="1\n")), recorder],
+    )
+    _mock_code_interpreter_responses_pair(respx_mock)
+
+    try:
+        stream: Final = await litellm.aresponses(
+            model="openai/gpt-4o-mini",
+            input="hi",
+            api_key="sk-test",
+            stream=True,
+            tools=[{"type": "code_interpreter", "container": {"type": "auto"}}],
+        )
+        events: Final = [event async for event in stream]
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        litellm.callbacks = saved_callbacks
+
+    completed: Final = events[-1].response
+    assert (completed.usage.input_tokens, completed.usage.output_tokens, completed.usage.total_tokens) == (
+        365,
+        135,
+        500,
+    )
+    assert len(recorder.events) == 1
+    std_log: Final = recorder.events[0][0]["standard_logging_object"]
+    assert (std_log["prompt_tokens"], std_log["completion_tokens"], std_log["total_tokens"]) == (365, 135, 500)
+
+
+@pytest.mark.asyncio
+async def test_a_responses_request_bridged_to_claude_sums_both_rounds_usage(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SuccessRecorder.build()
+    saved_callbacks: Final = list(litellm.callbacks)
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox(stdout="42")), recorder],
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_anthropic_message(
+                    [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                            "input": {"code": "print(40 + 2)"},
+                        }
+                    ],
+                    "tool_use",
+                ),
+            ),
+            httpx.Response(200, json=_anthropic_message([{"type": "text", "text": "The answer is 42."}], "end_turn")),
+        ]
+    )
+
+    try:
+        response: Final = await litellm.aresponses(
+            model="anthropic/claude-sonnet-5-5",
+            input="compute 40 + 2",
+            api_key="sk-test",
+            tools=[{"type": "code_interpreter", "container": {"type": "auto"}}],
+        )
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        litellm.callbacks = saved_callbacks
+
+    assert response.usage is not None
+    assert (response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens) == (20, 10, 30)
+    assert len(recorder.events) == 1
+    std_log: Final = recorder.events[0][0]["standard_logging_object"]
+    assert (std_log["prompt_tokens"], std_log["completion_tokens"], std_log["total_tokens"]) == (20, 10, 30)

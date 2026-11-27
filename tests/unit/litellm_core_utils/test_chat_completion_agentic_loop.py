@@ -1368,3 +1368,181 @@ async def test_a_malformed_choice_dropped_by_drop_params_never_holds_back_the_ch
     )
 
     assert (hook.runs, response.choices[0].message.content) == (1, "ran the hook")
+
+
+class _RecordingSuccessLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[tuple[dict[str, object], object]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append((kwargs, response_obj))
+
+
+async def _flush_async_logging() -> None:
+    import asyncio
+
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_metadata", (True, False), ids=("metadata", "no_metadata"))
+async def test_acompletion_sums_every_rounds_usage_and_cost_on_success_span_and_callback(
+    restore_callbacks, monkeypatch: pytest.MonkeyPatch, with_metadata: bool
+):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    success_logger: Final = _RecordingSuccessLogger()
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            CodeInterpreterInterceptionLogger(sandbox_config=FakeSandboxConfig()),
+            OpenTelemetry(config=OpenTelemetryConfig(), tracer_provider=provider),
+            success_logger,
+        ],
+    )
+
+    first_turn: Final = ModelResponse(
+        choices=_tool_call_model_response().choices,
+        usage=Usage(prompt_tokens=111, completion_tokens=75, total_tokens=186),
+    )
+    follow_turn: Final = ModelResponse(
+        choices=_plain_model_response("done").choices,
+        usage=Usage(prompt_tokens=254, completion_tokens=60, total_tokens=314),
+    )
+    mock_client: Final = MagicMock()
+    mock_client.post = AsyncMock(side_effect=[_raw_response_for(first_turn), _raw_response_for(follow_turn)])
+
+    call_kwargs: dict[str, object] = {"metadata": {"k": "v"}} if with_metadata else {}
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "code_interpreter", "container": {"type": "auto"}}],
+        api_key="sk-test",
+        client=mock_client,
+        **call_kwargs,
+    )
+    await _flush_async_logging()
+
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (
+        365,
+        135,
+        500,
+    )
+    price: Final = litellm.model_cost["gpt-4o-mini"]
+    expected_cost: Final = 365 * price["input_cost_per_token"] + 135 * price["output_cost_per_token"]
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+    spans: Final = [s for s in exporter.get_finished_spans() if s.name == "litellm_request"]
+    assert len(spans) == 1
+    assert spans[0].attributes["gen_ai.usage.input_tokens"] == 365
+    assert spans[0].attributes["gen_ai.usage.output_tokens"] == 135
+    assert spans[0].attributes["gen_ai.usage.total_tokens"] == 500
+
+    assert len(success_logger.events) == 1
+    logged_kwargs, logged_response = success_logger.events[0]
+    assert (
+        logged_response.usage.prompt_tokens,
+        logged_response.usage.completion_tokens,
+        logged_response.usage.total_tokens,
+    ) == (365, 135, 500)
+    std_log: Final = logged_kwargs["standard_logging_object"]
+    assert (std_log["prompt_tokens"], std_log["completion_tokens"], std_log["total_tokens"]) == (365, 135, 500)
+    assert std_log["response_cost"] == pytest.approx(expected_cost)
+    assert std_log["cost_breakdown"]["total_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_sums_three_agentic_rounds_and_converted_stream_usage(
+    restore_callbacks, monkeypatch: pytest.MonkeyPatch
+):
+    success_logger: Final = _RecordingSuccessLogger()
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CodeInterpreterInterceptionLogger(sandbox_config=FakeSandboxConfig()), success_logger],
+    )
+
+    round1: Final = ModelResponse(
+        choices=_tool_call_model_response().choices,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    round2: Final = ModelResponse(
+        choices=_tool_call_turn("call_2", Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30)).choices,
+        usage=Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30),
+    )
+    round2.choices[0].message.tool_calls[0].function.name = "litellm_code_execution"
+    round2.choices[0].message.tool_calls[0].function.arguments = '{"code": "print(2)"}'
+    round3: Final = ModelResponse(
+        choices=_plain_model_response("done").choices,
+        usage=Usage(prompt_tokens=30, completion_tokens=15, total_tokens=45),
+    )
+    mock_client: Final = MagicMock()
+    mock_client.post = AsyncMock(
+        side_effect=[_raw_response_for(round1), _raw_response_for(round2), _raw_response_for(round3)]
+    )
+
+    stream: Final = await litellm.acompletion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "code_interpreter", "container": {"type": "auto"}}],
+        stream=True,
+        stream_options={"include_usage": True},
+        api_key="sk-test",
+        client=mock_client,
+    )
+    assert isinstance(stream, CustomStreamWrapper)
+    chunks: Final = [chunk async for chunk in stream]
+    await _flush_async_logging()
+
+    usages: Final = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+    assert len(usages) == 1
+    assert (usages[0].prompt_tokens, usages[0].completion_tokens, usages[0].total_tokens) == (60, 30, 90)
+
+    price: Final = litellm.model_cost["gpt-4o-mini"]
+    expected_cost: Final = 60 * price["input_cost_per_token"] + 30 * price["output_cost_per_token"]
+    assert len(success_logger.events) == 1
+    logged_kwargs, _ = success_logger.events[0]
+    std_log: Final = logged_kwargs["standard_logging_object"]
+    assert (std_log["prompt_tokens"], std_log["completion_tokens"], std_log["total_tokens"]) == (60, 30, 90)
+    assert std_log["response_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_keeps_first_round_cost_when_follow_up_hits_cache(
+    restore_callbacks, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    await litellm.acompletion(model="openai/gpt-4o-mini", messages=_patched_messages(), mock_response="42")
+
+    monkeypatch.setattr(litellm, "callbacks", [_follow_up_logger()])
+    first_turn: Final = ModelResponse(
+        choices=_tool_call_model_response().choices,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    mock_client: Final = MagicMock()
+    mock_client.post = AsyncMock(return_value=_raw_response_for(first_turn))
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        api_key="sk-test",
+        client=mock_client,
+        num_retries=0,
+    )
+
+    price: Final = litellm.model_cost["gpt-4o-mini"]
+    first_round_cost: Final = 100 * price["input_cost_per_token"] + 50 * price["output_cost_per_token"]
+    assert response._hidden_params.get("cache_hit") is False
+    assert response._hidden_params["response_cost"] == pytest.approx(first_round_cost)

@@ -3,6 +3,16 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
+
+def _isolated_followup_value(key: str, value: object) -> object:
+    # Copy metadata dicts without OTel's per-request dedupe state so a nested
+    # follow-up never mutates or suppresses the parent call's spans.
+    if key in ("metadata", "litellm_metadata") and (mapping := as_str_mapping(value)) is not None:
+        return {k: v for k, v in mapping.items() if k != "_otel_internal"}
+    return value
+
 
 def build_agentic_followup_kwargs(
     *,
@@ -18,7 +28,7 @@ def build_agentic_followup_kwargs(
     seen: Final = [*fingerprints, fingerprint]
     return MappingProxyType(
         {
-            key: value
+            key: _isolated_followup_value(key, value)
             for key, value in chain(
                 ((k, v) for k, v in request_kwargs.items() if k not in request_params),
                 ((k, v) for k, v in patch_kwargs.items() if k not in request_params),
