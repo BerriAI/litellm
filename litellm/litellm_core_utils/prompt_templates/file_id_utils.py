@@ -270,6 +270,23 @@ def _decode_vector_store_ids_in_tools(
     return updated_tools
 
 
+def _resolve_tool_file_id(
+    file_id: object,
+    model_id: object,
+    model_file_id_mapping: object,
+) -> object:
+    """Resolve a single unified file ID in a tool's `file_ids` list to its provider ID."""
+    if isinstance(file_id, str) and json_contains(model_file_id_mapping, file_id):
+        return _mapped_provider_file_id(model_file_id_mapping, file_id, model_id) or file_id
+    return file_id
+
+
+_RESPONSE_TOOL_FILE_ID_KEYS: Final[Mapping[str, str]] = {
+    "code_interpreter": "container",
+    "shell": "environment",
+}
+
+
 def update_responses_tools_with_model_file_ids(
     tools: list[dict[str, object]] | None,
     model_id: object = None,
@@ -279,7 +296,8 @@ def update_responses_tools_with_model_file_ids(
     Updates responses API tools with provider-specific file IDs.
 
     Pass 1 (always): decode unified vector_store_ids in file_search tools.
-    Pass 2 (needs mapping): map code_interpreter container file_ids to provider IDs.
+    Pass 2 (needs mapping): map code_interpreter container and shell environment
+    file_ids to provider IDs.
 
     Args:
         tools: The responses API tools parameter
@@ -293,7 +311,7 @@ def update_responses_tools_with_model_file_ids(
     # Pass 1: decode unified vector_store_ids (no mapping needed)
     tools = _decode_vector_store_ids_in_tools(tools) or tools
 
-    # Pass 2: map code_interpreter file IDs (requires mapping)
+    # Pass 2: map code_interpreter container / shell environment file IDs (requires mapping)
     if not model_file_id_mapping or not model_id:
         return tools
 
@@ -303,33 +321,20 @@ def update_responses_tools_with_model_file_ids(
             updated_tools.append(tool)
             continue
 
-        updated_tool = tool.copy()
+        updated_tool: Final = tool.copy()
 
-        # Handle code_interpreter with container file_ids
-        if tool.get("type") == "code_interpreter":
-            container = tool.get("container")
-            if isinstance(container, dict):
-                container_file_ids = container.get("file_ids")
-                if isinstance(container_file_ids, list):
-                    updated_file_ids: list[object] = []
-                    for file_id in container_file_ids:
-                        if isinstance(file_id, str):
-                            # Check if we have a mapping for this file ID
-                            if json_contains(model_file_id_mapping, file_id):
-                                # Map to provider-specific file ID
-                                provider_file_id = (
-                                    _mapped_provider_file_id(model_file_id_mapping, file_id, model_id) or file_id
-                                )
-                                updated_file_ids.append(provider_file_id)
-                            else:
-                                updated_file_ids.append(file_id)
-                        else:
-                            updated_file_ids.append(file_id)
-
-                    # Update the tool with new file IDs
-                    updated_container = container.copy()
-                    updated_container["file_ids"] = updated_file_ids
-                    updated_tool["container"] = updated_container
+        tool_type: Final = tool.get("type")
+        nested_key: Final = _RESPONSE_TOOL_FILE_ID_KEYS.get(tool_type) if isinstance(tool_type, str) else None
+        if nested_key is not None:
+            nested: Final = tool.get(nested_key)
+            if isinstance(nested, dict):
+                nested_file_ids: Final = nested.get("file_ids")
+                if isinstance(nested_file_ids, list):
+                    updated_nested: Final = nested.copy()
+                    updated_nested["file_ids"] = [
+                        _resolve_tool_file_id(file_id, model_id, model_file_id_mapping) for file_id in nested_file_ids
+                    ]
+                    updated_tool[nested_key] = updated_nested
 
         updated_tools.append(updated_tool)
 
