@@ -17,9 +17,13 @@ import json
 
 import pytest
 
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    encode_all_content_blocks,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.utils import Message
 
 
@@ -382,3 +386,100 @@ class TestNonReasoningInputItemUnchanged:
         assert len(out) == 1
         assert out[0]["role"] == "assistant"
         assert out[0]["content"] == "hi"
+
+
+class TestInterleavedThinkingAndTextReplay:
+    """Interleaved thinking+text blocks must replay in their original order.
+
+    When Anthropic returns [thinking(sig1), text_A, thinking(sig2), text_B],
+    the blocks must be replayed to Anthropic in that exact order. Reordering
+    causes signature verification to fail with "Invalid signature in thinking block."
+    """
+
+    _THINKING_1 = {"type": "thinking", "thinking": "step one.", "signature": "sig-1"}
+    _TEXT_A = {"type": "text", "text": "First part."}
+    _THINKING_2 = {"type": "thinking", "thinking": "step two.", "signature": "sig-2"}
+    _TEXT_B = {"type": "text", "text": "Second part."}
+
+    def _make_input(self):
+        encrypted = encode_all_content_blocks(
+            [self._THINKING_1, self._TEXT_A, self._THINKING_2, self._TEXT_B]
+        )
+        return [
+            {"role": "user", "content": "Tell me about France."},
+            {
+                "type": "reasoning",
+                "id": "rs_interleaved",
+                "summary": [],
+                "encrypted_content": encrypted,
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "First part.Second part.", "annotations": []}],
+            },
+            {"role": "user", "content": "And Germany?"},
+        ]
+
+    def test_interleaved_blocks_are_replayed_as_a_content_list_not_string(self):
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=self._make_input(),
+            responses_api_request=ResponsesAPIOptionalRequestParams(),
+            replay_reasoning=True,
+        )
+        assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+        assert len(assistant_messages) == 1
+        content = assistant_messages[0].get("content")
+        assert isinstance(content, list), f"expected list content for interleaved replay, got {type(content)}: {content}"
+
+    def test_interleaved_blocks_preserve_original_order(self):
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=self._make_input(),
+            responses_api_request=ResponsesAPIOptionalRequestParams(),
+            replay_reasoning=True,
+        )
+        assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+        content = assistant_messages[0].get("content")
+        assert isinstance(content, list)
+        types = [b.get("type") for b in content if isinstance(b, dict)]
+        assert types == ["thinking", "text", "thinking", "text"], f"wrong block order: {types}"
+
+    def test_interleaved_blocks_carry_original_signatures(self):
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=self._make_input(),
+            responses_api_request=ResponsesAPIOptionalRequestParams(),
+            replay_reasoning=True,
+        )
+        assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+        content = assistant_messages[0].get("content")
+        assert isinstance(content, list)
+        thinking_blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "thinking"]
+        assert [b.get("signature") for b in thinking_blocks] == ["sig-1", "sig-2"]
+
+    def test_thinking_only_encrypted_content_still_uses_old_path(self):
+        from litellm.responses.litellm_completion_transformation.reasoning_items import encode_thinking_blocks
+
+        encrypted = encode_thinking_blocks([self._THINKING_1, self._THINKING_2])
+        input_items = [
+            {"role": "user", "content": "hi"},
+            {
+                "type": "reasoning",
+                "id": "rs_thinking_only",
+                "summary": [],
+                "encrypted_content": encrypted,
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "answer", "annotations": []}],
+            },
+            {"role": "user", "content": "continue"},
+        ]
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request=ResponsesAPIOptionalRequestParams(),
+            replay_reasoning=True,
+        )
+        assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+        assert len(assistant_messages) == 1
+        assert assistant_messages[0].get("thinking_blocks") == [self._THINKING_1, self._THINKING_2]

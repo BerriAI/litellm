@@ -3506,9 +3506,32 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tool_calls: list[ChatCompletionToolCallChunk],
         server_tool_use_ids: frozenset[str],
     ) -> dict[str, object]:
+        content_blocks: Final = completion_response.get("content")
+        has_interleaved_text: Final = (
+            thinking_blocks is not None
+            and isinstance(content_blocks, list)
+            and any(
+                isinstance(b, dict) and b.get("type") == "text" and bool(b.get("text"))
+                for b in content_blocks
+            )
+        )
+        filtered_content_blocks: Final = (
+            [
+                b
+                for b in content_blocks
+                if isinstance(b, dict)
+                and (
+                    (b.get("type") == "text" and bool(b.get("text")))
+                    or b.get("type") in ("thinking", "redacted_thinking")
+                )
+            ]
+            if has_interleaved_text and isinstance(content_blocks, list)
+            else None
+        )
         provider_specific_fields: Final[dict[str, object]] = {
             "citations": citations,
             "thinking_blocks": thinking_blocks,
+            **({"anthropic_content_blocks": filtered_content_blocks} if filtered_content_blocks else {}),
         }
 
         context_management: Final = completion_response.get("context_management")
