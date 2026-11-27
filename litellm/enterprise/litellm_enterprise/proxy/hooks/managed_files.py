@@ -104,6 +104,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_metadata,
 )
+from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+    PASSTHROUGH_MANAGED_ID_B64_PREFIX,
+)
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -1738,9 +1741,18 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if owner_filter is None:
             return build_list_page([])
 
-        where_clause: Dict[str, object] = {"file_purpose": "batch", **owner_filter}
+        where_clause: Dict[str, object] = {
+            "file_purpose": "batch",
+            **owner_filter,
+            "NOT": {"unified_object_id": {"startswith": PASSTHROUGH_MANAGED_ID_B64_PREFIX}},
+        }
 
         if after:
+            if after.startswith(PASSTHROUGH_MANAGED_ID_B64_PREFIX):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid 'after' cursor: no batch found with id '{after}'.",
+                )
             cursor_row = await _managed_object_table(self.prisma_client).find_first(
                 where={**where_clause, "unified_object_id": after}
             )
@@ -1800,7 +1812,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         user_api_key_dict: UserAPIKeyAuth,
     ) -> tuple[LiteLLMBatch, ...]:
         parsed_rows: Final = tuple(
-            (row, batch_obj) for row in rows if (batch_obj := _parse_managed_batch_row(row)) is not None
+            (row, batch_obj)
+            for row in rows
+            if not (
+                isinstance(getattr(row, "unified_object_id", None), str)
+                and row.unified_object_id.startswith(PASSTHROUGH_MANAGED_ID_B64_PREFIX)
+            )
+            and (batch_obj := _parse_managed_batch_row(row)) is not None
         )
         unified_id_by_raw_id: Final = await map_raw_file_ids_to_unified(
             raw_file_ids=frozenset(

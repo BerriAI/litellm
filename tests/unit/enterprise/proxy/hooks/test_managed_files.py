@@ -4145,9 +4145,17 @@ async def test_list_batches_from_managed_objects_table():
     assert result["first_id"] == "unified-batch-id-1"
     assert result["last_id"] == "unified-batch-id-2"
 
-    # Should filter by user_id (created_by)
+    # Should filter by user_id (created_by) and exclude passthrough managed objects
+    from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+        PASSTHROUGH_MANAGED_ID_B64_PREFIX,
+    )
+
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_once_with(
-        where={"file_purpose": "batch", "created_by": "test-user"},
+        where={
+            "file_purpose": "batch",
+            "created_by": "test-user",
+            "NOT": {"unified_object_id": {"startswith": PASSTHROUGH_MANAGED_ID_B64_PREFIX}},
+        },
         take=11,
         order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
     )
@@ -4174,10 +4182,18 @@ async def test_list_batches_from_managed_objects_table_empty_list():
     assert result["last_id"] is None
     assert result["has_more"] is False
 
-    # Verify where clause includes created_by filter
+    # Verify where clause includes created_by filter and excludes passthrough IDs
     # Default take is 20 when no limit is provided
+    from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+        PASSTHROUGH_MANAGED_ID_B64_PREFIX,
+    )
+
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_once_with(
-        where={"file_purpose": "batch", "created_by": "test-user"},
+        where={
+            "file_purpose": "batch",
+            "created_by": "test-user",
+            "NOT": {"unified_object_id": {"startswith": PASSTHROUGH_MANAGED_ID_B64_PREFIX}},
+        },
         take=21,
         order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
     )
@@ -4518,8 +4534,16 @@ async def test_list_batches_from_managed_objects_table_filters_by_created_by():
 
     assert len(result_user1["data"]) == 1
     assert result_user1["data"][0].id == "unified-batch-user1"
+    from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+        PASSTHROUGH_MANAGED_ID_B64_PREFIX,
+    )
+
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_with(
-        where={"file_purpose": "batch", "created_by": "user1"},
+        where={
+            "file_purpose": "batch",
+            "created_by": "user1",
+            "NOT": {"unified_object_id": {"startswith": PASSTHROUGH_MANAGED_ID_B64_PREFIX}},
+        },
         take=11,
         order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
     )
@@ -4534,7 +4558,11 @@ async def test_list_batches_from_managed_objects_table_filters_by_created_by():
     assert len(result_user2["data"]) == 1
     assert result_user2["data"][0].id == "unified-batch-user2"
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_with(
-        where={"file_purpose": "batch", "created_by": "user2"},
+        where={
+            "file_purpose": "batch",
+            "created_by": "user2",
+            "NOT": {"unified_object_id": {"startswith": PASSTHROUGH_MANAGED_ID_B64_PREFIX}},
+        },
         take=11,
         order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
     )
@@ -4565,8 +4593,16 @@ async def test_list_batches_pagination_uses_unified_object_id_cursor():
         after="unified-batch-id-7",
     )
 
+    from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+        PASSTHROUGH_MANAGED_ID_B64_PREFIX,
+    )
+
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_once_with(
-        where={"file_purpose": "batch", "created_by": "test-user"},
+        where={
+            "file_purpose": "batch",
+            "created_by": "test-user",
+            "NOT": {"unified_object_id": {"startswith": PASSTHROUGH_MANAGED_ID_B64_PREFIX}},
+        },
         take=6,
         order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
         cursor={"unified_object_id": "unified-batch-id-7"},
@@ -4902,10 +4938,15 @@ async def test_list_batches_rejects_unknown_after_cursor():
     assert exc_info.value.status_code == 400
     assert "does-not-exist-xyz" in str(exc_info.value.detail)
     prisma_client.db.litellm_managedobjecttable.find_many.assert_not_called()
+    from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+        PASSTHROUGH_MANAGED_ID_B64_PREFIX,
+    )
+
     prisma_client.db.litellm_managedobjecttable.find_first.assert_called_once_with(
         where={
             "file_purpose": "batch",
             "created_by": "test-user",
+            "NOT": {"unified_object_id": {"startswith": PASSTHROUGH_MANAGED_ID_B64_PREFIX}},
             "unified_object_id": "does-not-exist-xyz",
         }
     )
@@ -5492,12 +5533,188 @@ async def test_list_batches_only_returns_user_own_batches():
     assert len(result["data"]) == 1
     assert result["data"][0].id == "batch-user-a"
 
-    # Verify the database query filtered by user_id
+    # Verify the database query filtered by user_id and excluded passthrough objects
+    from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+        PASSTHROUGH_MANAGED_ID_B64_PREFIX,
+    )
+
     prisma_client.db.litellm_managedobjecttable.find_many.assert_called_once_with(
-        where={"file_purpose": "batch", "created_by": "user_a_id"},
+        where={
+            "file_purpose": "batch",
+            "created_by": "user_a_id",
+            "NOT": {"unified_object_id": {"startswith": PASSTHROUGH_MANAGED_ID_B64_PREFIX}},
+        },
         take=11,
         order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
     )
+
+
+def _matches_prisma_where(row: MagicMock, where: dict) -> bool:
+    """Evaluate simple Prisma equality and NOT.startswith clauses in-memory."""
+    for key, expected in where.items():
+        if key == "NOT":
+            if isinstance(expected, dict) and _matches_prisma_where(row, expected):
+                return False
+            continue
+        actual = getattr(row, key, None)
+        if isinstance(expected, dict) and "startswith" in expected:
+            if not isinstance(actual, str) or not actual.startswith(expected["startswith"]):
+                return False
+        elif actual != expected:
+            return False
+    return True
+
+
+@pytest.mark.asyncio
+async def test_list_user_batches_excludes_passthrough_managed_objects():
+    """
+    Test that list_user_batches excludes passthrough-managed objects stored with
+    file_purpose='batch' both via the Prisma NOT prefix filter and row resolution.
+    """
+    import base64
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+        PASSTHROUGH_MANAGED_ID_B64_PREFIX,
+        new_managed_id,
+    )
+
+    passthrough_openai_id = new_managed_id("openai", "batch_pt_openai")
+    passthrough_anthropic_id = new_managed_id("anthropic", "msgbatch_pt_anthropic")
+    assert passthrough_openai_id.startswith(PASSTHROUGH_MANAGED_ID_B64_PREFIX)
+    assert passthrough_anthropic_id.startswith(PASSTHROUGH_MANAGED_ID_B64_PREFIX)
+
+    managed_unified_id = (
+        base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:gpt-4o;unified_id,batch-managed-1;response_cost:0"
+        )
+        .decode()
+        .rstrip("=")
+    )
+    assert not managed_unified_id.startswith(PASSTHROUGH_MANAGED_ID_B64_PREFIX)
+
+    def _make_row(unified_id: str, raw_batch_id: str, created_at: int) -> MagicMock:
+        row = MagicMock()
+        row.unified_object_id = unified_id
+        row.file_purpose = "batch"
+        row.created_by = "user_a_id"
+        row.created_at = created_at
+        row.file_object = json.dumps(
+            {
+                "id": raw_batch_id,
+                "object": "batch",
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "status": "completed",
+                "created_at": created_at,
+                "input_file_id": "file-a",
+                "request_counts": {"total": 1, "completed": 1, "failed": 0},
+            }
+        )
+        return row
+
+    rows = [
+        _make_row(passthrough_openai_id, "batch_pt_openai", 300),
+        _make_row(passthrough_anthropic_id, "msgbatch_pt_anthropic", 250),
+        _make_row(managed_unified_id, "batch_managed_raw_1", 200),
+    ]
+
+    async def _find_many(*, where, take=None, order=None, cursor=None, skip=None):
+        filtered = [r for r in rows if _matches_prisma_where(r, where)]
+        if cursor:
+            cid = cursor["unified_object_id"]
+            idx = next((i for i, r in enumerate(filtered) if r.unified_object_id == cid), None)
+            filtered = filtered[idx + (skip or 0) :] if idx is not None else []
+        return filtered[:take] if take is not None else filtered
+
+    async def _find_first(*, where):
+        return next((r for r in rows if _matches_prisma_where(r, where)), None)
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(side_effect=_find_many)
+    prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(side_effect=_find_first)
+
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+    auth = UserAPIKeyAuth(user_id="user_a_id")
+
+    result = await proxy_managed_files.list_user_batches(
+        user_api_key_dict=auth,
+        limit=1,
+    )
+
+    assert len(result["data"]) == 1
+    assert result["data"][0].id == managed_unified_id
+    assert result["has_more"] is False
+
+    # Passthrough unified object IDs must be rejected as 'after' cursors.
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_managed_files.list_user_batches(
+            user_api_key_dict=auth,
+            after=passthrough_openai_id,
+        )
+    assert exc_info.value.status_code == 400
+    assert "Invalid 'after' cursor" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_list_user_batches_filters_passthrough_rows_in_resolution():
+    """
+    Defense in depth: even if a database mock returns passthrough rows alongside
+    managed rows, batch row resolution skips passthrough unified_object_ids.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.managed_id_codec import new_managed_id
+
+    passthrough_row = MagicMock()
+    passthrough_row.unified_object_id = new_managed_id("vertex_ai", "batch_pt_vertex")
+    passthrough_row.file_object = json.dumps(
+        {
+            "id": "batch_pt_vertex",
+            "object": "batch",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "status": "completed",
+            "created_at": 1234567891,
+            "input_file_id": "file-pt",
+            "request_counts": {"total": 1, "completed": 1, "failed": 0},
+        }
+    )
+
+    managed_row = MagicMock()
+    managed_row.unified_object_id = "unified-managed-batch-1"
+    managed_row.file_object = json.dumps(
+        {
+            "id": "batch_managed_1",
+            "object": "batch",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "status": "completed",
+            "created_at": 1234567890,
+            "input_file_id": "file-m",
+            "request_counts": {"total": 1, "completed": 1, "failed": 0},
+        }
+    )
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.find_many.return_value = [
+        passthrough_row,
+        managed_row,
+    ]
+
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    result = await proxy_managed_files.list_user_batches(
+        user_api_key_dict=UserAPIKeyAuth(user_id="user_a_id"),
+        limit=10,
+    )
+
+    assert [b.id for b in result["data"]] == ["unified-managed-batch-1"]
 
 
 @pytest.mark.asyncio
