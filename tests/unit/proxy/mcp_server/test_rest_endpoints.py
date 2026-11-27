@@ -3525,6 +3525,38 @@ class TestCallToolRestAPI:
         assert exc_info.value.headers is not None
         assert exc_info.value.headers.get("www-authenticate") == challenge
 
+    @pytest.mark.parametrize(
+        "content_type", ["application/x-www-form-urlencoded", "application/x-www-form-urlencoded; charset=utf-8"]
+    )
+    async def test_docs_curl_with_default_form_content_type_gets_415_naming_json_header(self, content_type):
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+
+        request: Final = _build_request(
+            {"content-type": content_type},
+            path="/mcp-rest/tools/call",
+            method="POST",
+            body=b'{"name":"mcp_tool_search","arguments":{"query":"weather"}}',
+        )
+        await read_request_body(request)
+        user_api_key_dict: Final = UserAPIKeyAuth(
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="search-scope",
+                mcp_tool_search_enabled=True,
+            )
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+
+        assert (exc_info.value.status_code, exc_info.value.detail) == (
+            415,
+            {
+                "error": "unsupported_media_type",
+                "message": "Send the request body as JSON with the header 'Content-Type: application/json'",
+            },
+        )
+
     async def test_virtual_mcp_tool_call_guardrail_block_runs_failure_logging(self, monkeypatch):
         """A pre_mcp_call guardrail block on the virtual mcp_tool_call branch must write a failure
         spend log, same as the direct tool call branch, and still raise the original error."""
