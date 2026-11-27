@@ -28,6 +28,7 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.anthropic.pass_through.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -37,11 +38,14 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     bedrock_invoke_guardrail_headers,
 )
 from litellm.llms.bedrock.common_utils import (
+    SAFEGUARDS,
     BedrockError,
     apply_bedrock_invoke_structured_output,
     bedrock_capability_model,
+    bedrock_drops_safeguards,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
+    drops_safeguards_bedrock_rejects,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_bedrock_native_output_rejection,
@@ -54,6 +58,7 @@ from litellm.llms.bedrock.common_utils import (
     supports_bedrock_prompt_cache_ttl,
     tools_without_eager_input_streaming,
     warn_bedrock_native_output_rejected,
+    without_safeguards_beta,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -80,6 +85,11 @@ else:
 
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+def _safeguards_drop_params(drop_params: object, safeguards: object) -> object:
+    return True if proxy_serves_safeguards(safeguards) else drop_params
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -109,6 +119,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         ):
             return frozenset({ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value})
         return frozenset()
+
+    def drops_model_safeguards(self, model: str, kwargs: Mapping[str, object]) -> bool:
+        return bedrock_drops_safeguards(
+            bedrock_capability_model(model, kwargs.get("base_model")),
+            _MODEL_INFO.validate_python(kwargs.get("model_info")),
+            _safeguards_drop_params(kwargs.get("drop_params"), kwargs.get("safeguards")),
+            sends_beta=True,
+        )
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
@@ -736,18 +754,29 @@ class AmazonAnthropicClaudeMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
+        params: Final = _OPTIONAL_PARAMS.validate_python(anthropic_messages_optional_request_params)
+        drops_safeguards: Final = SAFEGUARDS in params and drops_safeguards_bedrock_rejects(
+            bedrock_capability_model(model, getattr(litellm_params, "base_model", None)),
+            _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
+            _safeguards_drop_params(getattr(litellm_params, "drop_params", None), params.get(SAFEGUARDS)),
+            self.beta_headers_provider,
+            sends_beta=True,
+        )
+        upstream_params: Final = (
+            {key: value for key, value in params.items() if key != SAFEGUARDS} if drops_safeguards else params
+        )
         requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
         requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)
         drop_params: Final = getattr(litellm_params, "drop_params", None) is True
         self._clamp_adaptive_reasoning_effort_for_bedrock(
             model=model,
-            optional_params=anthropic_messages_optional_request_params,
+            optional_params=upstream_params,
         )
         anthropic_messages_request = AnthropicMessagesConfig.transform_anthropic_messages_request(
             self=self,
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -824,15 +853,16 @@ class AmazonAnthropicClaudeMessagesConfig(
         filtered_betas: Final = self._get_bedrock_invoke_anthropic_beta_headers(
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=upstream_params,
             headers=headers,
             anthropic_messages_request=anthropic_messages_request,
             injected_thinking_for_clear_thinking=injected_thinking_for_clear_thinking,
             litellm_params=litellm_params,
         )
 
-        if filtered_betas:
-            anthropic_messages_request["anthropic_beta"] = filtered_betas
+        upstream_betas: Final = list(without_safeguards_beta(filtered_betas)) if drops_safeguards else filtered_betas
+        if upstream_betas:
+            anthropic_messages_request["anthropic_beta"] = upstream_betas
 
         outbound_tools: Final = tools_without_eager_input_streaming(anthropic_messages_request)
         if outbound_tools is not None:

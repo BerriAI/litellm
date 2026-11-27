@@ -10,7 +10,7 @@ import json
 import os
 import re
 import warnings
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
@@ -33,6 +33,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -42,6 +43,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
@@ -1476,6 +1478,102 @@ def bedrock_supports_per_turn_control(model: str, model_info: Mapping[str, objec
     if isinstance(deployment_flag, bool):
         return deployment_flag
     return AnthropicModelInfo.supports_model_capability(model, "supports_per_turn_control", "bedrock")
+
+
+SAFEGUARDS: Final = "safeguards"
+_ANTHROPIC_BODY_BETAS: Final = TypeAdapter(tuple[str, ...])
+
+
+def bedrock_supports_safeguards(model: str, model_info: Mapping[str, object] | None) -> bool:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    deployment_flag: Final = (model_info or {}).get("supports_safeguards")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    mapped_flag: Final = AnthropicModelInfo.resolved_model_capability(model, "supports_safeguards", "bedrock")
+    if mapped_flag is not None:
+        return mapped_flag
+    return "claude" not in model.lower() or AnthropicModelInfo.supports_model_capability(
+        model, "supports_safeguards", "bedrock"
+    )
+
+
+def log_dropped_safeguards(model: str, provider: str) -> None:
+    verbose_logger.warning(
+        "Dropped safeguards for model=%s provider=%s because drop_params is on or the proxy's safeguards classifier "
+        "answers them, and Bedrock would reject safeguards on this request, since the model map does not flag "
+        "supports_safeguards for the model or the request does not send the %s beta. A request that sends the beta "
+        "keeps safeguards on a deployment with model_info supports_safeguards true.",
+        model,
+        provider,
+        ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,
+    )
+
+
+def bedrock_drops_safeguards(
+    model: str, model_info: Mapping[str, object] | None, drop_params: object, *, sends_beta: bool
+) -> bool:
+    return drops_unsupported_params(drop_params) and not (sends_beta and bedrock_supports_safeguards(model, model_info))
+
+
+def drops_safeguards_bedrock_rejects(
+    model: str, model_info: Mapping[str, object] | None, drop_params: object, provider: str, *, sends_beta: bool
+) -> bool:
+    if not bedrock_drops_safeguards(model, model_info, drop_params, sends_beta=sends_beta):
+        return False
+    log_dropped_safeguards(model, provider)
+    return True
+
+
+def anthropic_body_betas(value: object) -> frozenset[str]:
+    try:
+        return frozenset(_ANTHROPIC_BODY_BETAS.validate_python(value))
+    except ValidationError:
+        return frozenset()
+
+
+def sent_anthropic_betas(headers: Mapping[str, object], body_betas: object) -> frozenset[str]:
+    return frozenset(get_anthropic_beta_from_headers(dict(headers))) | anthropic_body_betas(body_betas)
+
+
+def without_safeguards_beta(betas: Iterable[str]) -> tuple[str, ...]:
+    return tuple(beta for beta in betas if beta != ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
+
+
+_BODY_BETA_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def without_safeguards(fields: Mapping[str, object]) -> Mapping[str, object]:
+    body_betas: Final = fields.get("anthropic_beta")
+    if not isinstance(body_betas, list):
+        return {key: value for key, value in fields.items() if key != SAFEGUARDS}
+    kept_betas: Final = [
+        beta
+        for beta in _BODY_BETA_ITEMS.validate_python(body_betas)
+        if beta != ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+    ]
+    return {key: value for key, value in fields.items() if key not in (SAFEGUARDS, "anthropic_beta")} | (
+        {"anthropic_beta": kept_betas} if kept_betas else {}
+    )
+
+
+def without_safeguards_bedrock_rejects(
+    fields: Mapping[str, object],
+    model: str,
+    litellm_params: Mapping[str, object],
+    provider: str,
+    *,
+    sent_betas: frozenset[str],
+) -> Mapping[str, object]:
+    if SAFEGUARDS not in fields or not drops_safeguards_bedrock_rejects(
+        bedrock_capability_model(strip_bedrock_routing_prefix(model), litellm_params.get("base_model")),
+        deployment_model_info(litellm_params),
+        litellm_params.get("drop_params"),
+        provider,
+        sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value in sent_betas,
+    ):
+        return fields
+    return without_safeguards(fields)
 
 
 def supports_bedrock_prompt_cache_ttl(model: str) -> bool:

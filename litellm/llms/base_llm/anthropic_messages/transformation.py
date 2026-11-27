@@ -141,6 +141,9 @@ class BaseAnthropicMessagesConfig(ABC):
     def model_specific_anthropic_betas(self, model: str, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
         return frozenset()
 
+    def drops_model_safeguards(self, model: str, kwargs: Mapping[str, object]) -> bool:
+        return False
+
     def handles_web_search_natively(self) -> bool:
         """
         Whether the upstream this config routes to executes ``web_search`` tools

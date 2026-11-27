@@ -10,12 +10,19 @@ at a different endpoint (bedrock-mantle.{region}.api.aws) with AWS SigV4 auth.
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
-from litellm.llms.anthropic.chat.transformation import JsonModeRequest
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.bedrock.common_utils import build_mantle_messages_url
+from litellm.llms.bedrock.common_utils import (
+    anthropic_body_betas,
+    build_mantle_messages_url,
+    sent_anthropic_betas,
+    without_safeguards_bedrock_rejects,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -25,6 +32,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_PARAMS: Final = TypeAdapter(dict[str, object])
+_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
@@ -95,11 +105,21 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
     ) -> dict:
         # Strip the "mantle/" routing prefix to get the real model ID
         model_id: Final = model.replace("mantle/", "", 1)
+        params: Final = _PARAMS.validate_python(optional_params)
+        upstream_params: Final = dict(
+            without_safeguards_bedrock_rejects(
+                params,
+                model_id,
+                _MAPPING.validate_python(litellm_params),
+                "bedrock_mantle",
+                sent_betas=sent_anthropic_betas(_MAPPING.validate_python(headers), params.get("anthropic_beta")),
+            )
+        )
 
         request: Final = self._build_bedrock_anthropic_request_base(
             model=model_id,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -109,7 +129,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         return self._restore_mantle_body_fields(
             request=request,
             model_id=model_id,
-            optional_params=optional_params,
+            optional_params=upstream_params,
         )
 
     async def async_transform_request(
@@ -126,6 +146,24 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        unguarded: Final = AnthropicConfig.transform_extra_body(
+            self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+        )
+        return without_safeguards_bedrock_rejects(
+            unguarded,
+            model,
+            litellm_params,
+            "bedrock_mantle",
+            sent_betas=anthropic_body_betas(unguarded.get("anthropic_beta", request.get("anthropic_beta"))),
         )
 
     @staticmethod

@@ -25,6 +25,8 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_TRACE_FIELD,
+    SAFEGUARDS,
+    anthropic_body_betas,
     apply_bedrock_invoke_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
@@ -38,8 +40,11 @@ from litellm.llms.bedrock.common_utils import (
     requests_opt_in_native_output,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
+    without_safeguards_bedrock_rejects,
+    without_safeguards_beta,
 )
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
     AnthropicThinkingParam,
@@ -57,6 +62,7 @@ else:
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -200,29 +206,67 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
+        upstream_params: Final = dict(
+            without_safeguards_bedrock_rejects(
+                params,
+                model,
+                _LITELLM_PARAMS.validate_python(litellm_params),
+                "bedrock_invoke",
+                sent_betas=frozenset(get_anthropic_beta_from_headers(headers))
+                | anthropic_body_betas(params.get("anthropic_beta")),
+            )
+        )
+        drops_safeguards: Final = SAFEGUARDS in params and SAFEGUARDS not in upstream_params
         _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
         )
 
         self._convert_document_url_sources_to_base64(_anthropic_request)
-        beta_list: Final = self._compute_bedrock_invoke_beta_headers(
+        header_and_auto_betas: Final = self._compute_bedrock_invoke_beta_headers(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             headers=headers,
             thinking=_anthropic_request.get("thinking"),
             history_holds_tool_search=replays_tool_search(
                 OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
             ),
         )
-        if beta_list:
-            _anthropic_request["anthropic_beta"] = beta_list
+        body_safeguards_beta: Final = (
+            anthropic_body_betas(upstream_params.get("anthropic_beta"))
+            & {ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value}
+            if SAFEGUARDS in upstream_params
+            else frozenset[str]()
+        )
+        beta_list: Final = sorted({*header_and_auto_betas, *body_safeguards_beta}) if header_and_auto_betas else []
+        upstream_betas: Final = list(without_safeguards_beta(beta_list)) if drops_safeguards else beta_list
+        if upstream_betas:
+            _anthropic_request["anthropic_beta"] = upstream_betas
 
         return _anthropic_request
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        admitted: Final = super().transform_extra_body(
+            extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+        )
+        return without_safeguards_bedrock_rejects(
+            admitted,
+            model,
+            litellm_params,
+            "bedrock_invoke",
+            sent_betas=anthropic_body_betas(admitted.get("anthropic_beta", request.get("anthropic_beta"))),
+        )
 
     @property
     def uses_async_transform_request(self) -> bool:

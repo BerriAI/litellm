@@ -64,6 +64,8 @@ from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.chat.tool_use_ids import with_mistral_tool_use_ids
 from litellm.llms.bedrock.common_utils import (
+    SAFEGUARDS,
+    anthropic_body_betas,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_model_supports_regex_lookaround,
@@ -71,7 +73,9 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
     deployment_model_info,
+    drops_safeguards_bedrock_rejects,
     requests_output_config_format,
+    without_safeguards,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -79,7 +83,7 @@ from litellm.llms.bedrock.request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -2379,12 +2383,29 @@ class AmazonConverseConfig(BaseConfig):
             for config_name, config_class in self.get_config_blocks().items()
         )
 
+        sent_fields: Final = _JSON_OBJECT.validate_python(additional_request_params)
+        request_fields: Final = {
+            **(
+                without_safeguards(sent_fields)
+                if SAFEGUARDS in sent_fields
+                and drops_safeguards_bedrock_rejects(
+                    bedrock_capability_model(model, self._deployment_base_model(litellm_params or {})),
+                    deployment_model_info(litellm_params),
+                    drop_params,
+                    "bedrock_converse",
+                    sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+                    in anthropic_body_betas(sent_fields.get("anthropic_beta")),
+                )
+                else sent_fields
+            )
+        }
+
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
         }
-        if additional_request_params:
-            data["additionalModelRequestFields"] = additional_request_params
-            if "thinking" in additional_request_params:
+        if request_fields:
+            data["additionalModelRequestFields"] = request_fields
+            if "thinking" in request_fields:
                 data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
         if system_content_blocks:
             data["system"] = system_content_blocks
