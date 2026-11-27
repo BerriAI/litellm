@@ -502,15 +502,17 @@ async def aresponses_api_with_mcp(
         await mcp_streaming_response.start_initial_response()
         if stream:
             return mcp_streaming_response
-        events: Final = [event async for event in mcp_streaming_response]
-        for event in reversed(events):
-            terminal_response: Final[object] = getattr(event, "response", None)
+        terminal_response: ResponsesAPIResponse | None = None
+        async for event in mcp_streaming_response:
+            event_response: Final[object] = getattr(event, "response", None)
             if event.type in (
                 ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
-            ) and isinstance(terminal_response, ResponsesAPIResponse):
-                return terminal_response
+            ) and isinstance(event_response, ResponsesAPIResponse):
+                terminal_response = (
+                    event_response  # rebind-ok: retain only the latest terminal while draining the lifecycle
+                )
             if event.type == ResponsesAPIStreamEvents.ERROR:
                 raise litellm.APIError(
                     status_code=500,
@@ -518,6 +520,8 @@ async def aresponses_api_with_mcp(
                     model=model,
                     llm_provider=custom_llm_provider or "mcp",
                 )
+        if terminal_response is not None:
+            return terminal_response
         raise litellm.APIError(
             status_code=500,
             message="MCP stream ended without a terminal response",
