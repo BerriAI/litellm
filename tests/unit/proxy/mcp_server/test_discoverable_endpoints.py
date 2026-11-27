@@ -91,6 +91,26 @@ async def test_vendor_credential_state_agrees_with_egress_token_resolution(monke
     assert connect == ("present" if egress_has_token else "absent")
 
 
+async def test_reconnecting_after_a_dead_grant_keeps_the_scopes_it_had(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.mcp_server import db as mcp_db
+    from litellm.proxy.mcp_server import discoverable_endpoints
+
+    dead_grant: Final = {**_stored_grant(access_token="", refresh_token="dead-refresh"), "scopes": ["read", "write"]}
+
+    async def read(
+        _prisma: object, _user_id: str, _server_id: str, *, include_invalidated: bool = False
+    ) -> dict[str, object] | None:
+        return dead_grant if include_invalidated else None
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr(mcp_db, "get_user_oauth_credential", read)
+    server: Final = MagicMock(server_id="server-1", authorization_server_metadata=None)
+
+    granted: Final = await discoverable_endpoints._managed_authorization_scope(MagicMock(), server, "read", "user-1")
+
+    assert (set((granted[0] or "").split()), granted[1]) == ({"read", "write"}, "user-1")
+
+
 # Fixture to mock IP address check for all MCP tests
 # This prevents tests from failing due to IP-based access control
 @pytest.fixture(autouse=True)

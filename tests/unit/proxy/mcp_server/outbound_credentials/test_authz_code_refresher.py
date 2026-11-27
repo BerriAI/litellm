@@ -397,78 +397,102 @@ async def test_saved_cimd_identity_refreshes_without_discovery(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_invalid_grant_is_an_unauthorized_refresh_outcome():
+async def test_invalid_grant_revokes_only_the_failed_credential_generation():
     from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeTokenDenied
+
+    revoked: list[tuple[str, str, str, str | None]] = []
 
     async def endpoint(url: str, form: dict[str, str], headers: dict[str, str]) -> AuthorizationCodeTokenDenied:
         return AuthorizationCodeTokenDenied(
             status_code=400, body={"error": "invalid_grant"}, detail="token endpoint returned HTTP 400"
         )
 
-    refresher: Final = AuthorizationCodeRefresher(_lookup(_Server()), endpoint, _recording_persist([]))
+    async def revoke(user_id: str, server_id: str, access_token: str, refresh_token: str | None) -> None:
+        revoked.append((user_id, server_id, access_token, refresh_token))
+
+    refresher: Final = AuthorizationCodeRefresher(_lookup(_Server()), endpoint, _recording_persist([]), revoke=revoke)
     outcome: Final = await refresher.refresh("alice", "srv", OAuthToken("old-at", refresh_token="dead-rt"))
     assert isinstance(outcome, Error)
     assert outcome.error.tag == "unauthorized"
+    assert revoked == [("alice", "srv", "old-at", "dead-rt")]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "status, body, expected",
+    "status, body, expected, should_revoke",
     [
-        (500, {"error": "temporarily_unavailable"}, "upstream_unavailable"),
-        (500, {"error": "invalid_grant"}, "upstream_unavailable"),
-        (500, {"error": {}}, "upstream_unavailable"),
-        (429, {"error": "rate_limited"}, "upstream_unavailable"),
-        (400, {"error": "server_error"}, "upstream_unavailable"),
-        (400, {"error": "temporarily_unavailable"}, "upstream_unavailable"),
-        (200, {}, "upstream_unavailable"),
-        (401, {"error": "invalid_client"}, "misconfigured"),
-        (400, {"error": "unsupported_grant_type"}, "misconfigured"),
-        (400, {"error": "invalid_target"}, "misconfigured"),
-        (401, {}, "misconfigured"),
-        (401, {"error": "invalid_grant"}, "unauthorized"),
-        (400, {}, "unauthorized"),
-        (400, {"error": "invalid_request"}, "unauthorized"),
-        (400, {"error": "unauthorized_client"}, "unauthorized"),
-        (400, {"error": []}, "unauthorized"),
+        (500, {"error": "temporarily_unavailable"}, "upstream_unavailable", False),
+        (500, {"error": "invalid_grant"}, "upstream_unavailable", False),
+        (500, {"error": {}}, "upstream_unavailable", False),
+        (429, {"error": "rate_limited"}, "upstream_unavailable", False),
+        (400, {"error": "server_error"}, "upstream_unavailable", False),
+        (400, {"error": "temporarily_unavailable"}, "upstream_unavailable", False),
+        (200, {}, "upstream_unavailable", False),
+        (401, {"error": "invalid_client"}, "misconfigured", False),
+        (400, {"error": "unsupported_grant_type"}, "misconfigured", False),
+        (400, {"error": "invalid_target"}, "misconfigured", False),
+        (401, {}, "misconfigured", False),
+        (401, {"error": "invalid_grant"}, "unauthorized", True),
+        (400, {}, "unauthorized", True),
+        (400, {"error": "invalid_request"}, "unauthorized", True),
+        (400, {"error": "unauthorized_client"}, "unauthorized", False),
+        (400, {"error": []}, "unauthorized", True),
     ],
 )
 async def test_transient_client_and_dead_refresh_failures_keep_their_error_classes(
-    status: int, body: dict[str, object], expected: str
+    status: int, body: dict[str, object], expected: str, should_revoke: bool
 ) -> None:
     from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeTokenDenied
+
+    revoked: list[tuple[str, str, str, str | None]] = []
+
+    async def revoke(user_id: str, server_id: str, access_token: str, refresh_token: str | None) -> None:
+        revoked.append((user_id, server_id, access_token, refresh_token))
 
     async def endpoint(url: str, form: dict[str, str], headers: dict[str, str]) -> AuthorizationCodeTokenDenied:
         return AuthorizationCodeTokenDenied(status_code=status, body=body, detail="denied")
 
-    refresher: Final = AuthorizationCodeRefresher(_lookup(_Server()), endpoint, _recording_persist([]))
+    refresher: Final = AuthorizationCodeRefresher(_lookup(_Server()), endpoint, _recording_persist([]), revoke=revoke)
     outcome: Final = await refresher.refresh("alice", "srv", OAuthToken("old-at", refresh_token="rt"))
     assert isinstance(outcome, Error)
     assert outcome.error.tag == expected
+    assert revoked == ([("alice", "srv", "old-at", "rt")] if should_revoke else [])
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "body, expected",
+    "body, expected, should_revoke",
     [
-        ({"error": "bad_refresh_token", "error_description": "The refresh token passed is incorrect."}, "unauthorized"),
-        ({"ok": False, "error": "invalid_refresh_token"}, "unauthorized"),
-        ({"ok": False}, "unauthorized"),
-        ({"error": "unauthorized_client"}, "unauthorized"),
-        ({"error": "invalid_client"}, "misconfigured"),
-        ({"error": "incorrect_client_credentials"}, "misconfigured"),
-        ({"error": "invalid_client_id"}, "misconfigured"),
-        ({"error": "bad_client_secret"}, "misconfigured"),
-        ({"error": "unsupported_grant_type"}, "misconfigured"),
-        ({"error": "server_error"}, "upstream_unavailable"),
-        ({"error": "temporarily_unavailable"}, "upstream_unavailable"),
-        ({}, "upstream_unavailable"),
+        (
+            {"error": "bad_refresh_token", "error_description": "The refresh token passed is incorrect."},
+            "unauthorized",
+            True,
+        ),
+        ({"ok": False, "error": "invalid_refresh_token"}, "unauthorized", True),
+        ({"ok": False}, "unauthorized", True),
+        ({"error": "unauthorized_client"}, "unauthorized", False),
+        ({"error": "invalid_client"}, "misconfigured", False),
+        ({"error": "incorrect_client_credentials"}, "misconfigured", False),
+        ({"error": "invalid_client_id"}, "misconfigured", False),
+        ({"error": "bad_client_secret"}, "misconfigured", False),
+        ({"error": "unsupported_grant_type"}, "misconfigured", False),
+        ({"error": "server_error"}, "upstream_unavailable", False),
+        ({"error": "temporarily_unavailable"}, "upstream_unavailable", False),
+        ({}, "upstream_unavailable", False),
     ],
 )
 async def test_http_200_error_bodies_without_access_token_classify_by_error(
-    body: dict[str, object], expected: str
+    body: dict[str, object], expected: str, should_revoke: bool
 ) -> None:
-    refresher: Final = _refresher(body=body)
+    revoked: Final[list[tuple[str, str, str, str | None]]] = []
+
+    async def revoke(user_id: str, server_id: str, access_token: str, refresh_token: str | None) -> None:
+        revoked.append((user_id, server_id, access_token, refresh_token))
+
+    refresher: Final = AuthorizationCodeRefresher(
+        _lookup(_Server()), _endpoint(body), _recording_persist([]), revoke=revoke
+    )
     outcome: Final = await refresher.refresh("alice", "srv", OAuthToken("old-at", refresh_token="rt"))
     assert isinstance(outcome, Error)
     assert outcome.error.tag == expected
+    assert revoked == ([("alice", "srv", "old-at", "rt")] if should_revoke else [])

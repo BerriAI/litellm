@@ -80,6 +80,9 @@ class CredentialPersist(Protocol):
     ) -> bool | None: ...
 
 
+CredentialRevoker: TypeAlias = Callable[[str, str, str, str | None], Awaitable[None]]
+
+
 def _parse_expires_in(raw: object) -> int | None:
     if isinstance(raw, bool):
         return None
@@ -123,12 +126,14 @@ class AuthorizationCodeRefresher:
         token_endpoint: TokenEndpointPost,
         persist: CredentialPersist,
         *,
+        revoke: CredentialRevoker | None = None,
         clock: Callable[[], float] = time.time,
         identity_validator: BindingValidator = enforce_oauth_identity_binding,
     ) -> None:
         self._server_lookup = server_lookup
         self._token_endpoint = token_endpoint
         self._persist = persist
+        self._revoke = revoke
         self._clock = clock
         self._identity_validator = identity_validator
 
@@ -142,6 +147,7 @@ class AuthorizationCodeRefresher:
 
     async def _refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Result[OAuthToken, CredError]:
         if token.refresh_token is None:
+            await self._revoke_dead_grant(user_id, server_id, token)
             return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
         server: Final = self._server_lookup(server_id)
         if server is None:
@@ -183,14 +189,22 @@ class AuthorizationCodeRefresher:
                     CredError.of_upstream_unavailable("OAuth token endpoint is unreachable; retry the request.")
                 )
             case AuthorizationCodeTokenDenied():
-                denial_failure, _ = self._classify_error_body(outcome.status_code, outcome.body, outcome.detail)
+                denial_failure, denial_dead = self._classify_error_body(
+                    outcome.status_code, outcome.body, outcome.detail
+                )
+                if denial_dead:
+                    await self._revoke_dead_grant(user_id, server_id, token)
                 return Error(denial_failure)
             case AuthorizationCodeTokenSuccess():
                 body: Final = outcome.body or {}
         access_token: Final = body.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             if body.get("error") or body.get("ok") is False:
-                body_failure, _ = self._classify_error_body(200, body, "token endpoint returned HTTP 200 with error")
+                body_failure, body_dead = self._classify_error_body(
+                    200, body, "token endpoint returned HTTP 200 with error"
+                )
+                if body_dead:
+                    await self._revoke_dead_grant(user_id, server_id, token)
                 return Error(body_failure)
             return Error(CredError.of_upstream_unavailable("OAuth token endpoint response is missing an access token."))
 
@@ -232,6 +246,10 @@ class AuthorizationCodeRefresher:
                 cimd_client_id=cimd_client_id,
             )
         )
+
+    async def _revoke_dead_grant(self, user_id: str, server_id: str, token: OAuthToken) -> None:
+        if self._revoke is not None:
+            await self._revoke(user_id, server_id, token.access_token, token.refresh_token)
 
     def _classify_error_body(self, status_code: int, body: Mapping[str, object], detail: str) -> tuple[CredError, bool]:
         error: Final = body.get("error")

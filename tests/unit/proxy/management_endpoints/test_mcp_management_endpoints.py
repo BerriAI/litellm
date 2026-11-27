@@ -10598,7 +10598,7 @@ class TestMCPServerResolutionCharacterization:
             "is_expired": False,
             "connected_at": None,
         }
-        credential_read.assert_awaited_once_with(prisma, user_id, server_id)
+        credential_read.assert_awaited_once_with(prisma, user_id, server_id, include_invalidated=True)
         delete_credential.assert_awaited_once_with(prisma, user_id, server_id)
         invalidate.assert_awaited_once_with(user_id, server_id)
         assert httpx_mock.calls.call_count == 0
