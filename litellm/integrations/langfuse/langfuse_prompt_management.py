@@ -160,8 +160,8 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_host=langfuse_host,
         )
         self.tracing = acquire_langfuse_tracing(
-            public_key=str(self.public_key),
-            secret_key=str(self.secret_key),
+            public_key=str(self.public_key) if self.public_key is not None else None,
+            secret_key=str(self.secret_key) if self.secret_key is not None else None,
             base_url=self.langfuse_host,
             environment=LangFuseLogger.resolve_deployment_environment(),
             release=configured_release(),
