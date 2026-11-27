@@ -1,7 +1,11 @@
-"""Flat per-request pricing: a deployment's ``input_cost_per_query`` replaces token pricing on model calls."""
+"""Flat per-request pricing: ``input_cost_per_query`` set on a call or its deployment replaces usage pricing."""
 
+from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils import model_cost_table
 from litellm.types.utils import CallTypes
 
 PER_REQUEST_PRICED_CALL_TYPES: Final = frozenset(
@@ -27,7 +31,24 @@ PER_REQUEST_PRICED_CALL_TYPES: Final = frozenset(
         CallTypes.aocr,
     )
 )
+REQUEST_PRICE_FIELD: Final = "input_cost_per_query"
+_ENTRY: Final = TypeAdapter(Mapping[str, object])
 
 
-def per_request_price(call_type: str, configured_cost_per_request: float | None) -> float | None:
-    return configured_cost_per_request if call_type in PER_REQUEST_PRICED_CALL_TYPES else None
+def _price_in(entry: object) -> float | None:
+    if not isinstance(entry, Mapping):
+        return None
+    price: Final = _ENTRY.validate_python(entry).get(REQUEST_PRICE_FIELD)
+    return float(price) if isinstance(price, int | float) and not isinstance(price, bool) else None
+
+
+def per_request_price(call_type: str, call_params: object, deployment_id: str | None) -> float | None:
+    """The flat price of one call: the call's own ``input_cost_per_query``, else the one its router deployment
+    registered. The raw registration only carries prices the deployment declared, so a cost-map per-query rate
+    (rerank, search, Marengo embeddings) never turns into a flat request price here."""
+    if call_type not in PER_REQUEST_PRICED_CALL_TYPES:
+        return None
+    requested: Final = _price_in(call_params)
+    if requested is not None:
+        return requested
+    return _price_in(model_cost_table.published().get(deployment_id)) if deployment_id else None

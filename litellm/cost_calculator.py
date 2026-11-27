@@ -2251,7 +2251,7 @@ def completion_cost(
         )
         custom_priced_request_model: Final = model if custom_pricing is True else None
         configured_cost_per_query: Final = (
-            _configured_cost_per_query(litellm_logging_obj) if custom_pricing else None
+            _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
         )
         base_model_provider: Final = (
             _base_model_pricing_provider(
@@ -2304,7 +2304,9 @@ def completion_cost(
             raw_candidates if custom_pricing is True else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
 
-        request_price: Final = per_request_price(call_type, configured_cost_per_query)
+        request_price: Final = per_request_price(
+            call_type, getattr(litellm_logging_obj, "litellm_params", None) if custom_pricing else None, router_model_id
+        )
         if request_price is not None:
             return _adjusted_stored_cost(
                 original_cost=request_price,
@@ -3029,7 +3031,7 @@ def _video_input_image_cost(
 _LOGGED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
-def _configured_cost_per_query(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
+def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
     logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
     if logged_params is None:
         return None
