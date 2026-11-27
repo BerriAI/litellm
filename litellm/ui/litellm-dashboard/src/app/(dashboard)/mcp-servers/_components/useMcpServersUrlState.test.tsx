@@ -145,6 +145,33 @@ describe("useMcpServersUrlState page tab", () => {
   });
 });
 
+describe("useMcpServersUrlState list filters", () => {
+  beforeEach(() => window.sessionStorage.clear());
+
+  it("replaces history when the team, access group, search or sort changes", async () => {
+    const { result, onUrlUpdate } = renderPageState("");
+
+    act(() => result.current.setTeam("t1"));
+    await flushUrl();
+    act(() => result.current.setAccessGroup("g1"));
+    await flushUrl();
+    act(() => result.current.setSearch("qa"));
+    await flushUrl();
+    act(() => result.current.setSort("name_asc"));
+    await flushUrl();
+
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.toString()).toBe(
+      "team=t1&access_group=g1&search=qa&sort=name_asc",
+    );
+    expect(onUrlUpdate.mock.calls.map(([update]) => update.options.history)).toEqual([
+      "replace",
+      "replace",
+      "replace",
+      "replace",
+    ]);
+  });
+});
+
 describe("useMcpServersUrlState server detail", () => {
   beforeEach(() => window.sessionStorage.clear());
 

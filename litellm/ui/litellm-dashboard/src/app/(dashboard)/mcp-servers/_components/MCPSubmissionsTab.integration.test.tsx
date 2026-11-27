@@ -221,6 +221,7 @@ describe("MCPSubmissionsTab filter URL state", () => {
     await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("sub_status")).toBe("active"));
     expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("sub_search")).toBe("pending");
     expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("tab")).toBe("submitted");
+    expect(new Set(onUrlUpdate.mock.calls.map(([update]) => update.options.history))).toEqual(new Set(["replace"]));
     expect(screen.getByText("No MCP server submissions match your filters.")).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "all" } });
