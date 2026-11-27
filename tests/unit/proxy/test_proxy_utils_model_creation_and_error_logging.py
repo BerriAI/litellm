@@ -523,7 +523,6 @@ async def test_proxy_only_error_log_keeps_the_decision_request_as_the_logged_mes
         ),
         ("/v1/decisions", "adecisions", {**_DECISION_REQUEST, "metadata": {"turn_off_message_logging": True}}),
         ("/v1/systemone", "asystemone", {**_SYSTEMONE_REQUEST, "litellm_metadata": {"turn_off_message_logging": "true"}}),
-        ("/v1/responses", "aresponses", {"input": "PROMPT-CANARY", "metadata": {"turn_off_message_logging": True}}),
         ("/v1/responses", "aresponses", {"input": "PROMPT-CANARY", "turn_off_message_logging": True}),
         (
             "/v1/responses",
@@ -536,7 +535,6 @@ async def test_proxy_only_error_log_keeps_the_decision_request_as_the_logged_mes
         "systemone_header",
         "decisions_metadata_flag",
         "systemone_litellm_metadata_flag",
-        "responses_metadata_flag",
         "responses_flag",
         "responses_header",
     ],
@@ -551,6 +549,22 @@ async def test_proxy_only_error_log_keeps_the_caller_input_out_when_the_request_
     details: Final = await _rejected_request_log(route, call_type, caller_fields, with_logging_object, monkeypatch)
 
     assert "PROMPT-CANARY" not in json.dumps([details["messages"], details["input"]])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+async def test_proxy_only_error_log_keeps_the_responses_text_out_of_the_callback_input_on_a_metadata_redaction_flag(
+    with_logging_object: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    details: Final = await _rejected_request_log(
+        "/v1/responses",
+        "aresponses",
+        {"input": "PROMPT-CANARY", "metadata": {"turn_off_message_logging": True}},
+        with_logging_object,
+        monkeypatch,
+    )
+
+    assert details["input"] == ""
 
 
 def _nested(depth: int) -> Mapping[str, object]:
