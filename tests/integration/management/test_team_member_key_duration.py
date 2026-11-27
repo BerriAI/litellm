@@ -114,6 +114,34 @@ def test_existing_team_member_key_cannot_be_given_a_duration_above_the_team_ceil
         assert abs(_expiry(info) - requested_at - TEAM_LIFETIME) <= CLOCK_SLACK
 
 
+@pytest.mark.parametrize(
+    ("initial_duration", "expected_lifetime"),
+    [
+        pytest.param(None, TEAM_LIFETIME, id="no-expiry"),
+        pytest.param("90d", TEAM_LIFETIME, id="later-expiry"),
+        pytest.param("1d", None, id="earlier-expiry"),
+    ],
+)
+def test_move_member_key_without_duration_applies_destination_team_ceiling(
+    scenario: Scenario, initial_duration: str | None, expected_lifetime: timedelta | None
+) -> None:
+    gateway: Final = scenario.gateway
+    team: Final = scenario.team(team_member_key_duration=TEAM_DURATION)
+    member: Final = scenario.member(team)
+    key: Final = scenario.key(user_id=member, duration=initial_duration)
+    previous_expiry: Final = _key_info(gateway, key)["expires"]
+    requested_at: Final = datetime.now(timezone.utc)
+
+    gateway.post("/key/update", {"key": sha256(key.encode()).hexdigest(), "team_id": team})
+
+    info: Final = _key_info(gateway, key)
+    assert info["team_id"] == team
+    if expected_lifetime is None:
+        assert info["expires"] == previous_expiry
+    else:
+        assert abs(_expiry(info) - requested_at - expected_lifetime) <= CLOCK_SLACK
+
+
 def test_team_member_key_duration_minus_one_defaults_to_no_expiry_without_a_ceiling(scenario: Scenario) -> None:
     gateway: Final = scenario.gateway
     team: Final = scenario.team(team_member_key_duration="-1")

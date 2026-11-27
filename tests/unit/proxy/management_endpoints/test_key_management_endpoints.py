@@ -10645,6 +10645,31 @@ async def test_prepare_update_applies_duration_ceiling_to_the_effective_team_and
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("key_duration_clock")
+@pytest.mark.parametrize(
+    ("stored_expiry", "expected"),
+    [
+        pytest.param(None, {"expires": _KEY_DURATION_NOW + timedelta(days=30)}, id="no-expiry"),
+        pytest.param(
+            (_KEY_DURATION_NOW + timedelta(days=90)).isoformat(),
+            {"expires": _KEY_DURATION_NOW + timedelta(days=30)},
+            id="later-expiry",
+        ),
+        pytest.param(_KEY_DURATION_NOW + timedelta(days=1), {}, id="earlier-expiry"),
+    ],
+)
+async def test_move_member_key_without_duration_applies_destination_team_ceiling(
+    stored_expiry: str | datetime | None, expected: dict[str, datetime]
+) -> None:
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="destination", metadata={"team_member_key_duration": "30d"})
+    stored: Final = LiteLLM_VerificationToken(token="token", user_id="member", team_id="source", expires=stored_expiry)
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key=stored.token, team_id=team.team_id), stored, team_obj=team
+    )
+    assert {key: prepared[key] for key in prepared if key == "expires"} == expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("duration", ("", " \t"), ids=["empty", "whitespace"])
 async def test_blank_team_member_update_duration_keeps_expiry_with_proxy_upperbound(
     monkeypatch: pytest.MonkeyPatch, duration: str
@@ -24012,7 +24037,8 @@ async def test_regenerate_proxy_admin_skips_project_team_membership_lookup() -> 
     mock_prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(
         return_value=LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id="team-b")
     )
-    get_team: Final = AsyncMock()
+    get_team: Final = AsyncMock(return_value=LiteLLM_TeamTableCachedObj(team_id="team-b"))
+    cache: Final = UserApiKeyCache()
 
     with (
         patch(
@@ -24034,12 +24060,14 @@ async def test_regenerate_proxy_admin_skips_project_team_membership_lookup() -> 
             data=RegenerateKeyRequest(team_id="team-b", project_id=_OWNED_PROJECT),
             user_api_key_dict=_make_regenerate_user_api_key_dict(),
             litellm_changed_by=None,
-            user_api_key_cache=UserApiKeyCache(),
+            user_api_key_cache=cache,
             proxy_logging_obj=MagicMock(),
         )
 
     assert response.key == "sk-newtoken1234ab12"
-    get_team.assert_not_awaited()
+    get_team.assert_awaited_once_with(
+        team_id="team-b", prisma_client=mock_prisma_client, user_api_key_cache=cache, check_db_only=True
+    )
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
 
 

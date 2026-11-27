@@ -3503,7 +3503,13 @@ async def prepare_key_update_data(
 
     non_default_values.pop("duration", None)
     requested_duration: Final = data.duration
-    if "duration" in data.model_fields_set and (requested_duration is None or requested_duration.strip()):
+    duration_requested: Final = "duration" in data.model_fields_set and (
+        requested_duration is None or bool(requested_duration.strip())
+    )
+    moved_to_team: Final = (
+        "team_id" in data.model_fields_set and data.team_id is not None and data.team_id != existing_key_row.team_id
+    )
+    if duration_requested or moved_to_team:
         team_id: Final = (
             (data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id)
             if team_obj is not None or user_api_key_cache is not None
@@ -3522,21 +3528,30 @@ async def prepare_key_update_data(
             if team_id is not None and is_member and user_api_key_cache is not None
             else None
         )
+        duration_input: Final = requested_duration if duration_requested else None
         duration: Final = (
-            _team_member_key_duration(effective_team, requested_duration, requested_duration)
-            if is_member
-            else requested_duration
+            _team_member_key_duration(effective_team, duration_input, duration_input) if is_member else duration_input
         )
         upperbound: Final = litellm.upperbound_key_generate_params
-        if upperbound is not None:
+        if duration_requested and upperbound is not None:
             _enforce_duration_upperbound(data, "duration", duration, upperbound.duration, fill_defaults=False)
         if duration is None or duration == "-1":
             # Set expires to None to indicate the key never expires
-            non_default_values["expires"] = None
-        elif duration:
+            if duration_requested:
+                non_default_values["expires"] = None
+        else:
             duration_s: Final = duration_in_seconds(duration=duration)
             expires: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            non_default_values["expires"] = expires
+            stored_expiry: Final = None if duration_requested else existing_key_row.expires
+            parsed_expiry: Final = (
+                datetime.fromisoformat(stored_expiry) if isinstance(stored_expiry, str) else stored_expiry
+            )
+            if (
+                parsed_expiry is None
+                or (parsed_expiry if parsed_expiry.tzinfo is not None else parsed_expiry.replace(tzinfo=timezone.utc))
+                > expires
+            ):
+                non_default_values["expires"] = expires
 
     if "budget_duration" in non_default_values:
         budget_duration: Final = non_default_values.pop("budget_duration")
