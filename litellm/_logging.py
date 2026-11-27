@@ -921,6 +921,13 @@ RUST_FIELDS_RECORD_ATTR: Final = "rust_fields"
 _RUST_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
+async def drain_rust_log_lines() -> None:
+    """Waits until every log line Rust queued so far has gone through the handlers; for the shutdown path."""
+    from litellm.rust_bridge._native import rust_log_lines_delivered
+
+    await rust_log_lines_delivered()
+
+
 def _rust_fields_suffix(record: logging.LogRecord) -> str:
     """The fields as ``[name=value ...]``. Each value is JSON, so a newline or control code in it cannot start a
     line, and the fields together are held to the base64 and length limits a message is."""

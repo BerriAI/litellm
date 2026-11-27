@@ -29,7 +29,8 @@ struct Held {
     bytes: usize,
 }
 
-/// What the queue carries: a record, or a mark that is answered once every record queued before it was delivered.
+/// What the queue carries: a record, or a mark that is answered once every record queued before it was delivered
+/// and every drop counted by then was reported.
 enum Entry {
     Record(Held),
     Mark(oneshot::Sender<()>),
@@ -119,26 +120,38 @@ async fn drain<D: Delivery>(
             .chain(iter::from_fn(|| records.try_recv().ok()))
             .take(BATCH)
             .collect();
-        let lost = lost.swap(0, Ordering::Relaxed);
-        let delivery = Arc::clone(&delivery);
+        let dropped = lost.swap(0, Ordering::Relaxed);
+        let batch_delivery = Arc::clone(&delivery);
         let held_bytes = Arc::clone(&held_bytes);
-        drop(
-            tokio::task::spawn_blocking(move || {
-                batch.into_iter().for_each(|entry| match entry {
+        let marks = tokio::task::spawn_blocking(move || {
+            let marks: Vec<oneshot::Sender<()>> = batch
+                .into_iter()
+                .filter_map(|entry| match entry {
                     Entry::Record(held) => {
-                        delivery.record(&held.record);
+                        batch_delivery.record(&held.record);
                         held_bytes.fetch_sub(held.bytes, Ordering::Relaxed);
+                        None
                     }
-                    Entry::Mark(mark) => {
-                        let _ = mark.send(());
-                    }
-                });
-                if lost > 0 {
-                    delivery.lost(lost);
-                }
-            })
-            .await,
-        );
+                    Entry::Mark(mark) => Some(mark),
+                })
+                .collect();
+            if dropped > 0 {
+                batch_delivery.lost(dropped);
+            }
+            marks
+        })
+        .await
+        .unwrap_or_default();
+        if records.is_empty() {
+            let dropped_since = lost.swap(0, Ordering::Relaxed);
+            if dropped_since > 0 {
+                let delivery = Arc::clone(&delivery);
+                drop(tokio::task::spawn_blocking(move || delivery.lost(dropped_since)).await);
+            }
+        }
+        marks.into_iter().for_each(|mark| {
+            let _ = mark.send(());
+        });
     }
 }
 
@@ -294,6 +307,24 @@ mod tests {
                 .recv_timeout(Duration::from_millis(200))
                 .is_err()
         );
+    }
+
+    #[rstest::rstest]
+    fn a_record_dropped_while_the_last_one_is_delivered_is_reported_without_another_record() {
+        let runtime = single_worker();
+        let (probe, probed) = probe();
+        let logger = Logger::new(Queued(
+            Arc::new(Background::new(probe, 8, "delivering".len())),
+            runtime.handle().clone(),
+        ));
+        let wait = Duration::from_secs(5);
+        logger.scope(|| tracing::warn!("delivering"));
+        probed.started.recv_timeout(wait).unwrap();
+        logger.scope(|| tracing::warn!("x"));
+        probed.release.send(()).unwrap();
+
+        assert_eq!(probed.records.recv_timeout(wait).unwrap(), "delivering");
+        assert_eq!(probed.lost.recv_timeout(wait).unwrap(), 1);
     }
 
     #[rstest::rstest]
