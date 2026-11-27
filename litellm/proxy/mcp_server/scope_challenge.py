@@ -70,11 +70,30 @@ class OAuthScopeResponse:
 
     def deny_reauth(self) -> None:
         if self._reauthorize_as is not None:
-            self._refuse(MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=self._reauthorize_as))
+            self._refuse(
+                MCPUpstreamAuthError(
+                    status_code=401,
+                    www_authenticate=None,
+                    server_name=self._reauthorize_as,
+                    managed_reauth=True,
+                )
+            )
 
     def _refuse(self, error: MCPUpstreamAuthError) -> None:
         if self.pending:
-            self._challenge = error
+            self._challenge = (
+                MCPUpstreamAuthError(
+                    status_code=error.status_code,
+                    www_authenticate=error.www_authenticate,
+                    server_name=self._reauthorize_as,
+                    required_scope=error.required_scope,
+                    server_id=error.server_id,
+                    public_detail=error.public_detail,
+                    managed_reauth=error.managed_reauth,
+                )
+                if self._reauthorize_as is not None and error.managed_reauth
+                else error
+            )
             self._ready.set()
 
     async def __call__(self, message: Message) -> None:
