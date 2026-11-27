@@ -49,6 +49,17 @@ const OFF_BY_DEFAULT_PARAMS: [&str; 4] = [
 /// `ModelInfo.member_auto_router`, which `/model/new` stores as `false`, its default.
 const OFF_BY_DEFAULT_MODEL_INFO: [&str; 1] = ["member_auto_router"];
 
+/// `_POINTER_REF_PREFIXES` in `litellm/llms/base_llm/auth/identity_source.py`, the spellings Python
+/// takes for a secret pointer rather than a key. The native app would send such an api_key as
+/// written, so Python answers it, resolving `oidc/` and `os.environ/` in `get_secret`.
+const SECRET_REFERENCE_PREFIXES: [&str; 5] = [
+    "oidc/",
+    "os.environ/",
+    "hashicorp_vault/",
+    "aws_secret_manager/",
+    "google_secret_manager/",
+];
+
 pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let model = fields.get("model").and_then(Value::as_str)?;
     let Some(reached) = admit.router.reach(model) else {
@@ -161,7 +172,7 @@ fn is_no_seconds(request_timeout: Option<&Value>) -> bool {
 
 /// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` gets its
 /// credential from a flow the proxy can host and the gateway may not, as Entra and workload
-/// identity are.
+/// identity are, and so does one whose `api_key` is a secret pointer.
 fn params(params: &LitellmParams) -> Vec<Box<str>> {
     let LitellmParams {
         model: _,
@@ -200,6 +211,14 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
     } = params;
     let unsent = [
         ("api_key unset", api_key.is_none()),
+        (
+            "api_key secret reference",
+            api_key.as_ref().is_some_and(|key| {
+                SECRET_REFERENCE_PREFIXES
+                    .iter()
+                    .any(|prefix| key.expose().starts_with(prefix))
+            }),
+        ),
         (
             "api_base",
             api_base.as_deref().is_some_and(|base| !is_sendable(base)),
@@ -520,6 +539,16 @@ mod tests {
         assert_eq!(
             one_deployment(written, anthropic(&["claude"])).as_deref(),
             Some("model_list.litellm_params.api_key unset")
+        );
+    }
+
+    #[rstest]
+    fn a_deployment_whose_key_is_any_pointer_python_lists_names_its_group() {
+        let written = "    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: os.environ/ANTHROPIC_API_KEY\n";
+
+        assert_eq!(
+            one_deployment(written, anthropic(&["claude"])).as_deref(),
+            Some("model_list.litellm_params.api_key secret reference")
         );
     }
 
