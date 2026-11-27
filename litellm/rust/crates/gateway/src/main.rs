@@ -1,6 +1,7 @@
 use std::{
     convert::Infallible,
     error::Error,
+    net::SocketAddr,
     path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -16,8 +17,8 @@ use axum::{
 use litellm_config::{Config, Environment};
 use litellm_env::Lookup;
 use litellm_gateway::{
-    Admit, AppState, Live, Loaded, Poller, Refused, Resources, Served, Source, StoredConfig,
-    middleware::InFlight,
+    Admit, AppState, CostMapRefresh, Live, Loaded, Poller, Refused, Resources, Served, Source,
+    StoredConfig, middleware::InFlight,
 };
 use litellm_tracing::{KeyLength, Level, Logger, Metadata, Record, Scrubbed, Sink};
 use serde_json::json;
@@ -109,6 +110,7 @@ async fn standalone(
     let state = AppState::build(&config, environment).await?;
     scrub_at_the_configs_key_length(key_length, &*state.environment);
     let admit = Arc::new(Admit::new(&config, &state, stored));
+    refresh_cost_map(environment, &state, &config)?;
     let in_flight = InFlight::new();
     let live = Arc::new(Live::new(served(
         state,
@@ -123,9 +125,12 @@ async fn standalone(
 
     tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %log_level, "gateway listening");
 
-    let served = axum::serve(listener, ServiceExt::<Request>::into_make_service(app))
-        .with_graceful_shutdown(shutdown_signal())
-        .await;
+    let served = axum::serve(
+        listener,
+        ServiceExt::<Request>::into_make_service_with_connect_info::<SocketAddr>(app),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await;
     closed(poller, &live).await;
     Ok(served?)
 }
@@ -261,6 +266,9 @@ async fn in_front_of_python(
         source,
     } = native_state(loaded, environment).await?;
     scrub_at_the_configs_key_length(key_length, &*state.environment);
+    if admit.is_some() {
+        refresh_cost_map(environment, &state, &config)?;
+    }
     let in_flight = InFlight::new();
     let live = Arc::new(Live::new(served(
         state,
@@ -336,6 +344,18 @@ fn served(
 ) -> Served {
     let native = native(state.clone(), config, environment, in_flight);
     Served::new(state, admit, native)
+}
+
+/// Installs the remote cost map in the background once it is read, as Python's import does.
+fn refresh_cost_map(
+    environment: &Environment,
+    state: &AppState,
+    config: &Config,
+) -> Result<(), litellm_gateway::Error> {
+    if let Some(refresh) = CostMapRefresh::new(config, environment, state)? {
+        litellm_call_scope::spawn_detached(refresh.run(state.clone()));
+    }
+    Ok(())
 }
 
 /// The native app, which both modes build here so they cannot differ in its layers. `admit` goes
@@ -655,6 +675,139 @@ mod tests {
             .and_then(|body| body["error"]["code"].as_str().map(str::to_owned));
         assert_eq!((status, code.as_deref()), expected);
         state.close().await;
+    }
+
+    /// A config file with nothing stored in a database beside it.
+    fn unstored(config: Config) -> Loaded {
+        Loaded {
+            config,
+            stored: StoredConfig::Unused,
+            source: None,
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Front {
+        Nothing,
+        Python,
+    }
+
+    /// What the client gets for `request`, with `general` added to the config's
+    /// `general_settings`, through `alone` with nothing in front, and through what
+    /// `in_front_of_python` hands `gateway-forward` in front of Python, where a request `admitted`
+    /// refuses is Python's.
+    async fn answered(front: Front, general: &str, request: Request) -> Option<StatusCode> {
+        litellm_gateway::install_crypto_provider();
+        let config = Config::from_yaml(&format!(
+            "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\n      api_base: http://127.0.0.1:9\ngeneral_settings:\n  master_key: gateway-key\n{general}"
+        ))
+        .unwrap();
+        let environment = Environment::default();
+        let NativeState {
+            config,
+            state,
+            admit,
+            ..
+        } = native_state(Some(unstored(config)), &environment)
+            .await
+            .unwrap();
+        let live = Arc::new(Live::new(served(
+            state.clone(),
+            admit,
+            &config,
+            &environment,
+            &InFlight::new(),
+        )));
+        let status = match front {
+            Front::Nothing => Some(
+                tower::ServiceExt::oneshot(alone(live), request)
+                    .await
+                    .unwrap()
+                    .status(),
+            ),
+            Front::Python => match live.clone().admitted(request).await {
+                Ok(request) => Some(
+                    tower::ServiceExt::oneshot(live.native(), request)
+                        .await
+                        .unwrap()
+                        .status(),
+                ),
+                Err(_) => None,
+            },
+        };
+        state.close().await;
+        status
+    }
+
+    fn sent_from(peer: &str, forwarded_for: Option<&str>) -> Request {
+        forwarded_for
+            .into_iter()
+            .fold(Request::post("/v1/messages"), |request, value| {
+                request.header("x-forwarded-for", value)
+            })
+            .header("authorization", "Bearer gateway-key")
+            .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(SocketAddr::new(
+                peer.parse().unwrap(),
+                50000,
+            )))
+            .body(axum::body::Body::from(
+                r#"{"model":"claude","max_tokens":8,"messages":[]}"#,
+            ))
+            .unwrap()
+    }
+
+    #[rstest]
+    #[case::an_unlisted_route("  allowed_routes: [/health]\n", "10.0.0.1", None)]
+    #[case::an_unlisted_peer("  allowed_ips: [10.0.0.1]\n", "10.0.0.9", None)]
+    #[case::an_unlisted_forwarded_address(
+        "  allowed_ips: [10.0.0.1]\n  use_x_forwarded_for: true\n",
+        "10.0.0.1",
+        Some("10.0.0.9")
+    )]
+    #[tokio::test]
+    async fn the_native_app_answers_the_proxys_403_for_what_the_allowlists_leave_out(
+        #[values(Front::Nothing, Front::Python)] front: Front,
+        #[case] general: &str,
+        #[case] peer: &str,
+        #[case] forwarded_for: Option<&str>,
+    ) {
+        assert_eq!(
+            answered(front, general, sent_from(peer, forwarded_for)).await,
+            Some(StatusCode::FORBIDDEN)
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_listed_address_is_served_natively(
+        #[values(Front::Nothing, Front::Python)] front: Front,
+    ) {
+        assert_eq!(
+            answered(
+                front,
+                "  allowed_ips: [10.0.0.1]\n",
+                sent_from("10.0.0.1", None)
+            )
+            .await,
+            Some(StatusCode::INTERNAL_SERVER_ERROR)
+        );
+    }
+
+    /// With `use_x_forwarded_for` off, the address Python checks is one its server resolved from
+    /// the header the gateway does not read.
+    #[rstest]
+    #[tokio::test]
+    async fn a_forwarded_address_python_resolves_itself_is_left_to_python() {
+        assert_eq!(
+            answered(
+                Front::Python,
+                "  allowed_ips: [10.0.0.1]\n",
+                sent_from("10.0.0.9", Some("10.0.0.1"))
+            )
+            .await,
+            None
+        );
     }
 
     #[rstest]

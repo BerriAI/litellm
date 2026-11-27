@@ -34,7 +34,7 @@ function isWorkspaceRoute(pathname: string, workspace: string): boolean {
 function routeWorkspaceLabel(pathname: string): string | undefined {
   if (isWorkspaceRoute(pathname, CHAT)) return i18n.t("shell.viewSwitcher.chat");
   if (isWorkspaceRoute(pathname, MOYAI)) return productNames.moyai;
-  if (isWorkspaceRoute(pathname, LENS)) return i18n.t("shell.nav.items.lens");
+  if (isWorkspaceRoute(pathname, LENS)) return productNames.lens;
   return undefined;
 }
 
@@ -59,13 +59,11 @@ function WorkspaceSwitcherTrigger({
   className,
   collapsed,
   compactLens,
-  showPortalBadge,
 }: {
   activeLabel: string;
   className?: string;
   collapsed: boolean;
   compactLens: boolean;
-  showPortalBadge: boolean;
 }) {
   const { t } = useTranslation();
   const triggerLabel = t("shell.viewSwitcher.trigger", { workspace: activeLabel });
@@ -97,12 +95,6 @@ function WorkspaceSwitcherTrigger({
         <>
           <span data-slot="workspace-label" className="truncate">
             {activeLabel}
-            {showPortalBadge && (
-              <>
-                {" "}
-                <BetaBadge />
-              </>
-            )}
           </span>
           <ChevronsUpDown data-slot="workspace-chevron" className="size-3.5 flex-none text-muted-foreground" />
         </>
@@ -191,9 +183,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
     label: (
       <div className="flex w-full items-center justify-between gap-6 py-0.5">
         <span className="flex flex-col">
-          <span className="font-medium">
-            {t("customerPortal.switcher.label")} <BetaBadge />
-          </span>{" "}
+          <span className="font-medium">{t("customerPortal.switcher.label")}</span>{" "}
           <span className="text-xs leading-snug text-muted-foreground">{t("customerPortal.switcher.description")}</span>
         </span>
         {isGatewayModeActive && mode === CUSTOMER_PORTAL && <Check className="size-4 text-info" />}
@@ -220,7 +210,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
         <div className="flex w-full items-center justify-between gap-6 py-0.5">
           <span className="flex flex-col">
             <span className="font-medium">
-              {t("shell.nav.items.lens")} <BetaBadge />
+              {productNames.lens} <BetaBadge />
             </span>{" "}
             <span className="text-xs leading-snug text-muted-foreground">
               {t("shell.viewSwitcher.lensDescription")}
@@ -240,7 +230,6 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
         className={className}
         collapsed={collapsed}
         compactLens={collapsed && isLensRoute}
-        showPortalBadge={isGatewayModeActive && mode === CUSTOMER_PORTAL}
       />
       <DropdownMenuContent className={cn("w-auto", contentClassName)}>
         {items.map((item) => (

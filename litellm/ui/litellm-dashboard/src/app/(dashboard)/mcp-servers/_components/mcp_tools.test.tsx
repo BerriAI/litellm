@@ -1,9 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import MCPToolsViewer from "./mcp_tools";
 import { listMCPTools, getMCPOAuthUserCredentialStatus } from "@/components/networking";
 import { isTokenValid, getToken } from "@/utils/mcpTokenStore";
+import { renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   listMCPTools: vi.fn(),
@@ -36,20 +35,22 @@ const GATE_TEXT = "Authentication required";
 const TOKEN_URL = "https://slack.com/api/oauth.v2.user.access";
 
 const renderViewer = (props: Record<string, unknown>) =>
-  render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MCPToolsViewer
-        serverId="srv-1"
-        accessToken="litellm-key"
-        userRole="admin"
-        userID="tin@berri.ai"
-        serverAlias="slack"
-        auth_type="oauth2"
-        tokenUrl={TOKEN_URL}
-        {...props}
-      />
-    </QueryClientProvider>,
+  renderWithProviders(
+    <MCPToolsViewer
+      serverId="srv-1"
+      accessToken="litellm-key"
+      userRole="admin"
+      userID="tin@berri.ai"
+      serverAlias="slack"
+      auth_type="oauth2"
+      tokenUrl={TOKEN_URL}
+      {...props}
+    />,
   );
+
+beforeEach(() => {
+  testQueryClient.clear();
+});
 
 const credStatus = (overrides: Record<string, unknown> = {}) => ({
   server_id: "srv-1",

@@ -95,6 +95,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     consulted, so a subclass that does not override ``async_pre_call_hook`` inherits nothing.
     """
 
+    def logs_failed_attempt(self, exception: BaseException) -> bool:
+        return self.logs_every_failed_attempt
+
     def __init__(
         self,
         turn_off_message_logging: bool = False,

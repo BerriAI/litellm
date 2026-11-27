@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { render, screen, within } from "@testing-library/react";
 import moment from "moment";
+import { I18nextProvider } from "react-i18next";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import { AuditLogDrawer } from "./AuditLogDrawer";
 import { AuditLogEntry } from "../AuditLogsTableColumns";
 
@@ -51,6 +54,19 @@ describe("AuditLogDrawer", () => {
     render(<AuditLogDrawer {...defaultProps} />);
     expect(screen.getByText("updated")).toBeInTheDocument();
     expect(screen.getByText(moment.utc(baseLog.updated_at).local().format("MMM D, YYYY HH:mm:ss"))).toBeInTheDocument();
+  });
+
+  it("localizes the action badge in Chinese", async () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    await locale.changeLanguage("zh-CN");
+    render(
+      <I18nextProvider i18n={locale}>
+        <AuditLogDrawer {...defaultProps} />
+      </I18nextProvider>,
+    );
+
+    expect(screen.getByText("已更新")).toBeInTheDocument();
   });
 
   it("should show the friendly table name for a known table", () => {

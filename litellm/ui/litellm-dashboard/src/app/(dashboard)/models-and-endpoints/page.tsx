@@ -9,6 +9,7 @@ import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
+import { displayTime } from "@/i18n/displayDate";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
@@ -93,7 +94,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
@@ -103,7 +104,7 @@ export default function ModelsAndEndpointsPage() {
 
   const [requestedTab, setRequestedTab] = useUrlTab(TAB_KEYS, BASE_TAB_KEY);
   const [, setPrefillParams] = useQueryStates(PREFILL_URL_PARAMS);
-  const [lastRefreshed, setLastRefreshed] = useState("");
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
   const canCreate = canCreateModels(
@@ -167,7 +168,7 @@ export default function ModelsAndEndpointsPage() {
   };
 
   const handleRefreshClick = () => {
-    setLastRefreshed(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    setLastRefreshed(new Date());
     queryClient.invalidateQueries({ queryKey: ["models", "list"] });
   };
 
@@ -231,7 +232,7 @@ export default function ModelsAndEndpointsPage() {
             <div className="flex shrink-0 items-center gap-2 pb-1">
               {lastRefreshed && (
                 <span className="text-xs text-muted-foreground">
-                  {t("modelsAndEndpoints.page.lastRefreshed", { time: lastRefreshed })}
+                  {t("modelsAndEndpoints.page.lastRefreshed", { time: displayTime(lastRefreshed, i18n.language) })}
                 </span>
               )}
               <Button

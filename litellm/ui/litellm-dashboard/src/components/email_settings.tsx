@@ -1,10 +1,14 @@
 import React, { useState } from "react";
+import { Controller } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Eye, EyeOff } from "lucide-react";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
+import { toChangedVariables, toDestinationFieldValue } from "./alerting/destination/mapper";
+import { destinationVariablesSchema } from "./alerting/destination/schema";
 import { serviceHealthCheck, setCallbacksCall } from "./networking";
 import { EmailEventSettings } from "./email_events";
 
@@ -66,6 +70,7 @@ const SENSITIVE_FIELD_PATTERN = /(PASSWORD|SECRET|KEY|TOKEN)/i;
 const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser, alerts }) => {
   const { t } = useTranslation();
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
+  const { control, getValues } = useZodForm(destinationVariablesSchema, { defaultValues: {} });
 
   const toggleFieldVisibility = (key: string) => {
     setVisibleFields((prev) => ({
@@ -79,28 +84,12 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
       return;
     }
 
-    let updatedVariables: Record<string, string> = {};
-
-    alerts
-      .filter((alert) => alert.name === "email")
-      .forEach((alert) => {
-        Object.entries(alert.variables ?? {}).forEach(([key, value]) => {
-          const inputElement = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
-          if (!inputElement || !inputElement.value) {
-            return;
-          }
-          // Only send fields the admin actually edited. Values rendered from the
-          // server are masked (SMTP_PASSWORD) or sourced from the process
-          // environment, so re-submitting an untouched field would persist a mask
-          // or copy env-managed config into the database.
-          if (inputElement.value === (value == null ? "" : String(value))) {
-            return;
-          }
-          updatedVariables[key] = inputElement.value;
-        });
-      });
-
-    //filter out null / undefined values for updatedVariables
+    const fields = getValues();
+    const updatedVariables: Record<string, string> = Object.fromEntries(
+      alerts
+        .filter((alert) => alert.name === "email")
+        .flatMap((alert) => Object.entries(toChangedVariables(alert.variables ?? {}, fields))),
+    );
 
     const payload = {
       general_settings: {
@@ -162,12 +151,22 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                         </p>
                       )}
                       <InputGroup className="max-w-100">
-                        <InputGroupInput
+                        <Controller
+                          control={control}
                           name={key}
-                          aria-label={key === "PROXY_BASE_URL" ? t("loggingAndAlerts.emailSettings.gatewayUrl") : key}
-                          defaultValue={value as string}
-                          type={isSensitive && !isVisible ? "password" : "text"}
-                          disabled={isLocked}
+                          defaultValue={toDestinationFieldValue(value)}
+                          render={({ field }) => (
+                            <InputGroupInput
+                              name={key}
+                              aria-label={
+                                key === "PROXY_BASE_URL" ? t("loggingAndAlerts.emailSettings.gatewayUrl") : key
+                              }
+                              defaultValue={value as string}
+                              onChange={field.onChange}
+                              type={isSensitive && !isVisible ? "password" : "text"}
+                              disabled={isLocked}
+                            />
+                          )}
                         />
                         {isSensitive && (
                           <InputGroupAddon align="inline-end">

@@ -288,17 +288,18 @@ impl RouterCoreHandle {
     /// `RouterModelInfoQuery` document), driven like `start`: its steps are `model_info`
     /// lookups, and it ends with `done` (`info`: the merged map or None, `user_keys`: the keys
     /// whose values are the deployment's own).
-    fn router_model_info(&self, query: &Bound<'_, PyAny>) -> PyResult<RouterCall> {
+    fn router_model_info(&self, py: Python<'_>, query: &Bound<'_, PyAny>) -> PyResult<RouterCall> {
         let query: litellm_router_core::model_info::RouterModelInfoQuery =
             serde_json::from_value(document(query)?)
                 .map_err(|error| PyValueError::new_err(format!("bad model-info query: {error}")))?;
         let router = self.router.clone();
-        Ok(RouterCall::new(async move {
+        let logger = crate::logger::capture(py);
+        Ok(RouterCall::new(logger.instrument(async move {
             router
                 .router_model_info(&PythonRouterHost, &query)
                 .await
                 .map(Finish::RouterModelInfo)
-        }))
+        })))
     }
 
     /// `get_deployment_model_info` for deployment `model_id` serving `model_name`, driven like
@@ -1365,7 +1366,7 @@ fn tokens_key(window: UsageWindow) -> String {
 /// and `"tracks_usage": bool`) or `{"ok": False, "kind": str, "status": int | None,
 /// "retry_after": float | None, "num_retries": int | None, "detail": str | None,
 /// "outside_deployment": bool, "caller_scoped": bool, "status_absent": bool,
-/// "uncounted_request": bool}`.
+/// "uncounted_request": bool, "answered_tokens": int}`.
 pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u64, AttemptError>> {
     fn item<'py, T: FromPyObjectOwned<'py>>(
         outcome: &Bound<'py, PyDict>,
@@ -1404,6 +1405,7 @@ pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u6
     failure.outside_deployment = item::<bool>(outcome, "outside_deployment")?.unwrap_or(false);
     failure.status_absent = item::<bool>(outcome, "status_absent")?.unwrap_or(false);
     failure.uncounted_request = item::<bool>(outcome, "uncounted_request")?.unwrap_or(false);
+    failure.answered_tokens = item::<u32>(outcome, "answered_tokens")?.unwrap_or(0);
     failure.caller_scoped = item::<bool>(outcome, "caller_scoped")?.unwrap_or(false);
     failure.classes = item::<Vec<String>>(outcome, "classes")?
         .unwrap_or_default()

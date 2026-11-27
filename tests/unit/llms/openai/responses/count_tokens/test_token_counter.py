@@ -383,7 +383,7 @@ async def test_anthropic_format_counts_the_structured_output_schema(monkeypatch:
             "format": {
                 "type": "json_schema",
                 "name": "structured_output",
-                "schema": {**schema, "required": ["answer"], "additionalProperties": False},
+                "schema": {**schema, "additionalProperties": False, "required": ["answer"]},
                 "strict": True,
             }
         },

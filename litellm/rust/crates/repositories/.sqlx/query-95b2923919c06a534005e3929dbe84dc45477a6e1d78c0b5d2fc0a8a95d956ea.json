@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_TeamTable\"\nSET members_with_roles =\n        CASE WHEN jsonb_typeof(members_with_roles) = 'array' THEN members_with_roles ELSE '[]'::jsonb END\n        || jsonb_build_array(jsonb_build_object('user_id', $2::text, 'user_email', $3::text, 'role', $4::text)),\n    updated_at = NOW() AT TIME ZONE 'UTC'\nWHERE team_id = $1\nRETURNING members_with_roles AS \"members_with_roles!: Json<serde_json::Value>\"\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "members_with_roles!: Json<serde_json::Value>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "members_with_roles"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "95b2923919c06a534005e3929dbe84dc45477a6e1d78c0b5d2fc0a8a95d956ea"
+}

@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 from typing import (
     Final,
+    NoReturn,
     TypeAlias,
     TypeVar,
     cast,  # noqa: TID251  # narrows native payloads to public TypedDicts
@@ -70,6 +71,11 @@ from litellm.llms.anthropic.common_utils import (
     strip_provider_specific_fields_from_anthropic_messages,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import reject_non_string_system_text
+from litellm.llms.anthropic.messages.deferred_tools import (
+    native_messages_deferred_tools_refusal,
+    refusal_unless_dropped,
+    unknown_deferred_tools_refusal,
+)
 from litellm.llms.anthropic.messages.native import handler
 from litellm.llms.anthropic.messages.native import utils as native_utils
 from litellm.llms.anthropic.messages.native.handler import (
@@ -314,6 +320,28 @@ def _refuse_unsupported_thread(request: Mapping[str, object], asynchronous: bool
     if refusal is None:
         return
     _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+    _raise_provider_refusal(refusal, request, provider)
+
+
+def _refuse_unusable_deferred_tools(request: Mapping[str, object], asynchronous: bool) -> None:
+    """Python's handler refuses a model_info.deferred_tools it cannot apply, or ignores it under drop_params."""
+    model_info: Final = request.get("model_info")
+    if (as_str_mapping(model_info) or {}).get("deferred_tools") is None:
+        return
+    drop_params: Final = drops_unsupported_params(request.get("drop_params"))
+    provider, config = _messages_config(request)
+    refusal: Final = refusal_unless_dropped(
+        unknown_deferred_tools_refusal(model_info)
+        or (None if config is None else native_messages_deferred_tools_refusal(model_info, provider)),
+        drop_params,
+    )
+    if refusal is None:
+        return
+    _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+    _raise_provider_refusal(AnthropicError(status_code=400, message=refusal), request, provider)
+
+
+def _raise_provider_refusal(refusal: AnthropicError, request: Mapping[str, object], provider: str) -> NoReturn:
     try:
         raise refusal
     except AnthropicError as provider_error:
@@ -1516,6 +1544,7 @@ def settings(
     if call_settings.mock_response is None and not call_settings.mcp_gateway:
         _refuse_unsupported_thread(request, asynchronous)
         _refuse_unsupported_diagnostics(request, asynchronous)
+        _refuse_unusable_deferred_tools(request, asynchronous)
     return asdict(call_settings)
 
 

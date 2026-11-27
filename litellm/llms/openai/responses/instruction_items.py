@@ -175,7 +175,7 @@ def later_system_items_as_user(input: str | ResponseInputParam) -> str | Respons
 
 
 def has_instruction_items(input: str | ResponseInputParam, from_index: int) -> bool:
-    return not isinstance(input, str) and any(_role(item) in _INSTRUCTION_ROLES for item in input[from_index:])
+    return isinstance(input, list) and any(_role(item) in _INSTRUCTION_ROLES for item in input[from_index:])
 
 
 def _items_as_user_turns(items: Sequence[ResponseInputItemParam]) -> ResponseInputParam:

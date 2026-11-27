@@ -50,7 +50,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   presets = relativeTimeOptions,
   maxRangeDays,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const language = i18n.resolvedLanguage ?? i18n.language;
   const inputId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
@@ -135,13 +136,31 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
       if (!from || !to) return t("shared.advancedDatePicker.selectDateRange");
 
       const formatDateTime = (date: Date) => {
-        return moment(date).format(showTimeRange ? "D MMM, HH:mm" : "D MMM YYYY");
+        if (language.startsWith("en")) return moment(date).format(showTimeRange ? "D MMM, HH:mm" : "D MMM YYYY");
+        return new Intl.DateTimeFormat(
+          language,
+          showTimeRange
+            ? { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }
+            : { day: "numeric", month: "short", year: "numeric" },
+        ).format(date);
       };
 
       return `${formatDateTime(from)} - ${formatDateTime(to)}`;
     },
-    [t, showTimeRange],
+    [t, showTimeRange, language],
   );
+
+  const formatSelectionDate = (date: Date) => {
+    if (language.startsWith("en"))
+      return moment(date).format(showTimeRange ? "MMM D, YYYY [at] HH:mm:ss" : "MMM D, YYYY");
+    const selectionDateOptions: Intl.DateTimeFormatOptions = {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      ...(showTimeRange && { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }),
+    };
+    return new Intl.DateTimeFormat(language, selectionDateOptions).format(date);
+  };
 
   // CRITICAL: Apply the same date adjustment logic as the original component
   const adjustDateRange = useCallback((newValue: DateRangePickerValue): DateRangePickerValue => {
@@ -429,11 +448,11 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                     <div className={cn("bg-info/10 p-3 rounded-md space-y-1", compact && "col-span-2")}>
                       <div className="text-xs text-info">
                         <span className="font-medium">{t("shared.advancedDatePicker.from")}</span>{" "}
-                        {moment(tempValue.from).format(showTimeRange ? "MMM D, YYYY [at] HH:mm:ss" : "MMM D, YYYY")}
+                        {formatSelectionDate(tempValue.from)}
                       </div>
                       <div className="text-xs text-info">
                         <span className="font-medium">{t("shared.advancedDatePicker.to")}</span>{" "}
-                        {moment(tempValue.to).format(showTimeRange ? "MMM D, YYYY [at] HH:mm:ss" : "MMM D, YYYY")}
+                        {formatSelectionDate(tempValue.to)}
                       </div>
                     </div>
                   )}

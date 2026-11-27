@@ -2,6 +2,9 @@ import { act, render, screen, fireEvent, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { I18nextProvider } from "react-i18next";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import AdvancedDatePicker from "./advanced_date_picker";
 
 // Polyfill requestIdleCallback for test environment
@@ -78,6 +81,27 @@ describe("AdvancedDatePicker", () => {
   it("should display formatted date range", () => {
     const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
     expect(getTrigger(container)).toHaveTextContent(/\d{1,2} \w{3}, \d{2}:\d{2} - \d{1,2} \w{3}, \d{2}:\d{2}/);
+  });
+
+  it("updates the date range when the dashboard language changes", async () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    await locale.changeLanguage("en");
+    render(
+      <I18nextProvider i18n={locale}>
+        <AdvancedDatePicker
+          value={{ from: new Date(2026, 10, 20), to: new Date(2026, 10, 29) }}
+          onValueChange={mockOnValueChange}
+          showTimeRange={false}
+        />
+      </I18nextProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "20 Nov 2026 - 29 Nov 2026" })).toBeInTheDocument();
+    await act(() => locale.changeLanguage("zh-CN"));
+    expect(screen.getByRole("button", { name: "2026年11月20日 - 2026年11月29日" })).toBeInTheDocument();
+    await act(() => locale.changeLanguage("en"));
+    expect(screen.getByRole("button", { name: "20 Nov 2026 - 29 Nov 2026" })).toBeInTheDocument();
   });
 
   it("should open dropdown when clicked", () => {

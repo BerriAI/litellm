@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
@@ -35,7 +36,7 @@ interface VectorStoreTesterProps {
 }
 
 export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStoreId, accessToken, className = "" }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [searchHistory, setSearchHistory] = useState<
@@ -86,7 +87,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
   };
 
   const formatTimestamp = (timestamp: number): string => {
-    return new Date(timestamp).toLocaleString();
+    return displayTimestamp(new Date(timestamp), locale.language);
   };
 
   const clearHistory = () => {

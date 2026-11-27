@@ -20,7 +20,8 @@ impl TcpProxy {
         let listener = TcpListener::bind((HOST, 0)).await.map_err(Error::Port)?;
         let port = listener.local_addr().map_err(Error::Port)?.port();
         let cuts = Arc::new(watch::Sender::new(0));
-        let accepting = tokio::spawn(accept(listener, upstream, cuts.clone()));
+        let accepting =
+            litellm_call_scope::spawn_detached(accept(listener, upstream, cuts.clone()));
         Ok(Self {
             port,
             cuts,
@@ -48,7 +49,7 @@ impl Drop for TcpProxy {
 
 async fn accept(listener: TcpListener, upstream: u16, cuts: Arc<watch::Sender<u64>>) {
     while let Ok((client, _)) = listener.accept().await {
-        tokio::spawn(forward(client, upstream, cuts.subscribe()));
+        litellm_call_scope::spawn_detached(forward(client, upstream, cuts.subscribe()));
     }
 }
 

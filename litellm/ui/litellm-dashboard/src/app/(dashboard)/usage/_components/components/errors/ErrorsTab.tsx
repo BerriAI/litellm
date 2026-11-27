@@ -37,8 +37,8 @@ interface ErrorsTabProps {
 
 const ENTITY_OPTIONS = ERROR_ENTITY_KINDS.map((kind) => ({ value: kind, labelKey: ERROR_ENTITY_LABEL[kind].plural }));
 
-const shortDate = (iso: string): string =>
-  new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const shortDate = (iso: string, language: string): string =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString(language, { month: "short", day: "numeric" });
 
 const count = (value: number): string => value.toLocaleString();
 
@@ -85,7 +85,7 @@ function rateChartEmpty(rateView: ErrorRateView, series: ErrorSeries, noTraffic:
 }
 
 export default function ErrorsTab({ activity, loading, failed, userScoped = false }: ErrorsTabProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [kind, setKind] = useState<ErrorEntityKind>("key");
   const [rateView, setRateView] = useState<ErrorRateView>("total");
   const summary = useMemo(() => (activity ? errorSummary(activity) : null), [activity]);
@@ -97,9 +97,9 @@ export default function ErrorsTab({ activity, loading, failed, userScoped = fals
     () =>
       (rateView === "total" ? series.rows : rateByStatusRows(series)).map((row) => ({
         ...row,
-        date: shortDate(row.date),
+        date: shortDate(row.date, i18n.language),
       })),
-    [series, rateView],
+    [series, rateView, i18n.language],
   );
   const noTraffic = summary !== null && summary.requests === 0;
   const rateEmpty = rateChartEmpty(rateView, series, noTraffic, t);
@@ -197,6 +197,7 @@ export default function ErrorsTab({ activity, loading, failed, userScoped = fals
               data={rateRows}
               index="date"
               categories={rateView === "total" ? ["rate"] : series.codes}
+              categoryLabels={rateView === "total" ? { rate: t("usage.errors.rateChart.title") } : undefined}
               colors={
                 rateView === "total"
                   ? ["red"]
@@ -219,7 +220,7 @@ export default function ErrorsTab({ activity, loading, failed, userScoped = fals
               data={series.rows}
               series={series.codes}
               xKey="date"
-              xLabel={shortDate}
+              xLabel={(date) => shortDate(date, i18n.language)}
               format={count}
               totalFor={(date) => failedByDate.get(date)}
               totalLabel={t("usage.errors.statusChart.totalLabel")}

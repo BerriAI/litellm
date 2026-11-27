@@ -885,7 +885,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str,
         api_key: str,
         data: dict[str, object],
-        headers: dict,
+        headers: Mapping[str, object],
         deployment_name: str | None = None,
     ) -> httpx.Response:
         if client is None:
@@ -904,7 +904,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         else:
             async_handler = client
 
-        request_json: Final = azure_deployment_image_generation_json_body(api_base, data, deployment_name)
+        request_json: Final[dict[str, object]] = azure_deployment_image_generation_json_body(
+            api_base, data, deployment_name
+        )
         return await async_handler.post(
             url=api_base,
             json=request_json,
@@ -919,7 +921,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str,
         api_key: str,
         data: dict,
-        headers: dict,
+        headers: Mapping[str, object],
         deployment_name: str | None = None,
     ) -> httpx.Response:
         if client is None:
@@ -935,7 +937,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         else:
             sync_handler = client
 
-        request_json: Final = azure_deployment_image_generation_json_body(api_base, data, deployment_name)
+        request_json: Final[dict[str, object]] = azure_deployment_image_generation_json_body(
+            api_base, data, deployment_name
+        )
         return sync_handler.post(
             url=api_base,
             json=request_json,

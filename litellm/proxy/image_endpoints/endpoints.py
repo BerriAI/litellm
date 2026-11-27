@@ -27,6 +27,7 @@ from litellm.images.streaming import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
@@ -35,6 +36,8 @@ from litellm.proxy.common_request_processing import (
     hierarchical_router_settings_updates,
     log_llm_api_exception,
     resolve_litellm_call_id,
+    response_cost_with_failed_attempts,
+    stream_response_cost_header_value,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
@@ -43,10 +46,12 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
-    litellm_call_id_headers,
+    failed_call_headers,
     openai_error_param,
     openai_error_type,
+    relayed_provider_specific_fields,
 )
+from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
@@ -54,6 +59,7 @@ from litellm.types.utils import CallTypes, ImageResponse
 
 router: Final = APIRouter()
 _IMAGE_GENERATION_MODEL_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
@@ -280,7 +286,9 @@ async def image_generation(
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
-        async def response_headers(served: object) -> dict[str, str]:
+        request_logging_obj: Final = _REQUEST_FIELDS.validate_python(data).get("litellm_logging_obj")
+
+        async def response_headers(served: object, *, streamed: bool) -> dict[str, str]:
             hidden_params: Final = getattr(served, "_hidden_params", {}) or {}
             # Call response headers hook (matches base_process_llm_request behavior)
             callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
@@ -296,7 +304,13 @@ async def image_generation(
                     cache_key=hidden_params.get("cache_key", None) or "",
                     api_base=hidden_params.get("api_base", None) or "",
                     version=version,
-                    response_cost=hidden_params.get("response_cost", None) or "",
+                    response_cost=(
+                        stream_response_cost_header_value(
+                            isinstance(served, ImageResponse), hidden_params, request_logging_obj
+                        )
+                        if streamed
+                        else response_cost_with_failed_attempts(hidden_params.get("response_cost"), request_logging_obj)
+                    ),
                     model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                     call_id=hidden_params.get("litellm_call_id", None) or "",
                     request_data=data,
@@ -314,7 +328,7 @@ async def image_generation(
                     event_prefix="image_generation",
                 ),
                 media_type="text/event-stream",
-                headers=await response_headers(generated),
+                headers=await response_headers(generated, streamed=True),
                 request=request,
                 general_settings=general_settings,
             )
@@ -324,7 +338,7 @@ async def image_generation(
             data=data, user_api_key_dict=user_api_key_dict, response=generated
         )
 
-        fastapi_response.headers.update(await response_headers(response))
+        fastapi_response.headers.update(await response_headers(response, streamed=False))
 
         return response
     except Exception as e:
@@ -335,12 +349,15 @@ async def image_generation(
             dispatched_call_type=CallTypes.aimage_generation.value,
         )
         log_llm_api_exception(e, litellm_call_id)
+        failure_headers: Final = failed_call_headers(
+            litellm_call_id, failure_row_response_cost(_REQUEST_FIELDS.validate_python(data))
+        )
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
                 type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
                 param=openai_error_param(e),
-                headers=litellm_call_id_headers(litellm_call_id),
+                headers=failure_headers,
                 code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
@@ -349,9 +366,12 @@ async def image_generation(
                 message=getattr(e, "message", error_msg),
                 type=openai_error_type(e, error_status_code(e, 500)),
                 param=openai_error_param(e),
-                headers=litellm_call_id_headers(litellm_call_id),
+                headers=failure_headers,
                 openai_code=getattr(e, "code", None),
                 code=error_status_code(e, 500),
+                provider_specific_fields=relayed_provider_specific_fields(e)
+                if isinstance(e, ImageRefusalError)
+                else None,
             )
 
 

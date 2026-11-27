@@ -2,7 +2,7 @@ import React from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { ChartColumnStacked } from "lucide-react";
-import { BarChart, CustomTooltip } from "@/components/shared/charts";
+import { BarChart } from "@/components/shared/charts";
 import { MetricWithMetadata } from "@/components/UsagePage/types";
 import { Panel } from "../../overview/Primitives";
 
@@ -62,9 +62,9 @@ const EndpointUsageBarChart: React.FC<EndpointUsageBarChartProps> = ({ endpointD
         data={chartData}
         index="endpoint"
         categories={CATEGORIES}
+        categoryLabels={{ Successful: t(CATEGORY_LABELS.Successful), Failed: t(CATEGORY_LABELS.Failed) }}
         colors={COLORS}
         valueFormatter={valueFormatter}
-        customTooltip={CustomTooltip}
         showLegend={false}
         stack={true}
         maxBarSize={48}

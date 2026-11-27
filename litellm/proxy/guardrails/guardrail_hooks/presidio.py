@@ -9,6 +9,7 @@
 
 
 import asyncio
+import copy
 import json
 import re
 import sys
@@ -1534,9 +1535,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Masks the input and output before logging to langfuse, datadog, etc.
         """
-        if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
+        masks_response_only: Final = self._callback_role is not None and self.apply_to_output
+        if call_type in ("completion", "acompletion") and not masks_response_only:  # /chat/completions requests
             messages: Final[list | None] = kwargs.get("messages", None)
-            tasks: Final = []
+            tasks: Final[list[Awaitable[str]]] = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
 
             if messages is None:
@@ -1603,8 +1605,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     request_data=kwargs,
                     mode="mask",
                 )
+        else:
+            return kwargs, await self._masked_copy_of_logged_response(kwargs, result, call_type)
 
         return kwargs, result
+
+    async def _masked_copy_of_logged_response(
+        self, kwargs: Mapping[str, object], result: object, call_type: str
+    ) -> object:
+        from litellm.llms import get_guardrail_translation_mapping
+        from litellm.types.utils import CallTypes
+
+        if isinstance(result, ModelResponse):
+            return await self._process_response_for_pii(response=result, request_data={**kwargs}, mode="mask")
+        try:
+            translation: Final = get_guardrail_translation_mapping(CallTypes(call_type))()
+        except ValueError:
+            return result
+        return await translation.process_output_response(
+            response=copy.deepcopy(result),
+            guardrail_to_apply=self,
+            request_data={"metadata": {}, "litellm_call_id": kwargs.get("litellm_call_id")},
+        )
 
     async def async_post_call_success_hook(
         self,

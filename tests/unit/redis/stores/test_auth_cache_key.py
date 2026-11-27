@@ -9,6 +9,7 @@ from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._types import LiteLLM_VerificationTokenView, UserAPIKeyAuth
@@ -313,3 +314,22 @@ def test_the_object_permission_entry_is_what_python_caches_for_the_repository_ro
     permission: Final = LiteLLM_ObjectPermissionTable.model_validate_json(row)
 
     assert json.dumps(CacheCodec.serialize(permission, model_type=LiteLLM_ObjectPermissionTable)) == entry
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"user_role": "bogus"}, {"allowed_model_region": "ap"}, {"allowed_model_region": "EU"}],
+    ids=["a_role_the_model_does_not_take", "a_region_the_model_does_not_take", "a_region_in_capitals"],
+)
+def test_python_refuses_each_key_role_and_region_the_rust_store_refuses(fields: dict[str, str]) -> None:
+    with pytest.raises(ValidationError):
+        UserAPIKeyAuth.model_validate(fields)
+
+
+def test_python_keeps_the_key_role_and_region_the_rust_store_keeps() -> None:
+    key: Final = UserAPIKeyAuth.model_validate({"user_role": "proxy_admin_viewer", "allowed_model_region": "eu"})
+
+    assert (
+        '"user_role": "proxy_admin_viewer", "allowed_model_region": "eu"'
+        in json.dumps(CacheCodec.serialize(key, model_type=UserAPIKeyAuth))
+    )

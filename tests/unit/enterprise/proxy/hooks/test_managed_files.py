@@ -28,7 +28,7 @@ from litellm_enterprise.proxy.hooks.managed_files import (
 from litellm import Router
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import get_format_from_file_id
-from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
+from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     TeamProviderDeployment,
@@ -158,6 +158,14 @@ class _InMemoryManagedFileTable:
         where: Mapping[str, object],
         **_query: object,
     ) -> list[LiteLLM_ManagedFileTable]:
+        unified_file_ids: Final = where.get("unified_file_id")
+        if isinstance(unified_file_ids, Mapping) and "in" in unified_file_ids:
+            return [row for row in self.rows.values() if row.unified_file_id in unified_file_ids["in"]]
+        raw_file_ids: Final = where.get("flat_model_file_ids")
+        if isinstance(raw_file_ids, Mapping) and "hasSome" in raw_file_ids:
+            return [
+                row for row in self.rows.values() if not set(row.flat_model_file_ids).isdisjoint(raw_file_ids["hasSome"])
+            ]
         if "OR" not in where or len(where) != 1:
             return list(self.rows.values())
         return [
@@ -6838,6 +6846,40 @@ async def test_enforce_provider_file_access_still_passes_a_file_nobody_registere
     stranger: Final = UserAPIKeyAuth(user_id="stranger")
 
     assert await managed_files.enforce_provider_file_access("files/batch-other", stranger) is None
+
+
+@pytest.mark.asyncio
+async def test_provider_file_ids_denied_to_names_only_the_spellings_of_another_keys_file():
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    stranger: Final = UserAPIKeyAuth(user_id="stranger", team_id="team-stranger")
+    asked: Final = (*_GEMINI_OUTPUT_SPELLINGS, "files/batch-other", "files/nobody-registered")
+
+    assert await managed_files.provider_file_ids_denied_to(asked, stranger) == _GEMINI_OUTPUT_SPELLINGS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller",
+    [
+        UserAPIKeyAuth(user_id="owner", team_id="team-owner"),
+        UserAPIKeyAuth(user_id="teammate", team_id="team-owner"),
+        UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    ],
+    ids=["owner", "teammate", "admin"],
+)
+async def test_provider_file_ids_denied_to_denies_nothing_to_a_caller_who_may_read_the_file(caller: UserAPIKeyAuth):
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+
+    assert await managed_files.provider_file_ids_denied_to(_GEMINI_OUTPUT_SPELLINGS, caller) == ()
+
+
+@pytest.mark.asyncio
+async def test_provider_file_ids_denied_to_finds_another_keys_file_past_the_first_lookup_chunk():
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    stranger: Final = UserAPIKeyAuth(user_id="stranger", team_id="team-stranger")
+    asked: Final = (*(f"files/filler-{n}" for n in range(2_000)), "files/zz-last/../batch-out1", "files/batch-out1")
+
+    assert await managed_files.provider_file_ids_denied_to(asked, stranger) == ("files/batch-out1",)
 
 
 _GEMINI_UPLOAD_URI: Final = "https://generativelanguage.googleapis.com/v1beta/files/upload-1"

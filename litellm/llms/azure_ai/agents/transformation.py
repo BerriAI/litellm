@@ -21,7 +21,7 @@ The API uses these endpoints:
 See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -319,7 +319,7 @@ class AzureAIAgentsConfig(BaseConfig):
     @staticmethod
     def completion(
         model: str,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         api_base: str,
         api_key: str | None,
         model_response: ModelResponse,
@@ -329,7 +329,7 @@ class AzureAIAgentsConfig(BaseConfig):
         timeout: float | str | httpx.Timeout | None,
         acompletion: bool,
         stream: bool | None = False,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,  # mutable-ok: dict-typed callees take it
     ) -> Any:
         """
         Dispatch method for Azure Foundry Agents completion.

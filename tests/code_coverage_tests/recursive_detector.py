@@ -8,6 +8,7 @@ NON_SDK_SOURCE_DIRS: Final = frozenset(
 )
 
 IGNORE_FUNCTIONS = [
+    "_with_original_numbers",  # DEFAULT_MAX_RECURSE_DEPTH bound, deeper values keep the guardrail's decoded JSON.
     "with_sanitized_schema_at",  # depth is len(path), a literal tuple of at most two keys at every call site.
     "check_opaque_inference_controls",  # DEFAULT_MAX_RECURSE_DEPTH bound, rejects unchecked nesting with HTTP 403.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
@@ -42,6 +43,7 @@ IGNORE_FUNCTIONS = [
     "_node_blocks",  # bedrock tool call arguments, bounded by MAX_STRUCTURED_CONTENT_SCAN_DEPTH.
     "_json_text_with_masks",  # walks a tree _node_blocks already admitted within the depth bound.
     "_value_with_masks",  # walks a tree _node_blocks already admitted within the depth bound.
+    "_extract_media_nodes",  # max depth set (_MAX_DEPTH, 10).
     "remove_json_schema_refs",  # max depth set.,
     "_convert_schema_types",  # max depth set.,
     "_fix_enum_empty_strings",  # max depth set.,
@@ -58,6 +60,7 @@ IGNORE_FUNCTIONS = [
     "_decrypted_param",  # max depth set.
     "contains_encrypted_marker",  # max depth set.
     "_rotate_guardrail_row",  # bounded by attempts_left.
+    "_responses_dropping_refused_fields",  # bounded by _REFUSED_FIELDS, each retry drops a field it sent.
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
     "_filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
@@ -144,13 +147,8 @@ class RecursiveFunctionFinder(ast.NodeVisitor):
             return True
 
         # Case 2: Method call with self (e.g., self.my_func())
-        if isinstance(call_node.func, ast.Attribute) and isinstance(
-            call_node.func.value, ast.Name
-        ):
-            return (
-                call_node.func.value.id == "self"
-                and call_node.func.attr == func_node.name
-            )
+        if isinstance(call_node.func, ast.Attribute) and isinstance(call_node.func.value, ast.Name):
+            return call_node.func.value.id == "self" and call_node.func.attr == func_node.name
 
         return False
 
@@ -187,9 +185,7 @@ if __name__ == "__main__":
     # this is used in the CI/CD pipeline to prevent recursive functions from being merged
 
     directory_path = "./litellm"
-    recursive_functions, ignored_recursive_functions = (
-        find_recursive_functions_in_directory(directory_path)
-    )
+    recursive_functions, ignored_recursive_functions = find_recursive_functions_in_directory(directory_path)
     print("UNIGNORED RECURSIVE FUNCTIONS: ", recursive_functions)
     print("IGNORED RECURSIVE FUNCTIONS: ", ignored_recursive_functions)
 

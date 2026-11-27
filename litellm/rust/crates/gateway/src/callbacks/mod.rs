@@ -12,9 +12,9 @@ pub mod parallel_request_limiter;
 pub mod spend_log;
 mod spend_log_input;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use litellm_callbacks::{
     Abort, Callback, CallbackError, ErasedCallback, Hook, ManifestError, RequestState,
     Subscription, Verdict, Violation,
@@ -219,18 +219,18 @@ fn refusal(abort: Abort) -> Refusal {
     }
 }
 
-fn header(name: &str, value: &Value) -> Option<(HeaderName, HeaderValue)> {
-    let value = match value {
-        Value::String(text) => HeaderValue::try_from(text.as_str()),
-        other => HeaderValue::try_from(other.to_string()),
-    };
-    Some((HeaderName::try_from(name).ok()?, value.ok()?))
-}
-
 impl Call {
     /// Runs the hook of `point` over the callbacks subscribed to it, in order. On a hook that
-    /// decides, the first to abort or fail ends it and the call.
+    /// decides, the first to abort or fail ends it and the call. The time the hook took is added
+    /// to the call's callback time.
     async fn run(&self, point: Point) -> Result<(), HookError> {
+        let began = Instant::now();
+        let ran = self.run_turns(point).await;
+        record::write(|entries| entries.callback_time += began.elapsed());
+        ran
+    }
+
+    async fn run_turns(&self, point: Point) -> Result<(), HookError> {
         let hook = point.hook();
         for (registered, state) in self.callbacks.callbacks.iter().zip(&self.states) {
             let callback = &registered.callback;
@@ -303,7 +303,7 @@ impl CallHooks for Call {
     async fn pre_call(&self, body: Map<String, Value>) -> Result<Map<String, Value>, HookError> {
         let mut unheld = Some(body);
         record::write(|entries| {
-            entries.charge_to(self.charged.clone());
+            entries.charged = self.charged.clone();
             if let Some(body) = unheld.take() {
                 entries.hold(body);
             }
@@ -313,7 +313,7 @@ impl CallHooks for Call {
             .or(unheld)
             .unwrap_or_default();
         if ran.is_ok() {
-            record::write(CallState::call_provider);
+            record::write(|entries| entries.api_call_start = Some(std::time::SystemTime::now()));
         }
         ran.map(|()| body)
     }
@@ -322,16 +322,8 @@ impl CallHooks for Call {
         self.run(Point::PostCallSuccess).await
     }
 
-    async fn response_headers(&self) -> HeaderMap {
+    async fn response_headers(&self) {
         let _ = self.run(Point::ResponseHeaders).await;
-        record::read(|entries| {
-            entries
-                .response_headers()
-                .iter()
-                .filter_map(|(name, value)| header(name, value))
-                .collect()
-        })
-        .unwrap_or_default()
     }
 
     async fn succeeded(&self, served: ServedCall) {
@@ -635,7 +627,9 @@ mod tests {
         let seeded =
             Registered::for_caller(scripted("seeded", &log, &[ended()], silent), |identity| {
                 AtomicU32::new(
-                    u32::from(**identity == litellm_gateway_auth_core::Caller::MasterKey) * 6,
+                    u32::from(
+                        identity.credential == litellm_gateway_auth_core::Credential::MasterKey,
+                    ) * 6,
                 )
             });
         let callbacks = Arc::new(Callbacks::new(vec![seeded]).unwrap());
@@ -691,22 +685,6 @@ mod tests {
                 name: "wrong".to_owned(),
                 hook: Hook::PostCallFailure
             })
-        );
-    }
-
-    #[rstest]
-    #[case::text("x-a", json!("one"), Some("one"))]
-    #[case::a_number_as_python_formats_it("x-a", json!(7), Some("7"))]
-    #[case::a_name_no_header_can_have("x a", json!("one"), None)]
-    fn a_header_a_callback_adds_goes_out_as_text(
-        #[case] name: &str,
-        #[case] value: Value,
-        #[case] sent: Option<&str>,
-    ) {
-        let header = header(name, &value);
-        assert_eq!(
-            header.as_ref().and_then(|(_, value)| value.to_str().ok()),
-            sent
         );
     }
 }

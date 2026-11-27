@@ -1859,7 +1859,7 @@ export const deleteAllowedIP = async (accessToken: string, ip: string) => {
 
 export const updateUsefulLinksCall = async (
   accessToken: string,
-  useful_links: Record<string, string | { url: string; index: number }>,
+  useful_links: Record<string, string | { url: unknown; index: number }>,
 ) => {
   try {
     return await apiClient.post(`/model_hub/update_useful_links`, {

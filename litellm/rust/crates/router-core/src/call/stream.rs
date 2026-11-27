@@ -19,7 +19,7 @@ use crate::{
     error::{AttemptError, Error, FailureKind},
     fallback::FallbackTarget,
     health::should_retry_status,
-    host::{Attempt, CallError, RouterEvent, RouterHost, RouterRequest, UncountedRetries},
+    host::{Attempt, CallError, Raised, RouterEvent, RouterHost, RouterRequest, UncountedRetries},
     retry::RetryStep,
     select::{SelectInputs, skips_batch_only},
 };
@@ -119,10 +119,11 @@ struct Spent {
 }
 
 /// A take-over whose attempts served nothing. `raised` is the host's error of the attempt the
-/// take-over ended on, `None` when it ends on the stream's own failure.
+/// take-over ended on with the deployment that attempt ran on, `None` when it ends on the
+/// stream's own failure.
 #[derive(Debug, PartialEq)]
 pub struct Unanswered<F> {
-    pub raised: Option<F>,
+    pub raised: Option<Raised<F>>,
 }
 
 impl StreamOrigin {
@@ -559,7 +560,7 @@ impl TakeOver<'_> {
             ..answer
         })
         .map_err(|error| Unanswered {
-            raised: call.ended(error).raised.map(|raised| raised.failure),
+            raised: call.ended(error).raised,
         })
     }
 }

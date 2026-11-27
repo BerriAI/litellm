@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from bisect import bisect_left
 from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -1009,6 +1010,9 @@ class ResponsesSessionHandler:
             RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS,
             RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL,
         )
+
+        if "litellm.proxy.proxy_server" not in sys.modules:
+            return []
         from litellm.proxy.proxy_server import disable_spend_logs, prisma_client
         from litellm.proxy.utils import query_raw_rows
 

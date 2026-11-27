@@ -24,6 +24,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import streamed_prompt_fields
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.llms.anthropic.common_utils import anthropic_server_call_fields
 from litellm.proxy._types import UserAPIKeyAuth
@@ -157,6 +158,15 @@ def _passthrough_delta(delta: object) -> Delta:
     if not server_call_fields:
         return Delta(content=None, role=role, tool_calls=tool_calls)
     return Delta(content=None, role=role, tool_calls=tool_calls, provider_specific_fields=dict(server_call_fields))
+
+
+def _with_stream_prompt_fields(
+    chunk: ModelResponseStream, responses_so_far: Sequence[object], responses_yielded: Sequence[object]
+) -> ModelResponseStream:
+    prompt_fields: Final = streamed_prompt_fields(responses_so_far)
+    if responses_yielded or not prompt_fields:
+        return chunk
+    return chunk.model_copy(update=dict(prompt_fields))
 
 
 def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
@@ -746,8 +756,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             raise _StreamTerminated()
 
         if synthetic is not None:
-            responses_yielded.append(synthetic)
-            yield synthetic
+            emitted: Final = _with_stream_prompt_fields(synthetic, responses_so_far, responses_yielded)
+            responses_yielded.append(emitted)
+            yield emitted
 
     async def _run_incremental_transform_stream(
         self,
@@ -801,7 +812,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         saw_text_content = False
         tool_calls_released = False  # rebind-ok: set once a raw tool call reaches the client unscanned
         # With hold_tool_calls, the raw tool-call chunks wait here for the end-of-stream block inspection.
-        held_tool_call_chunks: Final[list[object]] = []  # mutable-ok: released, or dropped, at end of stream
+        held_tool_call_chunks: Final[list[ModelResponseStream]] = []  # mutable-ok: released or dropped at stream end
         end_of_stream_inspection_started = False  # rebind-ok: set once the end-of-stream inspection owns the verdict
 
         try:
@@ -841,9 +852,10 @@ class UnifiedLLMGuardrails(CustomLogger):
                     if hold_tool_calls:
                         held_tool_call_chunks.append(tool_only)
                         continue
-                    responses_yielded.append(tool_only)
+                    released = _with_stream_prompt_fields(tool_only, responses_so_far, responses_yielded)
+                    responses_yielded.append(released)
                     tool_calls_released = True
-                    yield tool_only
+                    yield released
                     continue
 
                 if self._is_trailing_metadata_chunk(item):
@@ -957,7 +969,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         self,
         *,
         inspect: bool,
-        held_tool_call_chunks: Sequence[object],
+        held_tool_call_chunks: Sequence[ModelResponseStream],
         endpoint_translation: _EndpointTranslation,
         guardrail_to_apply: CustomGuardrail,
         request_data: _RequestData,
@@ -984,8 +996,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             ):
                 yield out
         for held_tool_call_chunk in held_tool_call_chunks:
-            responses_yielded.append(held_tool_call_chunk)
-            yield held_tool_call_chunk
+            released = _with_stream_prompt_fields(held_tool_call_chunk, responses_so_far, responses_yielded)
+            responses_yielded.append(released)
+            yield released
 
     async def _inspect_full_response_for_block(
         self,

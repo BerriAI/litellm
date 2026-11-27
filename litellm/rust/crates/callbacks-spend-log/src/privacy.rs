@@ -322,6 +322,17 @@ fn is_number(value: &Value) -> bool {
     matches!(value, Value::Int(_) | Value::Float(_))
 }
 
+/// `None` or an empty string, list, tuple or dict: a field value with no text in it.
+fn holds_nothing(value: &Value) -> bool {
+    match value {
+        Value::None => true,
+        Value::Str(text) => text.is_empty(),
+        Value::List(items) | Value::Tuple(items) => items.is_empty(),
+        Value::Dict(pairs) => pairs.is_empty(),
+        _ => false,
+    }
+}
+
 fn redact_guardrail_entry(entry: &[(Value, Value)]) -> Value {
     let preserved: Option<Vec<(Value, Value)>> = lookup(entry, "guardrail_response")
         .and_then(entries)
@@ -338,8 +349,8 @@ fn redact_guardrail_entry(entry: &[(Value, Value)]) -> Value {
         .filter(|stats| !stats.is_empty());
     let mut redacted = Dict::from_entries(entry);
     for field in PROMPT_CARRYING_GUARDRAIL_FIELDS {
-        if lookup(entry, field).is_some() {
-            redacted.set(field, text(REDACTED));
+        if lookup(entry, field).is_some_and(|value| !holds_nothing(value)) {
+            redacted.set(field, Value::None);
         }
     }
     if let Some(stats) = preserved {
@@ -416,7 +427,10 @@ pub(crate) fn error_information_without_ip_addresses(information: &Value) -> Val
 #[cfg(test)]
 mod tests {
     use litellm_python_compat::Value;
+    use rstest::rstest;
 
+    use super::redact_guardrail_entry;
+    use crate::consts::PROMPT_CARRYING_GUARDRAIL_FIELDS;
     use crate::py::{entries, get};
     use crate::test_support::{argument, case, field, helper_records, token_redactor};
     use crate::{RowConfig, SpendLogRowBuilder};
@@ -435,6 +449,38 @@ mod tests {
             Value::Int(length) => i64::try_from(length).expect("length fits"),
             other => panic!("{other:?} is not a length"),
         }
+    }
+
+    fn entry_with(value: Value) -> Vec<(Value, Value)> {
+        PROMPT_CARRYING_GUARDRAIL_FIELDS
+            .iter()
+            .map(|name| (Value::Str((*name).to_owned()), value.clone()))
+            .collect()
+    }
+
+    #[rstest]
+    #[case::none(Value::None)]
+    #[case::empty_string(Value::Str(String::new()))]
+    #[case::empty_list(Value::List(vec![]))]
+    #[case::empty_tuple(Value::Tuple(vec![]))]
+    #[case::empty_dict(Value::Dict(vec![]))]
+    fn a_guardrail_field_with_nothing_in_it_is_stored_as_it_is(#[case] empty: Value) {
+        let entry = entry_with(empty);
+        assert_eq!(redact_guardrail_entry(&entry), Value::Dict(entry));
+    }
+
+    #[rstest]
+    #[case::false_flag(Value::Bool(false))]
+    #[case::zero(Value::Int(0.into()))]
+    #[case::zero_float(Value::Float(0.0))]
+    #[case::blank_string(Value::Str(" ".to_owned()))]
+    #[case::list_of_none(Value::List(vec![Value::None]))]
+    #[case::dict_with_one_empty_pair(Value::Dict(vec![(Value::Str(String::new()), Value::None)]))]
+    fn a_guardrail_field_with_any_value_in_it_is_stored_as_none(#[case] held: Value) {
+        assert_eq!(
+            redact_guardrail_entry(&entry_with(held)),
+            Value::Dict(entry_with(Value::None))
+        );
     }
 
     // `_sanitize_request_body_for_spend_logs_payload` calls recorded by `scripts/record_goldens.py`

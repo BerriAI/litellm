@@ -144,6 +144,7 @@ MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 S3_LOG_PROMPTS_ONLY_ENV_VAR: Final = "S3_LOG_PROMPTS_ONLY"
 MAX_FILE_LIST_LIMIT: Final = 10000
 MAX_IMAGE_FAN_OUT_REQUESTS: Final = get_env_int("MAX_IMAGE_FAN_OUT_REQUESTS", 10)
+IMAGE_CALL_TYPES: Final = frozenset({"image_generation", "aimage_generation", "image_edit", "aimage_edit"})
 ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
@@ -207,13 +208,6 @@ MAX_BASE64_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_BASE64_LENGTH_STDOUT_LOG"
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
 LITELLM_DETAILED_TIMING: Final = os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
 
-# Model cost map validation constants
-MODEL_COST_MAP_MIN_MODEL_COUNT: Final = get_env_int(
-    "MODEL_COST_MAP_MIN_MODEL_COUNT", 50
-)  # Minimum number of models a fetched cost map must contain to be considered valid
-MODEL_COST_MAP_MAX_SHRINK_RATIO: Final = get_env_float(
-    "MODEL_COST_MAP_MAX_SHRINK_RATIO", 0.5
-)  # Maximum allowed shrinkage ratio vs local backup (0.5 = reject if fetched map is <50% of backup)
 DEFAULT_IMAGE_WIDTH: Final = get_env_int("DEFAULT_IMAGE_WIDTH", 300)
 DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 # Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)
@@ -223,6 +217,7 @@ DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: Final = get_env_float("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 50.0)
 MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB: Final = get_env_float("MAX_DECOMPRESSED_REQUEST_BODY_SIZE_MB", 50.0)
 MAX_REQUEST_BODY_DECOMPRESSION_RATIO: Final = get_env_int("MAX_REQUEST_BODY_DECOMPRESSION_RATIO", 200)
+BODY_READ_AHEAD_NS: Final = "litellm_body_read_ahead_ns"
 MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB: Final = get_env_float(
     "MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB", 200.0
 )
@@ -707,6 +702,7 @@ HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
 SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = get_env_float("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", 5.0)
 SEMANTIC_CACHE_PARAMS_KEY: Final = "cache_params"
 SEMANTIC_CACHE_POLICY_KEY: Final = "_semantic_cache_policy"
+CALLER_MESSAGE_COUNT_KEY: Final = "_caller_message_count"
 _request_timeout_from_env: Final = get_env_float_or_none("REQUEST_TIMEOUT")
 request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
@@ -740,6 +736,9 @@ STREAM_FINISH_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, "provider_spec
 STREAM_CHUNK_CHOICE_FIELDS: Final = ("token_ids",)
 PROVIDER_FINISH_REASONS_HIDDEN_PARAM: Final = "provider_finish_reasons"
 VLLM_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, *STREAM_CHUNK_CHOICE_FIELDS)
+VLLM_STREAM_PROMPT_FIELDS: Final = ("prompt_token_ids", "prompt_text")
+VLLM_PROMPT_DERIVED_FIELDS: Final = (*VLLM_STREAM_PROMPT_FIELDS, "prompt_logprobs")
+VLLM_PROMPT_FIELD_REQUEST_PARAMS: Final = ("prompt_logprobs", "return_prompt_text", "return_token_ids")
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
     "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400
@@ -753,6 +752,7 @@ FIREWORKS_AI_80_B: Final = get_env_int("FIREWORKS_AI_80_B", 80)
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = get_env_int("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
 LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS: Final = 10_000
+LANGFUSE_MEDIA_QUEUE_MAX_BYTES: Final = max(1, get_env_int("LANGFUSE_MEDIA_QUEUE_MAX_BYTES", 100 * 1024 * 1024))
 # Backpressure + lifetime bounds for the /v1/messages streaming relay (see
 # BaseAnthropicMessagesStreamingIterator.async_sse_wrapper). The relay queue is
 # bounded so a slow client throttles the upstream pump instead of letting it
@@ -773,6 +773,10 @@ ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS: Final = get_env_float(
 ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
     "ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 600.0
 )
+RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
+    "RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS", 600.0
+)
+RESPONSES_API_UNCLAIMED_STREAM_CLOSE_GRACE_SECONDS: Final = 30.0
 LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 100)  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)

@@ -77,3 +77,53 @@ async fn json_extraction_rejections_use_the_endpoint_error_envelope(
     }
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
+
+#[rstest]
+#[case::messages("/v1/messages", "anthropic/test-model")]
+#[case::ocr("/v1/ocr", "mistral/test-ocr")]
+#[tokio::test]
+async fn a_body_that_sets_the_deployments_endpoint_is_refused_before_any_call(
+    #[case] path: &str,
+    #[case] model: &str,
+) {
+    let upstream = MockServer::start().await;
+    let app = support::app(model, &upstream.uri());
+
+    let response = support::post(
+        app,
+        path,
+        json!({"model": "public/model", "api_base": "https://attacker.example", "max_tokens": 8, "messages": []}),
+    )
+    .await;
+
+    assert_eq!(response.status(), 401);
+    let message = support::json(response).await["error"]["message"].clone();
+    assert!(
+        message.as_str().is_some_and(|message| message.starts_with(
+            "Authentication Error, Rejected Request: api_base is not allowed in request body."
+        )),
+        "{message}"
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_deployment_that_opts_in_lets_a_caller_set_its_endpoint() {
+    let upstream = MockServer::start().await;
+    let app = support::app_with_litellm_params(
+        "anthropic/test-model",
+        &upstream.uri(),
+        json!({"configurable_clientside_auth_params": ["api_base"]}),
+    );
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        json!({"model": "public/model", "api_base": upstream.uri(), "max_tokens": 8, "messages": []}),
+    )
+    .await;
+
+    assert_ne!(response.status(), 401);
+    assert_eq!(upstream.received_requests().await.unwrap().len(), 1);
+}
