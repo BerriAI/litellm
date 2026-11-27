@@ -236,6 +236,11 @@ model_list:
       model: azure_ai/claude-fable-5-1
       api_base: http://127.0.0.1:8191
       api_key: synthetic-azure-ai-key
+  - model_name: azure_ai/claude-fable-5-2
+    litellm_params:
+      model: azure_ai/claude-fable-5-2
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
   - model_name: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0

@@ -6,6 +6,7 @@ from integration.translation.case import SSEFrame, StreamingTranslationTestCase
 from integration.translation.chat_completions.cross_model.contracts import followup_request
 from integration.translation.chat_completions.bases.azure_ai import (
     CLAUDE_FABLE_5_1_TEST_CASE,
+    CLAUDE_FABLE_5_2_TEST_CASE,
     CLAUDE_FABLE_5_TEST_CASE,
     CLAUDE_HAIKU_4_5_TEST_CASE,
     CLAUDE_HAIKU_5_5_TEST_CASE,
@@ -357,6 +358,355 @@ CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
             "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
         },
         "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+    },
+)
+
+
+CLAUDE_FABLE_5_2_AGENT_TEST_CASE: Final = replace(
+    CLAUDE_FABLE_5_2_TEST_CASE,
+    scenario="agent_tools",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "azure_ai/claude-fable-5-2"},
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "model": "claude-fable-5-2",
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-fable-5-2",
+        "id": "msg_011ChTeGpCXrdM5viicUidve",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_015U2EQecdLQ5hNpy199Ctzu",
+                "name": "search_code",
+                "input": {"query": "retries_remaining"},
+                "caller": {"type": "direct"},
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_014MKoNxxtGVE2ErLA77Eogt",
+                "name": "run_tests",
+                "input": {"path": "tests/test_retry.py"},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "usage": {
+            "input_tokens": 1184,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 105,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+        "diagnostics": None,
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "azure_ai/claude-fable-5-2",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "caller": {"type": "direct"},
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "toolu_015U2EQecdLQ5hNpy199Ctzu",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "caller": {"type": "direct"},
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "toolu_014MKoNxxtGVE2ErLA77Eogt",
+                            "type": "function",
+                        },
+                    ],
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1184,
+            "total_tokens": 1289,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1184,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "speed": "standard",
+            "service_tier": "standard",
+        },
+    },
+)
+
+
+CLAUDE_FABLE_5_2_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
+    CLAUDE_FABLE_5_2_AGENT_TEST_CASE,
+    scenario="agent_followup",
+    litellm_request=followup_request(
+        CLAUDE_FABLE_5_2_AGENT_TEST_CASE.litellm_request, CLAUDE_FABLE_5_2_AGENT_TEST_CASE.expected_litellm_response
+    ),
+    expected_provider_request={
+        **CLAUDE_FABLE_5_2_AGENT_TEST_CASE.expected_provider_request,
+        "messages": [
+            *list_value(ANTHROPIC_AGENT_REQUEST["messages"]),
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_015U2EQecdLQ5hNpy199Ctzu",
+                        "name": "search_code",
+                        "input": {"query": "retries_remaining"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_014MKoNxxtGVE2ErLA77Eogt",
+                        "name": "run_tests",
+                        "input": {"path": "tests/test_retry.py"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_015U2EQecdLQ5hNpy199Ctzu",
+                        "content": '{"matches": [{"path": "src/worker.py", "line": 12, "text": "remaining '
+                        '= retries_remaining(3, attempts)"}]}',
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_014MKoNxxtGVE2ErLA77Eogt",
+                        "content": '{"exit_code": 1, "output": "FAILED '
+                        'tests/test_retry.py::test_retries_remaining - assert 4 == 2"}',
+                    },
+                    {
+                        "type": "text",
+                        "text": "Stop after these diagnostics. Do not call more tools or change files. "
+                        "Summarize the bug, the caller found and the failed test in two short "
+                        "sentences.",
+                    },
+                ],
+            },
+        ],
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-fable-5-2",
+        "id": "msg_011ChTeGz2sZAzizFW2Wkibx",
+        "content": [
+            {
+                "type": "text",
+                "text": "`retries_remaining` in `src/retry.py` returns `limit + attempts` instead of "
+                "subtracting and clamping at zero, so "
+                "`tests/test_retry.py::test_retries_remaining` fails with `assert 4 == 2` (exit "
+                "code 1). The only other caller found is `src/worker.py` line 12, `remaining = "
+                "retries_remaining(3, attempts)`; no files were changed.",
+            }
+        ],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 1492,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 130,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+        "diagnostics": None,
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "azure_ai/claude-fable-5-2",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "`retries_remaining` in `src/retry.py` returns `limit + "
+                    "attempts` instead of subtracting and clamping at zero, so "
+                    "`tests/test_retry.py::test_retries_remaining` fails with "
+                    "`assert 4 == 2` (exit code 1). The only other caller found is "
+                    "`src/worker.py` line 12, `remaining = retries_remaining(3, "
+                    "attempts)`; no files were changed.",
+                    "role": "assistant",
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 130,
+            "prompt_tokens": 1492,
+            "total_tokens": 1622,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 130},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1492,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "speed": "standard",
+            "service_tier": "standard",
+        },
+    },
+)
+
+
+CLAUDE_FABLE_5_2_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
+    scenario="agent_streaming",
+    litellm_endpoint=CLAUDE_FABLE_5_2_AGENT_TEST_CASE.litellm_endpoint,
+    litellm_request={
+        **CLAUDE_FABLE_5_2_AGENT_TEST_CASE.litellm_request,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    expected_provider_endpoint=CLAUDE_FABLE_5_2_AGENT_TEST_CASE.expected_provider_endpoint,
+    expected_provider_headers=CLAUDE_FABLE_5_2_AGENT_TEST_CASE.expected_provider_headers,
+    expected_provider_request={**CLAUDE_FABLE_5_2_AGENT_TEST_CASE.expected_provider_request, "stream": True},
+    mock_provider_frames=(
+        SSEFrame(
+            data={
+                "type": "message_start",
+                "message": {
+                    "model": "claude-fable-5-2",
+                    "id": "msg_011ChTeHBC623nBzijytu71E",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "container": None,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "stop_details": None,
+                    "usage": {
+                        "input_tokens": 1184,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                        "output_tokens": 16,
+                        "service_tier": "standard",
+                        "inference_geo": "global",
+                        "speed": "standard",
+                    },
+                    "diagnostics": None,
+                },
+            },
+            event="message_start",
+        ),
+        SSEFrame(
+            data={
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_01Js5V4W1FiPHjs6qZW3du7K",
+                    "name": "search_code",
+                    "input": {},
+                    "caller": {"type": "direct"},
+                },
+            },
+            event="content_block_start",
+        ),
+        SSEFrame(data={"type": "ping"}, event="ping"),
+        *(
+            SSEFrame(
+                data={
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": partial_json},
+                },
+                event="content_block_delta",
+            )
+            for partial_json in ("", '{"query', '": "ret', "ries_re", "maining", '"}')
+        ),
+        SSEFrame(data={"type": "content_block_stop", "index": 0}, event="content_block_stop"),
+        SSEFrame(
+            data={
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_01RiTC8opva6LY6kZrMv7hmG",
+                    "name": "run_tests",
+                    "input": {},
+                    "caller": {"type": "direct"},
+                },
+            },
+            event="content_block_start",
+        ),
+        *(
+            SSEFrame(
+                data={
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": partial_json},
+                },
+                event="content_block_delta",
+            )
+            for partial_json in ("", '{"path"', ': "test', "s/test_", "retry.p", 'y"}')
+        ),
+        SSEFrame(data={"type": "content_block_stop", "index": 1}, event="content_block_stop"),
+        SSEFrame(
+            data={
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None, "stop_details": None, "container": None},
+                "usage": {
+                    "input_tokens": 1184,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 105,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                },
+            },
+            event="message_delta",
+        ),
+        SSEFrame(data={"type": "message_stop"}, event="message_stop"),
+    ),
+    expected_litellm_message=coding_agent_stream_message(
+        ("toolu_01Js5V4W1FiPHjs6qZW3du7K", "toolu_01RiTC8opva6LY6kZrMv7hmG")
+    ),
+    expected_litellm_usage={
+        "completion_tokens": 105,
+        "prompt_tokens": 1184,
+        "total_tokens": 1289,
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "inference_geo": "global",
+        "speed": "standard",
     },
 )
 

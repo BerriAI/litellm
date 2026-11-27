@@ -865,3 +865,171 @@ CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
         "provider_specific_fields": {"citations": None, "thinking_blocks": None},
     },
 )
+
+
+CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0: Final = (
+    "CAQS/gYKEAgUGAI4AUIIdGhpbmtpbmcSDARPRWoYgTbgpQ0KGxoMAco7bfPRvrQBBRtwIjDGiildBhc90PVrGv5k4zIl4A6NlPAb6eim5D"
+    "uYkDmUH2R2d4DVOD/LlcgB2CJgF2YqmwaV8kuz1PxD7xb2Eptsp5mpAKKVGQOTKwW/ZAx8JD8ER3q2Lst0vBzee/Sc1yZqbUNXP24uw1D2"
+    "/C8mFT1JKDG8OlOE1BIHMtrU4/UOo1oobRIjtcLnNkX82G+w+HcTaBpflCEUzDm/EtGHc2Ujm+dbe+hVcLBfqHXoz+Ix3zz4yci3TvfgzV"
+    "9+D39TCk/TcsvBp7C2tk5Skkha/SFqQdOuU5LrZ0XIQ8G5xAgbL3u2l739GDifoqLwkXCD8Becd6vAIj7bvd9BrZbak5d7bq+FfGNUdyx+"
+    "eG1loA6uHCLCs/xECvpd+miQlFk3ytwsYnZPZ6TdRjKzV5PVC1vHGYwEG2ZxOqFzNdOT68MXuKe5Kj2DO2QfTiu1/ZhZA+zaVIhIOruzWr"
+    "zYu9p0/cyq1FrzwtUgzgiDKmmzhGEe/GbXdqqO76jlgrnuzxIz7Kzx8Loe9xnugkBTdol6V1QwGp5miLIrQChBGeyM1aohyYNBYuKrbAlc"
+    "NzqRaDqbbmZ+4+9NDUWTs1Lid1FBXqVcmw6U7lCK63o5VijonegOWQrJ4cmzWje4/JLCdRi2wmKpVpQQNLXo9qfwFgywcG3IAlkbF/cBRB"
+    "Ea5/qNIxV0kNmpaIGaPPTWdatYm6GTcsw+AU8Re3ADf5YBCMKiJHo0Wa/6Nbd0UlSZrwbyg28/ZZ7d5p/OUgx21nc5krVMTo0OytsjnRY0"
+    "9sup55AKEsRhVnRwqd+uvm8R6nYqqUInGerNVE0Gk+JDUCaSaRVhdqdP+eJmVB7u8zM4bS8xefMCwx1CWcxPtmSo1CBFKO9LzfbhpDVcEC"
+    "ibbM0TNLpZdF0ioHiTIU4C00gv9fz27tLTvYEAlPhJAOJbaEJF7dP/BHDJsqJHj23n0AEXY0Qo6RRcLLxfpbniiT2ruStMNQ0r/E2SxHVN"
+    "fLmMkYjr5Wt+trETfpIo2K3cCl5TIM8IIcfLWd4KZyfh7rxS/MVsFQv7jIWjy34vTzT0dDr7z9rGoAbvunXv0YX5vvfTPcSwyKtQPCk12f"
+    "y3WQZ4zQ6qkf1ZDIrLJLrWpqb20b0uOBcYAQ=="
+)
+
+CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1: Final = (
+    "CAQSlwcKEQgUGAI4AUIJbmFycmF0aW9uEgz1q1NX7CnR35RKVeoaDN43pR/i3MaMZjQI+SIw45R4rZnAA+CgJo9iin3zTtsufCPZLoA4+N"
+    "j3ICJIxGBwiH3Mn5So2gs/6PNl+LezKrMGdh+GEIOOH7d5vE0uphv/1CTULw7j1XyZS/CrA1/c4OclM65anmNe7OWTctkzyGKa1MkJc/Ci"
+    "v/pfJvewDDSYi6F8K5zR7DLcwLUL85LK0ZkvIzHXQQ22DP27VuRYC5axs+dNtZwWbiougyNLgoUiFigdFznhmn3EeHSW9I41DYl83mt99e"
+    "0RsgOsbBjFQodAgSmF4axmvApNFewxauvoVMGgmTjDS8R/LxN+MCF5UkIlAbAwCkHRTIHqYeG7K9KsArWg9aAL2h0jPq84P243Qs0cUqka"
+    "WIjUvBtMO9zAl7y5FSsi01TxN6tOXXvbiXshRlVW1SzNe+pcyqZ7Kyl/6AUjqe6CfvN62Og4qwG52/xLtmCacMbvV3wV40F6d9WSrw90O3"
+    "/hny+yAk+v09I9bW/Er0DCk0j2EvJ5k+sMrNFnMWF1TF0HX20aNlrkwFLsmQ7sUs8sRhLUcFivu4cRgoBUoyA4xM09OzPNeG3SICqzfwv8"
+    "S5ooTieytfywMhn+Is378+ToHZtOha7B/2vLrIS1z5mFYkU94YKI7jx7hA3s8heLCIAykJKq4k8T8Pa/K/A1JF10fXMPdlzkoe6ayQDPPV"
+    "pbVZIjWYScWeqHWPdFZuK1PGNdJf8Kp7FHiZQjLI0ERYyQpG3G3w4fYkf69OjA7/dA9FTPBn0cmZORhZC8IvyR17P5wUM2K5sjxBq/EKfJ"
+    "U0a5lsWubToh0jk2CUwwkSS4Iir21lmZelAHd2qCOgC/42gt7CZC111TguVnXJ4TjFXcTPUFI4GFvI9NrBqUE6VlxhKQeCCjKl4mFTygf/"
+    "kwaMQ99ixlpWs/R3eFbiHvx5Fa8s7r2Y6AYcOEdFatD7fvsQbAtMMr/ckI6C725LKhdY9R99ossK6Hxoqjz9mm035qCPTMwz2GIvFrOLdv"
+    "WRv+3KoiXB01Xf7Kmt0iRJvN6ZhjgDDreWdZxc6ZWwj4fcl1Hwad9O9N2UCeqMeHE9JvcWP6SwLrV76P83eD8InrKMBsrmh6bp6Y5RNrRw"
+    "/erNiZqHvJGbAQnRuNcWNqx4vCBeuPylzFTVCv4vVKCrWPM+g2CeNpLUe37BQHZWYjGAE="
+)
+
+
+CLAUDE_FABLE_5_2_THINKING_BLOCKS: Final = [
+    {
+        "type": "thinking",
+        "thinking": "I need to read the validation file first, as the user asked, and I'll check the "
+        "function near line 18 by pulling lines 1 through 60.\n"
+        "\n",
+        "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+    },
+    {
+        "type": "thinking",
+        "thinking": "Next I'm reading `validate_quantity` at line 18 in `shop/validation.py`, checking "
+        "its imports and how it handles zero, negative and non-integer values.\n"
+        "\n",
+        "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+    },
+]
+
+
+CLAUDE_FABLE_5_2_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/responses",
+    litellm_request={**RESPONSES_REQUEST, "model": "azure_ai/claude-fable-5-2"},
+    expected_provider_endpoint="/anthropic/v1/messages",
+    expected_provider_headers={
+        "x-api-key": "synthetic-azure-ai-key",
+        "api-key": "synthetic-azure-ai-key",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    },
+    expected_provider_request={
+        **ANTHROPIC_MESSAGES_REQUEST,
+        "model": "claude-fable-5-2",
+        "system": [{"type": "text", "text": RESPONSES_REQUEST["instructions"]}],
+    },
+    mock_provider_response={
+        **ANTHROPIC_MESSAGES_RESPONSE,
+        "model": "claude-fable-5-2",
+        "id": "msg_011ChTeCWZn8VobbUJ8GZwjv",
+        "content": [
+            *CLAUDE_FABLE_5_2_THINKING_BLOCKS,
+            {
+                "type": "tool_use",
+                "id": "toolu_01VGZ3yfbfb17oHz1xb8LRU5",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 873,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 259,
+            "output_tokens_details": {"thinking_tokens": 78},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+    },
+    expected_litellm_response={
+        **RESPONSES_RESPONSE,
+        "model": "azure_ai/claude-fable-5-2",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": ANY,
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "I need to read the validation file first, as the user asked, and I'll check "
+                        "the function near line 18 by pulling lines 1 through 60.\n"
+                        "\n"
+                        "Next I'm reading `validate_quantity` at line 18 in `shop/validation.py`, "
+                        "checking its imports and how it handles zero, negative and non-integer "
+                        "values.\n"
+                        "\n",
+                        "annotations": [],
+                    }
+                ],
+                "phase": None,
+                "encrypted_content": json.dumps(CLAUDE_FABLE_5_2_THINKING_BLOCKS, separators=(",", ":")),
+            },
+            {
+                "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 60}',
+                "call_id": "toolu_01VGZ3yfbfb17oHz1xb8LRU5",
+                "name": "read_file",
+                "type": "function_call",
+                "id": "fc_toolu_01VGZ3yfbfb17oHz1xb8LRU5",
+                "namespace": None,
+                "status": "completed",
+            },
+        ],
+        "usage": {
+            "input_tokens": 877,
+            "input_tokens_details": {
+                "audio_tokens": None,
+                "cached_tokens": 0,
+                "cached_tokens_details": None,
+                "cache_write_tokens": 873,
+                "image_tokens": None,
+                "text_tokens": 4,
+                "video_tokens": None,
+            },
+            "output_tokens": 259,
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 78, "text_tokens": 181},
+            "total_tokens": 1136,
+            "cost": None,
+        },
+        "provider_specific_fields": {
+            "citations": None,
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "I need to read the validation file first, as "
+                    "the user asked, and I'll check the function "
+                    "near line 18 by pulling lines 1 through 60.\n"
+                    "\n",
+                    "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Next I'm reading `validate_quantity` at line "
+                    "18 in `shop/validation.py`, checking its "
+                    "imports and how it handles zero, negative and "
+                    "non-integer values.\n"
+                    "\n",
+                    "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+                },
+            ],
+        },
+    },
+)

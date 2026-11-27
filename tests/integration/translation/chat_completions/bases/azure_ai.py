@@ -857,3 +857,200 @@ CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
         },
     },
 )
+
+
+CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0: Final = (
+    "CAQStwcKEAgUGAI4AUIIdGhpbmtpbmcSDMp41h6wTQ02m2K+OBoMthyKQtnkX80sa9LGIjCEb57cIXjs/sQO2/6OtWYJFkqLoMbS0oeP6g"
+    "lueceYXK8PZgFUuVEB6jcdOZ450OYq1AbtG5xVJSIAMNMa2wP6RTuC9T0fT85tK6DUG7ywWg19IrOyUV6x4OD1ul9e4pdoy3UMLvR2zjHS"
+    "WHiD+0eDgWOdY2P2ZbotXHa/qfYRvRM3emMit+cOxshS/zo55oiqc/PypGLOtB/YMSNMk3U3IqK1W2Xrj9jGzuR0GUL0njExNE1G5Viwwd"
+    "85aP8wV4oIjdPuo4gSjlZFGUjAsEViHBTu7KK1z4BrFvlJJx0B7IqR3WGfJ+q32uhK3mZlw957Fr2X4qiexTRCgz1OXhJezRgrqmtTbdRr"
+    "UoyzSB2jTEyylZ2dMYv23zcvfhBadoXvwETPvTcSeteXKmCHTtOfwp/+6YQvhBOXZO6HIMFM5itq3jAvsWTvmAykjg5viF0LP7smMiGaKm"
+    "UtH44q65UWfK70MzEWpwpAFeslKxuWtzs/2mGnmnRy7Bv+uhSfbHwXO5v2bWsSJJSaeQ0FCxu85V9DtVmLWFdKWBW+WDaXuroJRgubpChu"
+    "+nqiGLV1L9oj+ofdT2rUYU5US2SL+fqCYH8MZK8lFjxNyR7u54GuDd1nciJMpJSu/9VdyuZHU0z8BoxgfmTE1aDoPlpZTCZl2ODJk258EX"
+    "iqZ2slpXkL+KdhthW32xVvwGw5HLpw22dXYzEhCNrmUyFi/cN8S5dEvkz+7Ee5OGDeHC1UyeIIIUj0HhiYVGTYFmfxqMdpS6Xfw63WYqBV"
+    "JsPO9KsQn6/R9MqsHQfF1eT277xAlV0VIeJ9/Gvqrj+a4o5Dqxtm6OEOiubNZkMN9w6dKe3dkK67OOBUQ/YCneAoFPLdvb85gcrAxxupRT"
+    "4LDOqT03ZUufdeczKCwir0FU5lKcKh1FTHnVrQ9QEt0+z/+CS1p7/Rcm87fzWx5N++MZpLJHzzFkYGwJddCfqDzBPBCPMri+d1JiDdtio4"
+    "iYz/k+VeMMV9zwUSaBXPzSs0D0JYAursgtP5E9yKI6GDRSFsif0Tp9/G0L/VvjvZ31j4r+7bU+K6g/qL8VIObmae5QwBvUxLDCz393kHAp"
+    "/ksK8QdhLfA3dQ82ALxDljwB1+HHGh6yMvR2rmatRHteXzJRy633iANSpTHbOFp6QGiE/NlCDaTKTTlWeLpYixd2z4Xlu+rLiTbOaFW/T8"
+    "0AsYAQ=="
+)
+
+CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1: Final = (
+    "CAQSkwcKEQgUGAI4AUIJbmFycmF0aW9uEgwORwymPwVMSgXBmnIaDLAWjOw4kkZEhDe7uyIwGx7TqV64PXZi7rSmO0hBUzG+aPy33juU3R"
+    "ml6kp6FAxg5urpZMMPwdNdlknZmgwIKq8Gs1KPtp/yG3buLiyMh74Fjhr7JncoUlVbmwh3DMQDxLoYrGhQ6qnnvpZV21WyEzULHCKg/Srs"
+    "DN6SOCkJE4jGF5HyrQgVrZvOjdVf4t1WGnSnDhCxAYPShBKZDHDAGNiJ5zYmSR2+O4sgppiE3svTP8qRPO3MjWcRvmJM96tXGcPqk2WpTk"
+    "iNg2o1gQFfpd3PDO/aVPmV/n1Uwy78+fLST4zfZ+TsF6i82Jm/w15MTOtZiY18mnDe+OlKrPkUrT7tblUWni6v9d5TxKVYhbXl9N73MRvA"
+    "vOKATFgp3e/POxEVdOUuAT7op9oq3KRPZ70Z6LiE28xgO/zl+gww0ms4On5yI2fG9+RUm48qTVrzCwFozy4gtVVi+1NZzFlm7Z5NnWQ0fH"
+    "L3xKt1JJMGbQvm0uO1/Jr3a4eq+GgdsST3ay/wTaTN+9xFQJf8vrDAMKGlObdbrtGWNaMvRGBw525bWlt0DY6pD+vd2Fja7ZiAhJznXQn4"
+    "eaAve62VBM1VeSklGlYaTZUPr8SJswuOAI0hfQoM20Ozm1Y5qm82Fo73zdxtgMm2h87c5Bkp94A8iH7uqKiVV5aTXjzWp9YQIxSsgJDz1U"
+    "+1nRmCfnXSHwUIo6x3j7E+TpmqwDgemJZzYJog62KKUNNfNJG/11vY/f6nzidEEh0cyGLvrw247Qne5r0RJ2mdMuZ10xW0DBj3wdDSyyPi"
+    "G8Wbhj0YR9FLkGXlyXgfYPxoJhFoOkmhO49pGXbjWJR2WhAff/UvgedcNsffS5wEDormHLzHUCZhUagdl88J9CjjJvrxjGGgE7P88+xCkC"
+    "swGJD5JdUvOHmmspEeTG361DD1ydua67YYxES128wfX7UkqH9Vn7ERI57RSDJP1o4rLYPx2h1LgKtBkforDUtOpXy/Ys/t+KjrvVZQO1IP"
+    "RWHI8gVYKdF/KQBdmFUzsWqCb0MarBW4JVqNRUgE0AUS2LTkJuderc1hyXj4Fux9KDjcOtZoUVl84tK6YTtbbzXkyWC3Qjws/zHe5XQ8J0"
+    "rOktcW0/EfLKC4rNf1iBu6YQ6VTeUkuUuOgpOzCm6nHvBP5ViSkU6stNp6FusYAQ=="
+)
+
+
+CLAUDE_FABLE_5_2_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CHAT_COMPLETIONS_REQUEST, "model": "azure_ai/claude-fable-5-2"},
+    expected_provider_endpoint="/anthropic/v1/messages",
+    expected_provider_headers={
+        "x-api-key": "synthetic-azure-ai-key",
+        "api-key": "synthetic-azure-ai-key",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    },
+    expected_provider_request={**ANTHROPIC_MESSAGES_REQUEST, "model": "claude-fable-5-2"},
+    mock_provider_response={
+        **ANTHROPIC_MESSAGES_RESPONSE,
+        "model": "claude-fable-5-2",
+        "id": "msg_011ChTeBsnCJAphow7NAB77X",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "I'm going to read shop/validation.py first, checking roughly lines 1 to 60, and "
+                "I'll leave the tests for later since the user asked for the validation file first.\n"
+                "\n",
+                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+            },
+            {
+                "type": "thinking",
+                "thinking": "I'm opening shop/validation.py to check the imports and helper checks that affect "
+                "how zero, negative and non-integer quantities are handled, since validate_quantity "
+                "is defined there at line 18.\n"
+                "\n",
+                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_01QzZVTbzLq6Gkyna6rooMr5",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 876,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 876, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 281,
+            "output_tokens_details": {"thinking_tokens": 102},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+    },
+    expected_litellm_response={
+        **CHAT_COMPLETIONS_RESPONSE,
+        "model": "azure_ai/claude-fable-5-2",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 2,
+                            "caller": {"type": "direct"},
+                            "function": {
+                                "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 60}',
+                                "name": "read_file",
+                            },
+                            "id": "toolu_01QzZVTbzLq6Gkyna6rooMr5",
+                            "type": "function",
+                        }
+                    ],
+                    "reasoning_content": "I'm going to read shop/validation.py first, checking roughly "
+                    "lines 1 to 60, and I'll leave the tests for later since the "
+                    "user asked for the validation file first.\n"
+                    "\n"
+                    "I'm opening shop/validation.py to check the imports and helper "
+                    "checks that affect how zero, negative and non-integer "
+                    "quantities are handled, since validate_quantity is defined "
+                    "there at line 18.\n"
+                    "\n",
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "I'm going to read shop/validation.py first, "
+                            "checking roughly lines 1 to 60, and I'll leave the "
+                            "tests for later since the user asked for the "
+                            "validation file first.\n"
+                            "\n",
+                            "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+                        },
+                        {
+                            "type": "thinking",
+                            "thinking": "I'm opening shop/validation.py to check the "
+                            "imports and helper checks that affect how zero, "
+                            "negative and non-integer quantities are handled, "
+                            "since validate_quantity is defined there at line "
+                            "18.\n"
+                            "\n",
+                            "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+                        },
+                    ],
+                    "provider_specific_fields": {
+                        "citations": None,
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": "I'm going to read "
+                                "shop/validation.py "
+                                "first, checking "
+                                "roughly lines 1 to "
+                                "60, and I'll leave "
+                                "the tests for later "
+                                "since the user asked "
+                                "for the validation "
+                                "file first.\n"
+                                "\n",
+                                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+                            },
+                            {
+                                "type": "thinking",
+                                "thinking": "I'm opening "
+                                "shop/validation.py to "
+                                "check the imports and "
+                                "helper checks that "
+                                "affect how zero, "
+                                "negative and "
+                                "non-integer "
+                                "quantities are "
+                                "handled, since "
+                                "validate_quantity is "
+                                "defined there at line "
+                                "18.\n"
+                                "\n",
+                                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+                            },
+                        ],
+                    },
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 281,
+            "prompt_tokens": 880,
+            "total_tokens": 1161,
+            "completion_tokens_details": {"reasoning_tokens": 102, "text_tokens": 179},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 4,
+                "cache_write_tokens": 876,
+                "cache_creation_tokens": 876,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 876, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 876,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "speed": "standard",
+            "service_tier": "standard",
+        },
+    },
+)
