@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import reporting_nested_tool_call_failure
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import flush_post_call_redis_batches
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, BILLED_RETRY_ATTEMPT_METADATA_KEY
@@ -684,7 +685,7 @@ class _ProxyDBLogger(CustomLogger):
         )
         tracking_disabled: Final = ProxyUpdateSpend.disable_spend_updates()
         try:
-            if not completed_cost or tracking_disabled:
+            if (not completed_cost or tracking_disabled) and not reporting_nested_tool_call_failure():
                 await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
         except Exception:
             verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")

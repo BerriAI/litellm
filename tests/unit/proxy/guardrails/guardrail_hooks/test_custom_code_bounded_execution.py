@@ -37,7 +37,10 @@ def _spin_swallowing_exceptions() -> None:
             continue
 
 
-async def _swallow_cancellations_for(seconds: float) -> str:
+async def _swallow_cancellations_for(seconds: float, ran_in: list[asyncio.Task[object]] | None = None) -> str:
+    task = asyncio.current_task()
+    if ran_in is not None and task is not None:
+        ran_in.append(task)
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         try:
@@ -115,35 +118,32 @@ async def test_call_off_loop_with_timeout_keeps_the_loop_running_and_stops_the_w
     assert _worker_threads() == []
 
 
-def _stragglers() -> list[asyncio.Task[object]]:
-    return [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
-
-
 @pytest.mark.asyncio
 async def test_await_with_timeout_keeps_cancelling_a_coroutine_that_swallows_cancellation():
     assert await await_with_timeout(_swallow_cancellations_for(0.0), 1.0, label="ok") == "survived"
     started = time.monotonic()
+    ran_in: list[asyncio.Task[object]] = []
 
     with pytest.raises(ExecutionTimeoutError, match=r"exceeded the 0\.1s execution timeout"):
-        await await_with_timeout(_swallow_cancellations_for(0.4), 0.1, label="stubborn")
+        await await_with_timeout(_swallow_cancellations_for(0.4, ran_in), 0.1, label="stubborn")
 
     assert time.monotonic() - started < 1.0
-    assert _stragglers() == []
+    assert [task.done() for task in ran_in] == [True]
 
 
 @pytest.mark.asyncio
 async def test_await_with_timeout_abandons_a_coroutine_that_never_stops_swallowing_cancellation():
     started = time.monotonic()
+    ran_in: list[asyncio.Task[object]] = []
 
     with pytest.raises(ExecutionTimeoutError):
-        await await_with_timeout(_swallow_cancellations_for(2.0), 0.1, label="stubborn")
+        await await_with_timeout(_swallow_cancellations_for(2.0, ran_in), 0.1, label="stubborn")
 
     elapsed = time.monotonic() - started
     assert 1.0 <= elapsed < 1.8
-    stragglers = _stragglers()
-    assert len(stragglers) == 1
+    assert [task.done() for task in ran_in] == [False]
     with pytest.raises(ExecutionTimeoutError):
-        await asyncio.gather(*stragglers)
+        await asyncio.gather(*ran_in)
 
 
 @pytest.mark.asyncio

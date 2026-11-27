@@ -39,7 +39,7 @@ use litellm_callbacks_parallel_request_limiter::{
 };
 use litellm_config::{Config, PriorityReservation};
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::Caller;
+use litellm_gateway_auth_core::Credential;
 use litellm_gateway_inference::group_limits;
 use litellm_python_compat::json::loaded_str;
 use litellm_redis_store::{RequestRedis, active_teams::ActiveTeams, rate_limits::RateLimits};
@@ -180,9 +180,9 @@ pub struct Counted {
 impl Counted {
     /// The master key names no priority class. A key names the one its row holds.
     fn of(identity: &Authenticated<NativeRows>) -> Self {
-        let priority = match &**identity {
-            Caller::MasterKey => None,
-            Caller::Key(key) => key.key.priority().cloned(),
+        let priority = match &identity.credential {
+            Credential::MasterKey => None,
+            Credential::Key { key } => key.priority().cloned(),
         };
         Self {
             key: KeyFacts {

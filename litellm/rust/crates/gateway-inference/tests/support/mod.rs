@@ -1,7 +1,7 @@
 // Shared across integration-test targets; each target uses a different subset.
 #![allow(dead_code)]
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Router,
@@ -20,6 +20,8 @@ use litellm_gateway_auth_core::Caller;
 use litellm_gateway_inference::{RouterTiers, RoutingCache, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
+use litellm_inference_messages::MessagesSettings;
+use litellm_model_catalog::{CostMap, IntegrityLimits};
 use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 
@@ -53,28 +55,48 @@ pub fn app_with_cache(
 }
 
 pub fn app_with_litellm_params(model: &str, api_base: &str, litellm_params: Value) -> Router {
-    app_with_shaping(
-        model,
-        api_base,
-        litellm_params,
-        Value::Object(Default::default()),
-    )
+    app_and_gateway(model, api_base, litellm_params).0
 }
 
-pub fn app_with_shaping(
+/// The app with the gateway it serves from, for a test that installs a cost map.
+pub fn app_and_gateway(
     model: &str,
     api_base: &str,
     litellm_params: Value,
-    shaping: Value,
-) -> Router {
-    deployment_app(
-        test_params(model, api_base)
-            .into_iter()
-            .chain(litellm_params.as_object().cloned().unwrap_or_default())
-            .collect(),
-        shaping,
+) -> (Router, Arc<Gateway>) {
+    app_with_settings(model, api_base, litellm_params, json!({}))
+}
+
+/// The app with the gateway it serves from, under the `litellm_settings` read as `settings`.
+pub fn app_with_settings(
+    model: &str,
+    api_base: &str,
+    litellm_params: Value,
+    settings: Value,
+) -> (Router, Arc<Gateway>) {
+    let gateway = Arc::new(hosted_gateway(
+        public_model(
+            test_params(model, api_base)
+                .into_iter()
+                .chain(litellm_params.as_object().cloned().unwrap_or_default())
+                .collect(),
+        ),
+        serde_json::from_value(settings).unwrap(),
         None,
+        NativeHost::default(),
+        &RouterSettings::default(),
+    ));
+    (mounted(gateway.clone()), gateway)
+}
+
+/// The cost map whose document is `rows`.
+pub fn cost_map(rows: Value) -> CostMap {
+    CostMap::read(
+        rows.to_string().as_bytes(),
+        None,
+        IntegrityLimits::UNCHECKED,
     )
+    .unwrap()
 }
 
 /// The app whose router is built from `router_settings`.
@@ -84,16 +106,18 @@ pub fn app_with_router_settings(
     litellm_params: Value,
     router_settings: Value,
 ) -> Router {
-    hosted_app(
-        test_params(model, api_base)
-            .into_iter()
-            .chain(litellm_params.as_object().cloned().unwrap_or_default())
-            .collect(),
-        Value::Object(Map::new()),
+    mounted(Arc::new(hosted_gateway(
+        public_model(
+            test_params(model, api_base)
+                .into_iter()
+                .chain(litellm_params.as_object().cloned().unwrap_or_default())
+                .collect(),
+        ),
+        MessagesSettings::default(),
         None,
         NativeHost::default(),
         &serde_json::from_value(router_settings).unwrap(),
-    )
+    )))
 }
 
 /// The app with `callbacks` run around each call, in the order given.
@@ -102,16 +126,16 @@ pub fn app_with_callbacks(
     api_base: &str,
     callbacks: Vec<Arc<dyn ErasedCallback>>,
 ) -> Router {
-    hosted_app(
-        test_params(model, api_base),
-        Value::Object(Map::new()),
+    mounted(Arc::new(hosted_gateway(
+        public_model(test_params(model, api_base)),
+        MessagesSettings::default(),
         None,
         NativeHost::new(
             Arc::new(Callbacks::new(callbacks.into_iter().map(Into::into).collect()).unwrap()),
             Arc::default(),
         ),
         &RouterSettings::default(),
-    )
+    )))
 }
 
 fn test_params(model: &str, api_base: &str) -> Map<String, Value> {
@@ -126,39 +150,30 @@ fn configured_app(
     api_base: &str,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
 ) -> Router {
-    deployment_app(
-        test_params(model, api_base),
-        Value::Object(Map::new()),
-        cache,
-    )
-}
-
-fn deployment_app(
-    litellm_params: Map<String, Value>,
-    shaping: Value,
-    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
-) -> Router {
-    hosted_app(
-        litellm_params,
-        shaping,
+    mounted(Arc::new(hosted_gateway(
+        public_model(test_params(model, api_base)),
+        MessagesSettings::default(),
         cache,
         NativeHost::default(),
         &RouterSettings::default(),
-    )
+    )))
 }
 
-fn hosted_app(
-    litellm_params: Map<String, Value>,
-    shaping: Value,
+fn mounted(gateway: Arc<Gateway>) -> Router {
+    router(gateway).layer(axum::middleware::from_fn(as_the_master_key))
+}
+
+fn hosted_gateway(
+    model_list: Vec<DeploymentSpec>,
+    settings: MessagesSettings,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     host: NativeHost,
     router_settings: &RouterSettings,
-) -> Router {
-    let model_list = vec![DeploymentSpec {
-        model_name: "public/model".into(),
-        litellm_params,
-        ..DeploymentSpec::default()
-    }];
+) -> Gateway {
+    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
+    let http = Resolution::from(&HttpSettings::default()).config;
+    let secrets = Arc::new(NoSecrets);
+    let resources = CoreResources::new(pool);
     let (config, dynamic) = RouterConfig::from_settings(router_settings).unwrap();
     let models = litellm_router_core::Router::new(
         RouterConfig {
@@ -168,55 +183,41 @@ fn hosted_app(
         dynamic,
     )
     .unwrap();
-    let id = models.registry().group("public/model").unwrap()[0]
-        .id
-        .clone();
-    let shaping = HashMap::from([(id, serde_json::from_value(shaping).unwrap())]);
-    served_app(models, shaping, cache, host)
-}
-
-/// The app whose router serves `model_list`, each entry as a config spells it, under
-/// `router_settings`.
-pub fn app_with_models(model_list: Value, router_settings: Value) -> Router {
-    let (config, dynamic) =
-        RouterConfig::from_settings(&serde_json::from_value(router_settings).unwrap()).unwrap();
-    let model_list = serde_json::from_value(model_list).unwrap();
-    let models = litellm_router_core::Router::new(
-        RouterConfig {
-            model_list,
-            ..config
-        },
-        dynamic,
-    )
-    .unwrap();
-    served_app(models, HashMap::new(), None, NativeHost::default())
-}
-
-fn served_app(
-    models: litellm_router_core::Router,
-    shaping: HashMap<String, litellm_inference_messages::MessagesShaping>,
-    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
-    host: NativeHost,
-) -> Router {
-    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
-    let http = Resolution::from(&HttpSettings::default()).config;
-    let secrets = Arc::new(NoSecrets);
-    let resources = CoreResources::new(pool);
     let gateway = Gateway::new(
         resources,
         http,
         secrets,
         models,
-        shaping,
+        settings,
         RoutingCache::new(None, RouterTiers::default()),
         host,
     )
     .unwrap();
-    let gateway = match cache {
+    match cache {
         Some(cache) => gateway.with_cache(cache),
         None => gateway,
-    };
-    router(Arc::new(gateway)).layer(axum::middleware::from_fn(as_the_master_key))
+    }
+}
+
+/// The one deployment of `public/model`, called with `litellm_params`.
+fn public_model(litellm_params: Map<String, Value>) -> Vec<DeploymentSpec> {
+    vec![DeploymentSpec {
+        model_name: "public/model".into(),
+        litellm_params,
+        ..DeploymentSpec::default()
+    }]
+}
+
+/// The app whose router serves `model_list`, each entry as a config spells it, under
+/// `router_settings`.
+pub fn app_with_models(model_list: Value, router_settings: Value) -> Router {
+    mounted(Arc::new(hosted_gateway(
+        serde_json::from_value(model_list).unwrap(),
+        MessagesSettings::default(),
+        None,
+        NativeHost::default(),
+        &serde_json::from_value(router_settings).unwrap(),
+    )))
 }
 
 async fn as_the_master_key(
@@ -225,7 +226,9 @@ async fn as_the_master_key(
 ) -> Response {
     request
         .extensions_mut()
-        .insert(Authenticated::<NativeRows>::from(Caller::MasterKey));
+        .insert(Authenticated::<NativeRows>::from(Caller::master_key(
+            Default::default(),
+        )));
     next.run(request).await
 }
 

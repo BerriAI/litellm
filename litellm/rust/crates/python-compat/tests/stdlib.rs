@@ -136,11 +136,15 @@ fn a_clock_reading_has_the_fields_of_its_timestamp() {
 fn fromisoformat_matches_datetime() {
     for row in fixtures().fromisoformat {
         let expected = match (row.naive, row.aware) {
-            (Some(micros), None) => Some(IsoDateTime::Naive(micros)),
-            (None, Some(micros)) => Some(IsoDateTime::Aware(micros)),
+            (Some(micros), None) => Some((true, micros)),
+            (None, Some(micros)) => Some((false, micros)),
             _ => None,
         };
-        assert_eq!(fromisoformat(&row.text), expected, "{:?}", row.text);
+        let read = fromisoformat(&row.text).map(|at| match at {
+            IsoDateTime::Naive(micros) => (true, micros),
+            IsoDateTime::Aware { utc, .. } => (false, utc),
+        });
+        assert_eq!(read, expected, "{:?}", row.text);
     }
 }
 

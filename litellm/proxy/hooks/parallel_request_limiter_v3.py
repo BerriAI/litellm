@@ -34,7 +34,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm import DualCache
-from litellm._internal_context import with_service_target
+from litellm._internal_context import reporting_nested_tool_call_failure, with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import Batch
 from litellm.caching.redis_cache import log_redis_failure
@@ -890,6 +890,12 @@ def claim_request_stash_for_data(data: Mapping[str, object]) -> RequestRateLimit
     return stash
 
 
+def mark_parallel_slot_reused_by_tool_calls() -> None:
+    stash: Final = get_request_stash()
+    if stash is not None:
+        stash.parallel_slot_reused_at = datetime.now()  # noqa: DTZ005  # naive like the logged end_time it is compared with
+
+
 def _ended_before_slot_reuse(ended_at: datetime | None, reused_at: datetime | None) -> bool:
     if ended_at is None or reused_at is None or (ended_at.tzinfo is None) != (reused_at.tzinfo is None):
         return False
@@ -1562,6 +1568,8 @@ class ParallelRequestLimiterHook(CustomLogger):
         partial usage settles the reservation at that usage instead of refunding it.
         """
         try:
+            if reporting_nested_tool_call_failure():
+                return
             native_state: Final = _native_state(self, get_request_stash())
             if native_state is None:
                 return

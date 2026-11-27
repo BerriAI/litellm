@@ -30,7 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, Securi
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm import get_llm_provider
@@ -154,6 +154,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.common_utils.model_listing_utils import alias_map
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
+from litellm.proxy.common_utils.registry_read_through import (
+    VectorStoreIndexLookup,
+    get_vector_store_with_read_through,
+    lookup_vector_store_index,
+)
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
@@ -285,6 +290,32 @@ def is_passthrough_request_using_router_model(
 
 class RelayRejection(TypedDict):
     error: ReadOnly[str]
+
+
+def _unreadable_vector_store_index(index_name: str) -> HTTPException:
+    unreadable: Final[RelayRejection] = {
+        "error": f"Could not read vector store index '{index_name}' from the database in time. Retry the request"
+    }
+    return HTTPException(status_code=503, detail=unreadable)
+
+
+def _unroutable_search_index(
+    index_name: str, lookup: VectorStoreIndexLookup, relay_configured: bool
+) -> HTTPException | None:
+    match lookup:
+        case "managed":
+            return None
+        case "unmanaged" | "unknown" if relay_configured:
+            return None
+        case "unmanaged":
+            not_registered: Final[RelayRejection] = {
+                "error": f"Azure AI Search index '{index_name}' is not registered on this proxy"
+            }
+            return HTTPException(status_code=404, detail=not_registered)
+        case "unknown":
+            return _unreadable_vector_store_index(index_name)
+        case _:
+            assert_never(lookup)
 
 
 def _declared_model_and_provider(litellm_params: LiteLLMParamsTypedDict) -> tuple[str, str | None]:
@@ -1205,18 +1236,10 @@ async def milvus_proxy_route(
             detail=f"Collection name is required. Got {request_body}",
         )
 
-    if not litellm.vector_store_index_registry or not litellm.vector_store_registry:
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to find Milvus vector store index registry or vector store registry.",
-        )
-
-    # check if vector store index
-    is_vector_store_index: Final = litellm.vector_store_index_registry.is_vector_store_index(
-        vector_store_index_name=collection_name
-    )
-
-    if not is_vector_store_index:
+    collection_lookup: Final = await lookup_vector_store_index(collection_name)
+    if collection_lookup == "unknown":
+        raise _unreadable_vector_store_index(collection_name)
+    if collection_lookup == "unmanaged":
         raise HTTPException(
             status_code=400,
             detail=f"Collection {collection_name} is not a litellm managed vector store index. Only litellm managed vector store indexes are supported.",
@@ -1246,9 +1269,7 @@ async def milvus_proxy_route(
     # Update the request object with the modified collection name
     safe_set_request_parsed_body(request, request_body)
 
-    vector_store: Final = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry_by_name(
-        vector_store_name=vector_store_name
-    )
+    vector_store: Final = await get_vector_store_with_read_through(vector_store_name)
     if vector_store is None:
         raise Exception(f"Vector store not found for {vector_store_name}")
     await assert_user_can_access_vector_store(
@@ -1283,8 +1304,11 @@ async def milvus_proxy_route(
     return received_value
 
 
-def _registered_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStoreIndex:
-    registry: Final = litellm.vector_store_index_registry
+async def _registered_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStoreIndex:
+    index_lookup: Final = await lookup_vector_store_index(index_name)
+    if index_lookup == "unknown":
+        raise _unreadable_vector_store_index(index_name)
+    registry: Final = litellm.vector_store_index_registry if index_lookup == "managed" else None
     index_object: Final = registry.get_vector_store_index_by_name(index_name) if registry is not None else None
     if index_object is None:
         raise HTTPException(
@@ -1298,8 +1322,10 @@ def _registered_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStor
 async def _opensearch_store_params(
     index_object: LiteLLM_ManagedVectorStoreIndex, user_api_key_dict: UserAPIKeyAuth
 ) -> tuple[Mapping[str, object], LiteLLM_ManagedVectorStore]:
-    registry: Final = litellm.vector_store_registry
     store_name: Final = index_object.litellm_params.vector_store_name
+    registry: Final = (
+        litellm.vector_store_registry if await get_vector_store_with_read_through(store_name) is not None else None
+    )
     named_stores: Final = tuple(
         store
         for store in (registry.vector_stores if registry is not None else ())
@@ -1412,7 +1438,7 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     assert_vector_store_index_access(
         user_api_key_dict, path.index_name, operation.permission if operation is not None else None
     )
-    index_object: Final = _registered_vector_store_index(path.index_name)
+    index_object: Final = await _registered_vector_store_index(path.index_name)
     store_params, vector_store = await _opensearch_store_params(index_object, user_api_key_dict)
     provider_index: Final = index_object.litellm_params.vector_store_index
     can_read: Final = has_vector_store_index_access(user_api_key_dict, path.index_name, "read")
@@ -3024,17 +3050,17 @@ async def azure_proxy_route(
     )  # azure model is in the url - e.g. https://{endpoint}/openai/deployments/{deployment-id}/completions?api-version=2024-10-21
 
     search_index_name: Final = get_azure_ai_search_index_from_endpoint(endpoint)
+    search_index_lookup: Final = (
+        await lookup_vector_store_index(search_index_name) if search_index_name is not None else None
+    )
+    is_managed_search_index: Final = search_index_lookup == "managed"
 
     if len(parts) > 1 and llm_router:
         for part in parts:
             # check if LLM MODEL
             is_router_model = is_azure_router_model_group(llm_router, part)
             # check if vector store index
-            is_vector_store_index = (
-                part == search_index_name
-                and litellm.vector_store_index_registry is not None
-                and litellm.vector_store_index_registry.is_vector_store_index(vector_store_index_name=part)
-            )
+            is_vector_store_index = is_managed_search_index and part == search_index_name
 
             if is_router_model:
                 request_body = await get_request_body(request)
@@ -3060,10 +3086,6 @@ async def azure_proxy_route(
                 )
                 if provider_config is None:
                     raise Exception("Provider config not found for Azure AI")
-                # get the index from registry
-                if litellm.vector_store_registry is None:
-                    raise Exception("Vector store registry not found")
-
                 is_allowed_to_call_vector_store_endpoint(
                     index_name=part,
                     provider=litellm.LlmProviders.AZURE_AI,
@@ -3081,9 +3103,7 @@ async def azure_proxy_route(
 
                 vector_store_name = index_object.litellm_params.vector_store_name
 
-                vector_store = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry_by_name(
-                    vector_store_name=vector_store_name
-                )
+                vector_store = await get_vector_store_with_read_through(vector_store_name)
                 if vector_store is None:
                     raise Exception(f"Vector store not found for {vector_store_name}")
                 await assert_user_can_access_vector_store(
@@ -3127,6 +3147,13 @@ async def azure_proxy_route(
         return body_model_group_relay
 
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
+    unroutable_index: Final = (
+        _unroutable_search_index(search_index_name, search_index_lookup, relay_configured=base_target_url is not None)
+        if search_index_name is not None and search_index_lookup is not None
+        else None
+    )
+    if unroutable_index is not None:
+        raise unroutable_index
     if base_target_url is None:
         raise Exception("Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure.")
     # Add or update query parameters

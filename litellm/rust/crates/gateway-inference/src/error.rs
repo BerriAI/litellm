@@ -41,6 +41,12 @@ pub enum Error {
     Callback(litellm_error::Source),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
+    /// The request body check refused the body, as Python's authentication refuses it.
+    #[error("Authentication Error, {0}")]
+    BodyRejected(litellm_gateway_auth_core::body::Rejection),
+    /// The host could not read a stored credential the body names, so the body is not checked.
+    #[error("could not read the stored credentials the request body names")]
+    Credentials(#[source] litellm_gateway_auth_core::Error),
     #[error("unexpected HTTP host operation")]
     Internal,
 }
@@ -180,7 +186,10 @@ impl Error {
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
-            Self::Internal | Self::Callback(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::BodyRejected(_) => StatusCode::UNAUTHORIZED,
+            Self::Internal | Self::Callback(_) | Self::Credentials(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
             Self::Routing(error) => routing_status(error),
@@ -288,7 +297,7 @@ impl Error {
     fn message(&self) -> String {
         match self {
             Self::Refused(refusal) => refusal.message.clone(),
-            Self::ModelAccess(_) => self.to_string(),
+            Self::ModelAccess(_) | Self::BodyRejected(_) => self.to_string(),
             Self::Routing(error) if let Some(refused) = rate_limit_refusal(error) => refused,
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
@@ -298,6 +307,7 @@ impl Error {
             | Self::Routing(_)
             | Self::Callback(_)
             | Self::BodyTooLarge
+            | Self::Credentials(_)
             | Self::Internal => litellm_error::Report::new(self).to_string(),
         }
     }

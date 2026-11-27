@@ -155,6 +155,7 @@ impl AppState {
         if let Some(keys) = &self.keys {
             keys.resize(auth_cache_settings(&config.general_settings).memory_entries);
         }
+        inference.install((*self.inference.cost_map()).clone());
         Ok(Self {
             inference,
             key_limiter,

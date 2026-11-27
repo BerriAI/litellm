@@ -9,7 +9,7 @@ use litellm_auth_store::{Error, KeyDatabase};
 use litellm_gateway_auth_core::KeyHash;
 use litellm_redis_store::{
     FromValue, IntoValue,
-    auth_cache::{AuthCache, AuthObject, CachedKey, Settings},
+    auth_cache::{AuthCache, AuthObject, KeyEntry, Settings},
 };
 use litellm_repositories::Side;
 
@@ -25,7 +25,7 @@ impl AuthStore {
 
     /// The key the cache holds for `hash`. A cache that fails and an entry that does not decode
     /// are both a miss, as they are to `UserApiKeyCache`.
-    pub async fn cached(&self, hash: &KeyHash) -> Option<CachedKey> {
+    pub async fn cached(&self, hash: &KeyHash) -> Option<KeyEntry> {
         let value = self
             .cache
             .get(None, &object(hash))
@@ -38,7 +38,7 @@ impl AuthStore {
             })
             .ok()
             .flatten()?;
-        CachedKey::from_value(&value)
+        KeyEntry::from_value(&value)
             .inspect_err(|error| {
                 tracing::warn!(
                     error = %litellm_error::Report::new(error),
@@ -51,7 +51,7 @@ impl AuthStore {
     /// The key the database holds for `hash`, cached for the cache's own TTL, as
     /// `get_management_object_ttl` names `default_in_memory_ttl`. A key the cache did not take is
     /// returned all the same.
-    pub async fn loaded(&self, hash: &KeyHash) -> Result<Option<CachedKey>, Error> {
+    pub async fn loaded(&self, hash: &KeyHash) -> Result<Option<KeyEntry>, Error> {
         let Some(key) = Box::pin(self.keys.read(hash, Side::Read)).await? else {
             return Ok(None);
         };

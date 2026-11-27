@@ -68,6 +68,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     request_capacity,
     should_rate_limit,
 )
+from litellm._internal_context import nested_tool_call_failure
 from litellm.proxy.hooks.parallel_request_limiter_v3_native import limiter_policy
 from litellm.proxy.spend_tracking.input_tokens import models_counted_for
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
@@ -2929,7 +2930,7 @@ async def test_a_pre_call_after_a_failure_leaves_the_success_charging_project_io
         (("tool-model-over-io-limit", "success"), 100_000, (20, 7, 0, 0)),
     ],
 )
-async def test_a_nested_mcp_pre_call_settles_each_project_io_hold_once_v3(
+async def test_a_nested_mcp_pre_call_is_checked_against_project_io_without_a_hold_of_its_own_v3(
     steps: tuple[str, ...], key_tpm_limit: int | None, expected_counters: tuple[int, int, int, int]
 ) -> None:
     api_key: Final = hash_token("sk-nested-mcp-hold-flags")
@@ -2988,8 +2989,9 @@ async def test_a_nested_mcp_pre_call_settles_each_project_io_hold_once_v3(
                     end_time=now,
                 )
             case "tool-model-over-io-limit":
-                with pytest.raises(ProxyRateLimitError):
+                with pytest.raises(HTTPException) as refused:
                     await mcp_pre_call(data={**request, "model": step})
+                assert refused.value.status_code == 429
             case _:
                 await mcp_pre_call(data={**request, "model": step})
 
@@ -4323,6 +4325,132 @@ async def test_mcp_tool_call_inside_admitted_request_reuses_its_parallel_slot() 
         CallTypes.aresponses.value,
     )
     assert await in_flight() == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tools_reached_their_pre_calls",
+    [True, False],
+    ids=["tools_failed_after_their_pre_calls", "tools_failed_before_their_pre_calls"],
+)
+@pytest.mark.parametrize(
+    ("request_succeeds", "tokens_counted_at_the_end"),
+    [(False, 0), (True, 15)],
+    ids=["request_fails", "request_succeeds"],
+)
+async def test_failed_mcp_tool_calls_keep_their_requests_parallel_slot_and_reservation(
+    tools_reached_their_pre_calls: bool,
+    request_succeeds: bool,
+    tokens_counted_at_the_end: int,
+) -> None:
+    api_key: Final = hash_token("sk-mcp-tool-failure")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1, tpm_limit=10_000)
+    parallel_key: Final = RateLimitScope("api_key", api_key).gauge
+    owner_call_id: Final = "mcp-tool-failure-owner"
+
+    async def in_flight() -> int:
+        return _gauge_in_flight(handler, _local(handler, parallel_key))
+
+    async def pre_call(data: dict[str, object], call_type: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type=call_type,
+        )
+
+    async def pre_call_from_another_request() -> None:
+        await contextvars.Context().run(
+            asyncio.create_task,
+            pre_call({"model": "gpt-4o-mini", "input": "next request"}, CallTypes.aresponses.value),
+        )
+
+    async def post_call_failure(request_data: dict[str, object]) -> None:
+        await handler.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("call failed"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    await pre_call(
+        {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "add 2 and 3"}],
+            "max_tokens": 50,
+            "litellm_call_id": owner_call_id,
+        },
+        CallTypes.acompletion.value,
+    )
+    request_reservation: Final = _tokens_counted(handler, "api_key", api_key)
+
+    for tool_call_id in ("call_1", "call_2"):
+        if tools_reached_their_pre_calls:
+            await pre_call(
+                {"model": "MCP: add", "messages": [{"role": "user", "content": "Tool: add"}], "mcp_server_name": "math"},
+                CallTypes.call_mcp_tool.value,
+            )
+        with nested_tool_call_failure():
+            await post_call_failure(
+                {"call_type": CallTypes.call_mcp_tool.value, "litellm_call_id": f"{owner_call_id}_{tool_call_id}"}
+            )
+
+    assert request_reservation > 0
+    assert _tokens_counted(handler, "api_key", api_key) == request_reservation
+    assert await in_flight() == 1
+    with pytest.raises(HTTPException):
+        await pre_call_from_another_request()
+
+    if request_succeeds:
+        await handler.async_log_success_event(
+            {"litellm_call_id": owner_call_id, "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}}},
+            ModelResponse(model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
+            None,
+            None,
+        )
+    else:
+        await post_call_failure({"call_type": CallTypes.acompletion.value, "litellm_call_id": owner_call_id})
+
+    assert _tokens_counted(handler, "api_key", api_key) == tokens_counted_at_the_end
+    assert await in_flight() == 0
+    await pre_call_from_another_request()
+
+
+@pytest.mark.asyncio
+async def test_failed_standalone_mcp_tool_call_frees_its_own_parallel_slot() -> None:
+    api_key: Final = hash_token("sk-standalone-mcp-tool-failure")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+    parallel_key: Final = RateLimitScope("api_key", api_key).gauge
+
+    call_id: Final = "standalone-mcp-tool-call"
+
+    async def pre_call() -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={
+                "model": "MCP: add",
+                "messages": [{"role": "user", "content": "Tool: add"}],
+                "mcp_server_name": "math",
+                "litellm_call_id": call_id,
+            },
+            call_type=CallTypes.call_mcp_tool.value,
+        )
+
+    await pre_call()
+    assert _gauge_in_flight(handler, _local(handler, parallel_key)) == 1
+
+    await handler.async_post_call_failure_hook(
+        request_data={"call_type": CallTypes.call_mcp_tool.value, "litellm_call_id": call_id},
+        original_exception=Exception("tool failed"),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert _gauge_in_flight(handler, _local(handler, parallel_key)) == 0
+    await contextvars.Context().run(asyncio.create_task, pre_call())
 
 
 @pytest.mark.asyncio

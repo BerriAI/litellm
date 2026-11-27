@@ -241,7 +241,9 @@ class BaseVectorStoreConfig:
         pass
 
     @abstractmethod
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         return {}
 
     @abstractmethod

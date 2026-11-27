@@ -891,6 +891,10 @@ def unsupported_params() -> litellm.UnsupportedParamsError:
     return litellm.UnsupportedParamsError(message="nope", llm_provider="openai", model="a")
 
 
+def document_fetch() -> litellm.DocumentFetchError:
+    return litellm.DocumentFetchError(message="media download failed", llm_provider="openai", model="a")
+
+
 def bad_request_with_status(status_code: int, llm_provider: str = "openai") -> litellm.BadRequestError:
     response: Final = httpx.Response(status_code, request=httpx.Request("POST", "https://provider.test"))
     return litellm.BadRequestError(message="rejected", llm_provider=llm_provider, model="a", response=response)
@@ -930,6 +934,7 @@ async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_par
         (content_policy, False),
         (rate_limit, False),
         (server_error, False),
+        (document_fetch, False),
     ],
     ids=[
         "bad-request-flag-on",
@@ -943,6 +948,7 @@ async def test_a_bad_request_does_not_fall_back_when_fallback_on_unsupported_par
         "content-policy-flag-off",
         "rate-limit-flag-off",
         "server-error-flag-off",
+        "document-fetch-flag-off",
     ],
 )
 async def test_errors_outside_the_unsupported_params_rule_fall_back(

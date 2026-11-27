@@ -1131,6 +1131,42 @@ def _deployment_call_params(
     return without(params, *caller_only_keys) if caller_only_keys else params
 
 
+def _passthrough_route_model_id(
+    core: EndpointCore, model_name: str, provider: str | None, kwargs: Mapping[str, object]
+) -> str:
+    from litellm.types.utils import LlmProviders
+
+    if provider == LlmProviders.BEDROCK.value:
+        return _bedrock_model_id(model_name)
+    try:
+        stripped, _, _, _ = core.host.invoke("get_llm_provider")(
+            model=model_name,
+            custom_llm_provider=kwargs.get("custom_llm_provider"),
+            api_base=kwargs.get("api_base"),
+        )
+    except Exception:  # noqa: BLE001  # as the Python router: an unresolvable model is used as is
+        return model_name
+    return str(stripped)
+
+
+def _bedrock_model_id(model_name: str) -> str:
+    from urllib.parse import unquote
+
+    from litellm.litellm_core_utils.model_latest_aliases import resolve_model_latest_alias
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock.common_utils import split_bedrock_region_path
+    from litellm.passthrough.utils import CommonUtils
+    from litellm.types.utils import LlmProviders
+
+    _, model_id = split_bedrock_region_path(model_name)
+    resolved: Final = resolve_model_latest_alias(model_id, LlmProviders.BEDROCK.value)
+    aws_model_id: Final = BaseAWSLLM.get_bedrock_model_id(
+        {}, BaseAWSLLM.get_bedrock_invoke_provider(resolved), resolved
+    )
+    arn: Final = unquote(aws_model_id)
+    return CommonUtils.encode_bedrock_runtime_modelid_arn(arn) if arn.startswith("arn:") else aws_model_id
+
+
 def _generic_attempt(
     core: EndpointCore,
     plan: Plan,
@@ -1157,21 +1193,14 @@ def _generic_attempt(
         caller_only_keys=_caller_only_keys(plan.endpoint),
     )
     model_name: Final = str(data.get("model"))
+    provider: Final = _generic_provider(data)
     endpoint: Final = kwargs.get("endpoint")
     if endpoint:
-        try:
-            stripped, _, _, _ = core.host.invoke("get_llm_provider")(
-                model=model_name,
-                custom_llm_provider=kwargs.get("custom_llm_provider"),
-                api_base=kwargs.get("api_base"),
-            )
-            replacement = str(stripped)  # rebind-ok: rebound as the Python router rebinds it
-        except Exception:  # noqa: BLE001  # as the Python router: an unresolvable model is used as is
-            replacement = model_name  # rebind-ok: rebound as the Python router rebinds it
         kwargs["endpoint"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
-            replace_path_segment(str(endpoint), requested, replacement)
+            replace_path_segment(
+                str(endpoint), requested, _passthrough_route_model_id(core, model_name, provider, kwargs)
+            )
         )
-    provider: Final = _generic_provider(data)
     final: Final = {
         **_deployment_call_params(plan.endpoint, data, kwargs),
         "caching": core.shaping.cache_responses,

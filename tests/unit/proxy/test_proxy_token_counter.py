@@ -2136,8 +2136,9 @@ async def _body_sent_to_anthropic_count(
     monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
+    api_base: Final = deployment_params.get("api_base", "https://api.anthropic.com")
     with respx.mock:
-        route: Final = respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+        route: Final = respx.post(f"{api_base}/v1/messages/count_tokens").mock(
             return_value=httpx.Response(200, json={"input_tokens": 7})
         )
         response: Final = await anthropic_count_tokens(
@@ -2221,8 +2222,13 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_params",
+    ({}, {"model": "anthropic/sonnet-prod", "api_base": "http://gateway.test"}),
+    ids=("anthropics-own-api", "claude-gateway"),
+)
 async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_messages_inference_sends(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, deployment_params: Mapping[str, JsonValue]
 ) -> None:
     from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
 
@@ -2232,7 +2238,7 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_messages_
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
     ]
 
-    sent: Final = await _messages_sent_to_anthropic_count(monkeypatch, {"messages": history}, {})
+    sent: Final = await _messages_sent_to_anthropic_count(monkeypatch, {"messages": history}, deployment_params)
 
     assert sent == normalize_native_messages(history)
     assert sent != history

@@ -2,12 +2,14 @@ from abc import abstractmethod
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, cast
 
+from pydantic import BaseModel, ConfigDict, ValidationError
 from typing_extensions import TypedDict
 
 import litellm
-from litellm.constants import STREAM_SSE_DONE_STRING
-from litellm.litellm_core_utils.core_helpers import loads_json_object
+from litellm.constants import STREAM_SSE_DONE_STRING, VLLM_STREAM_PROMPT_FIELDS
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, loads_json_object
 from litellm.litellm_core_utils.hidden_params import set_extra_attribute, stored_attribute
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.sse_lines import is_sse_payload_line
 
 if TYPE_CHECKING:
@@ -88,6 +90,12 @@ def convert_model_response_to_streaming(
             model=model_response.model,
             system_fingerprint=model_response.system_fingerprint,
             choices=streaming_choices,
+        ).model_copy(
+            update={
+                field: value
+                for field in VLLM_STREAM_PROMPT_FIELDS
+                if (value := attribute_or_none(model_response, field)) is not None
+            }
         )
         service_tier: Final = stored_attribute(model_response, "service_tier")
         if service_tier is not None:
@@ -100,6 +108,36 @@ def convert_model_response_to_streaming(
         return processed_chunk
     except Exception as e:
         raise ValueError(f"Failed to convert ModelResponse to ModelResponseStream: {model_response}. Error: {e}")
+
+
+UPSTREAM_ABORT_MESSAGE: Final = "Upstream generation aborted (finish_reason=abort)"
+
+
+class _StreamedChoice(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    finish_reason: object = None
+
+
+class _StreamedChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    choices: tuple[_StreamedChoice, ...] | None = None
+
+
+class UpstreamAbortError(BaseLLMException):
+    pass
+
+
+def upstream_abort_error() -> UpstreamAbortError:
+    return UpstreamAbortError(status_code=500, message=UPSTREAM_ABORT_MESSAGE)
+
+
+def raise_on_upstream_abort(chunk: object) -> None:
+    try:
+        choices: Final = _StreamedChunk.model_validate(chunk).choices or ()
+    except ValidationError:
+        return
+    if any(choice.finish_reason == "abort" for choice in choices):
+        raise upstream_abort_error()
 
 
 class BaseModelResponseIterator:
@@ -153,7 +191,7 @@ class BaseModelResponseIterator:
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         # chunk is a str at this point
-        stripped_json_chunk: Final = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
+        stripped_json_chunk: Final = BaseModelResponseIterator.string_to_dict_parser(str_line=str_line)
         stripped_sse_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
         if stripped_sse_chunk is not None and stripped_sse_chunk.strip() == STREAM_SSE_DONE_STRING:
             return GenericStreamingChunk(
@@ -165,7 +203,10 @@ class BaseModelResponseIterator:
                 tool_use=None,
             )
         elif stripped_json_chunk:
-            return self.chunk_parser(chunk=stripped_json_chunk)
+            parsed_chunk: Final = self.chunk_parser(chunk=stripped_json_chunk)
+            if '"abort"' in str_line:
+                raise_on_upstream_abort(stripped_json_chunk)
+            return parsed_chunk
         else:
             return GenericStreamingChunk(
                 text="",

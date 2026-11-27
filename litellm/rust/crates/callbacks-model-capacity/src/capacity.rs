@@ -46,6 +46,7 @@ pub enum Frame {
 }
 
 const UNCOUNTABLE_GROUP: &str = "failed to extract field PyIncrement.counter";
+const UNLICENSED_PRIORITY: &str = "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/enterprise.";
 
 const SOCKET_TURN_UNCOUNTED: [&str; 3] = [
     "model_per_project_itpm",
@@ -522,11 +523,10 @@ impl Engine {
         match self.read_saturation(settings, model, group).await {
             Ok(saturation) => saturation,
             Err(error) => {
-                let message = format!(
+                tracing::error!(
                     "Error checking saturation for {model}: {}",
                     error.python_message()
                 );
-                let _ = self.host.log("error", &message);
                 0.0
             }
         }
@@ -563,11 +563,10 @@ impl Engine {
         let value = match self.limiter.read_counter(counter, ttl).await {
             Ok(value) => value,
             Err(error) => {
-                let message = format!(
+                tracing::warn!(
                     "Saturation read failed in Redis, using this worker's copy: {}",
                     error.python_message()
                 );
-                let _ = self.host.log("warning", &message);
                 self.limiter.read_local_counter(counter)?
             }
         };
@@ -614,12 +613,11 @@ impl Engine {
         let members = match touched {
             Ok(members) => members,
             Err(error) if error.is_registry_unavailable() => {
-                let message = format!(
+                tracing::warn!(
                     "Active team registry unavailable for {model}, holding team {} to the class pool: {}",
                     python_optional(request.key.team_text().as_deref()),
                     error.python_message()
                 );
-                let _ = self.host.log("warning", &message);
                 return Ok(None);
             }
             Err(error) => return Err(error),
@@ -649,7 +647,7 @@ impl Engine {
         let weights = normalized_weights(settings, group)?;
         let allocated = allocation(settings, model, request.priority(), &weights, group)?;
         if allocated.unlicensed {
-            self.host.unlicensed_priority()?;
+            tracing::error!("{UNLICENSED_PRIORITY}");
         }
         let weight = share.map_or(allocated.weight, |share| share.fraction);
         let floor = if share.is_some() { 1 } else { 0 };
@@ -794,10 +792,9 @@ impl Engine {
 
     async fn fallback_requested(&self, fallback: &SaturationFallback) -> bool {
         if let Some(invalid) = &fallback.invalid {
-            let message = format!(
+            tracing::warn!(
                 "router_settings.fallback_on_saturation={invalid} is not a boolean, treating it as disabled"
             );
-            let _ = self.host.log("warning", &message);
         }
         fallback.enabled && fallback.armed
     }
@@ -1032,11 +1029,10 @@ impl Engine {
             }
             Err(AdmitError::Failed(error)) if error.is_http() => PreCall::Raise(error),
             Err(AdmitError::Failed(error)) => {
-                let message = format!(
+                tracing::error!(
                     "Error in dynamic rate limiter: {}, allowing request",
                     error.python_message()
                 );
-                let _ = self.host.log("error", &message);
                 PreCall::Allow(None)
             }
         }
@@ -1506,11 +1502,10 @@ impl Engine {
             .try_record_team_share(settings, stash, model_group, settlement, holds)
             .await
         {
-            let message = format!(
+            tracing::warn!(
                 "Dynamic rate limiter share metrics failed: {}",
                 error.python_message()
             );
-            let _ = self.host.log("warning", &message);
         }
     }
 
@@ -1648,6 +1643,7 @@ mod tests {
     use serde_json::{Number, Value, json};
 
     use litellm_callbacks_parallel_request_limiter::{Ctx, PolicyFacts};
+    use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 
     use crate::{
         host::{Fact, SeamFuture, ShareGauge},
@@ -1741,8 +1737,21 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeHost {
-        logged: Mutex<Vec<(String, String)>>,
+    struct FakeHost;
+
+    #[derive(Clone, Default)]
+    struct Lines(Arc<Mutex<Vec<(Level, String)>>>);
+
+    impl Sink for Lines {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn emit(&self, record: &Record) {
+            self.0
+                .lock()
+                .push((*record.metadata.level(), record.message.clone()));
+        }
     }
 
     fn done<'a, T: Send + 'a>(value: T) -> SeamFuture<'a, T> {
@@ -1774,17 +1783,6 @@ mod tests {
 
         fn set_share<'a>(&'a self, _gauge: &'a ShareGauge) -> SeamFuture<'a, ()> {
             done(())
-        }
-
-        fn unlicensed_priority(&self) -> Result<(), CapacityError> {
-            Ok(())
-        }
-
-        fn log(&self, level: &'static str, message: &str) -> Result<(), CapacityError> {
-            self.logged
-                .lock()
-                .push((level.to_owned(), message.to_owned()));
-            Ok(())
         }
 
         fn model_group<'a>(&'a self, model: &'a str) -> SeamFuture<'a, String> {
@@ -1922,7 +1920,7 @@ mod tests {
     async fn saturation_check_cache_ttl_configuration_backfills_each_read_for_its_ttl_like_python()
     {
         let limiter = Arc::new(FakeLimiter::new(Ok(None), None, answer("OK", Vec::new())));
-        let host = Arc::new(FakeHost::default());
+        let host = Arc::new(FakeHost);
         let engine = engine(&limiter, &host);
         let model_group = group(Some(1000), Some(100));
         engine
@@ -1953,15 +1951,20 @@ mod tests {
             Some(json!(3)),
             answer("OK", Vec::new()),
         ));
-        let host = Arc::new(FakeHost::default());
-        let saturation = engine(&limiter, &host)
-            .saturation(&settings(json!(60)), "down", &group(None, Some(4)))
+        let host = Arc::new(FakeHost);
+        let lines = Lines::default();
+        let saturation = Logger::new(lines.clone())
+            .instrument(engine(&limiter, &host).saturation(
+                &settings(json!(60)),
+                "down",
+                &group(None, Some(4)),
+            ))
             .await;
         assert!((saturation - 0.75).abs() < f64::EPSILON);
         assert_eq!(
-            *host.logged.lock(),
+            *lines.0.lock(),
             vec![(
-                "warning".to_owned(),
+                Level::WARN,
                 "Saturation read failed in Redis, using this worker's copy: redis down".to_owned()
             )]
         );
@@ -2010,7 +2013,7 @@ mod tests {
             None,
             answer("OVER_LIMIT", vec![unknown]),
         ));
-        let host = Arc::new(FakeHost::default());
+        let host = Arc::new(FakeHost);
         let PreCall::Refuse(refusal) = pre_call(
             &engine(&limiter, &host),
             &settings(json!(60)),
@@ -2065,7 +2068,7 @@ mod tests {
             answer("OVER_LIMIT", vec![counted.clone(), full.clone()]),
             answer("OK", vec![counted.clone()]),
         ]);
-        let host = Arc::new(FakeHost::default());
+        let host = Arc::new(FakeHost);
         let engine = engine(&limiter, &host);
         let settings = settings(json!(60));
         let key = KeyFacts::default();

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useController } from "react-hook-form";
 import type { ParseKeys } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
@@ -34,6 +35,17 @@ import { submissionRulesSchema } from "./SubmissionRulesPanel/schema";
 const DEFAULT_TRANSPORT = "sse";
 
 type MCPStatus = "active" | "pending_review" | "rejected";
+
+const STATUS_FILTERS = ["all", "pending_review", "active", "rejected"] as const;
+type StatusFilter = (typeof STATUS_FILTERS)[number];
+
+const submissionFilterParsers = {
+  sub_search: parseAsString.withDefault(""),
+  sub_status: parseAsStringLiteral(STATUS_FILTERS).withDefault("all"),
+};
+
+const toStatusFilter = (value: string): StatusFilter | null =>
+  STATUS_FILTERS.find((status) => status === value) ?? null;
 
 const STATUS_CONFIG: Record<MCPStatus, { labelKey: ParseKeys; bg: string; text: string; dot: string }> = {
   active: {
@@ -534,8 +546,8 @@ interface MCPSubmissionsTabProps {
 export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
   const { t } = useTranslation();
   const [summary, setSummary] = useState<MCPSubmissionsSummary>(EMPTY_SUMMARY);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | MCPStatus>("all");
+  const [{ sub_search: search, sub_status: statusFilter }, setSubmissionFilters] =
+    useQueryStates(submissionFilterParsers);
   const [confirmAction, setConfirmAction] = useState<{
     serverId: string;
     serverName: string;
@@ -670,13 +682,13 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
             type="text"
             placeholder={t("mcpServers.submissionsTab.filters.searchPlaceholder")}
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => void setSubmissionFilters({ sub_search: e.target.value })}
             className="w-full pl-9 pr-4 py-2 border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-ring focus:border-info"
           />
         </div>
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
+          onChange={(e) => void setSubmissionFilters({ sub_status: toStatusFilter(e.target.value) })}
           className="border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-hidden focus:ring-1 focus:ring-ring focus:border-info bg-card"
         >
           <option value="all">{t("mcpServers.submissionsTab.filters.allStatuses")}</option>

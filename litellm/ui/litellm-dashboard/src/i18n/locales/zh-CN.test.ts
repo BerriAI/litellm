@@ -17,10 +17,11 @@ const markers = (value: string) => ({
   placeholders: [...value.matchAll(/\{\{([^}]+)\}\}/g)].map((match) => match[1]).sort(),
   tags: [...value.matchAll(/<\/?[\w-]+[^>]*>/g)].map((match) => match[0]).sort(),
   references: [...value.matchAll(/\$t\(([^)]+)\)/g)].map((match) => match[1]).sort(),
+  urls: (value.match(/https?:\/\/[\w][^\s<>"\]}()「」＂，。；、“”（）]+/g) ?? []).sort(),
 });
 
 describe("zh-CN locale", () => {
-  it("only uses English keys and keeps their placeholders, rich-text tags and $t references", () => {
+  it("only uses English keys and keeps their placeholders, rich-text tags, references, and URLs", () => {
     const english = new Map(entries(en));
     const incompatible = entries(zh).filter(([key, value]) => {
       const source = english.get(key);
@@ -32,6 +33,11 @@ describe("zh-CN locale", () => {
     });
     expect(entries(zh).length).toBeGreaterThan(0);
     expect(incompatible).toEqual([]);
+  });
+
+  it("localizes the metadata export warning without losing the redaction caveat", () => {
+    expect(zh.usage.export.modal.includeMetadata).toBe("包含密钥和用户元数据");
+    expect(zh.usage.export.modal.includeMetadataNote).toContain("无法保证识别所有机密信息");
   });
 
   it("loads through the language registry, keeps dynamic values and falls back to English for missing keys", async () => {

@@ -254,7 +254,7 @@ export default function ModelInfoView({
       },
     };
     toast.info(t("modelInfoView.toasts.storingCredential"));
-    let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
+    await credentialCreateCall(accessToken, credentialItem);
     toast.success(t("modelInfoView.toasts.credentialStored"));
   };
 

@@ -1,6 +1,6 @@
-//! Which Python logger a Rust target's lines go to. Python proxy code logs on `LiteLLM Proxy` and the SDK on
-//! `LiteLLM`, so a Rust port keeps its lines on the logger its Python version used. This table is the only copy of
-//! that rule: Python is told the logger's name and never sees a Rust target.
+//! Which Python logger a Rust target's lines go to. Python proxy code logs on `LiteLLM Proxy`, the router on
+//! `LiteLLM Router` and the SDK on `LiteLLM`, so a Rust port keeps its lines on the logger its Python version used.
+//! This table is the only copy of that rule: Python is told the logger's name and never sees a Rust target.
 
 use strum::{EnumCount, IntoStaticStr, VariantArray};
 
@@ -10,19 +10,25 @@ pub(super) enum PythonLogger {
     Sdk,
     #[strum(serialize = "LiteLLM Proxy")]
     Proxy,
+    #[strum(serialize = "LiteLLM Router")]
+    Router,
 }
 
-const PROXY_TARGETS: [&str; 1] = ["litellm_callbacks_parallel_request_limiter"];
+const TARGETS: [(&str, PythonLogger); 3] = [
+    (
+        "litellm_callbacks_parallel_request_limiter",
+        PythonLogger::Proxy,
+    ),
+    ("litellm_callbacks_model_capacity", PythonLogger::Proxy),
+    ("litellm_router_core::model_info", PythonLogger::Router),
+];
 
 impl PythonLogger {
     pub(super) fn of(target: &str) -> Self {
-        if PROXY_TARGETS
+        TARGETS
             .iter()
-            .any(|prefix| target.starts_with(prefix))
-        {
-            return Self::Proxy;
-        }
-        Self::Sdk
+            .find(|(prefix, _)| target.starts_with(prefix))
+            .map_or(Self::Sdk, |(_, logger)| *logger)
     }
 }
 
@@ -36,6 +42,9 @@ mod tests {
         PythonLogger::Proxy
     )]
     #[case::limiter_crate_root("litellm_callbacks_parallel_request_limiter", PythonLogger::Proxy)]
+    #[case::capacity("litellm_callbacks_model_capacity::capacity", PythonLogger::Proxy)]
+    #[case::router_model_info("litellm_router_core::model_info", PythonLogger::Router)]
+    #[case::router_call("litellm_router_core::call", PythonLogger::Sdk)]
     #[case::another_callback("litellm_callbacks_budgets::admission", PythonLogger::Sdk)]
     #[case::store("litellm_redis_store::cache_invalidation", PythonLogger::Sdk)]
     #[case::bridge("_native::redis::events", PythonLogger::Sdk)]
