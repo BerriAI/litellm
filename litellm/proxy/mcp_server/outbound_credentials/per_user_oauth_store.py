@@ -125,7 +125,9 @@ def _redis_cache_is_available() -> bool:
     return user_api_key_cache.has_redis
 
 
-def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, RefreshCoordinator | None, bool]:
+def _runtime_backend_and_coordinator() -> tuple[
+    TokenCacheBackend | None, RefreshCoordinator[OAuthToken | None] | None, bool
+]:
     """The cross-replica cache + coordinator when Redis is wired, else ``(None, None, False)`` so the
     foundation's in-process defaults are used (a single replica needs no shared cache or lock).
     """
@@ -135,7 +137,7 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
     )
     from litellm.proxy.proxy_server import mcp_state_cache  # noqa: PLC0415
 
-    coordinator: Final = runtime_refresh_coordinator()
+    coordinator: Final[RefreshCoordinator[OAuthToken | None] | None] = runtime_refresh_coordinator()
     if coordinator is None:
         return None, None, False
     codec: Final = OAuthTokenCacheCodec(
