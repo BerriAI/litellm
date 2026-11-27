@@ -62,6 +62,7 @@ def _build_prisma_with_keys(user_keys, mock_user=None, updated_user=None):
     mock_db.litellm_verificationtoken.update = AsyncMock(return_value=None)
     mock_db.litellm_invitationlink.delete_many = AsyncMock(return_value=None)
     mock_db.litellm_organizationmembership.delete_many = AsyncMock(return_value=None)
+    mock_db.litellm_vaultsecrets.delete_many = AsyncMock(return_value=0)
     mock_db.litellm_teammembership.delete_many = AsyncMock(return_value=None)
     return mock_client, mock_db
 
@@ -220,6 +221,7 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
     mock_db.litellm_organizationmembership.delete_many = AsyncMock(
         side_effect=lambda **kw: call_order.append(("orgmembership", kw)) or None
     )
+    mock_db.litellm_vaultsecrets.delete_many = AsyncMock(return_value=0)
     mock_db.litellm_teammembership.delete_many = AsyncMock(
         side_effect=lambda **kw: call_order.append(("teammembership", kw)) or None
     )
