@@ -397,5 +397,32 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "kunavo": {
+    "base_url": "https://api.kunavo.com/v1",
+    "api_key_env": "KUNAVO_API_KEY",
+    "api_base_env": "KUNAVO_API_BASE",
+    "constraints": {
+      "cache_control_ttl": true
+    },
+    "provider_info": {
+      "supports_function_calling": true
+    },
+    "supported_endpoints": ["/v1/chat/completions"],
+    "model_supported_endpoints": {
+      "claude-fable-5-2": ["/v1/messages"],
+      "claude-fable-5-1": ["/v1/messages"],
+      "claude-fable-5": ["/v1/messages"],
+      "claude-opus-5-5": ["/v1/messages"],
+      "claude-opus-5": ["/v1/messages"],
+      "claude-opus-4-8": ["/v1/messages"],
+      "claude-opus-4-7": ["/v1/messages"],
+      "claude-opus-4-6": ["/v1/messages"],
+      "claude-sonnet-5-5": ["/v1/messages"],
+      "claude-sonnet-5": ["/v1/messages"],
+      "claude-sonnet-4-6": ["/v1/messages"],
+      "claude-haiku-5-5": ["/v1/messages"],
+      "claude-haiku-4-5": ["/v1/messages"]
+    }
   }
 }
