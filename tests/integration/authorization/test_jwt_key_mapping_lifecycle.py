@@ -678,10 +678,10 @@ def test_disabling_global_mapping_fallback_rejects_issuer_jwt_with_only_a_global
 
         strict_key: Final = "jwt_key_mapping_strict:" + json.dumps([runtime.strict_issuer, _CLIENT_CLAIM, client_id])
         with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
-            assert cache.get(strict_key) == b'"__NO_MAPPING__"'
+            eventually(lambda: cache.get(strict_key), lambda value: value == b'"__NO_MAPPING__"')
             scoped: Final = _create_mapping(gateway, key, client_id, runtime.strict_issuer)
             scenario.cleanups.callback(_delete_mapping_if_present, gateway, scoped.id)
-            assert cache.get(strict_key) is None
+            eventually(lambda: cache.get(strict_key), lambda value: value is None)
 
         prompt: Final = "issuer with a newly created scoped mapping"
         _assert_chat(gateway, runtime.model, token, prompt, sha256(key.encode()).hexdigest())
@@ -710,6 +710,9 @@ def test_a_cached_strict_miss_does_not_hide_a_global_mapping_from_a_permissive_r
         mapping: Final = _create_mapping(gateway, key, client_id)
         scenario.cleanups.callback(_delete_mapping_if_present, gateway, mapping.id)
         _assert_unmapped(_chat(gateway, runtime.model, token, "cold strict miss"), client_id)
+        strict_key: Final = "jwt_key_mapping_strict:" + json.dumps([runtime.strict_issuer, _CLIENT_CLAIM, client_id])
+        with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
+            eventually(lambda: cache.get(strict_key), lambda value: value == b'"__NO_MAPPING__"')
         _assert_unmapped(_chat(gateway, runtime.model, token, "cached strict miss"), client_id)
         _assert_upstream_requests(runtime.upstream, ())
 
