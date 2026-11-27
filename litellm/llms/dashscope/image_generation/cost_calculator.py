@@ -14,6 +14,6 @@ def cost_calculator(model: str, image_response: ImageResponse, model_info: Model
         raise ValueError(f"No output_cost_per_image found for dashscope/{model}")
     input_images: Final = image_response.hidden_params.get("billable_input_image_count")
     input_image_cost: Final = (prices.get("input_cost_per_image") or 0.0) * (
-        input_images if isinstance(input_images, int) else 0
+        input_images if isinstance(input_images, int) and not isinstance(input_images, bool) else 0
     )
     return output_cost_per_image * len(image_response.data or ()) + input_image_cost
