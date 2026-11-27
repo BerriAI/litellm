@@ -1,7 +1,9 @@
 import asyncio
+import datetime
 import importlib
 import random
 import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -3167,3 +3169,134 @@ def test_an_image_answer_without_an_image_is_not_counted_as_a_deployment_failure
     record_failure(router, model_id, exception)
 
     assert get_deployment_failures_for_current_minute(router, model_id) == counted
+
+
+async def _complete_like_the_proxy(router: Router, model: str) -> str:
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.datetime(2026, 1, 1),
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id=str(uuid.uuid4()),
+    )
+    response: Final = await router.acompletion(**request, litellm_logging_obj=logging_obj)
+    model_id: Final = response._hidden_params["model_id"]
+    assert isinstance(model_id, str)
+    return model_id
+
+
+_CHAT_COMPLETION_OK: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4o",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _openai_deployment(model_name: str, host: str, deployment_id: str) -> Mapping[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": f"https://{host}/v1"},
+        "model_info": {"id": deployment_id},
+    }
+
+
+@pytest.mark.asyncio
+async def test_fallback_deployment_stays_up_while_the_primary_is_in_cooldown(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://primary.test/v1/chat/completions").mock(
+        return_value=httpx.Response(429, json={"error": {"message": "rate limit", "type": "rate_limit_error"}})
+    )
+    twin_route: Final = respx_mock.post("https://twin.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_OK)
+    )
+    backup_route: Final = respx_mock.post("https://backup.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_OK)
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            _openai_deployment("primary", "primary.test", "primary-dep"),
+            _openai_deployment("twin", "twin.test", "twin-dep"),
+            _openai_deployment("backup", "backup.test", "backup-dep"),
+        ],
+        fallbacks=[{"primary": ["twin", "backup"]}, {"twin": ["backup"]}],
+        allowed_fails=2,
+        cooldown_time=120,
+        num_retries=0,
+    )
+
+    served_by: Final = [await _complete_like_the_proxy(router, "primary") for _ in range(10)]
+    cooldown_deployments: Final = await async_get_cooldown_deployments(
+        litellm_router_instance=router,
+        parent_otel_span=None,
+    )
+
+    assert served_by == ["twin-dep"] * 10
+    assert len(twin_route.calls) == 10
+    assert len(backup_route.calls) == 0
+    assert tuple(cooldown_deployments) == ("primary-dep",)
+
+
+@pytest.mark.asyncio
+async def test_pass_through_selection_failure_does_not_cool_down_another_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "pt-primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "use_in_pass_through": True},
+                "model_info": {"id": "pt-primary-dep", "blocked": True},
+            },
+            {
+                "model_name": "pt-fallback",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "use_in_pass_through": True},
+                "model_info": {"id": "pt-fallback-dep"},
+            },
+        ],
+        allowed_fails=0,
+        cooldown_time=120,
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.datetime(2026, 1, 1),
+        model="pt-primary",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id=str(uuid.uuid4()),
+    )
+
+    recorded_exceptions: list[BaseException] = []
+    orig_dispatch = logging_obj.dispatch_failure_handlers
+
+    async def capture_and_dispatch(*, exception, traceback_exception, prefer_async_handlers=True):
+        recorded_exceptions.append(exception)
+        logging_obj.model_call_details["model_info"] = {"id": "pt-fallback-dep"}
+        return await orig_dispatch(
+            exception=exception,
+            traceback_exception=traceback_exception,
+            prefer_async_handlers=prefer_async_handlers,
+        )
+
+    monkeypatch.setattr(logging_obj, "dispatch_failure_handlers", capture_and_dispatch)
+
+    with pytest.raises(RouterRateLimitError):
+        await router.async_get_available_deployment_for_pass_through(
+            model="pt-primary",
+            request_kwargs={"litellm_logging_obj": logging_obj},
+        )
+    await asyncio.sleep(0)
+
+    cooldown_deployments: Final = await async_get_cooldown_deployments(
+        litellm_router_instance=router,
+        parent_otel_span=None,
+    )
+    assert len(recorded_exceptions) == 1
+    assert tuple(cooldown_deployments) == ()
+    assert get_deployment_failures_for_current_minute(router, "pt-fallback-dep") == 0

@@ -56,6 +56,7 @@ else:
     Span = Any
 
 _ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
+_DEPLOYMENT_SELECTION_FAILURE_ATTR: Final = "_litellm_deployment_selection_failure"
 _CREDENTIAL_VALUES_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -78,9 +79,15 @@ def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
     return bool(getattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, False))
 
 
+def mark_deployment_selection_failure(exception: BaseException) -> None:
+    """Tag selection failures so async failure handlers do not cool down another deployment."""
+    setattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, True)
+
+
 def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
     return (
         is_advisor_orchestration_failure(exception)
+        or bool(getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False))
         or isinstance(exception, UnresolvablePreviousResponseError)
         or is_previous_response_rejected(exception)
     )
