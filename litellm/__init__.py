@@ -1042,21 +1042,35 @@ class _ProviderModelSources:
     )
 
 
+def _added_to(listing: str) -> frozenset[str]:
+    return _ProviderModelSources.added.get(listing, _NO_MODELS)
+
+
 def _install_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     lists: Final = _provider_model_lists(model_cost_map)
-    added: Final = _ProviderModelSources.added
     sets: Final = _provider_model_sets()
-    for listing, names in _ProviderModelSources.installed.items():
-        sets[listing].difference_update(names - lists.listed.get(listing, _NO_MODELS) - added.get(listing, _NO_MODELS))
+    unlisted: Final = MappingProxyType(
+        {
+            listing: names - lists.listed.get(listing, _NO_MODELS)
+            for listing, names in _ProviderModelSources.installed.items()
+        }
+    )
     _ProviderModelSources.installed = lists.listed
+    for listing, names in unlisted.items():
+        sets[listing].difference_update(names - _added_to(listing))
     _write_provider_model_sets(lists)
+    # a name added on another thread after the read above was still taken out, and its record is visible by now
+    for listing, names in unlisted.items():
+        sets[listing].update(names & _added_to(listing))
 
 
 def _add_provider_models(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     lists: Final = _provider_model_lists(model_cost_map)
-    added: Final = _ProviderModelSources.added
     _ProviderModelSources.added = MappingProxyType(
-        {**added, **{listing: added.get(listing, _NO_MODELS) | names for listing, names in lists.listed.items()}}
+        {
+            **_ProviderModelSources.added,
+            **{listing: _added_to(listing) | names for listing, names in lists.listed.items()},
+        }
     )
     _write_provider_model_sets(lists)
 
