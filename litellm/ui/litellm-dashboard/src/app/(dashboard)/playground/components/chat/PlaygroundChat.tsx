@@ -30,7 +30,8 @@ import RealtimePlayground from "../chat_ui/RealtimePlayground";
 import { Composer } from "./Composer";
 import { EndpointMenu, VoiceMenu } from "./ComposerControls";
 import { Conversation, formatCost } from "./Conversation";
-import { capabilitiesFor, CODE_INTERPRETER_SUGGESTIONS, SUGGESTIONS } from "./endpointCapabilities";
+import { modelPrompts } from "@/i18n/untranslated/modelText";
+import { capabilitiesFor, SUGGESTIONS } from "./endpointCapabilities";
 import { InspectorPanel, type CodeSdk } from "./Inspector";
 import { ByokKeyButton } from "./ByokConnect";
 import { McpDialog, serverName } from "./McpDialog";
@@ -198,6 +199,7 @@ export function PlaygroundChat({
     const info = modelList.find((option) => option.model_group === model);
     const switchTo =
       info?.mode && !isModelCompatibleWithEndpoint(info, settings.endpoint) ? getEndpointType(info.mode) : null;
+    if (model !== settings.model) chat.handleModelChange();
     update((current) => ({ ...(switchTo ? withEndpoint(current, switchTo) : current), model }));
   };
 
@@ -408,7 +410,7 @@ export function PlaygroundChat({
 
   const suggestions =
     settings.endpoint === EndpointType.RESPONSES && codeInterpreter.enabled
-      ? CODE_INTERPRETER_SUGGESTIONS
+      ? modelPrompts.codeInterpreter
       : SUGGESTIONS[settings.endpoint] ?? [];
 
   const inspector = <InspectorPanel message={inspectedMessage} code={code} />;
@@ -474,7 +476,7 @@ export function PlaygroundChat({
             }}
             inspectedIndex={inspectedIndex}
             onInspect={inspect}
-            suggestions={suggestions.map((suggestion) => t(suggestion))}
+            suggestions={suggestions}
             onPickSuggestion={draft.setText}
           />
         )}

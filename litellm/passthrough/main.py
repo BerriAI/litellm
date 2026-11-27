@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import weakref
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator, Mapping
 from functools import partial
 from types import TracebackType
 from typing import Final, cast
@@ -22,7 +22,7 @@ from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConf
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.passthrough.utils import CommonUtils
-from litellm.utils import client
+from litellm.utils import client, get_base_model_from_metadata
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
@@ -68,6 +68,7 @@ class _SpendCollection:
             custom_llm_provider=litellm_logging_obj.model_call_details.get("custom_llm_provider", ""),
             endpoint=litellm_logging_obj.model_call_details.get("endpoint", ""),
             response_headers=response_headers,
+            base_model=get_base_model_from_metadata(litellm_logging_obj.model_call_details),
         )
         self.chunk_count = 0
         self._failed = False
@@ -311,16 +312,16 @@ async def allm_passthrough_route(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
-    request_query_params: dict | None = None,
-    request_headers: dict | None = None,
+    request_query_params: dict[str, object] | None = None,
+    request_headers: Mapping[str, object] | None = None,
     content: RequestContent | None = None,
-    data: dict | None = None,
+    data: Mapping[str, object] | None = None,
     files: RequestFiles | None = None,
     json: object | None = None,
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> httpx.Response | AsyncGenerator[bytes, bytes]:
     """
     Async: Reranks a list of documents based on their relevance to the query
@@ -436,17 +437,17 @@ def llm_passthrough_route(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
-    request_query_params: dict | None = None,
-    request_headers: dict | None = None,
+    request_query_params: dict[str, object] | None = None,
+    request_headers: dict[str, str] | None = None,
     content: RequestContent | None = None,
-    data: dict | None = None,
+    data: Mapping[str, object] | None = None,
     files: RequestFiles | None = None,
     json: object | None = None,
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
     guardrailConfig: object = None,
-    **kwargs,
+    **kwargs: object,
 ) -> (
     httpx.Response
     | Coroutine[object, object, httpx.Response]
@@ -529,8 +530,8 @@ def llm_passthrough_route(
         litellm_params=litellm_params_dict,
     )
 
-    # [TODO: Refactor to bedrockpassthroughconfig] need to encode the id of application-inference-profile for bedrock
-    if custom_llm_provider == "bedrock" and "application-inference-profile" in endpoint:
+    # [TODO: Refactor to bedrockpassthroughconfig] need to encode the id of an ARN model for bedrock
+    if custom_llm_provider == "bedrock":
         encoded_url_str: Final = CommonUtils.encode_bedrock_runtime_modelid_arn(str(updated_url))
         updated_url = httpx.URL(encoded_url_str)
 
@@ -553,7 +554,9 @@ def llm_passthrough_route(
         forward_headers=False,
     )
 
-    _request_data: dict | None = data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
+    _request_data: dict[str, object] | None = (
+        data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
+    )
     headers, signed_json_body = provider_config.sign_request(
         headers=headers,
         litellm_params={**litellm_params_dict, "guardrailConfig": guardrailConfig},

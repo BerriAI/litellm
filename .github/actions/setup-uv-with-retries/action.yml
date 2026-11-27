@@ -7,11 +7,22 @@ inputs:
   version:
     description: "uv version to install"
     required: true
+  rust-toolchain:
+    description: >-
+      Install the pinned Rust toolchain. Pass "false" in jobs that install the
+      prebuilt Rust bridge and never compile Rust.
+    required: false
+    default: "true"
+  cache-suffix:
+    description: "Suffix for the uv cache key, for a job whose cache must not collide with another job's"
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
     - name: Configure the Rust build environment
+      if: inputs.rust-toolchain == 'true'
       shell: bash
       working-directory: ${{ github.workspace }}
       run: bash .github/scripts/setup_rust_environment.sh
@@ -23,6 +34,7 @@ runs:
       with:
         version: ${{ inputs.version }}
         save-cache: ${{ github.ref == 'refs/heads/main' }}
+        cache-suffix: ${{ inputs.cache-suffix }}
 
     - name: Wait before attempt 2
       if: steps.attempt-1.outcome == 'failure'
@@ -37,6 +49,7 @@ runs:
       with:
         version: ${{ inputs.version }}
         save-cache: ${{ github.ref == 'refs/heads/main' }}
+        cache-suffix: ${{ inputs.cache-suffix }}
 
     - name: Wait before attempt 3
       if: steps.attempt-2.outcome == 'failure'
@@ -49,3 +62,4 @@ runs:
       with:
         version: ${{ inputs.version }}
         save-cache: ${{ github.ref == 'refs/heads/main' }}
+        cache-suffix: ${{ inputs.cache-suffix }}

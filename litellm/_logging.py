@@ -3,6 +3,7 @@ import contextvars
 import functools
 import inspect
 import itertools
+import json
 import logging
 import os
 import re
@@ -10,7 +11,7 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from types import FrameType, MappingProxyType
+from types import FrameType, MappingProxyType, TracebackType
 from typing import Final, Protocol, TextIO
 from urllib.parse import unquote
 
@@ -19,10 +20,16 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
+    CREDENTIAL_FIELD_NAME_FRAGMENTS,
+    CREDENTIAL_FIELD_NAME_WORDS,
+    CREDENTIAL_HEADER_NAMES,
+    DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
+    QUANTITY_FIELD_NAME_WORDS,
+    TRUNCATED_BASE64_MARKER,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
@@ -146,28 +153,81 @@ def redact_internal_details_from_client_message(value: str) -> str:
 
 _CLIENT_FIELDS: Final = TypeAdapter(dict[str, object])
 _CLIENT_ITEMS: Final = TypeAdapter(list[object])
+_CREDENTIAL_KEY_PROBE: Final = "key-name-probe"
+_FIELD_NAME_BOUNDARY: Final = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|[^A-Za-z]+")
 
 
-def _redacted_client_field(key: str | None, value: object) -> object:
+def _redacted_client_key(key: str) -> str:
+    return redact_internal_details(redact_structured_value(None, key))
+
+
+def _names_a_credential(key: str | None) -> bool:
+    return redact_structured_value(key, _CREDENTIAL_KEY_PROBE) != _CREDENTIAL_KEY_PROBE
+
+
+def _names_a_credential_header(key: str | None) -> bool:
+    return key is not None and key.strip().lower().replace("_", "-") in CREDENTIAL_HEADER_NAMES
+
+
+def _names_a_credential_field(key: str | None, value: object) -> bool:
+    if key is None:
+        return False
+    words: Final = frozenset(_FIELD_NAME_BOUNDARY.sub(" ", key).lower().split())
+    if words & QUANTITY_FIELD_NAME_WORDS and not isinstance(value, str):
+        return False
+    compact: Final = "".join(character for character in key.lower() if character.isalnum())
+    return bool(words & CREDENTIAL_FIELD_NAME_WORDS) or any(
+        fragment in compact for fragment in CREDENTIAL_FIELD_NAME_FRAGMENTS
+    )
+
+
+def _embedded_json(value: str) -> object:
+    adapter: Final = _CLIENT_FIELDS if value.lstrip().startswith("{") else _CLIENT_ITEMS
+    try:
+        return adapter.validate_json(value)
+    except (ValueError, RecursionError):
+        return None
+
+
+def _redacted_embedded_json(key: str | None, value: str, depth: int) -> str:
+    """A string holding a JSON object or array has its fields redacted like the structured form."""
+    if not value.lstrip().startswith(("{", "[")):
+        return value
+    embedded: Final = _embedded_json(value)
+    if embedded is None:
+        return value
+    redacted: Final = _redacted_client_field(key, embedded, depth + 1)
+    return value if redacted == embedded else json.dumps(redacted, separators=(",", ":"))
+
+
+def _redacted_client_field(key: str | None, value: object, depth: int = 0) -> object:
+    if _names_a_credential_header(key) or _names_a_credential_field(key, value):
+        return REDACTED
     if isinstance(value, str):
-        return redact_internal_details(redact_structured_value(key, value))
+        return redact_internal_details(redact_structured_value(key, _redacted_embedded_json(key, value, depth)))
+    if isinstance(value, (dict, list, tuple)) and (depth > DEFAULT_MAX_RECURSE_DEPTH or _names_a_credential(key)):
+        return REDACTED
     if isinstance(value, dict):
         return {
-            child_key: _redacted_client_field(child_key, child)
+            _redacted_client_key(child_key): _redacted_client_field(child_key, child, depth + 1)
             for child_key, child in _CLIENT_FIELDS.validate_python(value).items()
         }
     if isinstance(value, (list, tuple)):
-        return [_redacted_client_field(key, child) for child in _CLIENT_ITEMS.validate_python(value)]
+        return [_redacted_client_field(key, child, depth + 1) for child in _CLIENT_ITEMS.validate_python(value)]
     if not isinstance(value, (int, float)):
         return value
     text: Final = str(value)
     return value if redact_structured_value(key, text) == text else REDACTED
 
 
-def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+def redact_internal_details_from_client_value(value: object) -> object:
     if not _ENABLE_SECRET_REDACTION:
-        return fields
-    return _redacted_client_field(None, dict(fields))
+        return value
+    return _redacted_client_field(None, value)
+
+
+def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+    return redact_internal_details_from_client_value(dict(fields))
 
 
 def _substituted_color_message(record: logging.LogRecord) -> str | None:
@@ -366,7 +426,7 @@ def _replace_base64_run(match: "re.Match[str]") -> str:
     run: Final = match.group(0)
     if not _looks_like_base64(run):
         return run
-    return f"[base64_data truncated: {format_base64_size(len(run))}]"
+    return f"{TRUNCATED_BASE64_MARKER}{format_base64_size(len(run))}]"
 
 
 def _collapse_base64_runs(text: str, limit: int) -> str:
@@ -781,7 +841,7 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
 
 # Standard LogRecord attribute names - used to identify 'extra' fields.
 # Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
-def _get_standard_record_attrs() -> frozenset:
+def _get_standard_record_attrs() -> frozenset[str]:
     """Standard LogRecord attribute names - excludes extra keys from logger.debug(..., extra={...})."""
     return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
@@ -799,12 +859,12 @@ class JsonFormatter(Formatter):
     def __init__(self):
         super().__init__()
 
-    def formatTime(self, record, datefmt=None):
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None):
         # Use datetime to format the timestamp in ISO 8601 format
         dt: Final = datetime.fromtimestamp(record.created)
         return dt.isoformat()
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord):
         message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
         json_record: Final[dict[str, object]] = {
             "message": message_str,
@@ -902,7 +962,7 @@ class CorrelationPlainFormatter(logging.Formatter):
 
 
 # Function to set up exception handlers for JSON logging
-def _setup_json_exception_handlers(formatter):
+def _setup_json_exception_handlers(formatter: Formatter):
     # Create a handler with JSON formatting for exceptions
     error_handler: Final = logging.StreamHandler()
     error_handler.setFormatter(formatter)
@@ -911,7 +971,7 @@ def _setup_json_exception_handlers(formatter):
     error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
-    def json_excepthook(exc_type, exc_value, exc_traceback):
+    def json_excepthook(exc_type: type[BaseException], exc_value: BaseException, exc_traceback: TracebackType | None):
         record: Final = logging.LogRecord(
             name="LiteLLM",
             level=logging.ERROR,
@@ -929,7 +989,7 @@ def _setup_json_exception_handlers(formatter):
     try:
         import asyncio
 
-        def async_json_exception_handler(loop, context):
+        def async_json_exception_handler(loop: asyncio.AbstractEventLoop, context):
             exception: Final = context.get("exception")
             if exception:
                 exc_type: Final = type(exception)

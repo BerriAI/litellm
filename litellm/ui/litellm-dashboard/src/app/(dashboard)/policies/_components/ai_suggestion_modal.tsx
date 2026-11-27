@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { SearchSelect } from "@/components/shared/SearchSelect";
+import { modelPrompts } from "@/i18n/untranslated/modelText";
 import { CheckCircle2, ChevronDown, ChevronRight, Info, XCircle } from "lucide-react";
 import {
   suggestPolicyTemplates,
@@ -81,7 +82,6 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
   const [testInputText, setTestInputText] = useState("");
   const [isTestLoading, setIsTestLoading] = useState(false);
   const [testResults, setTestResults] = useState<GuardrailTestResult[] | null>(null);
-  const [testOverallAction, setTestOverallAction] = useState<string | null>(null);
   const [collapsedResults, setCollapsedResults] = useState<Set<string>>(new Set());
   // Enrichment state for competitor templates
   const [enrichedDefs, setEnrichedDefs] = useState<Record<string, any[]>>({});
@@ -124,7 +124,6 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     setTestInputText("");
     setIsTestLoading(false);
     setTestResults(null);
-    setTestOverallAction(null);
     setCollapsedResults(new Set());
     setEnrichedDefs({});
     setEnrichedCompetitors({});
@@ -180,7 +179,6 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     setShowTestPanel(false);
     setTestInputText("");
     setTestResults(null);
-    setTestOverallAction(null);
     setCollapsedResults(new Set());
   };
 
@@ -368,16 +366,13 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
 
     setIsTestLoading(true);
     setTestResults(null);
-    setTestOverallAction(null);
     setCollapsedResults(new Set());
 
     try {
       const result = await testPolicyTemplate(accessToken, allDefs, testInputText);
       setTestResults(result.results || []);
-      setTestOverallAction(result.overall_action || "passed");
     } catch {
       setTestResults([]);
-      setTestOverallAction("error");
     } finally {
       setIsTestLoading(false);
     }
@@ -537,7 +532,6 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
               onClick={() => {
                 setShowTestPanel(false);
                 setTestResults(null);
-                setTestOverallAction(null);
               }}
               className="text-muted-foreground hover:text-foreground"
             >
@@ -900,15 +894,9 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                       className="w-full rounded-lg border border-border px-3.5 py-2.5 pr-9 text-sm text-foreground placeholder:text-muted-foreground focus:border-info focus:ring-1 focus:ring-ring overflow-hidden"
                       rows={1}
                       style={{ minHeight: "40px", resize: "none" }}
-                      placeholder={
-                        index === 0
-                          ? t("policies.aiSuggestionModal.input.examplePlaceholders.promptInjection")
-                          : index === 1
-                            ? t("policies.aiSuggestionModal.input.examplePlaceholders.personalData")
-                            : index === 2
-                              ? t("policies.aiSuggestionModal.input.examplePlaceholders.offTopic")
-                              : t("policies.aiSuggestionModal.input.examplePlaceholders.sqlInjection")
-                      }
+                      placeholder={t("policies.aiSuggestionModal.input.examplePlaceholder", {
+                        example: modelPrompts.policyExamples[index] ?? modelPrompts.policyExamples[3],
+                      })}
                       value={example}
                       onChange={(e) => {
                         handleExampleChange(index, e.target.value);

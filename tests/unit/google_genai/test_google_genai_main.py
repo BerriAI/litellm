@@ -1596,3 +1596,21 @@ async def test_ai_studio_generate_content_keeps_the_callers_labels_with_the_sett
     )
 
     assert body["labels"] == _FORGED
+
+
+def test_generate_content_with_a_call_id_that_is_not_a_string_still_returns_the_response() -> None:
+    from unittest.mock import patch
+
+    from litellm.google_genai.main import generate_content
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    with patch.object(HTTPHandler, "post", return_value=_mock_gemini_post_response()):
+        response: Final = generate_content(
+            model="gemini/gemini-2.0-flash",
+            contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
+            custom_llm_provider="gemini",
+            api_key="test-key",
+            litellm_call_id=123,
+        )
+
+    assert response.candidates[0]["content"]["parts"][0]["text"] == "hi"

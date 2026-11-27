@@ -1,18 +1,24 @@
 mod keys;
+mod local;
 mod types;
 
 use std::{sync::Arc, time::Duration};
 
+use self::local::LocalValue;
 use litellm_python_compat::{Value, json};
 use litellm_redis_client::{Declared, RedisBatch, commands};
 use parking_lot::Mutex;
 
 pub use self::keys::AuthObject;
+pub use self::local::TeamRoster;
 pub use self::types::{
-    Bag, CachedKey, CachedMember, CachedObjectPermission, Lists, MemberRole, Settings,
+    Bag, BudgetEntry, BudgetFullEntry, BudgetLimitEntry, Dict, EndUserEntry, ExcludedIfNone, Ints,
+    KeyEntry, Lists, MemberEntry, MemberRole, ModelAliases, ModelRegion, ModelTableEntry,
+    ObjectPermissionEntry, OrganizationEntry, OrganizationMembershipEntry, ProjectEntry, Settings,
+    TeamEntry, TeamMembershipEntry, UserEntry,
 };
 use crate::{
-    Error, Number, Pending, RequestRedis, Send, codec,
+    Error, IntoValue, Number, Pending, RequestRedis, Send, codec,
     dual_cache::DualCache,
     failure_log::redis_failure,
     memory::{Clock, system_clock},
@@ -41,8 +47,8 @@ const GENERATION_TTL: Duration = Duration::from_secs(600);
 /// an eviction carries a wire key and drops it from both. Values are what `json.loads` returns,
 /// written as `json.dumps`, like `RedisCache.async_set_cache`.
 pub struct AuthCache {
-    key_objects: DualCache<Value>,
-    objects: DualCache<Value>,
+    key_objects: DualCache<LocalValue>,
+    objects: DualCache<LocalValue>,
     redis: Arc<RemoteSlot>,
     settings: Mutex<Settings>,
 }
@@ -85,15 +91,88 @@ impl AuthCache {
     }
 
     pub fn get_local(&self, object: &AuthObject) -> Result<Option<Value>, Error> {
-        Ok(self.partition(object).memory().get(&object.key())?)
+        Ok(self
+            .partition(object)
+            .memory()
+            .get(&object.key())?
+            .map(IntoValue::into_value))
+    }
+
+    pub fn local_team_fields(
+        &self,
+        object: &AuthObject,
+        fields: Option<&[String]>,
+        user_id: Option<&str>,
+    ) -> Result<Option<Value>, Error> {
+        if !matches!(object, AuthObject::Team(_)) {
+            return Ok(None);
+        }
+        Ok(self
+            .objects
+            .memory()
+            .get(&object.key())?
+            .map(|row| row.team_fields(fields, user_id)))
+    }
+
+    /// Compact fields and the corresponding indexed roster from one cache entry.
+    pub async fn team_snapshot(
+        &self,
+        request: Option<&RequestRedis>,
+        object: &AuthObject,
+    ) -> Result<Option<(Value, Option<TeamRoster>)>, Error> {
+        if !matches!(object, AuthObject::Team(_) | AuthObject::TeamAlias(_)) {
+            return Ok(None);
+        }
+        Ok(self
+            .objects
+            .get(request, &object.key(), None)
+            .await?
+            .map(|row| {
+                let roster = row.team_roster();
+                (row.team_fields(None, None), roster)
+            }))
+    }
+
+    /// The compact team snapshot, optionally restricted to named scalar fields or one roster member.
+    pub async fn team_fields(
+        &self,
+        request: Option<&RequestRedis>,
+        object: &AuthObject,
+        fields: Option<&[String]>,
+        user_id: Option<&str>,
+    ) -> Result<Option<Value>, Error> {
+        if !matches!(object, AuthObject::Team(_)) {
+            return Ok(None);
+        }
+        Ok(self
+            .objects
+            .get(request, &object.key(), None)
+            .await?
+            .map(|row| row.team_fields(fields, user_id)))
+    }
+
+    /// A local-only scalar update which neither inserts an entry nor resets its deadline.
+    pub fn add_local_team_spend(&self, object: &AuthObject, delta: f64) -> Result<bool, Error> {
+        if !matches!(object, AuthObject::Team(_)) {
+            return Ok(false);
+        }
+        Ok(self
+            .objects
+            .memory()
+            .get(&object.key())?
+            .is_some_and(|row| row.add_team_spend(delta)))
     }
 
     /// This pod's copy under a wire key, whichever partition holds it. For a caller that knows only
     /// the key, as a Python pre-call hook does.
     pub fn get_local_by_key(&self, key: &str) -> Result<Option<Value>, Error> {
         match self.objects.memory().get(key)? {
-            Some(value) => Ok(Some(value)),
-            None => Ok(self.key_objects.memory().get(key)?),
+            Some(value) => Ok(Some(value.into_value())),
+            None => Ok(self
+                .key_objects
+                .memory()
+                .get(key)?
+                .map(IntoValue::into_value)),
         }
     }
 
@@ -107,7 +186,7 @@ impl AuthCache {
         let partition = self.partition(object);
         Ok(partition.memory().set(
             &object.key(),
-            value,
+            value.into(),
             ttl.or(partition.default_in_memory_ttl()),
         )?)
     }
@@ -138,9 +217,11 @@ impl AuthCache {
         request: Option<&RequestRedis>,
         object: &AuthObject,
     ) -> Result<Option<Value>, Error> {
-        self.partition(object)
+        Ok(self
+            .partition(object)
             .get(request, &object.key(), None)
-            .await
+            .await?
+            .map(IntoValue::into_value))
     }
 
     /// `DualCache.async_set_cache`, writing `json.dumps(value)`. `request` reads the key again
@@ -153,7 +234,9 @@ impl AuthCache {
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
         self.forget_misses(request, [object]);
-        self.partition(object).set(&object.key(), value, ttl).await
+        self.partition(object)
+            .set(&object.key(), value.into(), ttl)
+            .await
     }
 
     /// `DualCache.set_cache`, whose `RedisCache.set_cache` writes `str(value)`. `request` reads the
@@ -167,7 +250,7 @@ impl AuthCache {
     ) -> Result<(), Error> {
         self.forget_misses(request, [object]);
         self.partition(object)
-            .set_str(&object.key(), value, ttl)
+            .set_str(&object.key(), value.into(), ttl)
             .await
     }
 
@@ -180,7 +263,7 @@ impl AuthCache {
         ttl: Option<Duration>,
     ) -> Result<Pending<()>, Error> {
         self.partition(object)
-            .declare_set(send, &object.key(), value, ttl)
+            .declare_set(send, &object.key(), value.into(), ttl)
     }
 
     /// `DualCache.async_delete_cache_pre_call` of a wire key: both partitions now and the `DEL` on
@@ -281,10 +364,10 @@ impl AuthCache {
         let (key_objects, others): (Vec<_>, Vec<_>) = entries
             .into_iter()
             .partition(|(object, _)| object.is_key_object());
-        let keyed = |entries: Vec<(AuthObject, Value)>| -> Vec<(String, Value)> {
+        let keyed = |entries: Vec<(AuthObject, Value)>| -> Vec<(String, LocalValue)> {
             entries
                 .into_iter()
-                .map(|(object, value)| (object.key(), value))
+                .map(|(object, value)| (object.key(), value.into()))
                 .collect()
         };
         self.key_objects
@@ -445,7 +528,7 @@ impl AuthCache {
             .for_each(|object| misses.forget(&object.key()));
     }
 
-    fn partition(&self, object: &AuthObject) -> &DualCache<Value> {
+    fn partition(&self, object: &AuthObject) -> &DualCache<LocalValue> {
         if object.is_key_object() {
             &self.key_objects
         } else {

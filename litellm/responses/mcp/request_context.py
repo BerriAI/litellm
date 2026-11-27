@@ -17,8 +17,39 @@ from typing import TYPE_CHECKING, Any, Final
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
+
 if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+async def resolve_inference_mcp_auth(raw_auth: object) -> "UserAPIKeyAuth | None":
+    if raw_auth is None:
+        return None
+    from litellm.proxy.mcp_server.ui_session_utils import acting_user_auth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    auth: Final = require_attributes(raw_auth, UserAPIKeyAuth, "dashboard_model_access_auth")
+    session: Final = auth.dashboard_model_access_auth()
+    if session.mcp_explicit_grants_only or any(
+        scope is not None
+        for scope in (
+            session.object_permission,
+            session.object_permission_id,
+            session.mcp_toolset_id,
+            session.mcp_session_resource_server_ids,
+        )
+    ):
+        return auth
+    acting: Final = await acting_user_auth(session)
+    if acting is session:
+        return acting
+    return acting.model_copy(
+        update={
+            "end_user_id": session.end_user_id,
+            "mcp_authorization_is_admission_credential": bool(session.api_key),
+        }
+    )
 
 
 class _AuthCarryingMetadata(TypedDict):
@@ -46,6 +77,7 @@ class MCPRequestContext:
         cls,
         kwargs: Mapping[str, Any],
         tools: Iterable[object] | None,
+        mcp_auth: "UserAPIKeyAuth | None" = None,
     ) -> "MCPRequestContext":
         """
         Build the context from a gateway handler's kwargs.
@@ -59,13 +91,7 @@ class MCPRequestContext:
         )
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
-        litellm_metadata: Final[_AuthCarryingMetadata] = kwargs.get("litellm_metadata") or {}
-        metadata: Final[_AuthCarryingMetadata] = kwargs.get("metadata") or {}
-        user_api_key_auth: Final[UserAPIKeyAuth | None] = (
-            kwargs.get("user_api_key_auth")
-            or litellm_metadata.get("user_api_key_auth")
-            or metadata.get("user_api_key_auth")
-        )
+        user_api_key_auth: Final = cls.caller_auth(kwargs)
 
         (
             mcp_auth_header,
@@ -75,6 +101,7 @@ class MCPRequestContext:
         ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
             secret_fields=kwargs.get("secret_fields"),
             tools=tools,
+            mcp_auth=mcp_auth,
         )
 
         return cls(
@@ -87,6 +114,16 @@ class MCPRequestContext:
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             litellm_call_id=kwargs.get("litellm_call_id"),
             guardrail_context=cls.resolve_guardrail_context(kwargs),
+        )
+
+    @staticmethod
+    def caller_auth(kwargs: Mapping[str, Any]) -> "UserAPIKeyAuth | None":
+        litellm_metadata: Final[_AuthCarryingMetadata] = kwargs.get("litellm_metadata") or {}
+        metadata: Final[_AuthCarryingMetadata] = kwargs.get("metadata") or {}
+        return (
+            kwargs.get("user_api_key_auth")
+            or litellm_metadata.get("user_api_key_auth")
+            or metadata.get("user_api_key_auth")
         )
 
     @staticmethod

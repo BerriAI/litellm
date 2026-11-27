@@ -1,4 +1,4 @@
-import type { ParseKeys } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 
 export const ERROR_CODE_OPTIONS: { labelKey: ParseKeys; value: string }[] = [
   { labelKey: "logs.common.errorCodes.badRequest", value: "400" },
@@ -23,12 +23,12 @@ export const AGENT_CALL_TYPES = ["asend_message"];
 /** Call types that represent Batch API operations (creation and retrieval, sync and async). */
 export const BATCH_CALL_TYPES = ["acreate_batch", "create_batch", "aretrieve_batch", "retrieve_batch"];
 
-export const SPAN_TYPE_LABELS: Record<string, ParseKeys> = {
-  llm: "logs.common.spanTypes.llm",
-  agent: "logs.common.spanTypes.agent",
-  mcp: "logs.common.spanTypes.mcp",
-  batch: "logs.common.spanTypes.batch",
-};
+export const requestSpanTypeItems = (t: TFunction) => [
+  { value: "llm", label: "LLM" },
+  { value: "agent", label: t("logs.common.spanTypes.agent") },
+  { value: "mcp", label: "MCP" },
+  { value: "batch", label: t("logs.common.spanTypes.batch") },
+];
 
 export const CREDENTIAL_LABELS: Record<string, ParseKeys> = {
   true: "logs.common.credentials.clientOauthToken",

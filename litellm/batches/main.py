@@ -23,7 +23,8 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import float_of, require_attributes
+from litellm.litellm_core_utils.call_kwargs import logging_obj_of, optional_str
+from litellm.litellm_core_utils.core_helpers import callable_of, float_of, require_attributes, str_param
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
@@ -44,6 +45,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
     OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
+    CallTypes,
     ListBatchesSupportedProvider,
     LiteLLMBatch,
     LlmProviders,
@@ -53,6 +55,7 @@ from litellm.utils import (
     client,
     get_litellm_params,
     get_llm_provider,
+    load_credentials_from_list,
     supports_httpx_timeout,
 )
 
@@ -198,7 +201,7 @@ def create_batch(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     output_expires_after: FileExpiresAfter | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Creates and executes a batch from an uploaded file of request
@@ -210,7 +213,7 @@ def create_batch(
         litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         proxy_server_request: Final = kwargs.get("proxy_server_request", None)
         model_info: Final = kwargs.get("model_info", None)
-        model: str | None = kwargs.get("model", None)
+        model: str | None = str_param(kwargs, "model")
         try:
             if model is not None:
                 model, _, _, _ = get_llm_provider(
@@ -329,9 +332,9 @@ def create_batch(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
+            stored_extra_body: Final = optional_params.get("extra_body", {})
+            if stored_extra_body is not None:
+                require_attributes(stored_extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
             else:
                 get_secret_str("AZURE_AD_TOKEN")
 
@@ -364,7 +367,7 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
-                custom_endpoint=optional_params.get("custom_endpoint"),
+                custom_endpoint=bool(optional_params.get("custom_endpoint")),
                 litellm_params=litellm_params,
             )
         else:
@@ -576,7 +579,7 @@ def retrieve_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Retrieves a batch.
@@ -585,10 +588,11 @@ def retrieve_batch(
     """
     try:
         optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
-        litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
+        raw_logging_obj: Final = kwargs.get("litellm_logging_obj", None)
+        litellm_logging_obj: Final = None if raw_logging_obj is None else logging_obj_of(raw_logging_obj)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
-        litellm_params: Final = get_litellm_params(
+        litellm_params: Final[dict[str, object]] = get_litellm_params(  # mutable-ok: update_from_kwargs pops from it
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
@@ -610,7 +614,7 @@ def retrieve_batch(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)
+            timeout = float_of(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -638,7 +642,7 @@ def retrieve_batch(
 
                 return BedrockBatchesHandler.handle_async_invoke_status(
                     batch_id=batch_id,
-                    aws_region_name=kwargs.get("aws_region_name", "us-east-1"),
+                    aws_region_name=str_param(kwargs, "aws_region_name") or "us-east-1",
                     logging_obj=litellm_logging_obj,
                     **async_kwargs,
                 )
@@ -648,13 +652,13 @@ def retrieve_batch(
 
                 return BedrockBatchesHandler.handle_model_invocation_job_status(
                     batch_id=batch_id,
-                    aws_region_name=kwargs.get("aws_region_name"),
+                    aws_region_name=str_param(kwargs, "aws_region_name"),
                     logging_obj=litellm_logging_obj,
                     **mij_kwargs,
                 )
 
         # Try to use provider config first (for providers like bedrock)
-        model: Final[str | None] = kwargs.get("model", None)
+        model: Final = str_param(kwargs, "model")
         if model is not None:
             provider_config = ProviderConfigManager.get_provider_batches_config(
                 model=model,
@@ -756,7 +760,7 @@ def list_batches(
     custom_llm_provider: ListBatchesSupportedProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Lists batches
@@ -788,7 +792,7 @@ def list_batches(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)
+            timeout = float_of(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -841,9 +845,9 @@ def list_batches(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
+            stored_extra_body: Final = optional_params.get("extra_body", {})
+            if stored_extra_body is not None:
+                require_attributes(stored_extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
             else:
                 get_secret_str("AZURE_AD_TOKEN")
 
@@ -903,7 +907,7 @@ async def acancel_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMBatch:
     """
     Async: Cancels a batch.
@@ -915,7 +919,7 @@ async def acancel_batch(
         kwargs["acancel_batch"] = True
         # Preserve model parameter - only pop from kwargs if it exists there
         # (to avoid passing it twice), otherwise keep the function parameter value
-        model = kwargs.pop("model", None) or model
+        model = optional_str(kwargs.pop("model", None)) or model
 
         # Use a partial function to pass your keyword arguments
         func: Final = partial(
@@ -949,7 +953,7 @@ def cancel_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Cancels a batch.
@@ -957,6 +961,7 @@ def cancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
+        load_credentials_from_list(kwargs, CallTypes.cancel_batch.value)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped
         try:
             if model is not None:
                 _, custom_llm_provider, _, _ = get_llm_provider(
@@ -984,7 +989,7 @@ def cancel_batch(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)
+            timeout = float_of(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -1039,9 +1044,9 @@ def cancel_batch(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            extra_body = optional_params.get("extra_body", {})
-            if extra_body is not None:
-                extra_body.pop("azure_ad_token", None)
+            stored_extra_body: Final = optional_params.get("extra_body", {})
+            if stored_extra_body is not None:
+                require_attributes(stored_extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
             else:
                 get_secret_str("AZURE_AD_TOKEN")
 
@@ -1076,9 +1081,10 @@ def cancel_batch(
                 max_retries=optional_params.max_retries,
             )
         elif custom_llm_provider == "bedrock":
-            response = BedrockBatchesHandler.cancel_batch(
-                batch_id=batch_id,
-                **kwargs,
+            response = require_attributes(
+                callable_of(BedrockBatchesHandler.cancel_batch)(batch_id=batch_id, **kwargs),
+                LiteLLMBatch,
+                "id",
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -1096,7 +1102,9 @@ def cancel_batch(
         raise e
 
 
-def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+def _handle_async_invoke_status(
+    batch_id: str, aws_region_name: str, logging_obj: LiteLLMLoggingObj | None = None, **kwargs: object
+) -> "LiteLLMBatch":
     """
     Handle async invoke status check for AWS Bedrock.
 

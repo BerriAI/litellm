@@ -24,11 +24,11 @@ pub fn resolve_retry_policy<'a>(
 }
 
 impl RetryPolicy {
-    /// `get_num_retries_from_retry_policy`: `DefaultRetries` for an `UnsupportedEndpointError`;
-    /// else `NotFoundErrorRetries` for any 404 answer, then the most specific exception class
-    /// the policy names, then `DefaultRetries`.
+    /// `get_num_retries_from_retry_policy`: `DefaultRetries` for an `UnsupportedEndpointError` or a
+    /// `DocumentFetchError`; else `NotFoundErrorRetries` for any 404 answer, then the most specific
+    /// exception class the policy names, then `DefaultRetries`.
     pub fn retries_for(&self, failure: &AttemptError) -> Option<u32> {
-        if failure.is_a("UnsupportedEndpointError") {
+        if failure.is_retried_refusal() {
             return self.DefaultRetries;
         }
         let not_found = (failure.status == Some(404))
@@ -63,8 +63,10 @@ impl RetryPolicy {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RetryContext {
     pub healthy: usize,
+    pub untried: usize,
     pub all: usize,
-    /// `context_window_fallbacks is not None`.
+    /// A `context_window_fallbacks` chain matches the failed group
+    /// (`context_window_fallback_model_group`).
     pub has_context_window_fallbacks: bool,
     /// `content_policy_fallbacks is not None`.
     pub has_content_policy_fallbacks: bool,
@@ -74,8 +76,8 @@ pub struct RetryContext {
 
 /// `should_retry_this_error`, as a predicate: `false` where Python raises the error.
 pub fn should_retry(failure: &AttemptError, ctx: RetryContext) -> bool {
-    if failure.is_a("ContextWindowExceededError") && ctx.has_context_window_fallbacks {
-        return false;
+    if failure.is_a("ContextWindowExceededError") {
+        return !ctx.has_context_window_fallbacks && ctx.untried > 0;
     }
     if failure.is_a("ContentPolicyViolationError") && ctx.has_content_policy_fallbacks {
         return false;
@@ -83,7 +85,7 @@ pub fn should_retry(failure: &AttemptError, ctx: RetryContext) -> bool {
     if let Some(status) = failure.status
         && !should_retry_status(status)
         && !matches!(status, 401 | 403)
-        && !failure.is_a("UnsupportedEndpointError")
+        && !failure.is_retried_refusal()
     {
         return false;
     }
@@ -187,7 +189,7 @@ pub(crate) fn retry_step(state: RetryState<'_>) -> RetryStep {
 }
 
 /// `ContentPolicyViolationError`'s classes, most specific first.
-pub(crate) fn content_policy_classes() -> Vec<std::sync::Arc<str>> {
+pub(crate) fn content_policy_classes() -> Box<[std::sync::Arc<str>]> {
     [
         "ContentPolicyViolationError",
         "BadRequestError",
@@ -252,6 +254,10 @@ mod tests {
         failure(FailureKind::Declined, Some(400), &["UnsupportedEndpointError", "BadRequestError"]),
         Some(7)
     )]
+    #[case::document_fetch(
+        failure(FailureKind::Declined, Some(400), &["DocumentFetchError", "BadRequestError"]),
+        Some(7)
+    )]
     #[case::malformed_reads_bad_request(
         failure(FailureKind::Declined, Some(400), &["MalformedRequestFieldError", "BadRequestError"]),
         Some(3)
@@ -293,10 +299,19 @@ mod tests {
         AttemptError::new(FailureKind::BadRequest, Some(400))
     }
 
+    fn document_fetch() -> AttemptError {
+        failure(
+            FailureKind::Declined,
+            Some(400),
+            &["DocumentFetchError", "BadRequestError"],
+        )
+    }
+
     #[rstest]
     #[case::a_retry_is_left(server_error(), 2, 1, false, Some(false))]
     #[case::the_budget_is_spent(server_error(), 2, 2, false, Some(true))]
     #[case::the_budget_grants_none(server_error(), 0, 0, false, Some(true))]
+    #[case::an_unreachable_document_is_retried(document_fetch(), 2, 1, false, Some(false))]
     #[case::nothing_retries_the_failure(bad_request(), 2, 0, false, None)]
     #[case::a_spent_budget_still_raises_what_nothing_retries(bad_request(), 2, 2, false, None)]
     #[case::a_retry_policy_is_not_asked_whether_to_retry(bad_request(), 2, 0, true, Some(false))]
@@ -465,6 +480,7 @@ mod tests {
     ) {
         let ctx = RetryContext {
             healthy,
+            untried: healthy,
             all,
             has_regular_fallbacks,
             ..RetryContext::default()
@@ -473,5 +489,26 @@ mod tests {
             should_retry(&AttemptError::new(kind, status), ctx),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::a_sibling_has_not_refused(2, 1, false, true)]
+    #[case::every_healthy_deployment_refused(2, 0, false, false)]
+    #[case::context_window_fallbacks_take_over(2, 1, true, false)]
+    fn context_window_error_moves_to_a_deployment_that_has_not_refused(
+        #[case] healthy: usize,
+        #[case] untried: usize,
+        #[case] has_context_window_fallbacks: bool,
+        #[case] expected: bool,
+    ) {
+        let ctx = RetryContext {
+            healthy,
+            untried,
+            all: 2,
+            has_context_window_fallbacks,
+            ..RetryContext::default()
+        };
+        let failure = AttemptError::new(FailureKind::ContextWindowExceeded, Some(400));
+        assert_eq!(should_retry(&failure, ctx), expected);
     }
 }

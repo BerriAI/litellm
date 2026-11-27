@@ -1,4 +1,7 @@
-//! The fields of `datetime.fromtimestamp(seconds, timezone.utc)`, and `datetime.fromisoformat(text)`.
+//! The fields of `datetime.fromtimestamp(seconds, timezone.utc)`, `datetime.fromisoformat(text)`,
+//! and the milliseconds Python takes between two `datetime`s.
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// A UTC `datetime`'s fields, as Python's `datetime` exposes them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +29,19 @@ impl UtcDateTime {
             second: (of_day % 60) as u32,
             microsecond,
         }
+    }
+
+    /// `datetime.fromtimestamp(at, timezone.utc)` for a Rust clock reading, its nanoseconds cut
+    /// to whole microseconds.
+    pub fn from_system_time(at: SystemTime) -> Self {
+        let micros = match at.duration_since(UNIX_EPOCH) {
+            Ok(after) => i64::try_from(after.as_micros()).unwrap_or(i64::MAX),
+            Err(before) => i64::try_from(before.duration().as_micros()).map_or(i64::MIN, |m| -m),
+        };
+        Self::from_timestamp(
+            micros.div_euclid(1_000_000),
+            micros.rem_euclid(1_000_000) as u32,
+        )
     }
 }
 
@@ -76,13 +92,93 @@ fn days_in_month(year: i64, month: u32) -> u32 {
     }
 }
 
-/// What `datetime.fromisoformat(text)` returns, in microseconds since 1970-01-01.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A `datetime` as Python holds it, in microseconds since 1970-01-01: naive, or aware at its UTC
+/// offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IsoDateTime {
     /// A naive `datetime`, its fields read as UTC.
     Naive(i64),
-    /// An aware `datetime`, at its UTC instant.
-    Aware(i64),
+    /// An aware `datetime`: its UTC instant and its offset.
+    Aware { utc: i64, offset: i64 },
+}
+
+impl IsoDateTime {
+    /// An aware UTC `datetime`, as a database read hands it out.
+    pub fn utc(microseconds: i64) -> Self {
+        Self::Aware {
+            utc: microseconds,
+            offset: 0,
+        }
+    }
+
+    /// `datetime.fromtimestamp(seconds, timezone.utc)`, or `None` outside years 1 to 9999 where
+    /// it raises.
+    pub fn from_timestamp(seconds: f64) -> Option<Self> {
+        Self::from_epoch(seconds, 1_000_000)
+    }
+
+    /// A UTC `datetime` `milliseconds` after 1970-01-01, or `None` outside years 1 to 9999.
+    pub fn from_milliseconds(milliseconds: f64) -> Option<Self> {
+        Self::from_epoch(milliseconds, 1_000)
+    }
+
+    fn from_epoch(count: f64, microseconds_each: i64) -> Option<Self> {
+        const YEAR_1: i64 = -62_135_596_800_000_000;
+        const YEAR_10000: i64 = 253_402_300_800_000_000;
+        if !count.is_finite() {
+            return None;
+        }
+        let whole = count.floor();
+        let fraction = ((count - whole) * microseconds_each as f64).round() as i64;
+        let microseconds = (whole as i64)
+            .checked_mul(microseconds_each)?
+            .checked_add(fraction)?;
+        (YEAR_1..YEAR_10000)
+            .contains(&microseconds)
+            .then(|| Self::utc(microseconds))
+    }
+
+    /// The instant in microseconds since 1970-01-01, a naive `datetime` read as UTC.
+    pub fn utc_microseconds(self) -> i64 {
+        match self {
+            Self::Naive(local) => local,
+            Self::Aware { utc, .. } => utc,
+        }
+    }
+
+    /// What pydantic's JSON mode writes: `isoformat()` with a fraction only when there is one,
+    /// `Z` for a zero offset and none for a naive `datetime`.
+    pub fn isoformat(self) -> String {
+        let (local, offset) = match self {
+            Self::Naive(local) => (local, None),
+            Self::Aware { utc, offset } => (utc + offset, Some(offset)),
+        };
+        let at = UtcDateTime::from_timestamp(
+            local.div_euclid(1_000_000),
+            local.rem_euclid(1_000_000) as u32,
+        );
+        let fraction = match at.microsecond {
+            0 => String::new(),
+            microsecond => format!(".{microsecond:06}"),
+        };
+        let zone = match offset {
+            None => String::new(),
+            Some(0) => "Z".to_owned(),
+            Some(offset) => {
+                let sign = if offset < 0 { '-' } else { '+' };
+                let seconds = offset.abs() / 1_000_000;
+                let (hours, minutes, rest) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+                match rest {
+                    0 => format!("{sign}{hours:02}:{minutes:02}"),
+                    rest => format!("{sign}{hours:02}:{minutes:02}:{rest:02}"),
+                }
+            }
+        };
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{fraction}{zone}",
+            at.year, at.month, at.day, at.hour, at.minute, at.second
+        )
+    }
 }
 
 /// `datetime.fromisoformat(text)` as CPython 3.14's C parser reads it, or `None` where it
@@ -146,7 +242,10 @@ pub fn fromisoformat(text: &str) -> Option<IsoDateTime> {
     Some(match offset {
         None => IsoDateTime::Naive(local),
         Some(offset) if offset.abs() >= 86_400_000_000 => return None,
-        Some(offset) => IsoDateTime::Aware(local - offset),
+        Some(offset) => IsoDateTime::Aware {
+            utc: local - offset,
+            offset,
+        },
     })
 }
 
@@ -357,4 +456,43 @@ fn iso_week_date(year: i64, week: u32, weekday: u32) -> Option<(i64, u32, u32)> 
     Some(civil_from_days(
         week_one_monday + i64::from((week - 1) * 7 + weekday - 1),
     ))
+}
+
+/// `(end.timestamp() - start.timestamp()) * 1000` for `elapsed`, the time from `start` to `end`:
+/// its milliseconds, held to the microsecond a `datetime` keeps.
+pub fn milliseconds(elapsed: Duration) -> f64 {
+    let micros = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a call's duration in microseconds is far below 2^53"
+    )]
+    let micros = micros as f64;
+    micros / 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{number::round, repr::float_repr};
+
+    #[rstest]
+    #[case::whole_milliseconds(Duration::from_millis(1500), "1500.0")]
+    #[case::a_fraction(Duration::from_micros(1_250_500), "1250.5")]
+    #[case::nanoseconds_a_datetime_does_not_keep(Duration::from_nanos(1_250_500_999), "1250.5")]
+    fn a_duration_is_pythons_str_of_its_milliseconds(
+        #[case] elapsed: Duration,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(float_repr(milliseconds(elapsed)), expected);
+    }
+
+    #[rstest]
+    #[case::kept_to_four_places(12.345_678, "12.3457")]
+    #[case::whole(3.0, "3.0")]
+    #[case::none_spent(0.0, "0.0")]
+    fn a_rounded_duration_keeps_four_places(#[case] ms: f64, #[case] expected: &str) {
+        assert_eq!(float_repr(round(ms, 4)), expected);
+    }
 }

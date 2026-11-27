@@ -42,6 +42,7 @@ from litellm.integrations.datadog.datadog_mock_client import (
     create_mock_datadog_client,
     should_use_datadog_mock,
 )
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -69,7 +70,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
-class _DatadogLoggingKwargs(TypedDict, total=False):
+class _DatadogLoggingKwargs(TypedDict, total=False, extra_items=object):
     """The subset of logging ``kwargs`` that the Datadog payload builder reads."""
 
     standard_logging_object: ReadOnly[StandardLoggingPayload | None]
@@ -314,7 +315,7 @@ class DataDogLogger(
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         original_exception: Exception,
         user_api_key_dict: "UserAPIKeyAuth",
         traceback_str: str | None = None,
@@ -480,7 +481,9 @@ class DataDogLogger(
                 if not self.log_queue:
                     self.last_flush_time = time.time()
 
-    def log_success_event(self, kwargs, response_obj, start_time: datetime.datetime, end_time: datetime.datetime):
+    def log_success_event(
+        self, kwargs: _DatadogLoggingKwargs, response_obj, start_time: datetime.datetime, end_time: datetime.datetime
+    ):
         """
         Sync Log success events to Datadog
 
@@ -504,7 +507,7 @@ class DataDogLogger(
                 )
 
             # Build headers
-            headers: Final = {}
+            headers: Final[dict[str, str]] = {}  # mutable-ok: built here, sent as is
             # Add API key if available (required for direct API, optional for agent)
             if self.DD_API_KEY:
                 headers["DD-API-KEY"] = self.DD_API_KEY
@@ -712,7 +715,7 @@ class DataDogLogger(
 
     def _create_v0_logging_payload(
         self,
-        kwargs: dict,
+        kwargs: _DatadogLoggingKwargs,
         response_obj: _V0LoggedResponse,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
@@ -724,7 +727,7 @@ class DataDogLogger(
         (Not Recommended) If you want this to get logged set `litellm.datadog_use_v1 = True`
         """
 
-        litellm_params: Final = kwargs.get("litellm_params", {})
+        litellm_params: Final = require_get(kwargs.get("litellm_params", {}))
         metadata: Final = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
         messages: Final = kwargs.get("messages")
         optional_params: Final = kwargs.get("optional_params", {})
@@ -873,5 +876,5 @@ class DataDogLogger(
         request_id: str,
         start_time_utc: datetimeObj | None,
         end_time_utc: datetimeObj | None,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         pass

@@ -1,10 +1,14 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import i18next from "i18next";
+import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders as render, testQueryClient } from "@/../tests/test-utils";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
+import en from "@/i18n/locales/en.json";
+import zh from "@/i18n/locales/zh-CN.json";
 import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools, tagListCall } from "@/components/networking";
 import { setSecureItem } from "@/utils/secureStorage";
 import { fetchClient } from "@/lib/http/api";
@@ -124,6 +128,25 @@ describe("PlaygroundChat", () => {
     expect(model).toBe("gpt-fast");
     expect(apiKey).toBe("session-token");
     expect(guardrails).toEqual(["pii-mask"]);
+  });
+
+  it("sends the original starter prompt from a Chinese dashboard", async () => {
+    const i18n = i18next.createInstance();
+    await i18n.init({ lng: "zh-CN", resources: { en: { translation: en }, "zh-CN": { translation: zh } } });
+    const user = userEvent.setup();
+    chatRequest.mockImplementation(replyWith("Hi there"));
+    preload({ selectedModel: "gpt-fast" });
+    render(
+      <I18nextProvider i18n={i18n}>
+        <PlaygroundChat accessToken="session-token" disabledPersonalKeyCreation={false} proxySettings={undefined} />
+      </I18nextProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^(Write me a poem|给我写一首诗)$/ }));
+    await user.click(screen.getByRole("button", { name: "发送消息" }));
+
+    expect(await screen.findByText("Hi there")).toBeInTheDocument();
+    expect(sentMessages(0)).toEqual([{ role: "user", content: "Write me a poem" }]);
   });
 
   it("keeps answered turns in the history but never resends a failed one", async () => {
@@ -368,6 +391,105 @@ describe("PlaygroundChat", () => {
     expect(chatRequest).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
     expect(screen.queryByText("late reply")).not.toBeInTheDocument();
+  });
+
+  it("resends the answered turns once the session is lost and keeps sending them on later turns", async () => {
+    const user = userEvent.setup();
+    const resentHistories: unknown[] = [];
+    responsesRequest
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-first");
+        args[1]("assistant", "Hi Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        resentHistories.push(args[29]?.());
+        args[15]?.("resp-second");
+        args[1]("assistant", "You are Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[1]("assistant", "Still Ada", args[2]);
+      });
+    preload({ endpointType: "responses", selectedModel: "gpt-fast", useApiSessionManagement: "true" });
+    renderChat();
+
+    await send(user, "I am Ada");
+    expect(await screen.findByText("Hi Ada")).toBeInTheDocument();
+    await send(user, "Who am I?");
+    expect(await screen.findByText("You are Ada")).toBeInTheDocument();
+    await send(user, "And now?");
+
+    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(3));
+    const followUp = responsesRequest.mock.calls[1] as ResponsesArgs;
+    expect(followUp[14]).toBe("resp-first");
+    expect(followUp[0]).toEqual([{ role: "user", content: "Who am I?" }]);
+    expect(resentHistories).toEqual([
+      [
+        { role: "user", content: "I am Ada" },
+        { role: "assistant", content: "Hi Ada" },
+        { role: "user", content: "Who am I?" },
+      ],
+    ]);
+    const afterResend = responsesRequest.mock.calls[2] as ResponsesArgs;
+    expect(afterResend[14]).toBeNull();
+    expect(afterResend[0]).toEqual([
+      { role: "user", content: "I am Ada" },
+      { role: "assistant", content: "Hi Ada" },
+      { role: "user", content: "Who am I?" },
+      { role: "assistant", content: "You are Ada" },
+      { role: "user", content: "And now?" },
+    ]);
+  });
+
+  it("starts a fresh session on the model picked after a resend and continues it by response id", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchAvailableModels).mockResolvedValue([
+      { model_group: "gpt-fast", mode: "chat", providers: ["openai"] },
+      { model_group: "gpt-chained", mode: "chat", providers: ["openai"] },
+    ]);
+    responsesRequest
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-first");
+        args[1]("assistant", "Hi Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[29]?.();
+        args[15]?.("resp-resent");
+        args[1]("assistant", "You are Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-switched");
+        args[1]("assistant", "Ada again", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[1]("assistant", "Still Ada", args[2]);
+      });
+    preload({ endpointType: "responses", selectedModel: "gpt-fast", useApiSessionManagement: "true" });
+    renderChat();
+
+    await send(user, "I am Ada");
+    expect(await screen.findByText("Hi Ada")).toBeInTheDocument();
+    await send(user, "Who am I?");
+    expect(await screen.findByText("You are Ada")).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Model" }));
+    await user.click(await screen.findByRole("option", { name: "gpt-chained" }));
+    await send(user, "Again?");
+    expect(await screen.findByText("Ada again")).toBeInTheDocument();
+    await send(user, "And now?");
+
+    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(4));
+    const switched = responsesRequest.mock.calls[2] as ResponsesArgs;
+    expect(switched[2]).toBe("gpt-chained");
+    expect(switched[14]).toBeNull();
+    expect(switched[0]).toEqual([
+      { role: "user", content: "I am Ada" },
+      { role: "assistant", content: "Hi Ada" },
+      { role: "user", content: "Who am I?" },
+      { role: "assistant", content: "You are Ada" },
+      { role: "user", content: "Again?" },
+    ]);
+    const continued = responsesRequest.mock.calls[3] as ResponsesArgs;
+    expect(continued[14]).toBe("resp-switched");
+    expect(continued[0]).toEqual([{ role: "user", content: "And now?" }]);
   });
 
   it("keeps a stopped request's response id out of the next request", async () => {

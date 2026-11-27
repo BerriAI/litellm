@@ -81,6 +81,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
                     {name: value for name, value in request_data.items() if name in COUNT_TOKEN_OPTION_NAMES}
                 ),
                 context_management=request.get("context_management"),
+                custom_llm_provider="bedrock_mantle",
             )
             betas: Final = (
                 *context_management_betas(request.get("context_management")),
@@ -88,6 +89,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
             )
             verbose_logger.debug("Making bedrock-mantle count_tokens request to: %s", endpoint_url)
             api_key: Final = litellm_params.get("api_key")
+            signed_headers: dict[str, object]  # mutable-ok: the callee's own dict
             signed_headers, signed_body = await run_aws_signing(
                 self._sign_request,
                 service_name="bedrock",

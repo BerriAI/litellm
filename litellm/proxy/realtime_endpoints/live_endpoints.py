@@ -10,10 +10,12 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi import status as http_status
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, json_loaded
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # untyped dict params
+    header_value,
 )
 from litellm.llms.openai.live.handler import LiveAttach, LiveUpstream
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -35,6 +37,7 @@ _LIVE_SESSION_TOKEN_VERSION: Final = "live_v1"
 _LIVE_SESSION_TOKEN_TTL_SECONDS: Final = 24 * 60 * 60
 _LIVE_SESSIONS_PATH: Final = "/v1/live/sessions"
 _HTTP_SCHEMES: Final[Mapping[str, str]] = {"wss": "https", "ws": "http"}
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +71,7 @@ def _attachable_session(session_token: str, user_api_key_dict: UserAPIKeyAuth) -
     if decrypted is None:
         return None
     try:
-        payload: Final = as_str_mapping(json.loads(decrypted))
+        payload: Final = as_str_mapping(json_loaded(decrypted))
     except ValueError:
         return None
     if payload is None or payload.get("v") != _LIVE_SESSION_TOKEN_VERSION:
@@ -120,7 +123,7 @@ async def _start_live_billing_sideband(session: _LiveSession, user_api_key_dict:
 async def _requested_session(request: Request) -> tuple[Mapping[str, object], Mapping[str, object], str] | None:
     """The request body, its session, and the model the session asks for."""
     try:
-        body: Final = as_str_mapping(await request.json())
+        body: Final = as_str_mapping(_DECODED_JSON.validate_python(await request.json()))
     except ValueError:
         return None
     session: Final = None if body is None else as_str_mapping(body.get("session"))
@@ -133,7 +136,7 @@ async def _requested_session(request: Request) -> tuple[Mapping[str, object], Ma
 def _created_session(response: httpx.Response) -> tuple[Mapping[str, object], Mapping[str, object], str] | None:
     """The provider's answer, its session, and the session id, or None when the answer names no session."""
     try:
-        created: Final = as_str_mapping(response.json())
+        created: Final = as_str_mapping(_DECODED_JSON.validate_python(response.json()))
     except ValueError:
         return None
     session: Final = None if created is None else as_str_mapping(created.get("session"))
@@ -228,10 +231,11 @@ async def create_live_session(
     )
     created_parts: Final = _created_session(upstream_response) if upstream_response.is_success else None
     if created_parts is None:
+        upstream_content_type: Final = header_value(upstream_response.headers, "content-type")
         return Response(
             content=upstream_response.content,
             status_code=upstream_response.status_code,
-            media_type=upstream_response.headers.get("content-type", "application/json"),
+            media_type="application/json" if upstream_content_type is None else upstream_content_type,
         )
     created, created_session, upstream_session_id = created_parts
     model_info: Final = None if deployment is None else as_str_mapping(deployment.get("model_info"))

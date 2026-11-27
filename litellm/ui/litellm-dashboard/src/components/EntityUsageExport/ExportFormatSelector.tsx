@@ -1,32 +1,31 @@
-import type { ParseKeys } from "i18next";
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { ExportFormat } from "./types";
+import type { UsageExportFormat } from "./types";
 
-interface ExportFormatSelectorProps {
-  value: ExportFormat;
-  onChange: (value: ExportFormat) => void;
+interface UsageExportFormatSelectorProps {
+  value: UsageExportFormat;
+  onChange: (value: UsageExportFormat) => void;
 }
 
-const FORMAT_LABELS: Record<ExportFormat, ParseKeys> = {
-  csv: "usage.export.format.csv",
-  json: "usage.export.format.json",
-};
-
-const ExportFormatSelector: React.FC<ExportFormatSelectorProps> = ({ value, onChange }) => {
+const UsageExportFormatSelector: React.FC<UsageExportFormatSelectorProps> = ({ value, onChange }) => {
   const { t } = useTranslation();
+  const labels: Record<UsageExportFormat, string> = {
+    csv: "CSV (Excel, Google Sheets)",
+    json: t("usage.export.format.json"),
+    pdf: t("usage.export.format.pdf"),
+  };
   return (
     <div>
       <label className="text-sm font-medium text-foreground block mb-2">{t("usage.export.format.label")}</label>
-      <Select value={value} onValueChange={(next: ExportFormat | null) => next && onChange(next)}>
+      <Select value={value} onValueChange={(next: UsageExportFormat | null) => next && onChange(next)}>
         <SelectTrigger className="w-full">
-          <SelectValue>{t(FORMAT_LABELS[value])}</SelectValue>
+          <SelectValue>{labels[value]}</SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {(Object.keys(FORMAT_LABELS) as ExportFormat[]).map((format) => (
+          {(Object.keys(labels) as UsageExportFormat[]).map((format) => (
             <SelectItem key={format} value={format}>
-              {t(FORMAT_LABELS[format])}
+              {labels[format]}
             </SelectItem>
           ))}
         </SelectContent>
@@ -35,4 +34,4 @@ const ExportFormatSelector: React.FC<ExportFormatSelectorProps> = ({ value, onCh
   );
 };
 
-export default ExportFormatSelector;
+export default UsageExportFormatSelector;

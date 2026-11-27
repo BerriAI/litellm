@@ -88,6 +88,38 @@ const responseAsEvents = (response: NonStreamedResponse): SynthesizedResponseEve
   ];
 };
 
+const responsesInput = (messages: ResponsesMessage[]) =>
+  messages.flatMap((message) => {
+    const mcpInput =
+      message.role === "assistant"
+        ? (message.mcpEvents ?? []).flatMap<ResponseFunctionToolCall | ResponseInputItem.FunctionCallOutput>(
+            (event) => {
+              const item = event.item;
+              const callId = item?.id || event.item_id;
+              if (event.type !== "response.output_item.done" || item?.type !== "mcp_call" || !callId) {
+                return [];
+              }
+              if (!item.name || typeof item.arguments !== "string" || typeof item.output !== "string") {
+                return [];
+              }
+              return [
+                { type: "function_call", call_id: callId, name: item.name, arguments: item.arguments },
+                { type: "function_call_output", call_id: callId, output: item.output },
+              ];
+            },
+          )
+        : [];
+    return [
+      ...mcpInput,
+      ...(mcpInput.length > 0 && message.content === ""
+        ? []
+        : [{ role: message.role, content: message.content, type: "message" }]),
+    ];
+  });
+
+const isUnresolvedPreviousResponse = (error: unknown): boolean =>
+  error instanceof openai.APIError && error.status === 400 && error.param === "previous_response_id";
+
 export async function makeOpenAIResponsesRequest(
   messages: ResponsesMessage[],
   updateTextUI: (role: string, delta: string, model?: string) => void,
@@ -118,6 +150,7 @@ export async function makeOpenAIResponsesRequest(
   onResponseHeaders?: ResponseHeadersListener,
   onBackgroundResponse?: (response: OpenAIResponse) => void,
   research?: { instructions: string },
+  replayHistory?: () => ResponsesMessage[],
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -150,34 +183,6 @@ export async function makeOpenAIResponsesRequest(
     let reasoningPartKey: string | null = null;
     let servedFromResponseCache = false;
 
-    const formattedInput = messages.flatMap((message) => {
-      const mcpInput =
-        message.role === "assistant"
-          ? (message.mcpEvents ?? []).flatMap<ResponseFunctionToolCall | ResponseInputItem.FunctionCallOutput>(
-              (event) => {
-                const item = event.item;
-                const callId = item?.id || event.item_id;
-                if (event.type !== "response.output_item.done" || item?.type !== "mcp_call" || !callId) {
-                  return [];
-                }
-                if (!item.name || typeof item.arguments !== "string" || typeof item.output !== "string") {
-                  return [];
-                }
-                return [
-                  { type: "function_call", call_id: callId, name: item.name, arguments: item.arguments },
-                  { type: "function_call_output", call_id: callId, output: item.output },
-                ];
-              },
-            )
-          : [];
-      return [
-        ...mcpInput,
-        ...(mcpInput.length > 0 && message.content === ""
-          ? []
-          : [{ role: message.role, content: message.content, type: "message" }]),
-      ];
-    });
-
     // Build tools array
     const mcpSelection: BuildMcpToolBlocksArgs = {
       selectedMCPServers,
@@ -197,24 +202,37 @@ export async function makeOpenAIResponsesRequest(
 
     if (research) tools.push({ type: "web_search" });
 
-    const requestBody = {
+    const sharedBody = {
       model: selectedModel,
-      input: formattedInput,
       ...(research && { instructions: research.instructions }),
       litellm_trace_id: traceId,
-      ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
       ...(vector_store_ids ? { vector_store_ids } : {}),
       ...(guardrails ? { guardrails } : {}),
       ...(policies ? { policies } : {}),
       ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
     };
+    const requestBody = {
+      ...sharedBody,
+      input: responsesInput(messages),
+      ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+    };
+    const sendWithHistoryReplay = async <T,>(send: (body: typeof requestBody) => Promise<T>): Promise<T> => {
+      try {
+        return await send(requestBody);
+      } catch (error) {
+        if (!previousResponseId || !replayHistory || !isUnresolvedPreviousResponse(error)) throw error;
+        return send({ ...sharedBody, input: responsesInput(replayHistory()) });
+      }
+    };
 
     if (onBackgroundResponse) {
-      const response = await client.post<OpenAIResponse>("/responses", {
-        body: { ...requestBody, background: true, stream: false },
-        signal,
-        maxRetries: 0,
-      });
+      const response = await sendWithHistoryReplay((body) =>
+        client.post<OpenAIResponse>("/responses", {
+          body: { ...body, background: true, stream: false },
+          signal,
+          maxRetries: 0,
+        }),
+      );
       onBackgroundResponse(response);
       return response;
     }
@@ -222,14 +240,14 @@ export async function makeOpenAIResponsesRequest(
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
     const response = streamingEnabled
-      ? await (client as any).responses.create({ ...requestBody, stream: true }, { signal })
-      : await (async () => {
+      ? await sendWithHistoryReplay((body) => (client as any).responses.create({ ...body, stream: true }, { signal }))
+      : await sendWithHistoryReplay(async (body) => {
           const nonStreamingResponse = await (client as any).responses
-            .create({ ...requestBody, stream: false }, { signal })
+            .create({ ...body, stream: false }, { signal })
             .withResponse();
           servedFromResponseCache = nonStreamingResponse.response.headers.get("x-litellm-cache-key") !== null;
           return nonStreamingResponse.data;
-        })();
+        });
     const events = streamingEnabled ? response : responseAsEvents(response);
 
     let mcpToolUsed = "";

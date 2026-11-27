@@ -71,11 +71,11 @@ class SearchAPIConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """
@@ -97,9 +97,9 @@ class SearchAPIConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: dict[str, object],
         data: dict | list[dict] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint with query parameters.
@@ -123,8 +123,8 @@ class SearchAPIConfig(BaseSearchConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         search_engine_id: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to SearchAPI.io format.
 
@@ -207,7 +207,7 @@ class SearchAPIConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj | None,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform SearchAPI.io response to LiteLLM unified SearchResponse format.

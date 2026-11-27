@@ -350,14 +350,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     8,
   );
 
-  const getFilterLabel = (entityType: string) => {
-    return t("usage.entityUsage.filterLabel", { entity: entityType });
-  };
-
-  const getFilterPlaceholder = (entityType: string) => {
-    return t("usage.entityUsage.filterPlaceholder", { entity: entityType });
-  };
-
   const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
     team: <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />,
     customer: <CustomerMultiSelect value={selectedTags} onChange={setSelectedTags} />,
@@ -370,7 +362,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
   const filterSlot = entityFilterSlots[entityType];
 
-  const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
+  const entityTitle = t(`usage.entityLabels.title.${entityType}`);
+  const entityLabel = t(`usage.entityLabels.inline.${entityType}`);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
   const showPtuHours = entityType === "team" && hasPtuHours(spendData.metadata);
   const userSpendTeamIds = useMemo(
@@ -392,7 +385,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const entityBreakdownColumns = useMemo<ColumnDef<EntityMetricWithMetadata>[]>(
     () => [
       {
-        header: capitalizedEntityLabel,
+        header: entityTitle,
         accessorKey: "metadata.alias",
         meta: QUIET_HEADER,
         cell: ({ row }) => <span className="font-medium text-foreground">{row.original.metadata.alias}</span>,
@@ -428,7 +421,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         cell: ({ row }) => row.original.metrics.total_tokens.toLocaleString(),
       },
     ],
-    [capitalizedEntityLabel, maxEntitySpend, t],
+    [entityTitle, maxEntitySpend, t],
   );
 
   const chev = "size-3 text-muted-foreground";
@@ -494,7 +487,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     <div className="grid gap-3">
       <section className="grid gap-2">
         <h2 className="text-sm font-medium text-foreground">
-          {t("usage.entityUsage.spendOverview", { entity: capitalizedEntityLabel })}
+          {t("usage.entityUsage.spendOverview", { entity: entityTitle })}
         </h2>
         <div
           className={cn(
@@ -582,13 +575,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
       <Panel
         icon={Layers}
-        title={t("usage.entityUsage.spendPerEntity", { entity: capitalizedEntityLabel })}
+        title={t("usage.entityUsage.spendPerEntity", { entity: entityTitle })}
         action={
           <a
             href="https://docs.litellm.ai/docs/proxy/cost_tracking"
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
           >
-            {t("usage.entityUsage.trackCostPer", { entity: entityType })}
+            {t("usage.entityUsage.trackCostPer", { entity: entityLabel })}
             <ExternalLink aria-hidden="true" className="size-3" />
           </a>
         }
@@ -598,7 +591,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           data={entityRows}
           getRowId={(row) => row.metadata.id}
           maxBodyHeight={280}
-          noDataMessage={t("usage.entityUsage.noSpendData", { entity: entityType })}
+          noDataMessage={t("usage.entityUsage.noSpendData", { entity: entityLabel })}
           size="compact"
         />
       </Panel>
@@ -725,8 +718,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           }
           showFilters={filterSlot === undefined && entityList !== null}
           filterSlot={filterSlot}
-          filterLabel={getFilterLabel(entityType)}
-          filterPlaceholder={getFilterPlaceholder(entityType)}
+          filterLabel={t("usage.entityUsage.filterLabel", { entity: entityLabel })}
+          filterPlaceholder={t("usage.entityUsage.filterPlaceholder", { entity: entityLabel })}
           selectedFilters={selectedTags}
           onFiltersChange={setSelectedTags}
           filterOptions={getAllTags() || undefined}

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { messageRoleLabels } from "@/i18n/untranslated/modelText";
 
 import NumericalInput from "../shared/numerical_input";
 
@@ -33,9 +34,9 @@ export const NEW_CACHE_CONTROL_POINT: CacheControlInjectionPoint = { location: "
 const LOCATION_ITEMS = [{ value: "message", labelKey: "addModel.cacheControlSettings.locations.message" }] as const;
 
 const ROLE_ITEMS = [
-  { value: "user", labelKey: "addModel.cacheControlSettings.roles.user" },
-  { value: "system", labelKey: "addModel.cacheControlSettings.roles.system" },
-  { value: "assistant", labelKey: "addModel.cacheControlSettings.roles.assistant" },
+  { value: "user", label: messageRoleLabels.user },
+  { value: "system", label: messageRoleLabels.system },
+  { value: "assistant", label: messageRoleLabels.assistant },
 ] as const;
 
 const LabelWithHint: React.FC<{ label: string; hint: string }> = ({ label, hint }) => {
@@ -109,7 +110,7 @@ const CacheControlInjectionPoints: React.FC<CacheControlInjectionPointsProps> = 
           <div className="w-[180px] space-y-1">
             <LabelWithHint label={t("addModel.cacheControlSettings.role")} hint={t(CACHE_CONTROL_ROLE_HINT)} />
             <Select
-              items={ROLE_ITEMS.map((item) => ({ value: item.value, label: t(item.labelKey) }))}
+              items={ROLE_ITEMS}
               value={point.role ?? null}
               onValueChange={(selected) =>
                 replaceAt(index, { ...point, role: (selected as CacheControlRole | null) ?? undefined })
@@ -122,7 +123,7 @@ const CacheControlInjectionPoints: React.FC<CacheControlInjectionPointsProps> = 
                 <SelectItem value={null}>{t("addModel.cacheControlSettings.noRole")}</SelectItem>
                 {ROLE_ITEMS.map((item) => (
                   <SelectItem key={item.value} value={item.value}>
-                    {t(item.labelKey)}
+                    {item.label}
                   </SelectItem>
                 ))}
               </SelectContent>

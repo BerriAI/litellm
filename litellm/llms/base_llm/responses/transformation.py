@@ -102,8 +102,8 @@ class BaseResponsesAPIConfig(ABC):
     def sign_request(
         self,
         headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -120,7 +120,7 @@ class BaseResponsesAPIConfig(ABC):
         return headers, None
 
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         pass
 
     def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
@@ -145,18 +145,20 @@ class BaseResponsesAPIConfig(ABC):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     @abstractmethod
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
         return {}
 
     @abstractmethod
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         OPTIONAL
@@ -174,20 +176,20 @@ class BaseResponsesAPIConfig(ABC):
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     async def async_transform_responses_api_request(
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         return self.transform_responses_api_request(
             model=model,
             input=input,
@@ -226,7 +228,7 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     @abstractmethod
@@ -277,7 +279,7 @@ class BaseResponsesAPIConfig(ABC):
         include: list[str] | None = None,
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     @abstractmethod
@@ -285,7 +287,7 @@ class BaseResponsesAPIConfig(ABC):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     #########################################################
@@ -328,7 +330,7 @@ class BaseResponsesAPIConfig(ABC):
     def get_websocket_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Return the wss:// URL for the provider's native Responses WebSocket endpoint.
@@ -358,7 +360,7 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     @abstractmethod
@@ -381,11 +383,11 @@ class BaseResponsesAPIConfig(ABC):
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     @abstractmethod

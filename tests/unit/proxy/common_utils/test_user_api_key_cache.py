@@ -9,6 +9,7 @@ from pydantic import BaseModel, model_validator
 
 from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+from litellm.models.team import Member
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.proxy_server import UserAPIKeyCacheTTLEnum
@@ -31,6 +32,57 @@ class _Refusing(FakeAuthCache):
 
 
 class TestReadsAndWrites:
+    @pytest.mark.asyncio
+    async def test_team_auth_reads_isolate_the_matching_member_and_preserve_the_full_roster(self) -> None:
+        cache: Final = UserApiKeyCache()
+        key: Final = AuthObject.team("engineering")
+        roster: Final = [
+            Member(user_id="member", role="admin"),
+            Member(user_id="member", role="user"),
+            Member(user_id="peer", role="user"),
+        ]
+        team: Final = LiteLLM_TeamTableCachedObj(
+            team_id="engineering", members_with_roles=roster, metadata={"routes": ["original"]}, spend=4.0
+        )
+        await cache.async_set_cache(key, team, model_type=LiteLLM_TeamTableCachedObj)
+
+        matched: Final = await cache.get_auth_team(key, "member")
+        assert matched is not None and matched.metadata is not None
+        assert matched.members_with_roles == roster[:1]
+        matched.metadata["routes"].append("changed")
+        matched.members_with_roles[0].role = "user"
+        cache.add_local_team_spend(key, 0.5)
+
+        next_read: Final = await cache.get_auth_team(key, "member")
+        full: Final = await cache.async_get_cache(key, model_type=LiteLLM_TeamTableCachedObj)
+        assert next_read is not None and full is not None
+        assert (next_read.members_with_roles, next_read.metadata, next_read.spend) == (
+            roster[:1],
+            {"routes": ["original"]},
+            4.5,
+        )
+        assert (full.members_with_roles, full.spend) == (roster, 4.5)
+        cache.delete_local(key.key)
+        cache.add_local_team_spend(key, 1.0)
+        assert await cache.get_auth_team(key, "member") is None
+
+    @pytest.mark.asyncio
+    async def test_team_auth_reads_do_not_hide_a_malformed_member_elsewhere_in_the_roster(self) -> None:
+        cache: Final = UserApiKeyCache()
+        key: Final = AuthObject.team("engineering")
+        await cache.async_set_cache(
+            key,
+            {
+                "team_id": "engineering",
+                "members_with_roles": [
+                    {"user_id": "member", "role": "admin"},
+                    {"user_id": "other", "role": "invalid"},
+                ],
+            },
+        )
+
+        assert await cache.get_auth_team(key, "member") is None
+
     @pytest.mark.asyncio
     async def test_a_write_without_a_ttl_takes_the_default_in_memory_ttl(self):
         cache: Final = UserApiKeyCache(default_in_memory_ttl=0.05)

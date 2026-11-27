@@ -12,15 +12,17 @@ import os
 import re
 import time
 import traceback
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, get_args
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -94,6 +96,10 @@ def substitute_env_variables(value: str) -> str:
         return os.getenv(env_var_name, "")
 
     return re.sub(pattern, replace_env_var, value)
+
+
+class _GenericAPILoggingKwargs(TypedDict, total=False, extra_items=object):
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
 
 
 class GenericAPILogger(CustomBatchLogger):
@@ -198,7 +204,7 @@ class GenericAPILogger(CustomBatchLogger):
         #########################################################
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
-        self.log_queue: list[Mapping[str, object] | StandardLoggingPayload] = []
+        self.log_queue: list[Mapping[str, object] | StandardLoggingPayload | None] = []
         self._stop_flush = asyncio.Event()
         self._replacement: GenericAPILogger | None = None
         self._flush_task = asyncio.create_task(self._run_periodic_flush())
@@ -324,7 +330,9 @@ class GenericAPILogger(CustomBatchLogger):
 
         raise RuntimeError("Generic API Logger retry loop exited unexpectedly")
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time: object, end_time: object):
+    async def async_log_success_event(
+        self, kwargs: _GenericAPILoggingKwargs, response_obj, start_time: object, end_time: object
+    ):
         """
         Async Log success events to Generic API Endpoint
 
@@ -364,7 +372,9 @@ class GenericAPILogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("Generic API Logger Error - %s\n%s", e, traceback.format_exc())
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time: object, end_time: object):
+    async def async_log_failure_event(
+        self, kwargs: _GenericAPILoggingKwargs, response_obj, start_time: object, end_time: object
+    ):
         """
         Async Log failure events to Generic API Endpoint
 
@@ -424,7 +434,7 @@ class GenericAPILogger(CustomBatchLogger):
 
             if self.log_format == "single":
                 # Send each log as individual HTTP request in parallel
-                tasks: Final = []
+                tasks: Final[list[Coroutine[object, object, httpx.Response]]] = []
                 for log_entry in batch:
                     task = self._post_with_retries(data=safe_dumps(log_entry))
                     tasks.append(task)
@@ -469,7 +479,7 @@ class GenericAPILogger(CustomBatchLogger):
             self.last_flush_time = time.time()
 
     def _get_v1_logging_payload(
-        self, kwargs, response_obj, start_time: object, end_time: object
+        self, kwargs: _GenericAPILoggingKwargs, response_obj, start_time: object, end_time: object
     ) -> Mapping[str, object]:
         """
         Maintained for backwards compatibility with old logging payload
@@ -480,7 +490,7 @@ class GenericAPILogger(CustomBatchLogger):
 
         # construct payload to send custom logger
         # follows the same params as langfuse.py
-        litellm_params: Final = kwargs.get("litellm_params", {})
+        litellm_params: Final = require_get(kwargs.get("litellm_params", {}))
         metadata: Final = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
         messages: Final = kwargs.get("messages")
         cost: Final = kwargs.get("response_cost", 0.0)

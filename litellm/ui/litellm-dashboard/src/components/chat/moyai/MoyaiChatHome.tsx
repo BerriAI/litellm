@@ -3,22 +3,23 @@ import type { ParseKeys } from "i18next";
 import { Bug, Code2, ListChecks, type LucideIcon } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { modelPrompts } from "@/i18n/untranslated/modelText";
 import "./moyai-chat.css";
 
-const starters: { label: ParseKeys; prompt: ParseKeys; Icon: LucideIcon }[] = [
+const starters: { label: ParseKeys; prompt: string; Icon: LucideIcon }[] = [
   {
     label: "chat.moyaiHome.starters.review.label",
-    prompt: "chat.moyaiHome.starters.review.prompt",
+    prompt: modelPrompts.moyai.review,
     Icon: Code2,
   },
   {
     label: "chat.moyaiHome.starters.fixBug.label",
-    prompt: "chat.moyaiHome.starters.fixBug.prompt",
+    prompt: modelPrompts.moyai.fixBug,
     Icon: Bug,
   },
   {
     label: "chat.moyaiHome.starters.planFeature.label",
-    prompt: "chat.moyaiHome.starters.planFeature.prompt",
+    prompt: modelPrompts.moyai.planFeature,
     Icon: ListChecks,
   },
 ];
@@ -71,7 +72,7 @@ export default function MoyaiChatHome({
                 variant="outline"
                 className="dark:bg-transparent"
                 disabled={busy || Boolean(draft.trim())}
-                onClick={() => onPrompt(t(prompt))}
+                onClick={() => onPrompt(prompt)}
               >
                 <Icon />
                 <span className="moyai-chat-home-starter-label">{t(label)}</span>

@@ -186,7 +186,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
   };
   const approachLabels: Partial<Record<ClassifierType, string>> = {
     capability: t("addModel.autoRouterClassifierTabs.approach.capability"),
-    llm_v2: t("addModel.autoRouterClassifierTabs.approach.fuseV2"),
+    llm_v2: productNames.fuseV2,
   };
   const approachDescription: Partial<Record<ClassifierType, string>> = {
     capability: t("addModel.autoRouterClassifierTabs.approach.capabilityHelp"),
@@ -361,7 +361,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
                 />
                 <ClassifierOption
                   value="llm_v2"
-                  label={t("addModel.autoRouterClassifierTabs.approach.fuseV2")}
+                  label={productNames.fuseV2}
                   description={t("addModel.autoRouterClassifierTabs.approach.fuseV2Description")}
                   feature="llm_v2"
                   disabled={hasCustomTiers}

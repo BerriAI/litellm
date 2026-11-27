@@ -15,7 +15,7 @@ class AlibabaSecretDetector(RegexBasedDetector):
         return "Alibaba Secrets"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Alibaba AccessKey ID
             re.compile(r"""(?i)\b((LTAI)[a-z0-9]{20})(?:['|\"|\n|\r|\s|\x60|;]|$)"""),

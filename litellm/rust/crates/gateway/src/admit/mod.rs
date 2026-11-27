@@ -14,16 +14,16 @@ use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_gateway_auth::{Auth, Authenticated, Preauthenticated};
-use litellm_gateway_auth_core::authz::Layer;
+use litellm_gateway_auth_core::{Allowlists, authz::ModelList};
 use litellm_gateway_inference::{JsonObject, routing};
-use litellm_model_catalog::CostMap;
 use litellm_router_core::{Router, registry::DeploymentFilter};
 use serde_json::{Map, Value};
 
 use crate::{
-    AppState, Gateway,
+    AppState, Gateway, StoredConfig,
     callbacks::parallel_request_limiter,
-    host::{self, NativeRows},
+    host::{self, NativeHost, NativeRows},
+    middleware::request_allowlist,
 };
 use checks::Fields;
 pub use checks::Reason;
@@ -52,6 +52,9 @@ pub enum Refused {
     #[error("the gateway does not serve this model the way the proxy does")]
     #[strum(serialize = "model")]
     Model,
+    #[error("the gateway has not loaded the config the proxy stores in its database yet")]
+    #[strum(serialize = "db_config_not_loaded")]
+    DbConfigNotLoaded,
 }
 
 /// One deployment the router holds: its model group and its provider, or the provider's name when
@@ -65,27 +68,26 @@ type Deployed = (String, Result<LlmProviders, String>);
 /// built again and replaced together.
 pub struct Admit {
     config: Config,
-    /// The variables only the environment holds, as `main` read them.
+    /// The variables only the environment holds, with the config's `environment_variables` in
+    /// front of the process's.
     environment: Environment,
-    /// The variable that has the proxy serve models and settings from its database on top of the
-    /// config. `general_settings.store_model_in_db` is a setting of the config itself.
-    stored_models: Option<Box<str>>,
+    /// Whether `config` holds the config the proxy stores in its database.
+    stored: StoredConfig,
     /// Each deployment the router built from `config`, since only the router knows which provider
     /// serves each one.
     deployed: Vec<Deployed>,
-    /// The model group of each deployment whose model the cost map holds as another model's alias,
-    /// with the name it holds it under.
-    aliased: Vec<(String, Box<str>)>,
     /// The router the native app serves through, which says where a request for a name can be
     /// served and what a call served there asks of its host.
     router: Router,
+    /// The native host, which says which of a model group's host steps it answers.
+    host: NativeHost,
+    /// The proxy's address and route allowlists, read by the rule the Python proxy reads them with.
+    allowlists: Allowlists,
     auth: Auth<NativeRows>,
     /// The native app's inference, which tells whether a caller may call the model it asks for.
     /// `None` leaves every caller with a model list to Python.
     inference: Option<Arc<Gateway>>,
 }
-
-const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
 
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
     tracing::debug!(why = %reason.why, over = %reason.over, "admit refused a request over this");
@@ -108,25 +110,14 @@ fn token_estimate(
 
 impl Admit {
     /// By the `config` the native app `state` is built from, with its environment under it as
-    /// `load_config` leaves it, and the `environment` `main` read.
-    pub fn new(config: &Config, environment: &Environment, state: &AppState) -> Self {
+    /// `load_config` leaves it, and whether `config` holds the config the proxy stores in its
+    /// database.
+    pub fn new(config: &Config, state: &AppState, stored: StoredConfig) -> Self {
         let deployments = state
             .inference
             .router
             .registry()
             .deployments(&DeploymentFilter::default());
-        let cost_map = CostMap::bundled();
-        let aliased = deployments
-            .iter()
-            .filter_map(|deployment| {
-                let alias = checks::alias(
-                    cost_map.catalog(),
-                    deployment.provider(),
-                    &deployment.params.model,
-                )?;
-                Some((deployment.model_name.clone(), alias))
-            })
-            .collect();
         let deployed = deployments
             .iter()
             .map(|deployment| {
@@ -140,32 +131,30 @@ impl Admit {
             })
             .collect();
         Self {
-            environment: environment.clone(),
-            stored_models: state
-                .environment
-                .get(STORE_MODEL_IN_DB)
-                .map(|_| STORE_MODEL_IN_DB.into()),
+            environment: state.variables.clone(),
+            stored,
             auth: state.auth(config),
-            aliased,
+            host: state.inference.host().clone(),
             inference: Some(state.inference.clone()),
             ..Self::built(config, state.inference.router.clone(), deployed)
         }
     }
 
     #[cfg(test)]
-    fn over(config: &Config, deployed: Vec<Deployed>) -> Self {
+    pub(crate) fn over(config: &Config, deployed: Vec<Deployed>) -> Self {
         Self::built(config, crate::boot::unhosted(config), deployed)
     }
 
     fn built(config: &Config, router: Router, deployed: Vec<Deployed>) -> Self {
         Self {
             router,
+            allowlists: Allowlists::new(&config.general_settings),
             auth: host::auth::auth(config, None),
             config: config.clone(),
             environment: Environment::default(),
-            stored_models: None,
+            stored: StoredConfig::Unused,
             deployed,
-            aliased: Vec::new(),
+            host: NativeHost::default(),
             inference: None,
         }
     }
@@ -177,14 +166,16 @@ impl Admit {
         let model = fields.get("model")?.as_str()?;
         let allowed = match &self.inference {
             Some(inference) => routing::allows(inference, caller, model),
-            None => host::layers(caller).all(|Layer::Key(models)| models.is_empty()),
+            None => host::layers(caller).all(|layer| layer.list() == ModelList::Every),
         };
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }
 
     /// The body is read only for a request that passes every other check, and parsed once: an
     /// admitted request carries it parsed, as the [`JsonObject`] the route takes. A refused request
-    /// keeps the bytes the client sent and carries nothing more.
+    /// keeps the bytes the client sent and carries nothing more. A request the proxy's allowlists
+    /// leave out is admitted as sent, before its caller or body is read, as Python refuses it before
+    /// it reads either, and `middleware::request_allowlist` refuses it in the native app.
     pub async fn admit(
         self: Arc<Self>,
         request: Request,
@@ -192,6 +183,16 @@ impl Admit {
         let (mut parts, body) = request.into_parts();
         if let Some(reason) = checks::HEAD.iter().find_map(|check| check(&self, &parts)) {
             return Err(refused(parts, body, reason));
+        }
+        if request_allowlist::checked(
+            &self.allowlists,
+            parts.uri.path(),
+            &parts.headers,
+            &parts.extensions,
+        )
+        .is_err()
+        {
+            return Ok(Request::from_parts(parts, body));
         }
         let authenticated = self.auth.authenticate_parts(&parts).await;
         if let Some(reason) = checks::CALLER

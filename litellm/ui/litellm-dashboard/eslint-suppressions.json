@@ -244,11 +244,8 @@
     }
   },
   "src/app/(dashboard)/guardrails/_components/custom_code/CustomCodeModal.tsx": {
-    "max-lines": {
-      "count": 1
-    },
     "no-nested-ternary": {
-      "count": 6
+      "count": 5
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -279,9 +276,6 @@
       "count": 1
     },
     "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "max-lines": {
       "count": 1
     },
     "max-params": {
@@ -830,7 +824,7 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 10
+      "count": 8
     },
     "react-hooks/immutability": {
       "count": 1
@@ -882,7 +876,7 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/policies/_components/policy_info.tsx": {
@@ -1013,9 +1007,6 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 1
-    },
-    "prefer-const": {
       "count": 1
     }
   },
@@ -1244,11 +1235,6 @@
   },
   "src/components/Settings/AdminSettings/SSOSettings/RedactableField.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/UISettings/PageVisibilitySettings.tsx": {
-    "react-hooks/set-state-in-render": {
       "count": 1
     }
   },
@@ -1833,7 +1819,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/routing_groups/index.tsx": {

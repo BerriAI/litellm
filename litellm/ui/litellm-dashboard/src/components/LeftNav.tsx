@@ -1,4 +1,5 @@
 import { SidebarBrand } from "@/components/shared/SidebarBrand";
+import { GatewayLensNavigation } from "@/components/lens/GatewayLensNavigation";
 import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -75,7 +76,8 @@ import { usePluginMode } from "@/contexts/PluginModeContext";
 import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { type MouseEvent, useMemo, useState } from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
+import { productNames } from "@/i18n/untranslated/productNames";
 import type { ParseKeys } from "i18next";
 import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
@@ -111,7 +113,8 @@ export interface MenuItem {
   key: string;
   page: string;
   route?: string;
-  label: string | React.ReactNode;
+  label: React.ReactNode;
+  untranslatedLabel?: string;
   roles?: string[];
   children?: MenuItem[];
   icon?: React.ReactNode;
@@ -269,7 +272,8 @@ const menuGroups: MenuGroup[] = [
         key: "llm-playground",
         page: "llm-playground",
         route: "playground",
-        label: "shell.nav.items.playground",
+        label: null,
+        untranslatedLabel: productNames.playground,
         icon: <PlayCircle {...ICON} />,
         roles: rolesWithWriteAccess,
       },
@@ -386,9 +390,10 @@ const menuGroups: MenuGroup[] = [
         page: "lens",
         label: (
           <span className="flex items-center gap-2">
-            <Trans i18nKey="shell.nav.items.lens" /> <BetaBadge />
+            {productNames.lens} <BetaBadge />
           </span>
         ),
+        untranslatedLabel: productNames.lens,
         icon: <Aperture {...ICON} />,
       },
       {
@@ -473,7 +478,8 @@ const menuGroups: MenuGroup[] = [
           {
             key: "transform-request",
             page: "transform-request",
-            label: "shell.nav.items.apiPlayground",
+            label: null,
+            untranslatedLabel: productNames.apiPlayground,
             icon: <Terminal {...ICON} />,
             roles: [...all_admin_roles, ...internalUserRoles],
           },
@@ -609,7 +615,7 @@ const prettify = (key: string): string =>
     .join(" ");
 
 export const labelText = (item: MenuItem): string =>
-  typeof item.label === "string" ? i18n.t(item.label as ParseKeys) : prettify(item.key);
+  item.untranslatedLabel ?? (typeof item.label === "string" ? i18n.t(item.label as ParseKeys) : prettify(item.key));
 
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
@@ -642,7 +648,8 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const { mode: pluginMode } = usePluginMode();
   const { t } = useTranslation();
   const term = useTerminology();
-  const labelOf = (item: MenuItem) => (typeof item.label === "string" ? term(labelText(item)) : item.label);
+  const labelOf = (item: MenuItem) =>
+    typeof item.label === "string" || item.label == null ? term(labelText(item)) : item.label;
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
   const logout = useLogout(accessToken);
@@ -798,22 +805,28 @@ const Sidebar_: React.FC<SidebarProps> = ({
         </SidebarGroup>
         <SidebarContent>
           <ScrollArea className="min-h-0 flex-1">
-            <nav className="flex flex-col gap-0.5 px-3 pb-3">
-              {(inLensWorkspace ? [] : visibleGroups).map((group, gi) => (
-                <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
-                  {gi > 0 && (
-                    <SidebarSeparator
-                      aria-hidden
-                      className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block"
-                    />
-                  )}
-                  <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
-                    {term(groupText(group.groupLabel))}
-                  </SidebarGroupLabel>
-                  <SidebarMenu className={navMenuClassName}>{group.items.map((item) => renderItem(item))}</SidebarMenu>
-                </SidebarGroup>
-              ))}
-            </nav>
+            {inLensWorkspace ? (
+              <GatewayLensNavigation collapsed={collapsed} />
+            ) : (
+              <nav className="flex flex-col gap-0.5 px-3 pb-3">
+                {visibleGroups.map((group, gi) => (
+                  <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
+                    {gi > 0 && (
+                      <SidebarSeparator
+                        aria-hidden
+                        className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block"
+                      />
+                    )}
+                    <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
+                      {term(groupText(group.groupLabel))}
+                    </SidebarGroupLabel>
+                    <SidebarMenu className={navMenuClassName}>
+                      {group.items.map((item) => renderItem(item))}
+                    </SidebarMenu>
+                  </SidebarGroup>
+                ))}
+              </nav>
+            )}
           </ScrollArea>
         </SidebarContent>
 

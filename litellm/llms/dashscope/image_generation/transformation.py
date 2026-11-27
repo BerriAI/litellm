@@ -150,14 +150,14 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         headers["Authorization"] = f"Bearer {self._resolve_api_key(api_key)}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -166,14 +166,14 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform OpenAI-style image generation request to DashScope multimodal-generation format.
         """
-        parameters: Final[dict] = {}
+        parameters: Final[dict[str, object]] = {}
         for k, v in optional_params.items():
             parameters[k] = v
 

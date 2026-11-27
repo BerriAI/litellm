@@ -13,7 +13,7 @@ import os
 import sys
 import threading
 import warnings
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
@@ -26,6 +26,7 @@ import pytest
 import responses
 import respx
 from fastapi import HTTPException
+from pypdf import PdfWriter
 from opentelemetry import trace
 from pydantic import BaseModel, TypeAdapter
 
@@ -42,6 +43,11 @@ from litellm.exceptions import (
     RequestOverDeploymentTpmError,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.litellm_core_utils.token_counter import (
+    PdfDocumentPricing,
+    inline_pdf_token_delta,
+    inline_pdf_token_deltas,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.plumbing.context import set_request_root_span
@@ -61,12 +67,12 @@ from litellm.router_rust.invoke.streaming import (
     _stream_commits_now,
     _anthropic_stream_error_is_gateway_verdict,
     _stream_fallback_error_for_raised,
-    _anthropic_stream_forwards_ping_live,
     _stream_raised_error_status,
     _anthropic_stream_should_decline_fallback,
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
 )  # noqa: PLC2701
+from litellm.router_rust.steps.precall import STAND_IN_OVERCOUNT_MARGIN, stand_in_tokenizer
 from litellm.router_rust.surface.registry import _search_tool_support  # noqa: PLC2701
 from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
 from litellm.router_strategy import simple_shuffle
@@ -112,6 +118,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
 from tests.unit.conftest import redis_cache_double
+from tests.unit.litellm_core_utils.handbuilt_pdf import pdf_base64
 from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 import traceback
 import inspect
@@ -4332,13 +4339,555 @@ def test_pre_call_checks_count_a_group_of_one_openai_model_with_that_models_toke
     assert len(kept) == 1
 
 
-def test_pre_call_checks_count_a_group_mixing_in_another_vendor_by_its_own_name():
+def test_pre_call_checks_keep_every_deployment_of_a_mixed_group_that_fits_its_own_count():
     router: Final = _context_limited_router("openai/gpt-6.1-sol", "anthropic/claude-sonnet-5-5")
 
-    with pytest.raises(litellm.ContextWindowExceededError):
-        router._pre_call_checks(
-            model="prod", healthy_deployments=router.get_model_list(model_name="prod"), messages=_MULTILINGUAL_PROMPT
+    kept: Final = router._pre_call_checks(
+        model="prod", healthy_deployments=router.get_model_list(model_name="prod"), messages=_MULTILINGUAL_PROMPT
+    )
+
+    assert len(kept) == 2
+
+
+_PDF_BASE64: Final = pdf_base64(("", "", ""))
+_PDF_URL: Final = f"data:application/pdf;base64,{_PDF_BASE64}"
+_PDF_FILE_PROMPT: Final = [
+    {
+        "role": "user",
+        "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": {"file_data": _PDF_URL}}],
+    }
+]
+_PDF_DOCUMENT_PROMPT: Final = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "summarize"},
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_BASE64}},
+        ],
+    }
+]
+_PDF_RESPONSES_INPUT: Final = [
+    {
+        "type": "message",
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "summarize"},
+            {"type": "input_file", "filename": "report.pdf", "file_data": _PDF_URL},
+        ],
+    }
+]
+_GEMINI_MODELS: Final = ("gemini/gemini-3.5-flash-lite", "vertex_ai/gemini-3.8-flash")
+_CLAUDE_MODELS: Final = (
+    "anthropic/claude-sonnet-5-5",
+    "bedrock/anthropic.claude-sonnet-5-5",
+    "vertex_ai/claude-sonnet-5-5",
+)
+
+
+def _page_priced_pdf_tokens() -> int:
+    return _stand_in_tokens(_PDF_FILE_PROMPT)
+
+
+def _repriced_pdf_tokens(messages: list[dict[str, object]], pdf_pricing: PdfDocumentPricing) -> int:
+    deltas: Final = inline_pdf_token_deltas("", messages, (pdf_pricing,), custom_tokenizer=stand_in_tokenizer())
+    return _stand_in_tokens(messages) + deltas[pdf_pricing]
+
+
+def _single_image_pdf_tokens() -> int:
+    return _repriced_pdf_tokens(_PDF_FILE_PROMPT, "single_image")
+
+
+def _between_pdf_prices() -> int:
+    return (_page_priced_pdf_tokens() + _single_image_pdf_tokens()) // 2
+
+
+def _window_router(limit: int, *served: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "docs",
+                "litellm_params": {"model": model, "api_key": "sk-test", "mock_response": model},
+                "model_info": {"max_input_tokens": limit},
+            }
+            for model in served
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+def _kept_models(router: litellm.Router, **request: object) -> list[str]:
+    kept: Final = router._pre_call_checks(
+        model="docs", healthy_deployments=router.get_model_list(model_name="docs"), **request
+    )
+    return [deployment["litellm_params"]["model"] for deployment in kept]
+
+
+@pytest.mark.parametrize("gemini", _GEMINI_MODELS)
+async def test_gemini_takes_a_pdf_its_window_fits_on_the_sync_and_async_router(gemini: str):
+    router: Final = _window_router(_between_pdf_prices(), gemini)
+
+    sync_response: Final = router.completion(model="docs", messages=_PDF_FILE_PROMPT)
+    async_response: Final = await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
+
+    assert (sync_response.choices[0].message.content, async_response.choices[0].message.content) == (gemini, gemini)
+
+
+@pytest.mark.parametrize("claude", _CLAUDE_MODELS)
+async def test_a_group_of_gemini_and_claude_sends_a_pdf_only_claude_overflows_to_gemini(claude: str):
+    gemini: Final = _GEMINI_MODELS[0]
+    router: Final = _window_router(_between_pdf_prices(), gemini, claude)
+
+    sync_answers: Final = {router.completion(model="docs", messages=_PDF_FILE_PROMPT).choices[0].message.content}
+    async_answers: Final = {
+        (await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)).choices[0].message.content
+    }
+
+    assert _kept_models(router, messages=_PDF_FILE_PROMPT) == [gemini]
+    assert sync_answers == async_answers == {gemini}
+
+
+async def test_a_pdf_no_deployment_fits_names_each_deployments_own_count():
+    gemini: Final = _GEMINI_MODELS[0]
+    router: Final = _window_router(_single_image_pdf_tokens() - 1, gemini, _CLAUDE_MODELS[0])
+    expected: Final = (
+        f"Max Input Tokens={_single_image_pdf_tokens() - 1}, Got={_single_image_pdf_tokens()}",
+        f"Max Input Tokens={_single_image_pdf_tokens() - 1}, Got={_page_priced_pdf_tokens()}",
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as sync_error:
+        _kept_models(router, messages=_PDF_FILE_PROMPT)
+    with pytest.raises(litellm.ContextWindowExceededError) as async_error:
+        await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
+
+    assert all(part in str(sync_error.value) for part in expected)
+    assert all(part in str(async_error.value) for part in expected)
+
+
+@pytest.mark.parametrize(
+    "served", [*_CLAUDE_MODELS, "mistral/mistral-large-latest", "openrouter/google/gemini-3.5-flash-lite"]
+)
+async def test_a_pdf_keeps_its_page_price_on_every_deployment_without_a_known_lower_pdf_price(served: str):
+    router: Final = _window_router(_single_image_pdf_tokens(), served)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={_page_priced_pdf_tokens()}"):
+        _kept_models(router, messages=_PDF_FILE_PROMPT)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={_page_priced_pdf_tokens()}"):
+        await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
+
+
+@pytest.mark.parametrize("openai", ["openai/gpt-6.1-sol", "azure/gpt-6.1-sol"])
+async def test_an_openai_deployment_grouped_with_claude_takes_a_pdf_its_own_pdf_price_fits(openai: str):
+    router: Final = _window_router(_between_pdf_prices(), openai, _CLAUDE_MODELS[0])
+
+    sync_answer: Final = router.completion(model="docs", messages=_PDF_FILE_PROMPT).choices[0].message.content
+    async_answer: Final = (await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)).choices[0].message.content
+
+    assert _kept_models(router, messages=_PDF_FILE_PROMPT) == [openai]
+    assert (sync_answer, async_answer) == (openai, openai)
+
+
+def test_an_alias_of_gemini_openai_and_claude_keeps_every_deployment_whose_own_pdf_count_fits():
+    router: Final = _window_router(_between_pdf_prices(), _GEMINI_MODELS[0], "openai/gpt-6.1-sol", _CLAUDE_MODELS[0])
+
+    assert _kept_models(router, messages=_PDF_FILE_PROMPT) == [_GEMINI_MODELS[0], "openai/gpt-6.1-sol"]
+
+
+async def test_a_pdf_repricing_failure_keeps_the_stand_in_count(monkeypatch: pytest.MonkeyPatch):
+    from litellm.router_rust.steps import precall
+
+    router: Final = _window_router(_between_pdf_prices(), _GEMINI_MODELS[0], _CLAUDE_MODELS[0])
+    attempts: Final[list[frozenset[PdfDocumentPricing]]] = []  # mutable-ok: records each repricing the router attempts
+
+    def failing_repricing(
+        _model: str, _messages: object, pdf_pricings: Iterable[PdfDocumentPricing], **_: object
+    ) -> Mapping[PdfDocumentPricing, int]:
+        attempts.append(frozenset(pdf_pricings))
+        raise ValueError("unreadable PDF")
+
+    monkeypatch.setattr(precall, "inline_pdf_token_deltas", failing_repricing)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={_page_priced_pdf_tokens()}") as sync_error:
+        _kept_models(router, messages=_PDF_FILE_PROMPT)
+    sync_attempts: Final = len(attempts)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={_page_priced_pdf_tokens()}") as async_error:
+        await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
+
+    assert attempts == [frozenset({"single_image"})] * 2
+    assert sync_attempts == 1
+    assert str(sync_error.value).count(f"Got={_page_priced_pdf_tokens()}") == 2
+    assert str(async_error.value).count(f"Got={_page_priced_pdf_tokens()}") == 2
+
+
+def _web_fetched(document: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_1",
+        "content": {"type": "web_fetch_result", "url": "https://example.invalid/report.pdf", "content": document},
+    }
+
+
+def _web_fetched_document(document: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "web_fetch_tool_result", "tool_use_id": "srvtoolu_1", "content": document}
+
+
+def _text_with_stray_content(document: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "text", "text": "the fetched report", "content": document}
+
+
+def _base64_pdf_document() -> dict[str, object]:
+    return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_BASE64}}
+
+
+def _server_tool_prompt(wrap: Callable[[Mapping[str, object]], dict[str, object]]) -> list[dict[str, object]]:
+    fetched: Final = wrap(_base64_pdf_document())
+    return [
+        {"role": "user", "content": "fetch the report"},
+        {"role": "assistant", "content": [fetched]},
+        {"role": "user", "content": "summarize what was fetched"},
+    ]
+
+
+@pytest.mark.parametrize("wrap", [_web_fetched, _web_fetched_document], ids=["web_fetch_result", "document_content"])
+@pytest.mark.parametrize(
+    ("pdf_pricing", "fitting"), [("single_image", _GEMINI_MODELS[0]), ("openai", "openai/gpt-6.1-sol")]
+)
+async def test_a_pdf_a_server_tool_returned_reaches_the_deployment_its_own_pdf_price_fits(
+    wrap: Callable[[Mapping[str, object]], dict[str, object]], pdf_pricing: PdfDocumentPricing, fitting: str
+):
+    prompt: Final = _server_tool_prompt(wrap)
+    own: Final = _repriced_pdf_tokens(prompt, pdf_pricing)
+    router: Final = _window_router(own, fitting, _CLAUDE_MODELS[0])
+
+    assert own < litellm.token_counter(model="", messages=prompt)
+    assert _kept_models(router, messages=prompt) == [fitting]
+    assert router.completion(model="docs", messages=prompt).choices[0].message.content == fitting
+    assert (await router.acompletion(model="docs", messages=prompt)).choices[0].message.content == fitting
+
+
+async def test_a_pdf_the_counter_does_not_read_keeps_the_stand_in_count():
+    prompt: Final = _server_tool_prompt(_text_with_stray_content)
+    stand_in: Final = _stand_in_tokens(prompt)
+    router: Final = _window_router(stand_in - 1, _GEMINI_MODELS[0])
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={stand_in}"):
+        _kept_models(router, messages=prompt)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={stand_in}"):
+        await router.acompletion(model="docs", messages=prompt)
+
+
+async def test_repricing_reads_each_distinct_pdf_once_for_every_deployment(monkeypatch: pytest.MonkeyPatch):
+    import pypdf
+
+    first: Final = _base64_pdf_document()
+    other: Final = {"type": "file", "file": {"file_data": f"data:application/pdf;base64,{pdf_base64(('Q3 revenue',))}"}}
+    content: Final = [{"type": "text", "text": "compare"}, first, first, _base64_pdf_document(), other]
+    prompt: Final = [{"role": "user", "content": content}]
+    expected: Final = (f"Got={_repriced_pdf_tokens(prompt, 'single_image')}", f"Got={_stand_in_tokens(prompt)}")
+    router: Final = _window_router(1, *_GEMINI_MODELS, _CLAUDE_MODELS[0])
+    opened: Final[list[None]] = []  # mutable-ok: one entry per PDF pypdf opens
+
+    class CountingPdfReader(pypdf.PdfReader):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            opened.append(None)
+            super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # pypdf's own arguments
+
+    monkeypatch.setattr(pypdf, "PdfReader", CountingPdfReader)
+    litellm.token_counter(model="", messages=prompt)
+    shared_reads: Final = len(opened)
+    with pytest.raises(litellm.ContextWindowExceededError) as sync_error:
+        _kept_models(router, messages=prompt)
+    sync_reads: Final = len(opened) - shared_reads
+    with pytest.raises(litellm.ContextWindowExceededError) as async_error:
+        await router.acompletion(model="docs", messages=prompt)
+    async_reads: Final = len(opened) - shared_reads - sync_reads
+
+    assert shared_reads == 4
+    assert (sync_reads, async_reads) == (shared_reads + 2, shared_reads + 2)
+    assert all(got in str(sync_error.value) for got in expected)
+    assert all(got in str(async_error.value) for got in expected)
+
+
+def _pdf_url_of(pages: tuple[str, ...]) -> str:
+    return f"data:application/pdf;base64,{pdf_base64(pages)}"
+
+
+async def test_repricing_keeps_no_page_text_alive_between_pages(monkeypatch: pytest.MonkeyPatch):
+    import weakref
+
+    import pypdf
+
+    pages: Final = tuple(f"page {number} revenue grew while churn fell" for number in range(5))
+    prompt: Final = [{"role": "user", "content": [{"type": "file", "file": {"file_data": _pdf_url_of(pages)}}]}]
+    expected: Final = (f"Got={_repriced_pdf_tokens(prompt, 'single_image')}", f"Got={_stand_in_tokens(prompt)}")
+    router: Final = _window_router(1, _GEMINI_MODELS[0], _CLAUDE_MODELS[0])
+    alive: Final[weakref.WeakSet[str]] = weakref.WeakSet()
+    alive_at_each_extract: Final[list[int]] = []  # mutable-ok: page texts still alive as each page is extracted
+
+    class ExtractedText(str):
+        __slots__ = ("__weakref__",)
+
+    class TrackedPage(pypdf.PageObject):
+        def extract_text(self, *args: object, **kwargs: object) -> str:
+            alive_at_each_extract.append(len(alive))
+            text: Final = ExtractedText(super().extract_text(*args, **kwargs))  # pyright: ignore[reportArgumentType]  # pypdf's own arguments
+            alive.add(text)
+            return text
+
+    def tracked(page: pypdf.PageObject) -> pypdf.PageObject:
+        copy: Final = TrackedPage(pdf=page.pdf, indirect_reference=page.indirect_reference)
+        copy.update(page)
+        return copy
+
+    class TrackingPdfReader(pypdf.PdfReader):
+        @property
+        def pages(self) -> list[pypdf.PageObject]:
+            return [tracked(page) for page in super().pages]
+
+    monkeypatch.setattr(pypdf, "PdfReader", TrackingPdfReader)
+    litellm.token_counter(model="", messages=prompt)
+    shared_extracts: Final = len(alive_at_each_extract)
+    with pytest.raises(litellm.ContextWindowExceededError) as sync_error:
+        _kept_models(router, messages=prompt)
+    sync_extracts: Final = len(alive_at_each_extract) - shared_extracts
+    with pytest.raises(litellm.ContextWindowExceededError) as async_error:
+        await router.acompletion(model="docs", messages=prompt)
+
+    assert shared_extracts == len(pages)
+    assert (sync_extracts, len(alive_at_each_extract) - shared_extracts - sync_extracts) == (2 * len(pages),) * 2
+    assert max(alive_at_each_extract) == 0
+    assert all(got in str(sync_error.value) for got in expected)
+    assert all(got in str(async_error.value) for got in expected)
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("replaced", ["litellm", "core"])
+async def test_a_custom_token_counter_stays_authoritative_for_a_pdf_request(
+    monkeypatch: pytest.MonkeyPatch, wrapped: bool, replaced: str
+):
+    import litellm.litellm_core_utils.token_counter as core_token_counter
+
+    custom_count: Final = 10 * _page_priced_pdf_tokens()
+    router: Final = _window_router(_between_pdf_prices(), _GEMINI_MODELS[0], "openai/gpt-6.1-sol")
+    owner: Final = litellm if replaced == "litellm" else core_token_counter
+
+    def custom_token_counter(*_: object, **__: object) -> int:
+        return custom_count
+
+    configured_counter: Final = (
+        functools.wraps(owner.token_counter)(custom_token_counter) if wrapped else custom_token_counter
+    )
+    monkeypatch.setattr(owner, "token_counter", configured_counter)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={custom_count}"):
+        _kept_models(router, messages=_PDF_FILE_PROMPT)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={custom_count}"):
+        await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
+
+
+_REMOTE_IMAGE_URL: Final = "https://images.example.com/chart.png"
+
+
+def _png_bytes(width: int, height: int) -> bytes:
+    from PIL import Image
+
+    image: Final = io.BytesIO()
+    Image.new("RGB", (width, height)).save(image, format="PNG")
+    return image.getvalue()
+
+
+@pytest.mark.parametrize("caption", ["chart", "application/pdf", "data:application/pdf;base64,example"])
+async def test_an_over_window_prompt_without_a_pdf_fetches_its_remote_image_once(
+    monkeypatch: pytest.MonkeyPatch, caption: str
+):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    prompt: Final = [
+        {"role": "user", "content": [
+            {"type": "text", "text": caption},
+            {"type": "image_url", "image_url": {"url": _REMOTE_IMAGE_URL, "detail": "high"}},
+        ]}
+    ]
+    router: Final = _window_router(1, _GEMINI_MODELS[0], _CLAUDE_MODELS[0])
+
+    with respx.mock(assert_all_called=True) as mock:
+        image: Final = mock.get(_REMOTE_IMAGE_URL).respond(200, content=_png_bytes(2048, 2048))
+        with pytest.raises(litellm.ContextWindowExceededError):
+            _kept_models(router, messages=prompt)
+        sync_fetches: Final = image.call_count
+        with pytest.raises(litellm.ContextWindowExceededError):
+            await router.acompletion(model="docs", messages=prompt)
+
+    assert (sync_fetches, image.call_count) == (1, 2)
+
+
+def _pdf_and_image_prompt(image_url: str) -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "compare the chart with the report"},
+                {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}},
+                {"type": "file", "file": {"file_data": _PDF_URL}},
+            ],
+        }
+    ]
+
+
+def _counted_with_image(png: bytes) -> tuple[str, ...]:
+    """The `Got=` each deployment reports when the remote image answers `png`, counted from the same bytes inline."""
+    inline: Final = _pdf_and_image_prompt("data:image/png;base64," + base64.b64encode(png).decode())
+    return (f"Got={_repriced_pdf_tokens(inline, 'single_image')}", f"Got={_stand_in_tokens(inline)}")
+
+
+async def test_an_over_window_pdf_prompt_fetches_its_remote_image_once_per_request(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    large: Final = _png_bytes(2048, 2048)
+    small: Final = _png_bytes(512, 512)
+    prompt: Final = _pdf_and_image_prompt(_REMOTE_IMAGE_URL)
+    router: Final = _window_router(1, _GEMINI_MODELS[0], _CLAUDE_MODELS[0])
+
+    with respx.mock(assert_all_called=True) as mock:
+        image: Final = mock.get(_REMOTE_IMAGE_URL).mock(
+            side_effect=[httpx.Response(200, content=large), httpx.Response(200, content=small)]
         )
+        with pytest.raises(litellm.ContextWindowExceededError) as sync_error:
+            _kept_models(router, messages=prompt)
+        sync_fetches: Final = image.call_count
+        with pytest.raises(litellm.ContextWindowExceededError) as async_error:
+            await router.acompletion(model="docs", messages=prompt)
+
+    assert (sync_fetches, image.call_count) == (1, 2)
+    assert all(got in str(sync_error.value) for got in _counted_with_image(large))
+    assert all(got in str(async_error.value) for got in _counted_with_image(small))
+
+
+async def test_text_and_a_pdf_over_the_window_with_the_pdf_repriced_are_still_rejected():
+    prompt: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "read the attached report and summarize the findings. " * 200},
+                {"type": "file", "file": {"file_data": _PDF_URL}},
+            ],
+        }
+    ]
+    own: Final = _repriced_pdf_tokens(prompt, "single_image")
+    router: Final = _window_router(own - 1, _GEMINI_MODELS[0])
+
+    assert own < litellm.token_counter(model="", messages=prompt)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={own}"):
+        _kept_models(router, messages=prompt)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={own}"):
+        await router.acompletion(model="docs", messages=prompt)
+
+
+_REPEATED_DOCUMENT: Final = {
+    "type": "document",
+    "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_BASE64},
+}
+
+
+@pytest.mark.parametrize(
+    ("pdf_pricing", "fitting"), [("single_image", _GEMINI_MODELS[0]), ("openai", "openai/gpt-6.1-sol")]
+)
+def test_every_occurrence_of_a_pdf_is_repriced_for_the_deployment_it_fits(
+    pdf_pricing: PdfDocumentPricing, fitting: str
+):
+    alone: Final = [{"role": "user", "content": [_REPEATED_DOCUMENT]}]
+    prompt: Final = [
+        {"role": "user", "content": [_REPEATED_DOCUMENT, _REPEATED_DOCUMENT]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [_REPEATED_DOCUMENT]}]},
+    ]
+    own: Final = _repriced_pdf_tokens(prompt, pdf_pricing)
+
+    assert inline_pdf_token_delta("", prompt, pdf_pricing) == 3 * inline_pdf_token_delta("", alone, pdf_pricing) < 0
+    assert _kept_models(_window_router(own, fitting, _CLAUDE_MODELS[0]), messages=prompt) == [fitting]
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={own}"):
+        _kept_models(_window_router(own - 1, fitting), messages=prompt)
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {"messages": _PDF_DOCUMENT_PROMPT},
+        {"input": _PDF_RESPONSES_INPUT},
+        {"messages": [{"role": "user", "content": [
+            {"type": "document", "source": {"type": "url", "url": _PDF_URL}},
+        ]}]},
+        {"messages": [{"role": "user", "content": [
+            {"type": "document", "source": {"type": "content", "content": _PDF_DOCUMENT_PROMPT[0]["content"]}},
+        ]}]},
+        {"messages": [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "document-tool", "content": _PDF_DOCUMENT_PROMPT[0]["content"]},
+        ]}]},
+    ],
+    ids=["anthropic_document", "responses_input_file", "document_url", "nested_document", "tool_result"],
+)
+@pytest.mark.parametrize("fitting", [_GEMINI_MODELS[0], "openai/gpt-6.1-sol"])
+def test_a_pdf_in_every_request_shape_reaches_the_deployment_its_own_pdf_price_fits(
+    request_kwargs: dict[str, object], fitting: str
+):
+    shared: Final = _window_router(1, _CLAUDE_MODELS[0])._count_pre_call_check_tokens(
+        messages=request_kwargs.get("messages"), input=request_kwargs.get("input")
+    )
+    router: Final = _window_router(shared - 1, fitting, _CLAUDE_MODELS[0])
+
+    assert _kept_models(router, **request_kwargs) == [fitting]
+
+
+def _image_prompt() -> list[dict[str, object]]:
+    from PIL import Image
+
+    image: Final = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(image, format="PNG")
+    url: Final = "data:image/png;base64," + base64.b64encode(image.getvalue()).decode()
+    return [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}]
+
+
+def _file_prompt(file_data: str) -> list[dict[str, object]]:
+    return [{"role": "user", "content": [{"type": "file", "file": {"file_data": file_data}}]}]
+
+
+def _wrapped_base64(encoded: str) -> str:
+    return "\n".join(encoded[start : start + 76] for start in range(0, len(encoded), 76))
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        [{"role": "user", "content": "read the attached report and summarize the findings. " * 40}],
+        _image_prompt(),
+        _file_prompt("data:application/pdf;base64," + base64.b64encode(b"not a pdf at all").decode()),
+    ],
+    ids=["text", "image", "unreadable_pdf"],
+)
+async def test_a_prompt_without_a_readable_pdf_keeps_its_unrepriced_count_on_every_deployment(prompt: list[object]):
+    lowest: Final = min(_stand_in_tokens(prompt), litellm.token_counter(model="openai/gpt-6.1-sol", messages=prompt))
+    router: Final = _window_router(lowest - 1, _GEMINI_MODELS[0], "openai/gpt-6.1-sol", _CLAUDE_MODELS[0])
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        _kept_models(router, messages=prompt)
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.acompletion(model="docs", messages=prompt)
+
+
+def test_a_pdf_with_line_wrapped_base64_keeps_its_page_price_and_fits_gemini():
+    prompt: Final = _file_prompt(f"data:application/pdf;base64,{_wrapped_base64(_PDF_BASE64)}")
+    limit: Final = litellm.token_counter(model="", messages=prompt) - 1
+
+    assert litellm.token_counter(model="", messages=prompt) == litellm.token_counter(
+        model="", messages=_file_prompt(_PDF_URL)
+    )
+    assert _kept_models(_window_router(limit, _GEMINI_MODELS[0]), messages=prompt) == [_GEMINI_MODELS[0]]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        _kept_models(_window_router(limit, _CLAUDE_MODELS[0]), messages=prompt)
+
+
+def test_an_explicit_input_token_count_still_decides_a_gemini_pdf_request():
+    router: Final = _window_router(_between_pdf_prices(), _GEMINI_MODELS[0])
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        _kept_models(router, messages=_PDF_FILE_PROMPT, input_token_count=_page_priced_pdf_tokens())
+    assert _kept_models(router, messages=_PDF_FILE_PROMPT, skip_inline_token_count=True) == [_GEMINI_MODELS[0]]
 
 
 _EMBEDDING_CONTEXT_WINDOW: Final = 8_192
@@ -4433,9 +4982,7 @@ async def test_an_async_pre_call_check_reads_embedding_media_off_the_event_loop(
     router: Final = _embedding_context_router("vertex_ai/gemini-embedding-2", window=20)
     caption_and_images: Final = ["a red square", *[_EMBEDDING_IMAGE_INPUT] * 400]
 
-    deployment, took, lags = await timed_with_loop_lags(
-        lambda: router.select("embedder", {}, input=caption_and_images)
-    )
+    deployment, took, lags = await timed_with_loop_lags(lambda: router.select("embedder", {}, input=caption_and_images))
 
     assert deployment["litellm_params"]["model"] == "vertex_ai/gemini-embedding-2"
     assert_loop_stayed_free(took, lags)
@@ -7112,6 +7659,9 @@ def test_stream_chunks_have_generated_content_detects_text_and_non_text():
     reasoning_chunk = _chunk(Delta(reasoning_content="Thinking"))
     assert _stream_chunks_have_generated_content([reasoning_chunk]) is True
 
+    signature_only_chunk = _chunk(Delta(reasoning_details=[{"type": "reasoning.text", "signature": "sig", "index": 0}]))
+    assert _stream_chunks_have_generated_content([empty_chunk, signature_only_chunk]) is True
+
     tool_call_delta = Delta(
         tool_calls=[
             ChatCompletionDeltaToolCall(
@@ -8097,9 +8647,9 @@ async def test_a_batch_file_upload_the_batch_deployment_refuses_stays_off_chat_a
         chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/files").mock(
             return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
         )
-        chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
-            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
-        )
+        chat_completions: Final = respx_mock.post(
+            host="chat-sku.openai.azure.com", path__regex=r"/chat/completions"
+        ).mock(return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION))
         with pytest.raises(raised, match="upload refused"):
             await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
         await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
@@ -11444,14 +11994,6 @@ def _anthropic_messages_ping_chunk() -> bytes:
 
 
 # -------- mid-stream error handling --------
-
-
-def test_anthropic_stream_forwards_ping_live_direct_call():
-    ping = _anthropic_messages_ping_chunk()
-    content = _anthropic_messages_content_chunk("hi")
-    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False) is True
-    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=True) is False
-    assert _anthropic_stream_forwards_ping_live(content, has_generated_content=False) is False
 
 
 def test_anthropic_stream_error_is_gateway_verdict_direct_call():
@@ -20189,6 +20731,514 @@ def test_pre_call_checks_filters_deployment_when_token_count_exceeds_limit():
     )
 
     assert [d["model_info"]["id"] for d in filtered] == ["large"]
+
+
+_RUSSIAN_PROMPT: Final = [{"role": "user", "content": "Привет, как дела? Это тестовый текст. " * 50}]
+
+
+def _stand_in_tokens(messages: list[dict[str, object]]) -> int:
+    return litellm.token_counter(custom_tokenizer=stand_in_tokenizer(), messages=messages)
+
+
+def _single_deployment(model: str, max_input_tokens: int) -> list[dict[str, object]]:
+    return [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": model, "api_key": "my-fake-key"},
+            "model_info": {"id": "only", "max_input_tokens": max_input_tokens},
+        }
+    ]
+
+
+def _kept_ids(model_list: list[dict[str, object]], messages: list[dict[str, object]]) -> list[str]:
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+    return [
+        d["model_info"]["id"]
+        for d in router._pre_call_checks(model="m", healthy_deployments=model_list, messages=messages)
+    ]
+
+
+def _cost_map_window(model: str, max_input_tokens: int) -> str:
+    provider, key = model.split("/", 1)
+    litellm.register_model(
+        {key: {"litellm_provider": provider, "mode": "chat", "max_input_tokens": max_input_tokens}},
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+    return model
+
+
+def _cost_map_deployment(model: str, max_input_tokens: int, id: str = "only") -> dict[str, object]:
+    return {
+        "model_name": "m",
+        "litellm_params": {
+            "model": _cost_map_window(f"{model}-{max_input_tokens}", max_input_tokens),
+            "api_key": "my-fake-key",
+        },
+        "model_info": {"id": id},
+    }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model", ["anthropic/my-fake-claude-model", "deepseek/my-fake-deepseek-model", "cohere_chat/my-fake-command-model"]
+)
+def test_pre_call_checks_leaves_a_stand_in_overcount_within_the_margin_to_the_provider(model: str):
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+    smallest_window_within_margin: Final = -(-tokens // STAND_IN_OVERCOUNT_MARGIN)
+
+    assert _kept_ids([_cost_map_deployment(model, tokens - 1)], _RUSSIAN_PROMPT) == ["only"]
+    assert _kept_ids([_cost_map_deployment(model, smallest_window_within_margin)], _RUSSIAN_PROMPT) == ["only"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_pre_call_checks_refuses_a_stand_in_count_past_the_margin():
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+    largest_window_past_margin: Final = (tokens - 1) // STAND_IN_OVERCOUNT_MARGIN
+
+    with pytest.raises(
+        litellm.ContextWindowExceededError, match=f"Max Input Tokens={largest_window_past_margin}, Got={tokens}"
+    ):
+        _kept_ids(
+            [_cost_map_deployment("deepseek/my-fake-deepseek-model", largest_window_past_margin)], _RUSSIAN_PROMPT
+        )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_pre_call_checks_steers_off_a_stand_in_overcount_when_another_deployment_fits():
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+    model_list: Final = [
+        _cost_map_deployment("deepseek/my-fake-deepseek-model", tokens - 1, id="small"),
+        _cost_map_deployment("deepseek/my-fake-deepseek-model", tokens, id="large"),
+    ]
+
+    assert _kept_ids(model_list, _RUSSIAN_PROMPT) == ["large"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "deepseek/deepseek-v4-pro"])
+def test_pre_call_checks_enforce_an_operator_cap_below_the_cost_map_window_exactly(model: str):
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+    catalog_window: Final = litellm.get_model_info(model)["max_input_tokens"]
+    assert catalog_window is not None and catalog_window > tokens
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Max Input Tokens={tokens - 1}, Got={tokens}"):
+        _kept_ids(_single_deployment(model, tokens - 1), _RUSSIAN_PROMPT)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "deployed_model",
+    [
+        pytest.param(lambda: _cost_map_window("deepseek/my-small-deepseek-model", 1), id="above-the-cost-map-window"),
+        pytest.param(lambda: "deepseek/my-unmapped-deepseek-model", id="not-in-the-cost-map"),
+    ],
+)
+def test_pre_call_checks_keep_the_margin_for_an_operator_window_the_cost_map_does_not_exceed(
+    deployed_model: Callable[[], str],
+):
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+
+    assert _kept_ids(_single_deployment(deployed_model(), tokens - 1), _RUSSIAN_PROMPT) == ["only"]
+
+
+def test_pre_call_checks_keep_the_margin_for_a_cost_map_window_a_saved_model_info_echoes():
+    model: Final = "mistral/mistral-small"
+    echoed: Final = litellm.get_model_info(model)
+    window: Final = echoed["max_input_tokens"]
+    assert window is not None
+    model_list: Final = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": model, "api_key": "my-fake-key"},
+            "model_info": {**echoed, "id": "only"},
+        }
+    ]
+
+    assert _kept_ids(model_list, [{"role": "user", "content": _text_of_stand_in_tokens(window * 3 // 2)}]) == ["only"]
+
+
+def _text_of_stand_in_tokens(tokens: int) -> str:
+    sentence: Final = "Привет, как дела? Это тестовый текст. "
+    return sentence * (tokens // litellm.token_counter(custom_tokenizer=stand_in_tokenizer(), text=sentence))
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "deployment",
+    [
+        pytest.param(
+            lambda window: _cost_map_deployment("ollama/my-fake-ollama-model", window), id="ollama-in-the-cost-map"
+        ),
+        pytest.param(
+            lambda window: _single_deployment("ollama_chat/my-unmapped-ollama-model", window)[0],
+            id="ollama-chat-operator-window",
+        ),
+        pytest.param(
+            lambda window: {
+                "model_name": "m",
+                "litellm_params": {"model": "my-unmapped-model", "custom_llm_provider": "ollama_chat"},
+                "model_info": {"id": "only", "max_input_tokens": window},
+            },
+            id="ollama-chat-custom-llm-provider",
+        ),
+    ],
+)
+def test_pre_call_checks_refuse_a_stand_in_overcount_for_a_provider_that_truncates_silently(
+    deployment: Callable[[int], dict[str, object]],
+):
+    tokens: Final = _stand_in_tokens(_RUSSIAN_PROMPT)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Max Input Tokens={tokens - 1}, Got={tokens}"):
+        _kept_ids([deployment(tokens - 1)], _RUSSIAN_PROMPT)
+
+
+def test_pre_call_checks_refuse_a_stand_in_overcount_on_an_embedding_model():
+    backend: Final = "cohere/embed-english-v3.0"
+    window: Final = litellm.get_model_info(backend)["max_input_tokens"]
+    assert window is not None
+    router: Final = Router(
+        model_list=[{"model_name": "embedder", "litellm_params": {"model": backend, "api_key": "sk-test"}}],
+        enable_pre_call_checks=True,
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Max Input Tokens={window}"):
+        router._pre_call_checks(
+            model="embedder",
+            healthy_deployments=router.registry().deployments("embedder"),
+            input=_text_of_stand_in_tokens(window * 3 // 2),
+        )
+
+
+def _blank_pdf_prompt() -> list[dict[str, object]]:
+    writer: Final = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    pdf: Final = io.BytesIO()
+    writer.write(pdf)
+    file_data: Final = "data:application/pdf;base64," + base64.b64encode(pdf.getvalue()).decode()
+    return [{"role": "user", "content": [{"type": "file", "file": {"filename": "a.pdf", "file_data": file_data}}]}]
+
+
+def test_pre_call_checks_count_each_openai_model_with_its_own_pdf_framing():
+    prompt: Final = _blank_pdf_prompt()
+    own_tokens: Final = {
+        model: litellm.token_counter(model=model, messages=prompt) for model in ("gpt-4o", "openai/gpt-9.9-preview")
+    }
+    assert len(set(own_tokens.values())) == 2
+    model_list: Final = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": model, "api_key": "my-fake-key"},
+            "model_info": {"id": model, "max_input_tokens": tokens},
+        }
+        for model, tokens in sorted(own_tokens.items(), key=lambda item: item[1], reverse=True)
+    ]
+
+    assert sorted(_kept_ids(model_list, prompt)) == sorted(own_tokens)
+
+
+def _uncertain_overflow_model() -> str:
+    window: Final = _stand_in_tokens(_RUSSIAN_PROMPT) - 1
+    return _cost_map_window(f"deepseek/my-fake-deepseek-model-{window}", window)
+
+
+def _context_window_fallback_router(**router_settings: object) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {
+                    "model": _uncertain_overflow_model(),
+                    "api_key": "my-fake-key",
+                    "mock_response": "m",
+                },
+                "model_info": {"id": "m"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "openai/my-other-fake-model",
+                    "api_key": "my-fake-key",
+                    "mock_response": "fallback",
+                },
+                "model_info": {"id": "fallback"},
+            },
+        ],
+        enable_pre_call_checks=True,
+        num_retries=0,
+        **router_settings,
+    )
+
+
+@pytest.mark.parametrize(
+    ("router_settings", "request_settings", "answered_by"),
+    [
+        ({"context_window_fallbacks": [{"m": ["fallback"]}]}, {}, "fallback"),
+        ({}, {"context_window_fallbacks": [{"m": ["fallback"]}]}, "fallback"),
+        ({"context_window_fallbacks": [{"m": ["fallback"]}]}, {"context_window_fallbacks": []}, "m"),
+        ({"context_window_fallbacks": [{"m": ["fallback"]}]}, {"disable_fallbacks": True}, "m"),
+        ({"context_window_fallbacks": [{"m": ["fallback"]}], "max_fallbacks": 0}, {}, "m"),
+        ({"context_window_fallbacks": [{"other": ["fallback"]}]}, {}, "m"),
+        ({"context_window_fallbacks": [{"m": []}]}, {}, "m"),
+        ({"context_window_fallbacks": [{"m": ["m"]}]}, {}, "m"),
+        ({"fallbacks": [{"m": ["fallback"]}]}, {}, "m"),
+        ({}, {}, "m"),
+    ],
+    ids=[
+        "router_context_window_fallback",
+        "request_context_window_fallback",
+        "request_clears_the_router_fallback",
+        "fallbacks_disabled",
+        "no_fallback_budget",
+        "fallback_for_another_group",
+        "empty_fallback_chain",
+        "fallback_chain_names_only_the_failing_group",
+        "generic_fallbacks_only",
+        "no_fallback",
+    ],
+)
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_an_uncertain_stand_in_overflow_goes_to_a_context_window_fallback_that_resolves(
+    router_settings: dict[str, object], request_settings: dict[str, object], answered_by: str
+):
+    router: Final = _context_window_fallback_router(**router_settings)
+
+    response: Final = await router.acompletion(model="m", messages=_RUSSIAN_PROMPT, **request_settings)
+
+    assert response.choices[0].message.content == answered_by
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_sync_completion_sends_an_uncertain_stand_in_overflow_to_its_context_window_fallback():
+    router: Final = _context_window_fallback_router(context_window_fallbacks=[{"m": ["fallback"]}])
+
+    response: Final = router.completion(model="m", messages=_RUSSIAN_PROMPT)
+
+    assert response.choices[0].message.content == "fallback"
+
+
+def _refusing_provider(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("https://refusing.local/v1/chat/completions").respond(
+        400,
+        json={
+            "error": {
+                "message": "This model's maximum context length is 1000 tokens",
+                "type": "invalid_request_error",
+                "code": "context_length_exceeded",
+            }
+        },
+    )
+
+
+def _refusing_deployment(model_name: str, id: str, **params: object) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": _uncertain_overflow_model(),
+            "api_key": "my-fake-key",
+            "api_base": "https://refusing.local/v1",
+            **params,
+        },
+        "model_info": {"id": id},
+    }
+
+
+@pytest.mark.parametrize(
+    ("model_list", "router_settings"),
+    [
+        (lambda: [_refusing_deployment("m", "m")], {"retry_policy": RetryPolicy(BadRequestErrorRetries=2)}),
+        (lambda: [_refusing_deployment("m", "m"), _refusing_deployment("n", "n")], {"fallbacks": [{"m": ["n"]}]}),
+        (lambda: [_refusing_deployment("m", "first", order=1), _refusing_deployment("m", "second", order=2)], {}),
+    ],
+    ids=["retry_policy", "generic_fallback", "order_fallback"],
+)
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_an_uncertain_stand_in_overflow_the_provider_refused_is_not_sent_again(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    model_list: Callable[[], list[dict[str, object]]],
+    router_settings: dict[str, object],
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    provider: Final = _refusing_provider(respx_mock)
+    router: Final = Router(model_list=model_list(), enable_pre_call_checks=True, retry_after=0, **router_settings)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match="maximum context length is 1000 tokens"):
+        await router.acompletion(model="m", messages=_RUSSIAN_PROMPT)
+
+    assert provider.call_count == 1
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_an_uncertain_stand_in_overflow_is_not_sent_after_its_context_window_fallback_was_refused(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    provider: Final = _refusing_provider(respx_mock)
+    router: Final = Router(
+        model_list=[_refusing_deployment("m", "m"), _refusing_deployment("n", "n")],
+        enable_pre_call_checks=True,
+        num_retries=0,
+        context_window_fallbacks=[{"m": ["n"]}],
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.acompletion(model="m", messages=_RUSSIAN_PROMPT)
+
+    assert provider.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("fallback", "router_settings"),
+    [
+        ("small", {}),
+        ({"model": "small", "temperature": 0.5}, {}),
+        ("fits", {"fallback_access_check": _AllowlistFallbackAccessCheck(frozenset())}),
+    ],
+    ids=["too_small_group", "too_small_params", "not_authorized"],
+)
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_an_uncertain_stand_in_overflow_reaches_its_provider_when_the_context_window_fallback_cannot_take_it(
+    fallback: str | dict[str, object], router_settings: dict[str, object]
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {
+                    "model": _uncertain_overflow_model(),
+                    "api_key": "my-fake-key",
+                    "mock_response": "m",
+                },
+                "model_info": {"id": "m"},
+            },
+            {
+                "model_name": "small",
+                "litellm_params": {
+                    "model": _cost_map_window("openai/my-small-fake-model", 10),
+                    "api_key": "my-fake-key",
+                    "mock_response": "small",
+                },
+                "model_info": {"id": "small"},
+            },
+            {
+                "model_name": "fits",
+                "litellm_params": {
+                    "model": "openai/my-other-fake-model",
+                    "api_key": "my-fake-key",
+                    "mock_response": "fits",
+                },
+                "model_info": {"id": "fits"},
+            },
+        ],
+        enable_pre_call_checks=True,
+        num_retries=0,
+        context_window_fallbacks=[{"m": [fallback]}],
+        **router_settings,
+    )
+
+    response: Final = await router.acompletion(model="m", messages=_RUSSIAN_PROMPT)
+
+    assert response.choices[0].message.content == "m"
+
+
+@pytest.mark.parametrize(
+    "context_window_fallbacks",
+    [[{"a": ["b"]}], [{"a": ["b"]}, {"b": ["a"]}]],
+    ids=["fallback_target_has_no_chain_of_its_own", "fallback_target_falls_back_to_a_tried_group"],
+)
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_a_context_window_fallback_target_keeps_its_own_uncertain_stand_in_overflow(
+    context_window_fallbacks: list[dict[str, list[str]]],
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": _uncertain_overflow_model(),
+                    "api_key": "my-fake-key",
+                    "mock_response": group,
+                },
+                "model_info": {"id": group},
+            }
+            for group in ("a", "b")
+        ],
+        enable_pre_call_checks=True,
+        num_retries=0,
+        context_window_fallbacks=context_window_fallbacks,
+    )
+
+    response: Final = await router.acompletion(model="a", messages=_RUSSIAN_PROMPT)
+
+    assert response.choices[0].message.content == "b"
+
+
+@pytest.mark.parametrize(("fitting_tags", "picked"), [(["paid"], "free"), (["free"], "fits")])
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_an_uncertain_stand_in_overflow_steers_only_to_a_deployment_tag_routing_can_pick(
+    fitting_tags: list[str], picked: str
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {
+                    "model": "openai/my-other-fake-model",
+                    "api_key": "my-fake-key",
+                    "tags": fitting_tags,
+                },
+                "model_info": {"id": "fits"},
+            },
+            {
+                "model_name": "m",
+                "litellm_params": {"model": _uncertain_overflow_model(), "api_key": "my-fake-key", "tags": ["free"]},
+                "model_info": {"id": "free"},
+            },
+        ],
+        enable_pre_call_checks=True,
+        enable_tag_filtering=True,
+        num_retries=0,
+    )
+
+    deployment: Final = await router.async_get_available_deployment(
+        model="m", messages=_RUSSIAN_PROMPT, request_kwargs={"metadata": {"tags": ["free"]}}
+    )
+
+    assert deployment["model_info"]["id"] == picked
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_an_uncertain_stand_in_overflow_is_kept_when_the_fitting_deployment_rejects_a_requested_param(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    no_json_mode_model: Final = "gpt-3.5-turbo-16k"
+    assert "response_format" not in (
+        litellm.get_supported_openai_params(model=no_json_mode_model, custom_llm_provider="openai") or []
+    )
+    model_list: Final = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": f"openai/{no_json_mode_model}", "api_key": "my-fake-key"},
+            "model_info": {"id": "fits", "max_input_tokens": 1_000_000},
+        },
+        {
+            "model_name": "m",
+            "litellm_params": {"model": _uncertain_overflow_model(), "api_key": "my-fake-key"},
+            "model_info": {"id": "json"},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="m",
+        healthy_deployments=model_list,
+        messages=_RUSSIAN_PROMPT,
+        request_kwargs={"response_format": {"type": "json_object"}},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["json"]
 
 
 def test_pre_call_checks_context_window_check_is_skipped_but_not_fatal_when_token_counting_fails():
