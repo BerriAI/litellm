@@ -1020,7 +1020,9 @@ def _caller_scope(context: OperationContext, servers: Sequence[MCPServer]) -> st
         | frozenset({"authorization"})
         | frozenset(map(str.lower, chain.from_iterable(server.extra_headers or () for server in servers)))
     )
-    profile_ids: Final = tuple(server.auth_profile_id for server in servers)
+    profile_ids: Final = tuple(
+        sorted((server.server_id, server.auth_profile_id) for server in servers if server.auth_profile_id is not None)
+    )
     material: Final = (
         caller.model_dump(include={"api_key", "user_id", "team_id", "org_id", "end_user_id", "user_role"}, mode="json")
         if caller is not None
