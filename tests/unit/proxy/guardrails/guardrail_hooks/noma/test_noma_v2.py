@@ -52,6 +52,44 @@ async def _scan_body(guardrail: NomaV2Guardrail, respx_mock: respx.MockRouter) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skip_passed", "noma_action", "logged_action"),
+    [
+        (True, "BLOCKED", "flag"),
+        (True, "GUARDRAIL_INTERVENED", "flag"),
+        (True, "NONE", None),
+        (False, "BLOCKED", None),
+    ],
+)
+async def test_monitor_mode_logs_a_flagging_action_for_a_verdict_it_lets_through(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    skip_passed: bool,
+    noma_action: str,
+    logged_action: str | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", skip_passed)
+    respx_mock.post(f"{_API_BASE}/litellm/guardrail").respond(json={"action": noma_action, "texts": ["[masked]"]})
+    guardrail = NomaV2Guardrail(
+        api_base=_API_BASE, guardrail_name="noma-guard", event_hook="pre_call", default_on=True, monitor_mode=True
+    )
+    request_data: dict[str, object] = {"metadata": {}}
+
+    returned = await guardrail.apply_guardrail(
+        inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+    )
+
+    assert returned == {"texts": ["hello"]}
+    metadata = request_data["metadata"]
+    assert isinstance(metadata, dict)
+    (run,) = metadata["standard_logging_guardrail_information"]
+    assert run["guardrail_status"] == "success"
+    assert run.get("guardrail_action") == logged_action
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("guardrail_type", "extra_params"), [("noma_v2", {}), ("noma", {"use_v2": True})])
 async def test_gateway_name_from_guardrail_config_reaches_noma(
     guardrail_type: str, extra_params: dict[str, bool], respx_mock: respx.MockRouter

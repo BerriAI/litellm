@@ -606,6 +606,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
         elif self.on_flagged_action == "monitor":
             verbose_proxy_logger.info("Gray Swan Guardrail: Monitoring mode - allowing flagged content")
+            self.mark_run_as_flagging()
             return inputs
         elif self.on_flagged_action == "passthrough":
             # Replace content with violation message

@@ -54,6 +54,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
     GUARDRAIL_ACTION_BLOCK,
+    GUARDRAIL_ACTION_FLAG,
     GUARDRAIL_ACTION_MASK,
     CallTypes,
     GenericGuardrailAPIInputs,
@@ -123,6 +124,17 @@ def acting_runs_are_logged() -> bool:
 # the request can mark that run as blocking.
 _last_logged_run: Final[contextvars.ContextVar[StandardLoggingGuardrailInformation | None]] = contextvars.ContextVar(
     "litellm_guardrail_last_logged_run", default=None
+)
+
+# Set by a hook that found a violation and let the request continue, so the run it logs with a
+# success status carries the flag action.
+_run_let_a_violation_through: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
+    "litellm_guardrail_run_let_a_violation_through", default=False
+)
+
+# A logged run whose OTel span waits until its hook has decided whether to reject the request.
+_run_with_held_span: Final[contextvars.ContextVar[StandardLoggingGuardrailInformation | None]] = contextvars.ContextVar(
+    "litellm_guardrail_run_with_held_span", default=None
 )
 
 ScannedTextScope: TypeAlias = Literal["texts", "tool_calls"]
@@ -1692,6 +1704,7 @@ class CustomGuardrail(CustomLogger):
         guardrail_provider: str | None = None,
         event_type: GuardrailEventHooks | None = None,
         tracing_detail: GuardrailTracingDetail | None = None,
+        hold_span: bool = False,
     ) -> None:
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
@@ -1700,6 +1713,8 @@ class CustomGuardrail(CustomLogger):
             tracing_detail: Optional typed dict with provider-specific tracing fields
                 (guardrail_id, policy_template, detection_method, confidence_score,
                 classification, match_details, patterns_checked, alert_recipients).
+            hold_span: Keep the run's OTel span until ``emit_held_run_span`` is called, for a
+                guardrail that logs its verdict before it decides whether to reject the request.
         """
         if isinstance(guardrail_json_response, Exception):
             guardrail_json_response = str(guardrail_json_response)
@@ -1756,7 +1771,7 @@ class CustomGuardrail(CustomLogger):
             end_time=end_time,
             duration=duration,
             masked_entity_count=masked_entity_count,
-            **(tracing_detail or {}),
+            **self._tracing_detail_with_flag(tracing_detail, guardrail_status),
         )
 
         def _append_guardrail_info(container: dict[str, object]) -> None:
@@ -1777,15 +1792,49 @@ class CustomGuardrail(CustomLogger):
         _guardrail_self_recorded.set(True)
         _last_logged_run.set(slg)
 
+        if hold_span:
+            _run_with_held_span.set(slg)
+            return
         # Emit the otel guardrail span here, where every guardrail execution lands,
         # rather than relying on a post-call hook that does not fire on every path
         # (e.g. a pass-through request that passes its guardrails).
+        self._emit_run_span(slg)
+
+    @staticmethod
+    def _emit_run_span(run: StandardLoggingGuardrailInformation) -> None:
         try:
             from litellm.integrations.otel.logger import emit_guardrail_span
 
-            emit_guardrail_span(slg)
+            emit_guardrail_span(run)
         except Exception:
             pass
+
+    def emit_held_run_span(self) -> None:
+        """Emit the OTel span of the run this guardrail logged with ``hold_span``, once the hook has
+        decided whether to reject the request. Does nothing when no span is held."""
+        run: Final = _run_with_held_span.get()
+        if run is not None and "guardrail_name" in run and run["guardrail_name"] == self.guardrail_name:
+            _run_with_held_span.set(None)
+            self._emit_run_span(run)
+
+    @staticmethod
+    def _tracing_detail_with_flag(
+        tracing_detail: GuardrailTracingDetail | None, guardrail_status: GuardrailStatus
+    ) -> GuardrailTracingDetail:
+        """``tracing_detail`` with ``guardrail_action`` flag added for a run that called
+        ``mark_run_as_flagging`` and logs a success status with no action of its own. Added only
+        with ``general_settings.guardrail_log_skip_passed`` on."""
+        detail: Final[GuardrailTracingDetail] = tracing_detail or {}
+        flagged_as_passed: Final = _run_let_a_violation_through.get() and guardrail_status == "success"
+        if not flagged_as_passed or "guardrail_action" in detail or not acting_runs_are_logged():
+            return detail
+        return {**detail, "guardrail_action": GUARDRAIL_ACTION_FLAG}
+
+    def mark_run_as_flagging(self) -> None:
+        """Record that this run found a violation and let the request continue, for a guardrail
+        in a monitor mode. The run it logs with a success status then carries ``guardrail_action``
+        flag, with ``general_settings.guardrail_log_skip_passed`` on."""
+        _run_let_a_violation_through.set(True)
 
     def mark_logged_run_as_blocking(self) -> None:
         """Set ``guardrail_action`` to block on the run this guardrail just logged, for a guardrail
@@ -2257,6 +2306,7 @@ def log_guardrail_information(func):
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
+        flagging_token: Final = _run_let_a_violation_through.set(False)
         handed_response_token: Final = _handed_response.set(baseline.response)
         try:
             response: Final = await func(*args, **kwargs)
@@ -2284,6 +2334,7 @@ def log_guardrail_information(func):
             )
         finally:
             _handed_response.reset(handed_response_token)
+            _run_let_a_violation_through.reset(flagging_token)
             _guardrail_self_recorded.reset(self_recorded_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
@@ -2305,6 +2356,7 @@ def log_guardrail_information(func):
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
+        flagging_token: Final = _run_let_a_violation_through.set(False)
         try:
             response: Final = func(*args, **kwargs)
             if self.records_own_guardrail_information or _guardrail_self_recorded.get():
@@ -2326,6 +2378,7 @@ def log_guardrail_information(func):
                 event_type=event_type,
             )
         finally:
+            _run_let_a_violation_through.reset(flagging_token)
             _guardrail_self_recorded.reset(self_recorded_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 

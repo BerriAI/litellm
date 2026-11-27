@@ -977,6 +977,22 @@ class TestGuardrailOtelSpanEmission:
         assert emitted["start_time"] == 1.0
         assert emitted["end_time"] == 2.0
 
+    def test_held_span_is_emitted_once_when_released(self, monkeypatch):
+        captured = []
+        monkeypatch.setattr("litellm.integrations.otel.logger.emit_guardrail_span", captured.append)
+        guardrail = self._make_guardrail()
+        request_data = {"metadata": {}}
+
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"ok": True}, request_data=request_data, guardrail_status="success", hold_span=True
+        )
+        assert captured == []
+
+        guardrail.emit_held_run_span()
+        guardrail.emit_held_run_span()
+
+        assert captured == request_data["metadata"]["standard_logging_guardrail_information"]
+
     def test_span_emission_failure_does_not_break_recording(self, monkeypatch):
         def _boom(_entry):
             raise RuntimeError("otel exporter down")

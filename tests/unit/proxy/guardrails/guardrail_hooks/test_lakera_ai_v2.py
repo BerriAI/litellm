@@ -487,6 +487,40 @@ class TestLoggedRunKeepsItsRequestLogRow:
         assert guardrail_ran_without_acting(entry) is False
 
     @_EVERY_HOOK
+    @pytest.mark.parametrize(
+        ("skip_passed", "on_flagged", "lakera_response", "span_action"),
+        [
+            (True, "block", PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE, "block"),
+            (True, "monitor", PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE, "flag"),
+            (True, "block", {"flagged": False, "payload": []}, None),
+            (False, "block", PII_AND_PROMPT_ATTACK_LAKERA_RESPONSE, None),
+        ],
+        ids=["blocked", "let_through", "passed", "setting_off"],
+    )
+    async def test_run_emits_one_span_with_the_action_the_hook_ended_on(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        run_hook: _RunHook,
+        new_request: _NewRequest,
+        skip_passed: bool,
+        on_flagged: str,
+        lakera_response: Mapping[str, object],
+        span_action: str | None,
+    ):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", skip_passed)
+        span_actions: Final[list[object]] = []
+        monkeypatch.setattr(
+            "litellm.integrations.otel.logger.emit_guardrail_span",
+            lambda run: span_actions.append(run.get("guardrail_action")),
+        )
+        data: Final = new_request()
+        with contextlib.suppress(HTTPException):
+            await run_hook(LakeraAIGuardrail(api_key="test_key", on_flagged=on_flagged), lakera_response, data)
+        assert span_actions == [span_action]
+
+    @_EVERY_HOOK
     async def test_passed_run_logs_no_action(self, run_hook: _RunHook, new_request: _NewRequest):
         data: Final = new_request()
         guardrail: Final = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
