@@ -150,6 +150,7 @@ mod tests {
                 "search_tools": [],
                 "mcp_tool_search_enabled": null,
                 "skills": [],
+                "mcp_auth_profiles": null,
             })
         );
         assert_eq!(
