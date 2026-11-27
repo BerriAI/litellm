@@ -36,6 +36,11 @@ fn secret_patterns(minimum_custom_key_length: usize) -> String {
             r"huggingface_token|jwt_secret)",
             r#"['"]?\s*[:=]\s*['"]?(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]+"#,
         ),
+        concat!(
+            r#"\bauthorization['"]\s*[:=]\s*['"]?"#,
+            r#"(?!(?:null|None|true|false)(?![^\s,'"})\]{}>])|(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]*\*{3})"#,
+            r#"(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]+"#,
+        ),
         r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*",
         r"(?<=[?&])sig=[A-Za-z0-9%+/=]+",
         r#"\{[^{}]*"type"\s*:\s*"service_account"[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"#,
@@ -131,6 +136,34 @@ mod tests {
     #[case::auth_scheme_under_a_key_name(
         r#""authorization_token": "Bearer opaque-mcp-credential", "name": "docs""#,
         r#""REDACTED", "name": "docs""#
+    )]
+    #[case::mcp_tool_authorization(
+        r#"{"server_label": "docs", "authorization": "opaque-mcp-credential"}"#,
+        r#"{"server_label": "docs", "REDACTED"}"#
+    )]
+    #[case::masked_authorization_header_keeps_its_name(
+        "-H 'Authorization: Bearer sk-p****abcd'",
+        "-H 'Authorization: Bearer sk-p****abcd'"
+    )]
+    #[case::masked_authorization_value_is_kept(
+        r#"{"Authorization": "Bearer sk-p****abcd"}"#,
+        r#"{"Authorization": "Bearer sk-p****abcd"}"#
+    )]
+    #[case::authorization_inside_another_key_name_is_kept(
+        r#"{"requires_authorization": true, "x_authorization": "on"}"#,
+        r#"{"requires_authorization": true, "x_authorization": "on"}"#
+    )]
+    #[case::literal_authorization_value_is_kept(
+        r#"{"authorization": null}"#,
+        r#"{"authorization": null}"#
+    )]
+    #[case::authorization_that_only_starts_with_a_literal(
+        r#"{"authorization": "null-opaque-mcp-credential"}"#,
+        r#"{"REDACTED"}"#
+    )]
+    #[case::bearer_mcp_tool_authorization(
+        r#"{"authorization": "Bearer opaque-mcp-credential"}"#,
+        r#"{"REDACTED"}"#
     )]
     fn redacts_the_same_spans_as_the_python_patterns(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(

@@ -683,7 +683,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         headers: MutableMapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: MutableMapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
@@ -804,10 +804,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     # Providers whose InvokeModel body uses the Converse API format
@@ -1155,6 +1155,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
+            from litellm.llms.anthropic.chat.transformation import without_malformed_thinking_blocks
             from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
                 AmazonAnthropicClaudeConfig,
             )
@@ -1194,7 +1195,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
             return config.transform_request(
                 model=model,
-                messages=messages,
+                messages=[without_malformed_thinking_blocks(message) for message in messages]
+                if drop_params
+                else messages,
                 optional_params={
                     k: v for k, v in mapped_params.items() if k not in _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS
                 },
@@ -1381,9 +1384,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict[str, object],
-    ) -> bytes | str | dict:
+    ) -> bytes | str | dict[str, object]:
         """
         Transform file request and return a pre-signed request for S3.
         This keeps the HTTP handler clean by doing all the signing here.
@@ -1468,9 +1471,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         content: str,
         api_base: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         s3_encryption_key_id: str | None = None,
-    ) -> tuple[dict, str]:
+    ) -> tuple[dict[str, object], str]:
         """
         Sign S3 PUT request using the same proven logic as S3Logger.
         Reuses the exact pattern from litellm/integrations/s3_v2.py
@@ -1619,7 +1622,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             object="file",
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def transform_retrieve_file_request(

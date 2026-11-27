@@ -13,7 +13,7 @@ import { CustomerUsageDatePicker, CustomerUsageStats } from "./_components/Custo
 import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { PageContent } from "@/components/shared/Page";
-import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { isProxyAdminRole } from "@/utils/roles";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
 import CustomerDetail from "./_components/CustomerDetail";
@@ -94,16 +94,15 @@ function CustomerOrganizations() {
   };
 
   return (
-    <>
-      <PageHeader>
+    <div className="mx-auto flex w-full max-w-[1872px] flex-col gap-6">
+      <PageHeader
+        aside={<CustomerUsageDatePicker value={dateValue} onValueChange={onDateChange} presetShortLabel={preset} />}
+      >
         <PageHeaderTitle>
           <Building2 />
           {t("customerPortal.list.title")}
         </PageHeaderTitle>
         <PageHeaderDescription>{t("customerPortal.list.description")}</PageHeaderDescription>
-        <PageHeaderControls className="flex-wrap">
-          <CustomerUsageDatePicker value={dateValue} onValueChange={onDateChange} presetShortLabel={preset} />
-        </PageHeaderControls>
       </PageHeader>
       <PageContent>
         <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
@@ -173,6 +172,6 @@ function CustomerOrganizations() {
           onClose={() => setEditingOrganizationId(null)}
         />
       )}
-    </>
+    </div>
   );
 }

@@ -277,7 +277,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return OpenRouterException(
             message=error_message,
             status_code=status_code,

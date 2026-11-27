@@ -190,7 +190,7 @@ class SagemakerConfig(BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
         return await asyncify(self.transform_request)(model, messages, optional_params, litellm_params, headers)

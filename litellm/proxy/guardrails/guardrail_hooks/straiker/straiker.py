@@ -62,7 +62,6 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "straiker"
 DEFAULT_BLOCK_MESSAGE: Final = "Content violates policy"
@@ -348,7 +347,7 @@ def _route_has_translation(request_data: Mapping[str, object]) -> bool:
     return any(call_type in mappings for call_type in get_call_types_for_route(route) or ())
 
 
-def _request_structured_messages(request_data: dict) -> list[dict[str, object]] | None:
+def _request_structured_messages(request_data: dict[str, object]) -> list[dict[str, object]] | None:
     messages: Final = request_data.get("messages")
     if messages:
         return messages if isinstance(messages, list) else None
@@ -1005,7 +1004,7 @@ def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse | None:
 
 class StraikerGuardrail(CustomGuardrail):
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel]:
+    def get_config_model() -> type[StraikerGuardrailConfigModel]:
         return StraikerGuardrailConfigModel
 
     @classmethod
@@ -1131,7 +1130,7 @@ class StraikerGuardrail(CustomGuardrail):
 
     def _build_context(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         model: str | None,
         logging_obj: LiteLLMLoggingObj | None,
     ) -> StraikerWebhookContext:
@@ -1367,7 +1366,7 @@ class StraikerGuardrail(CustomGuardrail):
         self,
         *,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         error: str,
         is_unreachable: bool,
@@ -1560,7 +1559,7 @@ class StraikerGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:

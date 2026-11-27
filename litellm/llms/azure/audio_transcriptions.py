@@ -42,7 +42,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         azure_ad_token: str | None = None,
         atranscription: bool = False,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         custom_llm_provider: str = "azure",
     ) -> (
         TranscriptionResponse
@@ -51,6 +51,11 @@ class AzureAudioTranscription(AzureChatCompletion):
     ):
         data: Final = {"model": model, "file": audio_file, **optional_params}
         sdk_data: Final = sdk_compatible_transcription_request_data(data)
+        client_api_version: Final = (
+            None
+            if self.is_api_version_opt_out(api_version) or self.is_azure_v1_api_version((api_version or "").lower())
+            else api_version
+        )
 
         if atranscription is True:
             return self.async_audio_transcriptions(
@@ -60,6 +65,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 timeout=timeout,
                 api_key=api_key,
                 api_base=api_base,
+                api_version=client_api_version,
                 client=client,
                 max_retries=max_retries,
                 logging_obj=logging_obj,
@@ -69,7 +75,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             )
 
         azure_client: Final = self.get_azure_openai_client(
-            api_version=None if self.is_azure_v1_api_version(api_version) else api_version,
+            api_version=client_api_version,
             api_base=api_base,
             api_key=api_key,
             model=model,
@@ -133,7 +139,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         api_base: str | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         max_retries: int | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         custom_llm_provider: str = "azure",
     ) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:
         response = None

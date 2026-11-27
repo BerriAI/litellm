@@ -91,12 +91,12 @@ async def _anthropic_inference_view(
 ) -> InferenceRequestView | InferenceRequestViewError:
     from litellm.llms.anthropic.messages.adapters.handler import prepare_context_managed_request
     from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
-    from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
+    from litellm.llms.anthropic.messages.native.utils import native_messages_to_send
 
     typed_system: Final = _typed_system(system)
     if isinstance(typed_system, ValidationError):
         return InferenceRequestView(messages=messages, system=system)
-    normalized: Final = normalize_native_messages(messages)
+    normalized: Final = native_messages_to_send(messages, drop_params=False)
     spec: Final = _typed_spec(edits.spec)
     try:
         prepared: Final = await prepare_context_managed_request(

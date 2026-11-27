@@ -1005,7 +1005,7 @@ async fn charge_from_cached_spend(
                 .map(|(index, spend)| async move {
                     let counter = units[*index].warmed();
                     if spend > 0.0 {
-                        increment_one(store, counter, spend).await?;
+                        raise_to_cached_spend(store, counter, spend).await?;
                     }
                     Ok::<(), Failure>(())
                 });
@@ -1021,6 +1021,29 @@ async fn charge_from_cached_spend(
             for index in &fallback {
                 warmed[*index] = Some(Warmed::Failed(failure.clone()));
             }
+        }
+    }
+}
+
+/// `_seed_spend_counter_cache`: raise a cold counter to the auth cache's spend and never past it,
+/// so charges and pods that all found it cold leave that spend in it once. A Redis that refuses
+/// the script takes the increment; any other failure may or may not have landed, so the counter is
+/// dropped everywhere, as a failed increment drops it. The seed still ends with the charge's own
+/// `INCRBYFLOAT`, of nothing: a counter that command cannot reach (a Redis Cluster slot
+/// mid-migration) fails here and is dropped on its own, as it was when the seed was that increment.
+async fn raise_to_cached_spend(
+    store: &SpendCounters,
+    counter: &SpendCounter,
+    spend: f64,
+) -> Result<(), Failure> {
+    match store.set_max(counter, Number::Float(spend)).await {
+        Ok(_) => increment_one(store, counter, 0.0).await,
+        Err(error) if error.kind() == ErrorKind::Rejected => {
+            increment_one(store, counter, spend).await
+        }
+        Err(error) => {
+            store.invalidate(std::slice::from_ref(counter)).await;
+            Err(store_failure(error))
         }
     }
 }

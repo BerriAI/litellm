@@ -9,7 +9,7 @@ import BulkCreateUsersButton from "@/components/bulk_create_users_button";
 import { CreateUserButton } from "@/components/CreateUserButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageContent, PageTabs, PageTabsBar, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { TabsContent } from "@/components/ui/tabs";
 import {
@@ -325,6 +325,51 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     />
   );
 
+  const userActions = (
+    <>
+      {userListQuery.isLoading && (
+        <>
+          <Skeleton className="h-9 w-28" />
+          <Skeleton className="h-9 w-36" />
+          <Skeleton className="h-9 w-28" />
+        </>
+      )}
+      {!userListQuery.isLoading && userID && accessToken && (
+        <>
+          {isProxyAdmin && (
+            <CreateUserButton userID={userID} accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
+          )}
+
+          {isProxyAdmin && (
+            <BulkCreateUsersButton accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
+          )}
+
+          {isProxyAdmin && (
+            <Button
+              type="button"
+              onClick={handleToggleSelectionMode}
+              variant={selectionMode ? "default" : "outline"}
+              data-testid="toggle-user-selection"
+            >
+              {selectionMode ? t("users.page.selection.cancel") : t("users.page.selection.start")}
+            </Button>
+          )}
+
+          {isProxyAdmin && selectionMode && (
+            <Button
+              type="button"
+              onClick={() => setIsBulkEditModalVisible(true)}
+              disabled={selectedUsers.length === 0}
+              data-testid="bulk-edit-users"
+            >
+              {t("users.page.selection.bulkEdit", { count: selectedUsers.length })}
+            </Button>
+          )}
+        </>
+      )}
+    </>
+  );
+
   return (
     <>
       <PageContent>
@@ -335,62 +380,18 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               {t("shell.nav.items.internalUsers")}
             </PageHeaderTitle>
             <PageHeaderDescription>{t("shell.pageDescriptions.users")}</PageHeaderDescription>
-            <PageHeaderControls className="flex-wrap">
-              <div className="flex flex-wrap gap-2">
-                {userListQuery.isLoading && (
-                  <>
-                    <Skeleton className="h-9 w-28" />
-                    <Skeleton className="h-9 w-36" />
-                    <Skeleton className="h-9 w-28" />
-                  </>
-                )}
-                {!userListQuery.isLoading && userID && accessToken && (
-                  <>
-                    {isProxyAdmin && (
-                      <CreateUserButton userID={userID} accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
-                    )}
-
-                    {isProxyAdmin && (
-                      <BulkCreateUsersButton
-                        accessToken={accessToken}
-                        teams={teams}
-                        possibleUIRoles={possibleUIRoles}
-                      />
-                    )}
-
-                    {isProxyAdmin && (
-                      <Button
-                        type="button"
-                        onClick={handleToggleSelectionMode}
-                        variant={selectionMode ? "default" : "outline"}
-                        data-testid="toggle-user-selection"
-                      >
-                        {selectionMode ? t("users.page.selection.cancel") : t("users.page.selection.start")}
-                      </Button>
-                    )}
-
-                    {isProxyAdmin && selectionMode && (
-                      <Button
-                        type="button"
-                        onClick={() => setIsBulkEditModalVisible(true)}
-                        disabled={selectedUsers.length === 0}
-                        data-testid="bulk-edit-users"
-                      >
-                        {t("users.page.selection.bulkEdit", { count: selectedUsers.length })}
-                      </Button>
-                    )}
-                  </>
-                )}
-              </div>
-              {isProxyAdmin && (
-                <PageTabsList className="w-full flex-none sm:w-auto sm:flex-1">
+            <PageHeaderControls>
+              {isProxyAdmin ? (
+                <PageTabsBar actions={userActions}>
                   <PageTabsTrigger value="users" className="data-active:text-primary after:bg-primary">
                     {t("users.page.tabs.users")}
                   </PageTabsTrigger>
                   <PageTabsTrigger value="default-settings" className="data-active:text-primary after:bg-primary">
                     {t("users.page.tabs.defaultSettings")}
                   </PageTabsTrigger>
-                </PageTabsList>
+                </PageTabsBar>
+              ) : (
+                <div className="flex flex-wrap gap-2">{userActions}</div>
               )}
             </PageHeaderControls>
           </PageHeader>

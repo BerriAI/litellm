@@ -19,7 +19,7 @@ from litellm_proxy_extras.utils import (
 
 
 def _fake_migrate_deploy_failure(returncode: int, stderr: str):
-    def _run(*args, **kwargs):
+    def _run(*args: object, **kwargs: object):
         raise subprocess.CalledProcessError(
             returncode=returncode,
             cmd=args[0],
@@ -107,12 +107,12 @@ def test_v1_default_still_calls_resolve_all_migrations(monkeypatch, tmp_path):
         stdout = "Applied migration.\n"
         stderr = ""
 
-    def fake_run(cmd, *args, **kwargs):
+    def fake_run(cmd, *args: object, **kwargs: object):
         return FakeResult()
 
     resolve_called = {"n": 0}
 
-    def fake_resolve(*args, **kwargs):
+    def fake_resolve(*args: object, **kwargs: object):
         resolve_called["n"] += 1
 
     monkeypatch.setattr("litellm_proxy_extras.prisma_toolchain.run_prisma", fake_run)
@@ -149,14 +149,14 @@ def test_v2_warn_ahead_of_head_swallows_db_errors(monkeypatch, tmp_path):
         def __enter__(self):
             return self
 
-        def __exit__(self, *a):
+        def __exit__(self, *a: object):
             return False
 
-        def execute(self, *a, **kw):
+        def execute(self, *a: object, **kw: object):
             # Simulate an InsufficientPrivilege (subclass of DatabaseError).
             raise psycopg.errors.InsufficientPrivilege("permission denied")
 
-    def _fake_connect(*a, **kw):
+    def _fake_connect(*a: object, **kw: object):
         return _FakeConn()
 
     monkeypatch.setattr("psycopg.connect", _fake_connect)
@@ -216,7 +216,7 @@ def _stub_v2_env(monkeypatch, tmp_path, ledger_logs=""):
     ledger = MagicMock()
     ledger.fetchone.return_value = (ledger_logs,)
 
-    def execute(query, *args, **kwargs):
+    def execute(query, *args: object, **kwargs: object):
         if "SELECT logs FROM" in str(query):
             if ledger_logs is None:
                 raise psycopg.OperationalError("ledger is unavailable")
@@ -234,7 +234,7 @@ def _succeed_after(failures: int, stderr: str):
         stdout = "Applied migration.\n"
         stderr = ""
 
-    def _run(*args, **kwargs):
+    def _run(*args: object, **kwargs: object):
         if "deploy" not in args[0]:
             return _OkResult()
         calls["n"] += 1

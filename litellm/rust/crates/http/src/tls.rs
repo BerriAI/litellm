@@ -3,7 +3,7 @@ use std::{path::Path, str::FromStr, sync::Arc};
 use rustls::{
     CipherSuite, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    crypto::{CryptoProvider, SupportedKxGroup, ring},
+    crypto::{CryptoProvider, SupportedKxGroup, aws_lc_rs as backend},
     pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject},
 };
 
@@ -32,12 +32,57 @@ impl FromStr for KeyExchangeGroup {
     }
 }
 
+/// aws-lc-rs, which under the `fips` feature offers only what the FIPS module approves
+fn base_provider() -> CryptoProvider {
+    backend::default_provider()
+}
+
+/// Settings the FIPS provider cannot honour, which fall back to its approved defaults
+pub(crate) fn unapproved(config: &HttpClientConfig) -> Vec<Unsupported> {
+    let base = base_provider();
+    if !base.fips() {
+        return Vec::new();
+    }
+    let curve = config
+        .key_exchange_group
+        .filter(|group| !group.supported().fips())
+        .map(|group| Unsupported::NotFipsApproved(format!("ssl_ecdh_curve {group:?}")));
+    let suites = config.tls12_cipher_suites.iter().flatten().filter(|suite| {
+        !base
+            .cipher_suites
+            .iter()
+            .any(|offered| offered.suite() == suite.suite())
+    });
+    curve
+        .into_iter()
+        .chain(suites.map(|suite| Unsupported::NotFipsApproved(format!("cipher suite {suite:?}"))))
+        .collect()
+}
+
+/// The FIPS provider's share of a TLS 1.2 allowlist, or its approved defaults when it shares none
+pub(crate) fn approved(selected: Option<Vec<Tls12CipherSuite>>) -> Option<Vec<Tls12CipherSuite>> {
+    let base = base_provider();
+    let selected = selected?;
+    if !base.fips() || selected.is_empty() {
+        return Some(selected);
+    }
+    let kept: Vec<Tls12CipherSuite> = selected
+        .into_iter()
+        .filter(|suite| {
+            base.cipher_suites
+                .iter()
+                .any(|offered| offered.suite() == suite.suite())
+        })
+        .collect();
+    (!kept.is_empty()).then_some(kept)
+}
+
 impl KeyExchangeGroup {
     fn supported(self) -> &'static dyn SupportedKxGroup {
         match self {
-            Self::X25519 => ring::kx_group::X25519,
-            Self::Secp256r1 => ring::kx_group::SECP256R1,
-            Self::Secp384r1 => ring::kx_group::SECP384R1,
+            Self::X25519 => backend::kx_group::X25519,
+            Self::Secp256r1 => backend::kx_group::SECP256R1,
+            Self::Secp384r1 => backend::kx_group::SECP384R1,
         }
     }
 }
@@ -108,6 +153,8 @@ pub enum Unsupported {
         "ssl_security_level entry {0:?} is not supported: rustls only offers ECDHE AEAD cipher suites, so the entry is ignored"
     )]
     CipherToken(String),
+    #[error("{0} is not FIPS approved, so the FIPS build ignores it")]
+    NotFipsApproved(String),
 }
 
 #[derive(Default)]
@@ -182,11 +229,13 @@ impl TryFrom<&HttpClientConfig> for ClientConfig {
     type Error = Error;
 
     fn try_from(config: &HttpClientConfig) -> Result<Self, Self::Error> {
-        let base = ring::default_provider();
+        let base = base_provider();
         let provider = Arc::new(CryptoProvider {
             kx_groups: config
                 .key_exchange_group
-                .map_or_else(|| base.kx_groups.clone(), |group| vec![group.supported()]),
+                .map(KeyExchangeGroup::supported)
+                .filter(|group| base.fips() <= group.fips())
+                .map_or_else(|| base.kx_groups.clone(), |group| vec![group]),
             cipher_suites: base
                 .cipher_suites
                 .iter()
@@ -364,7 +413,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case("X25519", NamedGroup::X25519)]
+    #[cfg_attr(not(feature = "fips"), case("X25519", NamedGroup::X25519))]
     #[case("prime256v1", NamedGroup::secp256r1)]
     #[case("secp384r1", NamedGroup::secp384r1)]
     fn ecdh_curve_is_the_only_key_exchange_group_offered(
@@ -379,10 +428,17 @@ mod tests {
         assert_eq!(offered_groups(&tls), [expected]);
     }
 
+    #[cfg(feature = "fips")]
+    #[rstest]
+    fn fips_build_builds_a_fips_client_config() {
+        let tls = ClientConfig::try_from(&config(HttpSettings::default())).unwrap();
+        assert!(tls.fips());
+    }
+
     #[test]
     fn default_settings_offer_every_group_and_suite_of_the_provider() {
         let tls = ClientConfig::try_from(&config(HttpSettings::default())).unwrap();
-        let provider = ring::default_provider();
+        let provider = base_provider();
         assert_eq!(offered_groups(&tls).len(), provider.kx_groups.len());
         assert_eq!(
             tls.crypto_provider().cipher_suites.len(),

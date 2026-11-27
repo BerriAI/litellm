@@ -6,6 +6,7 @@ Helpers for the Prometheus integration (extracted to keep ``prometheus.py`` smal
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Final, Literal, Protocol, cast
 
 from litellm.types.integrations.prometheus import (
@@ -20,7 +21,7 @@ _get_end_user_id_for_cost_tracking = None
 class _EndUserIdGetter(Protocol):
     def __call__(
         self,
-        litellm_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         service_type: Literal["litellm_logging", "prometheus"] = "litellm_logging",
     ) -> str | None: ...
 

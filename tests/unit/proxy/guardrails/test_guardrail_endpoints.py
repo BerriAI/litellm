@@ -213,6 +213,11 @@ class _PatchScopeSupportedGuardrail(CustomGuardrail):
         return inputs
 
 
+class _PatchDescriptionScanGuardrail(_PatchScopeSupportedGuardrail):
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return True
+
+
 class _PatchScopeUnsupportedGuardrail(_PatchScopeSupportedGuardrail):
     async def async_logging_hook(
         self,
@@ -1693,6 +1698,67 @@ async def test_patch_guardrail_clears_scope_when_logging_only_mode_is_removed(
         callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
         assert callback.logging_only_scope is None
         assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_params", "patch_params"),
+    [
+        (
+            {"mode": "pre_call", "scan_tool_descriptions_as_text": True},
+            BaseLitellmParams(mode="post_call"),
+        ),
+        ({"mode": "post_call"}, BaseLitellmParams(scan_tool_descriptions_as_text=True)),
+    ],
+    ids=["mode_drops_pre_call", "description_scan_added_to_post_call"],
+)
+async def test_patch_guardrail_rejects_description_scan_that_never_runs_with_422(
+    mocker, monkeypatch, mock_guardrail_registry, stored_params: dict[str, object], patch_params: BaseLitellmParams
+):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchDescriptionScanGuardrail,
+        "patch_description_scan_test",
+        stored_params,
+    )
+    request = PatchGuardrailRequest(litellm_params=patch_params)
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await patch_guardrail(stored_guardrail["guardrail_id"], request, user_api_key_dict=MOCK_ADMIN_USER)
+
+        assert exc_info.value.status_code == 422
+        assert "tool descriptions would never be scanned" in str(exc_info.value.detail)
+        assert mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"] == stored_guardrail
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_keeps_accepting_unrelated_edits_on_a_stored_unscanned_description_setting(
+    mocker, monkeypatch, mock_guardrail_registry
+):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchDescriptionScanGuardrail,
+        "patch_description_scan_test",
+        {"mode": "post_call", "scan_tool_descriptions_as_text": True},
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(default_on=True))
+
+    try:
+        result = await patch_guardrail(stored_guardrail["guardrail_id"], request, user_api_key_dict=MOCK_ADMIN_USER)
+
+        assert result["guardrail_id"] == stored_guardrail["guardrail_id"]
+        callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
+        assert callback.default_on is True
+        assert callback.scan_tool_descriptions_as_text is None
     finally:
         handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
 

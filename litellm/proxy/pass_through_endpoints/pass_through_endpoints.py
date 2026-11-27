@@ -64,6 +64,7 @@ from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
     REDACTED_BY_LITELLM,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
@@ -89,6 +90,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import valida
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages_async
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
@@ -239,7 +241,7 @@ def _is_mergeable_client_metadata(key: str, value: object) -> bool:
     return (
         not key.startswith("user_api_key_")
         and key not in ROUTER_RESERVED_METADATA_FIELDS
-        and key not in ("used_client_oauth_token", "claude_subscription_usage")
+        and key not in ("used_client_oauth_token", "claude_subscription_usage", SESSION_ID_INHERITED_METADATA_KEY)
         and (key != "model_info" or isinstance(value, Mapping))
     )
 
@@ -541,9 +543,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         parsed_url: Final = urlparse(url)
         if custom_llm_provider == "chatgpt":
             return EndpointType.OPENAI
-        if custom_llm_provider in ("typesafe", "eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix(
-            "/"
-        ).endswith("/v1/systemone"):
+        if custom_llm_provider in ("eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
+            "/v1/systemone"
+        ):
             return EndpointType.DECISIONS
         if (
             ("generateContent") in url
@@ -569,7 +571,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         request: Request,
         async_client: httpx.AsyncClient,
         url: str,
-        headers: dict,
+        headers: Mapping[str, str],
         requested_query_params: dict | None = None,
         custom_body: dict[str, object] | None = None,
     ) -> httpx.Response:
@@ -769,7 +771,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         user_api_key_dict: UserAPIKeyAuth,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         logging_obj: LiteLLMLoggingObj,
-        _parsed_body: dict | None = None,
+        _parsed_body: dict[str, object] | None = None,
         litellm_call_id: str | None = None,
         customer_usage: ResolvedCustomerUsage | None = None,
     ) -> dict:
@@ -1622,12 +1624,12 @@ async def _opaque_passthrough_response(
 async def pass_through_request(
     request: Request,
     target: str,
-    custom_headers: dict,
+    custom_headers: dict[str, str],  # mutable-ok: forwarding adds aliases
     user_api_key_dict: UserAPIKeyAuth,
     custom_body: Mapping[str, object] | None = None,
     forward_headers: bool | None = False,
     merge_query_params: bool | None = False,
-    query_params: dict | None = None,
+    query_params: dict[str, object] | None = None,
     default_query_params: dict | None = None,
     stream: bool | None = None,
     cost_per_request: float | None = None,
@@ -1640,6 +1642,8 @@ async def pass_through_request(
     keep_target_query: bool = False,
     raw_response: bool = False,
     response_owner: AsyncExitStack | None = None,
+    *,
+    preserve_trace_context: bool = False,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1667,6 +1671,7 @@ async def pass_through_request(
         keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
         raw_response: Relay opaque response bytes without parsing, buffering or following redirects
         response_owner: Request-scoped owner that closes the upstream even if streaming never starts
+        preserve_trace_context: Relay the caller trace context without injecting the proxy span
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1695,14 +1700,13 @@ async def pass_through_request(
     #########################################################
     try:
         url = httpx.URL(target)
-        forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
-            request_headers=safe_get_request_headers(request).copy(),
-            headers=custom_headers,
-            forward_headers=forward_headers,
-        )
-        upstream_headers: Final = _with_trace_context(
-            upstream_headers_filter(forwarded_headers),
-            parent_span=user_api_key_dict.parent_otel_span,
+        upstream_headers: Final = _relay_request_headers(
+            request,
+            custom_headers,
+            forward_headers,
+            preserve_trace_context,
+            upstream_headers_filter,
+            user_api_key_dict.parent_otel_span,
         )
 
         requested_query_params: dict | None = (
@@ -1770,9 +1774,10 @@ async def pass_through_request(
             route_description="pass_through_endpoint",
         )
         litellm_trace_id: Final[str | None] = get_chain_id_from_headers(dict(request.headers))
+        received_body_for_logging: Final = safe_dumps(await truncate_base64_in_messages_async(_parsed_body))
         logging_obj = Logging(
             model=passthrough_model,
-            messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            messages=[{"role": "user", "content": received_body_for_logging}],
             stream=False,
             call_type="pass_through_endpoint",
             start_time=start_time,
@@ -2022,8 +2027,9 @@ async def pass_through_request(
             _with_anthropic_user_id(outgoing_body, client_user_id),
             _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
         )
+        hooked_body_for_logging: Final = safe_dumps(await truncate_base64_in_messages_async(_parsed_body))
         logging_obj.pre_call(
-            input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
+            input=[{"role": "user", "content": hooked_body_for_logging}],
             api_key="",
             additional_args={
                 "complete_input_dict": upstream_body,
@@ -2725,7 +2731,7 @@ def create_pass_through_route(
     custom_llm_provider: str | None = None,
     is_streaming_request: bool | None = False,
     query_params: dict | None = None,
-    default_query_params: dict | None = None,
+    default_query_params: dict[str, object] | None = None,
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
@@ -2871,7 +2877,7 @@ def create_pass_through_route(
                     return await pass_through_request(
                         request=request,
                         target=full_target,
-                        custom_headers=headers_dict,
+                        custom_headers=cast(dict[str, str], headers_dict),  # cast-ok: registry erases header types
                         user_api_key_dict=user_api_key_dict,
                         forward_headers=cast(bool | None, param_forward_headers),
                         merge_query_params=cast(bool | None, param_merge_query_params),
@@ -2887,6 +2893,7 @@ def create_pass_through_route(
                         upstream_request_filter=upstream_request_filter,
                         operation=operation,
                         keep_target_query=keep_target_query,
+                        preserve_trace_context=target_params.get("preserve_trace_context") is True,
                     )
                 finally:
                     _clear_pass_through_request_state(request.state)
@@ -2906,7 +2913,7 @@ def create_pass_through_route(
 def create_websocket_passthrough_route(
     endpoint: str,
     target: str,
-    custom_headers: dict | None = None,
+    custom_headers: dict[str, object] | None = None,
     _forward_headers: bool | None = False,
     dependencies: Sequence[params.Depends] | None = None,
     cost_per_request: float | None = None,
@@ -2929,7 +2936,7 @@ def create_websocket_passthrough_route(
     async def websocket_endpoint_func(
         websocket: WebSocket,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
-        **kwargs,  # For additional query parameters
+        **kwargs: object,  # For additional query parameters
     ):
         """
         WebSocket passthrough endpoint function.
@@ -3067,6 +3074,47 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
 
 
 _WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("x-goog-user-project",))
+
+
+def _relay_request_headers(
+    request: Request,
+    custom_headers: dict[str, str],  # mutable-ok: the forwarding helper adds x-pass aliases in place
+    forward_headers: bool | None,
+    preserve_trace_context: bool,
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]],
+    parent_span: object,
+) -> Mapping[str, str]:
+    cached: Final = cast(Mapping[str, str], safe_get_request_headers(request))  # cast-ok: cached Starlette headers
+    tracestate: Final = request.headers.getlist("tracestate") if preserve_trace_context else ()
+    request_headers: Final = {**cached, "tracestate": ",".join(tracestate)} if len(tracestate) > 1 else dict(cached)
+    relay_headers: Final = (
+        _with_caller_trace_headers(custom_headers, request_headers)
+        if preserve_trace_context and forward_headers is not True
+        else custom_headers
+    )
+    forwarded_headers: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+        request_headers=request_headers,
+        headers=relay_headers,
+        forward_headers=forward_headers,
+    )
+    filtered_headers: Final = upstream_headers_filter(forwarded_headers)
+    return (
+        filtered_headers if preserve_trace_context else _with_trace_context(filtered_headers, parent_span=parent_span)
+    )
+
+
+def _with_caller_trace_headers(
+    configured: Mapping[str, str], incoming: Mapping[str, str]
+) -> dict[str, str]:  # mutable-ok: the header forwarding helper adds x-pass aliases in place
+    configured_names: Final = frozenset(name.lower() for name in configured)
+    return {
+        **{
+            name: incoming[name]
+            for name in ("traceparent", "tracestate")
+            if name in incoming and name not in configured_names
+        },
+        **configured,
+    }
 
 
 def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict[str, str]:
@@ -4337,12 +4385,14 @@ class InitPassThroughEndpointHelpers:
         dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
-        guardrails: dict | None = None,
+        guardrails: dict[str, object] | None = None,
         methods: list[str] | None = None,
-        default_query_params: dict | None = None,
+        default_query_params: dict[str, object] | None = None,
         config_file_path: str | None = None,
         auth: bool = False,
         timeout: float | None = None,
+        *,
+        preserve_trace_context: bool = False,
     ):
         """Add exact path route for pass-through endpoint"""
         # Default to all methods if none specified (backward compatibility)
@@ -4401,6 +4451,7 @@ class InitPassThroughEndpointHelpers:
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": forward_headers,
+                "preserve_trace_context": preserve_trace_context,
                 "merge_query_params": merge_query_params,
                 "default_query_params": default_query_params,
                 "dependencies": dependencies,
@@ -4421,12 +4472,14 @@ class InitPassThroughEndpointHelpers:
         dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
-        guardrails: dict | None = None,
+        guardrails: dict[str, object] | None = None,
         methods: list[str] | None = None,
-        default_query_params: dict | None = None,
+        default_query_params: dict[str, object] | None = None,
         config_file_path: str | None = None,
         auth: bool = False,
         timeout: float | None = None,
+        *,
+        preserve_trace_context: bool = False,
     ):
         """Add wildcard route for sub-paths"""
         # Default to all methods if none specified (backward compatibility)
@@ -4486,6 +4539,7 @@ class InitPassThroughEndpointHelpers:
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": forward_headers,
+                "preserve_trace_context": preserve_trace_context,
                 "merge_query_params": merge_query_params,
                 "default_query_params": default_query_params,
                 "dependencies": dependencies,
@@ -4721,6 +4775,7 @@ async def _register_pass_through_endpoint(
 
     custom_headers: Final = await set_env_variables_in_header(custom_headers=endpoint_data.get("headers"))
     forward_headers: Final = endpoint_data.get("forward_headers")
+    preserve_trace_context: Final = endpoint_data.get("preserve_trace_context") is True
     merge_query_params: Final = endpoint_data.get("merge_query_params")
     default_query_params: Final = endpoint_data.get("default_query_params")
     auth: Final[bool | str | None] = endpoint_data.get("auth")
@@ -4751,6 +4806,7 @@ async def _register_pass_through_endpoint(
         target=target,
         custom_headers=custom_headers,
         forward_headers=forward_headers,
+        preserve_trace_context=preserve_trace_context,
         merge_query_params=merge_query_params,
         dependencies=dependencies,
         cost_per_request=cost_per_request,
@@ -4778,6 +4834,7 @@ async def _register_pass_through_endpoint(
             target=target,
             custom_headers=custom_headers,
             forward_headers=forward_headers,
+            preserve_trace_context=preserve_trace_context,
             merge_query_params=merge_query_params,
             dependencies=dependencies,
             cost_per_request=cost_per_request,
@@ -5188,6 +5245,7 @@ async def update_pass_through_endpoints(
             default_query_params=updated_endpoint.default_query_params,
             auth=updated_endpoint.auth,
             timeout=updated_endpoint.timeout,
+            preserve_trace_context=updated_endpoint.preserve_trace_context,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -5205,6 +5263,7 @@ async def update_pass_through_endpoints(
             default_query_params=updated_endpoint.default_query_params,
             auth=updated_endpoint.auth,
             timeout=updated_endpoint.timeout,
+            preserve_trace_context=updated_endpoint.preserve_trace_context,
         )
     InitPassThroughEndpointHelpers.drop_llm_api_routes(
         replaced_llm_api_routes - InitPassThroughEndpointHelpers.auth_enforced_llm_api_routes()
@@ -5285,6 +5344,7 @@ async def create_pass_through_endpoints(
             default_query_params=created_endpoint.default_query_params,
             auth=created_endpoint.auth,
             timeout=created_endpoint.timeout,
+            preserve_trace_context=created_endpoint.preserve_trace_context,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -5302,6 +5362,7 @@ async def create_pass_through_endpoints(
             default_query_params=created_endpoint.default_query_params,
             auth=created_endpoint.auth,
             timeout=created_endpoint.timeout,
+            preserve_trace_context=created_endpoint.preserve_trace_context,
         )
 
     return PassThroughEndpointResponse(endpoints=[created_endpoint])

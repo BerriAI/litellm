@@ -29,7 +29,7 @@ def completion(
     print_verbose: Callable[..., object],
     encoding,
     logging_obj: "LiteLLMLoggingObj",
-    optional_params: dict,
+    optional_params: dict[str, object],
     stream: object = False,
     litellm_params: object = None,
     logger_fn: object = None,

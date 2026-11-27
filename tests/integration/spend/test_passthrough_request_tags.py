@@ -660,6 +660,7 @@ def test_renaming_a_subpath_endpoint_moves_both_routes_keeps_stored_fields_and_n
             "include_subpath": True,
             "cost_per_request": 0.0,
             "timeout": None,
+            "preserve_trace_context": False,
             "auth": True,
             "guardrails": None,
             "is_from_config": False,

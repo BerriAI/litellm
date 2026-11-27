@@ -22,14 +22,14 @@ class NovitaConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is None:
             raise ValueError(
                 "Missing Novita AI API Key - A call is being made to novita but no key is set either in the environment variables or via params"

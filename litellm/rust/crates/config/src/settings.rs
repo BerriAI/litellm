@@ -1,13 +1,19 @@
-use litellm_python_compat::lenient::{IsTrue, LaxBool, StrBool, Truthy};
+use std::{num::NonZeroUsize, time::Duration};
+
+use litellm_python_compat::{
+    lenient::{IsTrue, LaxBool, StrBool, Truthy},
+    number::seconds,
+    pydantic::{lax_float, lax_int},
+};
 use litellm_secret_value::SecretValue;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de::Error as _};
 use serde_with::{Map, serde_as};
 use veil::Redact;
 
 use crate::{
-    AdditionalFields, CacheSettings, JwtAuthSettings, LitellmRole, Object, PassThroughEndpoint,
-    PriorityReservation, PriorityReservationSettings, RedisSettings, RolePermissions, RouteList,
-    Spelled, Value, value::one_or_many,
+    AdditionalFields, AddressList, CacheSettings, JwtAuthSettings, LitellmRole, Object,
+    PassThroughEndpoint, PriorityReservation, PriorityReservationSettings, RedisSettings,
+    RolePermissions, RouteList, Spelled, Value, value::one_or_many,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -31,6 +37,36 @@ fn user_header_mappings<'de, D: serde::Deserializer<'de>>(
         Some(Shape::One(mapping)) => Box::new([mapping]),
         Some(Shape::Many(mappings)) => mappings,
     })
+}
+
+/// `general_settings.user_api_key_cache_ttl` as the proxy reads it at startup: `float(value)` seconds
+/// handed to the auth cache store, which reads a negative number as zero and refuses infinity and
+/// NaN, so the proxy does not start over a value refused here.
+fn user_api_key_cache_ttl<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Duration>, D::Error> {
+    Option::<litellm_python_compat::Value>::deserialize(deserializer)?
+        .map(|value| {
+            lax_float(&value)
+                .and_then(|value| seconds(value).ok())
+                .ok_or_else(|| D::Error::custom("expected a finite number of seconds"))
+        })
+        .transpose()
+}
+
+/// `general_settings.user_api_key_cache_max_size` as `ConfigGeneralSettings` validates it: a lax
+/// `int` greater than zero, so the proxy does not start over a value refused here.
+fn user_api_key_cache_max_size<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<NonZeroUsize>, D::Error> {
+    Option::<litellm_python_compat::Value>::deserialize(deserializer)?
+        .map(|value| {
+            lax_int(&value)
+                .and_then(|number| usize::try_from(number).ok())
+                .and_then(NonZeroUsize::new)
+                .ok_or_else(|| D::Error::custom("expected an integer greater than zero"))
+        })
+        .transpose()
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -90,7 +126,8 @@ pub struct GeneralSettings {
     pub global_max_parallel_requests: Option<u64>,
     pub max_request_size_mb: Option<f64>,
     pub max_response_size_mb: Option<u64>,
-    pub proxy_config_reload_interval_seconds: u64,
+    /// `None` when neither the config nor `PROXY_CONFIG_RELOAD_INTERVAL_SECONDS` sets it.
+    pub proxy_config_reload_interval_seconds: Option<i64>,
     pub background_health_checks: Option<bool>,
     pub health_check_interval: u64,
     pub health_check_concurrency: Option<u64>,
@@ -119,8 +156,11 @@ pub struct GeneralSettings {
     #[serde_as(as = "IsTrue")]
     pub allow_client_side_credentials: bool,
     pub public_routes: Option<RouteList>,
-    pub allowed_ips: Option<Box<[String]>>,
-    pub allowed_routes: Option<Box<[String]>>,
+    pub allowed_ips: Option<AddressList>,
+    #[serde_as(as = "IsTrue")]
+    pub use_x_forwarded_for: bool,
+    #[serde(deserialize_with = "crate::routes::where_the_key_is_written")]
+    pub allowed_routes: Option<RouteList>,
     pub custom_auth: Option<String>,
     pub litellm_key_header_name: Option<String>,
     pub required_customer_headers: Box<[String]>,
@@ -134,6 +174,10 @@ pub struct GeneralSettings {
     pub token_rate_limit_type: Option<String>,
     #[serde(deserialize_with = "user_header_mappings")]
     pub user_header_mappings: Box<[UserHeaderMapping]>,
+    #[serde(deserialize_with = "user_api_key_cache_ttl")]
+    pub user_api_key_cache_ttl: Option<Duration>,
+    #[serde(deserialize_with = "user_api_key_cache_max_size")]
+    pub user_api_key_cache_max_size: Option<NonZeroUsize>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
@@ -163,7 +207,7 @@ impl Default for GeneralSettings {
             global_max_parallel_requests: None,
             max_request_size_mb: None,
             max_response_size_mb: None,
-            proxy_config_reload_interval_seconds: 30,
+            proxy_config_reload_interval_seconds: None,
             background_health_checks: None,
             health_check_interval: 300,
             health_check_concurrency: None,
@@ -186,6 +230,7 @@ impl Default for GeneralSettings {
             allow_client_side_credentials: false,
             public_routes: None,
             allowed_ips: None,
+            use_x_forwarded_for: false,
             allowed_routes: None,
             custom_auth: None,
             litellm_key_header_name: None,
@@ -196,6 +241,8 @@ impl Default for GeneralSettings {
             user_header_name: None,
             token_rate_limit_type: None,
             user_header_mappings: Box::default(),
+            user_api_key_cache_ttl: None,
+            user_api_key_cache_max_size: None,
             additional_fields: AdditionalFields::default(),
         }
     }
@@ -221,8 +268,9 @@ pub struct LiteLlmSettings {
     pub modify_params: Option<bool>,
     #[serde_as(as = "LaxBool")]
     pub enable_anthropic_prompt_caching: Option<bool>,
-    #[serde_as(as = "LaxBool")]
-    pub reasoning_auto_summary: Option<bool>,
+    /// `bool(value)`, as Python's `litellm.reasoning_auto_summary or ...` reads the setting.
+    #[serde_as(as = "Truthy")]
+    pub reasoning_auto_summary: bool,
     #[serde_as(as = "LaxBool")]
     pub use_chat_completions_url_for_anthropic_messages: Option<bool>,
     #[serde_as(as = "LaxBool")]
@@ -263,8 +311,10 @@ pub struct LiteLlmSettings {
 mod tests {
     use rstest::rstest;
 
+    use std::{num::NonZeroUsize, time::Duration};
+
     use super::{GeneralSettings, LiteLlmSettings};
-    use crate::JwtAuthSettings;
+    use crate::{JwtAuthSettings, RouteList};
 
     #[test]
     fn jwt_auth_settings_hide_unknown_fields() {
@@ -276,6 +326,29 @@ mod tests {
 
         assert!(!debug.contains("credential-value"), "{debug}");
         assert!(debug.contains("[REDACTED]"), "{debug}");
+    }
+
+    #[rstest]
+    #[case::left_out(serde_json::json!({}), None)]
+    #[case::written_with_no_value(
+        serde_json::json!({"allowed_routes": null}),
+        Some(RouteList::Malformed)
+    )]
+    #[case::written_as_text(
+        serde_json::json!({"allowed_routes": "/health"}),
+        Some(RouteList::Malformed)
+    )]
+    #[case::a_list(
+        serde_json::json!({"allowed_routes": ["/health"]}),
+        Some(RouteList::Valid(Box::from(["/health".to_owned()])))
+    )]
+    fn allowed_routes_is_a_list_wherever_the_key_is_written(
+        #[case] general: serde_json::Value,
+        #[case] expected: Option<RouteList>,
+    ) {
+        let settings: GeneralSettings = serde_json::from_value(general).unwrap();
+
+        assert_eq!(settings.allowed_routes, expected);
     }
 
     #[rstest]
@@ -307,5 +380,50 @@ mod tests {
         let settings: GeneralSettings =
             serde_json::from_value(serde_json::json!({"max_request_size_mb": limit})).unwrap();
         assert_eq!(settings.max_request_size_mb, Some(expected));
+    }
+
+    #[rstest]
+    #[case::unset(serde_json::json!({}), None)]
+    #[case::null(serde_json::json!({"user_api_key_cache_ttl": null}), None)]
+    #[case::int(serde_json::json!({"user_api_key_cache_ttl": 600}), Some(Duration::from_secs(600)))]
+    #[case::fraction(serde_json::json!({"user_api_key_cache_ttl": 1.5}), Some(Duration::from_millis(1500)))]
+    #[case::text(serde_json::json!({"user_api_key_cache_ttl": " 600 "}), Some(Duration::from_secs(600)))]
+    #[case::negative_is_zero(serde_json::json!({"user_api_key_cache_ttl": -5}), Some(Duration::ZERO))]
+    fn the_auth_cache_ttl_is_read_as_float_reads_it(
+        #[case] written: serde_json::Value,
+        #[case] expected: Option<Duration>,
+    ) {
+        let settings: GeneralSettings = serde_json::from_value(written).unwrap();
+
+        assert_eq!(settings.user_api_key_cache_ttl, expected);
+    }
+
+    #[rstest]
+    #[case::unset(serde_json::json!({}), None)]
+    #[case::null(serde_json::json!({"user_api_key_cache_max_size": null}), None)]
+    #[case::int(serde_json::json!({"user_api_key_cache_max_size": 500}), NonZeroUsize::new(500))]
+    #[case::whole_float(serde_json::json!({"user_api_key_cache_max_size": 500.0}), NonZeroUsize::new(500))]
+    #[case::text(serde_json::json!({"user_api_key_cache_max_size": "500"}), NonZeroUsize::new(500))]
+    fn the_auth_cache_size_is_read_as_pydantic_reads_an_int(
+        #[case] written: serde_json::Value,
+        #[case] expected: Option<NonZeroUsize>,
+    ) {
+        let settings: GeneralSettings = serde_json::from_value(written).unwrap();
+
+        assert_eq!(settings.user_api_key_cache_max_size, expected);
+    }
+
+    #[rstest]
+    #[case::ttl_text_that_is_no_number(serde_json::json!({"user_api_key_cache_ttl": "soon"}))]
+    #[case::ttl_infinity(serde_json::json!({"user_api_key_cache_ttl": "inf"}))]
+    #[case::ttl_nan(serde_json::json!({"user_api_key_cache_ttl": "nan"}))]
+    #[case::size_zero(serde_json::json!({"user_api_key_cache_max_size": 0}))]
+    #[case::size_negative(serde_json::json!({"user_api_key_cache_max_size": -1}))]
+    #[case::size_fraction(serde_json::json!({"user_api_key_cache_max_size": 1.5}))]
+    #[case::size_text_that_is_no_int(serde_json::json!({"user_api_key_cache_max_size": "many"}))]
+    fn an_auth_cache_setting_the_proxy_would_not_start_with_is_refused(
+        #[case] written: serde_json::Value,
+    ) {
+        assert!(serde_json::from_value::<GeneralSettings>(written).is_err());
     }
 }

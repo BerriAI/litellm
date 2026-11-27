@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import Mock
 
@@ -6,6 +7,7 @@ import pytest
 from openai import AsyncOpenAI, OpenAI
 
 import litellm
+from litellm.litellm_core_utils.model_cost_table import changed_in_place
 from litellm.llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from litellm.types.utils import TranscriptionResponse
 
@@ -166,6 +168,13 @@ def test_openai_compatible_transcription_row_with_a_zero_rate_is_billed_from_tha
     assert response._hidden_params["response_cost"] == pytest.approx(2 * declared_rates["input_cost_per_second"])
 
 
+@pytest.fixture
+def cost_lookups_reread_the_table_afterwards() -> Iterator[None]:
+    yield
+    changed_in_place()
+
+
+@pytest.mark.usefixtures("cost_lookups_reread_the_table_afterwards")
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 @pytest.mark.asyncio
 async def test_groq_transcription_looks_up_the_catalog_rate(use_async: bool, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,6 +184,7 @@ async def test_groq_transcription_looks_up_the_catalog_rate(use_async: bool, mon
         model,
         {"input_cost_per_second": 0.01, "litellm_provider": "groq", "mode": "audio_transcription"},
     )
+    changed_in_place()
     transport: Final = httpx.MockTransport(
         lambda request: httpx.Response(200, json={"text": "hello", "duration": 12.0, "language": "en"})
     )

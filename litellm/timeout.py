@@ -65,7 +65,7 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise: Callable[..., Bas
             return result
 
         @wraps(func)
-        async def async_wrapper(*args: object, **kwargs):
+        async def async_wrapper(*args: object, **kwargs: object):
             local_timeout_duration = timeout_duration
             if "force_timeout" in kwargs:
                 local_timeout_duration = kwargs["force_timeout"]

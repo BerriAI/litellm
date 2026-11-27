@@ -26,7 +26,9 @@ from litellm.proxy.control_plane.dataplanes.dependencies import (
     get_registry,
 )
 from litellm.proxy.control_plane.dataplanes.router import router as dataplanes_router
+from litellm.proxy.control_plane.fleet.router import get_fleet_teams
 from litellm.proxy.control_plane.fleet.router import router as fleet_router
+from litellm.proxy.control_plane.fleet.teams import FleetTeams
 from litellm.proxy.control_plane.health.router import router as health_router
 from litellm.proxy.control_plane.proxy.router import router as proxy_router
 from litellm.proxy.control_plane.roles.router import router as roles_router
@@ -87,6 +89,7 @@ class ControlPlaneRequestSizeLimitMiddleware:
 @dataclass(frozen=True, slots=True)
 class _Lifespan:
     container: Container
+    fleet: FleetTeams
 
     def __call__(self, app: FastAPI) -> "_Lifespan":
         return self
@@ -94,12 +97,16 @@ class _Lifespan:
     async def __aenter__(self) -> None:
         await self.container.runtime_config.start()
         self.container.audit_log.pipeline.start()
+        self.fleet.start()
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
         try:
-            await self.container.runtime_config.close()
+            try:
+                await self.fleet.close()
+            finally:
+                await self.container.runtime_config.close()
         finally:
             try:
                 await self.container.audit_log.pipeline.close()
@@ -114,10 +121,13 @@ def create_app(container: Container, license_check: License) -> FastAPI:
     api_prefix: Final = container.settings.api_prefix
     docs_url: Final = f"{api_prefix}/docs"
     swagger_url: Final = f"{api_prefix}/swagger"
+    fleet: Final = FleetTeams(
+        container.runtime_config, container.dataplane_client, container.fanout, container.audit_log
+    )
     app: Final = FastAPI(
         title=TITLE,
         version="1",
-        lifespan=_Lifespan(container),
+        lifespan=_Lifespan(container, fleet),
         docs_url=None,
         redoc_url=None,
         openapi_url=f"{api_prefix}/openapi.json",
@@ -133,6 +143,7 @@ def create_app(container: Container, license_check: License) -> FastAPI:
     app.dependency_overrides[get_fanout] = lambda: container.fanout
     app.dependency_overrides[get_audit_log] = lambda: container.audit_log
     app.dependency_overrides[get_runtime_config] = lambda: container.runtime_config
+    app.dependency_overrides[get_fleet_teams] = lambda: fleet
     install_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(auth_router, prefix=container.settings.api_prefix)

@@ -30,24 +30,49 @@ impl PythonWorkloadIdentity {
 }
 
 impl WorkloadIdentity for PythonWorkloadIdentity {
+    fn client_credentials_token<'a>(
+        &'a self,
+        litellm_params: &'a LitellmParams,
+        api_base: Option<&'a str>,
+        model: &'a str,
+    ) -> BoxFuture<'a, Result<Option<SecretValue>, litellm_auth::Error>> {
+        mint_token(
+            self.context.clone(),
+            litellm_params.extra.clone(),
+            api_base.map(str::to_owned),
+            Some(model.to_owned()),
+        )
+    }
+
     fn token<'a>(
         &'a self,
         litellm_params: &'a LitellmParams,
         api_base: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Option<SecretValue>, litellm_auth::Error>> {
-        let params = litellm_params.extra.clone();
-        let api_base = api_base.map(str::to_owned);
-        let context = self.context.clone();
-        Box::pin(async move {
-            attach_blocking(context, move |py| {
-                mint(py, &params, api_base).map_err(|error| raised(py, error))
-            })
-            .await
-            .map_err(|error| Python::attach(|py| raised(py, error)))
-            .and_then(|minted| minted)
-            .map(|token| token.map(SecretValue::new))
-        })
+        mint_token(
+            self.context.clone(),
+            litellm_params.extra.clone(),
+            api_base.map(str::to_owned),
+            None,
+        )
     }
+}
+
+fn mint_token(
+    context: PythonContext,
+    params: ExtraParams,
+    api_base: Option<String>,
+    model: Option<String>,
+) -> BoxFuture<'static, Result<Option<SecretValue>, litellm_auth::Error>> {
+    Box::pin(async move {
+        attach_blocking(context, move |py| {
+            mint(py, &params, api_base, model).map_err(|error| raised(py, error))
+        })
+        .await
+        .map_err(|error| Python::attach(|py| raised(py, error)))
+        .and_then(|minted| minted)
+        .map(|token| token.map(SecretValue::new))
+    })
 }
 
 /// The caller's `azure_ad_token_provider`, called on the blocking pool when the Entra ID
@@ -117,11 +142,19 @@ fn mint(
     py: Python<'_>,
     params: &ExtraParams,
     api_base: Option<String>,
+    model: Option<String>,
 ) -> PyResult<Option<String>> {
-    py.import(MODULE)?
-        .getattr("workload_identity_token")?
-        .call1((to_py(py, &**params)?, api_base))?
-        .extract()
+    let module = py.import(MODULE)?;
+    let params = to_py(py, &**params)?;
+    match model {
+        Some(model) => module
+            .getattr("client_credentials_token")?
+            .call1((params, api_base, model))?,
+        None => module
+            .getattr("workload_identity_token")?
+            .call1((params, api_base))?,
+    }
+    .extract()
 }
 
 #[derive(thiserror::Error)]

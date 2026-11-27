@@ -185,6 +185,48 @@ def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted()
     assert response.choices[0].text == SECRET, "the caller's own response is not redacted"
 
 
+def test_an_opted_out_callback_gets_neither_the_prompt_nor_the_answer_of_a_stream_chunk() -> None:
+    prompt_fields: Final = {"prompt_token_ids": [151644, 872], "prompt_text": f"<|im_start|>user\n{SECRET}"}
+    chunk: Final = ModelResponseStream(
+        choices=[litellm.utils.StreamingChoices(delta=litellm.utils.Delta(content=SECRET))], **prompt_fields
+    )
+
+    redacted: Final = redacted_response_obj_for_custom_logger(chunk, CustomLogger(message_logging=False))
+
+    assert SECRET not in str(redacted)
+    assert "151644" not in str(redacted)
+    assert chunk.model_dump(include=set(prompt_fields)) == prompt_fields, "the caller's own chunk is not redacted"
+
+
+@pytest.mark.parametrize("shape", ["object", "dict_message", "dict_delta"])
+def test_redaction_redacts_a_chat_refusal(shape: str) -> None:
+    response: Final = ModelResponse(
+        choices=[{"index": 0, "message": {"role": "assistant", "content": None, "refusal": SECRET}}]
+    )
+    result: Final = (
+        response
+        if shape == "object"
+        else {"choices": [{"index": 0, "delta": {"refusal": SECRET}}]}
+        if shape == "dict_delta"
+        else response.model_dump()
+    )
+
+    redacted: Final = perform_redaction({"litellm_params": _request_params({})}, result)
+
+    assert SECRET not in str(redacted), redacted
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_redacts_a_delta_refusal(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[litellm.utils.StreamingChoices(delta=litellm.utils.Delta(refusal=SECRET))]
+    )
+
+    perform_redaction({"stream": True, key: response}, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
+
+
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
     hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
     original_hidden_params: Final = copy.deepcopy(hidden_params)
@@ -878,6 +920,59 @@ class TestPerformRedaction:
         assert [choice["token_ids"] for choice in logged_choices] == [None, None]
         assert logged_choices[0]["message"]["provider_specific_fields"]["token_ids"] is None
         assert details["complete_streaming_response"].choices[0].get("token_ids") is None
+
+    def test_drops_the_vllm_prompt_fields_that_carry_the_prompt(self):
+        prompt_fields = {
+            "prompt_token_ids": [151644, 872],
+            "prompt_text": "<|im_start|>user\nsecret",
+            "prompt_logprobs": [None, {"872": {"logprob": -1.5, "rank": 1, "decoded_token": "secret"}}],
+        }
+
+        def response():
+            return litellm.ModelResponse(
+                choices=[litellm.Choices(message=litellm.Message(content="ok", role="assistant"))], **prompt_fields
+            )
+
+        details = {
+            "stream": True,
+            "complete_streaming_response": response(),
+            "standard_logging_object": {"response": {"choices": [{"message": {"content": "ok"}}], **prompt_fields}},
+        }
+
+        redacted = perform_redaction(details, response())
+
+        assert details["complete_streaming_response"].model_dump(include=set(prompt_fields)) == dict.fromkeys(
+            prompt_fields
+        )
+        assert redacted.model_dump(include=set(prompt_fields)) == dict.fromkeys(prompt_fields)
+        assert prompt_fields.keys().isdisjoint(details["standard_logging_object"]["response"])
+
+    def test_drops_the_vllm_prompt_fields_a_text_completion_carries_on_each_choice(self):
+        prompt_fields = {
+            "prompt_token_ids": [45764, 59249],
+            "prompt_logprobs": [None, {"59249": {"logprob": -1.5, "rank": 1, "decoded_token": SECRET}}],
+        }
+
+        def response():
+            return litellm.TextCompletionResponse(
+                choices=[litellm.utils.TextChoices(index=0, text="ok", finish_reason="stop", **prompt_fields)]
+            )
+
+        details = {
+            "stream": True,
+            "complete_streaming_response": response(),
+            "standard_logging_object": {"response": {"choices": [{"index": 0, "text": "ok", **prompt_fields}]}},
+        }
+        client_response = response()
+
+        redacted = perform_redaction(details, client_response)
+
+        assert redacted.choices[0].model_dump(include=set(prompt_fields)) == dict.fromkeys(prompt_fields)
+        assert details["complete_streaming_response"].choices[0].model_dump(
+            include=set(prompt_fields)
+        ) == dict.fromkeys(prompt_fields)
+        assert prompt_fields.keys().isdisjoint(details["standard_logging_object"]["response"]["choices"][0])
+        assert client_response.choices[0].model_dump(include=set(prompt_fields)) == prompt_fields
 
     def test_redacts_text_completion_stream_text_and_the_token_ids_that_decode_to_it(self):
         details = {

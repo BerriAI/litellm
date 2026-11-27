@@ -98,19 +98,19 @@ class DeepinfraRerankConfig(BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: Mapping[str, str],
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         if api_key is None:
             api_key = get_secret_str("DEEPINFRA_API_KEY")
 
         if api_key is None:
             raise ValueError("Deepinfra API key is required. Please set 'DEEPINFRA_API_KEY' environment variable")
 
-        default_headers: Final = {
+        default_headers: Final[dict[str, object]] = {  # mutable-ok: Authorization is reassigned below
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
@@ -246,7 +246,9 @@ class DeepinfraRerankConfig(BaseRerankConfig):
     def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return ["query", "documents"]
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         # Deepinfra errors may come as JSON: {"detail": {"error": "..."}}
         import json
 

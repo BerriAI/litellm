@@ -63,7 +63,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         model: str,
         query: str,
         documents: list[str | dict[str, object]],
-        optional_params: dict,
+        optional_params: dict[str, object],
         logging_obj: LitellmLogging,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,

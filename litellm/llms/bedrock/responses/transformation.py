@@ -248,7 +248,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
+        headers: dict[str, object],  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
         model: str,
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict[str, object]:  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
@@ -260,7 +260,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
 
     def sign_request(
         self,
-        headers: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
+        headers: dict[str, object],  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
         optional_params: dict,  # mutable-ok: same
         request_data: dict,  # mutable-ok: same
         api_base: str,
@@ -320,7 +320,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
         litellm_params: GenericLiteLLMParams,
         headers: dict,  # mutable-ok: same
     ) -> dict[str, object]:  # mutable-ok: same
@@ -337,9 +337,9 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: same
+        headers: dict[str, object],  # mutable-ok: same
     ) -> dict[str, object]:  # mutable-ok: same
         remote_urls: Final = collect_remote_image_urls(input)
         data_uris: Final = await asyncio.gather(*(self.async_fetch_image(url) for url in remote_urls))
@@ -355,7 +355,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,  # mutable-ok: signature fixed by the override contract
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
         litellm_params: GenericLiteLLMParams,
         headers: dict,  # mutable-ok: same
     ) -> dict[str, object]:  # mutable-ok: same

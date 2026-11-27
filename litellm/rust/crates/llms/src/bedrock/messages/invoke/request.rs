@@ -807,6 +807,31 @@ mod tests {
         );
     }
 
+    #[rstest]
+    fn only_custom_tools_without_a_name_get_one() {
+        let tools = json!([
+            {"type": "computer_toolset_20260801"},
+            {"type": "browser_toolset_20260801"},
+            {"type": "bash_20250124", "name": "bash"},
+            {"type": "custom", "input_schema": {"type": "object"}},
+            {"input_schema": {"type": "object"}},
+        ]);
+        let wire = transformed(
+            hello("us.anthropic.claude-sonnet-5-5", json!({"tools": tools})),
+            MessagesModelCapabilities::default(),
+        );
+        assert_eq!(
+            wire["tools"],
+            json!([
+                {"type": "computer_toolset_20260801"},
+                {"type": "browser_toolset_20260801"},
+                {"type": "bash_20250124", "name": "bash"},
+                {"type": "custom", "input_schema": {"type": "object"}, "name": "litellm_unnamed_tool_3"},
+                {"input_schema": {"type": "object"}, "name": "litellm_unnamed_tool_4"},
+            ])
+        );
+    }
+
     #[test]
     fn a_non_bool_eager_input_streaming_is_refused() {
         let error = transformed_with(

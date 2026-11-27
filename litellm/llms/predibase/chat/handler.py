@@ -15,6 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import CustomStreamWrapper, ModelResponse
 
 from ..common_utils import PredibaseError
@@ -57,7 +58,7 @@ class PredibaseChatCompletion:
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
@@ -71,7 +72,7 @@ class PredibaseChatCompletion:
         timeout: float | httpx.Timeout,
         acompletion: bool | None = None,
         logger_fn: object = None,
-        headers: dict = {},
+        headers: dict[str, object] = {},
     ) -> ModelResponse | CustomStreamWrapper:
         predibase_config: Final = litellm.PredibaseConfig()
         headers = predibase_config.validate_environment(
@@ -197,7 +198,7 @@ class PredibaseChatCompletion:
     async def async_completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         model_response: ModelResponse,
         print_verbose: Callable[..., object],
@@ -205,8 +206,8 @@ class PredibaseChatCompletion:
         api_key: str,
         logging_obj: LiteLLMLoggingObj,
         stream: bool,
-        data: dict,
-        optional_params: dict,
+        data: dict[str, object],
+        optional_params: dict[str, object],
         timeout: float | httpx.Timeout,
         litellm_params: Mapping[str, object] | None = None,
         logger_fn: object = None,
@@ -256,7 +257,7 @@ class PredibaseChatCompletion:
         encoding: object,
         api_key: object,
         logging_obj: LiteLLMLoggingObj,
-        data: dict,
+        data: dict[str, object],
         timeout: float | httpx.Timeout,
         optional_params: object = None,
         litellm_params: object = None,

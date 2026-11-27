@@ -219,7 +219,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "acompletion",

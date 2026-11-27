@@ -15,7 +15,7 @@ class GoCardlessApiTokenDetector(RegexBasedDetector):
         return "GoCardless API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # GoCardless API token
             re.compile(

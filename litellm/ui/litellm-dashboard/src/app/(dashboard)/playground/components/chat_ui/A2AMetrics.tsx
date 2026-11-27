@@ -1,3 +1,4 @@
+import { displayTime } from "@/i18n/displayDate";
 import React, { useState } from "react";
 import {
   Bot,
@@ -67,7 +68,7 @@ const formatTimestamp = (timestamp?: string) => {
   if (!timestamp) return null;
   try {
     const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return displayTime(date);
   } catch {
     return timestamp;
   }

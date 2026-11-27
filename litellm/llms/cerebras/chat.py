@@ -31,7 +31,7 @@ class CerebrasConfig(OpenAIGPTConfig):
     def __init__(
         self,
         max_tokens: int | None = None,
-        response_format: dict | None = None,
+        response_format: Mapping[str, object] | None = None,
         seed: int | None = None,
         stop: str | None = None,
         stream: bool | None = None,
@@ -82,10 +82,10 @@ class CerebrasConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":

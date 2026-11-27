@@ -938,7 +938,7 @@ class PrometheusMetricLabels:
     litellm_provider_cache_creation_input_tokens_metric = _cache_metric_labels
 
     # Metrics whose emission paths supply org context (used by get_labels)
-    _org_label_metrics: ClassVar[frozenset] = frozenset(
+    _org_label_metrics: ClassVar[frozenset[str]] = frozenset(
         {
             "litellm_llm_api_latency_metric",
             "litellm_llm_api_time_to_first_token_metric",
@@ -1213,17 +1213,17 @@ class PrometheusSettings:
 class NoOpMetric:
     """A no-op metric that has the same interface as prometheus metrics but does nothing"""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: object, **kwargs: object) -> None:
         pass
 
-    def labels(self, *args, **kwargs):
+    def labels(self, *args: object, **kwargs: object):
         return self
 
-    def inc(self, *args, **kwargs) -> None:
+    def inc(self, *args: object, **kwargs: object) -> None:
         pass
 
-    def set(self, *args, **kwargs) -> None:
+    def set(self, *args: object, **kwargs: object) -> None:
         pass
 
-    def observe(self, *args, **kwargs) -> None:
+    def observe(self, *args: object, **kwargs: object) -> None:
         pass

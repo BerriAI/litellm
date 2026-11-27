@@ -40,7 +40,7 @@ class VertexMultimodalEmbedding(VertexLLM):
         print_verbose: object,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,

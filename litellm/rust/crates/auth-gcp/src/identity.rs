@@ -502,7 +502,7 @@ mod tests {
         use axum::{Json, Router, routing::post};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let requests = Arc::new(AtomicUsize::new(0));
         let recorded = requests.clone();
         let impersonations = requests.clone();

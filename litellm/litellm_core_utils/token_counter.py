@@ -8,7 +8,7 @@ import struct
 import threading
 from bisect import bisect_right
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from itertools import accumulate, chain, islice
@@ -48,6 +48,7 @@ from litellm.constants import (
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
     TOKEN_COUNTER_MAX_EXACT_CHARS,
+    TRUNCATED_BASE64_MARKER,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
@@ -100,6 +101,8 @@ def get_modified_max_tokens(
     user_max_tokens: int | None,
     buffer_perc: float | None,
     buffer_num: float | None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> int | None:
     """
     Params:
@@ -112,14 +115,15 @@ def get_modified_max_tokens(
         if user_max_tokens is None:
             return None
 
-        ## MODEL INFO
-        _model_info: Final = litellm.get_model_info(model=model)
+        from litellm.utils import get_model_info_for_call
 
         max_output_tokens: Final = litellm.get_max_tokens(model=base_model)  # assume min context window is 4k tokens
 
         ## UNKNOWN MAX OUTPUT TOKENS - return user defined amount
         if max_output_tokens is None:
             return user_max_tokens
+
+        _model_info: Final = get_model_info_for_call(model, None, api_base, api_key)
 
         input_tokens = litellm.token_counter(model=base_model, messages=messages)
 
@@ -673,7 +677,7 @@ def _is_pdf_block(block: Mapping[str, object]) -> bool:
 
 
 def _bedrock_data_uri_media_scope(
-    resolved_model: str, media: Sequence[Mapping[str, object]]
+    resolved_model: str, media: Sequence[Mapping[str, object]], input_type: str | None
 ) -> _DataUriMediaScope | None:
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
@@ -686,14 +690,16 @@ def _bedrock_data_uri_media_scope(
         case "cohere":
             return "whole_batch"
         case "twelvelabs":
-            return None
+            return "per_item" if input_type == "image" else None
         case "nova" if any(map(_is_pdf_block, media)):
             return None
         case _:
             return "per_item"
 
 
-def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> _DataUriMediaScope | None:
+def _data_uri_media_scope(
+    model: str, media: Sequence[Mapping[str, object]], input_type: str | None
+) -> _DataUriMediaScope | None:
     from litellm.utils import supports_embedding_image_input
 
     try:
@@ -701,7 +707,7 @@ def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> 
     except litellm.exceptions.BadRequestError:
         return None
     if provider == "bedrock":
-        return _bedrock_data_uri_media_scope(resolved_model, media)
+        return _bedrock_data_uri_media_scope(resolved_model, media, input_type)
     if not supports_embedding_image_input(model):
         return None
     if provider == "cohere":
@@ -709,23 +715,48 @@ def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> 
     return "per_item" if provider in _PER_ITEM_DATA_URI_EMBEDDING_PROVIDERS else None
 
 
-def split_embedding_input_tokens(
-    value: _EmbeddingInputT, media_models: Callable[[], Sequence[str]], fallback_model: str | None = None
-) -> tuple[_EmbeddingInputT, int]:
+def count_embedding_input_tokens(
+    value: _EmbeddingInputT,
+    media_models: Callable[[], Sequence[str]],
+    fallback_model: str | None = None,
+    input_type: str | None = None,
+) -> tuple[_EmbeddingInputT, int, bool]:
+    """The input left to count as text, the tokens of the media priced out of it, and whether it holds media
+    no deployment prices, which stays in the text."""
     from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
-        embedding_input_is_all_media,
+        embedding_input_holds_media_read_as_text,
         split_embedding_media_for_tpm,
     )
 
+    if embedding_input_holds_media_read_as_text(value, input_type):
+        return value, 0, True
     text, media = split_embedding_media_for_tpm(value)
     if not media:
-        return value, 0
+        return value, 0, False
     models: Final = tuple(media_models())
-    scopes: Final = frozenset(_data_uri_media_scope(model, media) for model in models)
-    if not models or None in scopes or ("whole_batch" in scopes and not embedding_input_is_all_media(value)):
-        return value, 0
+    if not _prices_embedding_media(value, media, models, input_type):
+        return value, 0, True
     media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)
-    return cast(_EmbeddingInputT, text), media_tokens  # cast-ok: the projection keeps the input's container shape
+    return cast(_EmbeddingInputT, text), media_tokens, False  # cast-ok: the projection keeps the input's shape
+
+
+def split_embedding_input_tokens(
+    value: _EmbeddingInputT,
+    media_models: Callable[[], Sequence[str]],
+    fallback_model: str | None = None,
+    input_type: str | None = None,
+) -> tuple[_EmbeddingInputT, int]:
+    text, media_tokens, _ = count_embedding_input_tokens(value, media_models, fallback_model, input_type)
+    return text, media_tokens
+
+
+def _prices_embedding_media(
+    value: object, media: Sequence[Mapping[str, object]], models: Sequence[str], input_type: str | None
+) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import embedding_input_is_all_media
+
+    scopes: Final = frozenset(_data_uri_media_scope(model, media, input_type) for model in models)
+    return bool(models) and None not in scopes and ("whole_batch" not in scopes or embedding_input_is_all_media(value))
 
 
 def embedding_aware_token_count(
@@ -743,6 +774,7 @@ Type for a function that counts tokens in a string.
 """
 
 PdfPagePricing: TypeAlias = Literal["openai", "claude"]
+PdfDocumentPricing: TypeAlias = PdfPagePricing | Literal["single_image"]
 
 
 class _PdfBox(Protocol):
@@ -776,7 +808,17 @@ T_ParamSpec = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
 _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
-    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming", "custom")
+    (
+        "name",
+        "input_schema",
+        "description",
+        "cache_control",
+        "strict",
+        "type",
+        "eager_input_streaming",
+        "custom",
+        "defer_loading",
+    )
 )
 
 
@@ -902,6 +944,21 @@ def _is_openai_or_azure_model(model: str) -> bool:
 
 def pdf_page_pricing(model: str | None) -> PdfPagePricing:
     return "openai" if _is_openai_or_azure_model(model or "") else "claude"
+
+
+@dataclass(frozen=True, slots=True)
+class MessageCountFraming:
+    legacy_message_accounting: bool
+    tool_section: ChatTemplateToolSection | None
+    pdf_pricing: PdfPagePricing
+
+
+def message_count_framing(model: str) -> MessageCountFraming:
+    return MessageCountFraming(
+        legacy_message_accounting=uses_legacy_message_accounting(model),
+        tool_section=chat_template_tool_section(model),
+        pdf_pricing=pdf_page_pricing(model),
+    )
 
 
 def reads_pdf_pages(model: str) -> bool:
@@ -1282,7 +1339,8 @@ def _get_count_function(
 ) -> TokenCounterFunction:
     exact: Final = _resolve_exact_count(model, custom_tokenizer)
     count: Final = _get_extrapolating_count_function(exact.count)
-    return count if custom_tokenizer is not None else _TOKEN_COUNT_MEMO.wrap(exact.tokenizer, count)
+    memoizable: Final = custom_tokenizer is None or isinstance(exact.tokenizer, tiktoken.Encoding | OpenAIEncoding)
+    return _TOKEN_COUNT_MEMO.wrap(exact.tokenizer, count) if memoizable else count
 
 
 @dataclass(frozen=True, slots=True)
@@ -1317,7 +1375,13 @@ def _resolve_exact_count(
 
         return _ExactCount(tokenizer, count_tokens)
     if tokenizer_json["type"] == "openai_tokenizer":
-        encoding: Final = openai_tokenizer_encoding(model or "")
+        encoding: Final = (
+            tokenizer_json["tokenizer"]
+            if custom_tokenizer is not None
+            and isinstance(tokenizer_json["tokenizer"], tiktoken.Encoding | OpenAIEncoding)
+            and not is_openai_model(model or "")
+            else openai_tokenizer_encoding(model or "")
+        )
 
         def encode_length(text: str) -> int:
             return _encoding_count(encoding, text)
@@ -1405,15 +1469,6 @@ def _served_model(deployment: object) -> str | None:
 
 def _as_openai_model(model: str | None) -> str | None:
     return model if model is not None and is_openai_model(model) else None
-
-
-def single_encoding_openai_model(served: Sequence[str | None]) -> str | None:
-    """An OpenAI model to count a request with, when every `served_openai_models` entry is an OpenAI model on the same
-    encoding, else None."""
-    if not served or None in served:
-        return None
-    encodings: Final = frozenset(openai_tokenizer_encoding_name(model) for model in served if model is not None)
-    return served[0] if len(encodings) == 1 else None
 
 
 def _openai_model_name(model: str) -> str | None:
@@ -1750,35 +1805,111 @@ def _pdf_page_tokens(page: _PdfPage, count_function: TokenCounterFunction, pdf_p
             return _claude_pdf_page_tokens(page, count_function)
 
 
-def _count_inline_pdf_tokens(
-    data_url: str,
-    count_function: TokenCounterFunction,
-    pdf_pricing: PdfPagePricing = "claude",
-) -> int | None:
-    if not data_url.startswith(PDF_DATA_URL_PREFIX):
+def _pdf_or_none(operation: Callable[[], T_Retval]) -> T_Retval | None:
+    """`operation`'s result, or None when pypdf or the page pricing fails, which prices the document like one image."""
+    try:
+        return operation()
+    except Exception as e:
+        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
+        return None
+
+
+def _inline_pdf_reader(data_url: str) -> "_PdfReader | None":
+    if not data_url.startswith(PDF_DATA_URL_PREFIX) or data_url.startswith(
+        TRUNCATED_BASE64_MARKER, len(PDF_DATA_URL_PREFIX)
+    ):
         return None
     try:
         from pypdf import PdfReader
     except ImportError:
         verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
         return None
-    try:
-        reader: Final = cast(  # cast-ok: pypdf's PdfReader satisfies _PdfReader, typed only where pypdf is installed
+    return _pdf_or_none(
+        lambda: cast(  # cast-ok: pypdf's PdfReader satisfies _PdfReader, typed only where pypdf is installed
             _PdfReader, PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
         )
-        return sum(_pdf_page_tokens(page, count_function, pdf_pricing) for page in reader.pages)
-    except Exception as e:
-        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
+    )
+
+
+def _count_inline_pdf_tokens(
+    data_url: str,
+    count_function: TokenCounterFunction,
+    pdf_pricing: PdfPagePricing = "claude",
+) -> int | None:
+    reader: Final = _inline_pdf_reader(data_url)
+    if reader is None:
         return None
+    return _pdf_or_none(lambda: sum(_pdf_page_tokens(page, count_function, pdf_pricing) for page in reader.pages))
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadPdfPage:
+    page: _PdfPage
+    has_text: bool
+    text_tokens: int
+
+
+def _read_pdf_page(page: _PdfPage, count_function: TokenCounterFunction) -> _ReadPdfPage:
+    text: Final = page.extract_text() or ""
+    return _ReadPdfPage(page, bool(text.strip()), count_function(text))
+
+
+def _read_pdf_pages(data_url: str, count_function: TokenCounterFunction) -> tuple[_ReadPdfPage, ...] | None:
+    """Every page of an inline PDF with its extracted text counted once, or None where `_count_inline_pdf_tokens`
+    would price the document like one image for any page pricing."""
+    reader: Final = _inline_pdf_reader(data_url)
+    if reader is None:
+        return None
+    return _pdf_or_none(lambda: tuple(_read_pdf_page(page, count_function) for page in reader.pages))
+
+
+def _read_claude_page_tokens(page: _ReadPdfPage) -> int:
+    return page.text_tokens + _anthropic_rendered_page_image_tokens(
+        float(page.page.mediabox.width), float(page.page.mediabox.height)
+    )
+
+
+def _read_page_tokens(page: _ReadPdfPage, pdf_pricing: PdfPagePricing) -> int:
+    match pdf_pricing:
+        case "openai" if not _pdf_page_draws_raster_image(page.page):
+            return page.text_tokens + OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS if page.has_text else 0
+        case "openai" | "claude":
+            return _read_claude_page_tokens(page)
+
+
+def _read_pdf_tokens(pages: tuple[_ReadPdfPage, ...] | None, pdf_pricing: PdfDocumentPricing) -> int | None:
+    if pages is None or pdf_pricing == "single_image":
+        return None
+    return _pdf_or_none(lambda: sum(_read_page_tokens(page, pdf_pricing) for page in pages))
+
+
+def _inline_pdf_prices(
+    data_url: str, count_function: TokenCounterFunction, pdf_pricings: tuple[PdfDocumentPricing, ...]
+) -> Mapping[PdfDocumentPricing, int]:
+    """What `_count_opaque_document_tokens` prices one inline PDF at under each pricing, reading it once."""
+    pages: Final = _read_pdf_pages(data_url, count_function)
+    priced: Final[tuple[tuple[PdfDocumentPricing, int | None], ...]] = tuple(
+        (pricing, _read_pdf_tokens(pages, pricing)) for pricing in pdf_pricings
+    )
+    as_image: Final = (
+        calculate_img_tokens(data=data_url, mode="auto", use_default_image_token_count=False)
+        if any(tokens is None for _, tokens in priced)
+        else 0
+    )
+    return MappingProxyType[PdfDocumentPricing, int](
+        {pricing: as_image if tokens is None else tokens for pricing, tokens in priced}
+    )
 
 
 def _count_opaque_document_tokens(
     data_url: str,
     count_function: TokenCounterFunction,
     use_default_image_token_count: bool,
-    pdf_pricing: PdfPagePricing = "claude",
+    pdf_pricing: PdfDocumentPricing = "claude",
 ) -> int:
-    pdf_tokens: Final = _count_inline_pdf_tokens(data_url, count_function, pdf_pricing)
+    pdf_tokens: Final = (
+        None if pdf_pricing == "single_image" else _count_inline_pdf_tokens(data_url, count_function, pdf_pricing)
+    )
     if pdf_tokens is not None:
         return pdf_tokens
     return calculate_img_tokens(
@@ -1786,6 +1917,98 @@ def _count_opaque_document_tokens(
         mode="auto",
         use_default_image_token_count=use_default_image_token_count,
     )
+
+
+def inline_pdf_token_deltas(
+    model: str,
+    messages: object,
+    pdf_pricings: Iterable[PdfDocumentPricing],
+    custom_tokenizer: SelectTokenizerResponse | None = None,
+) -> Mapping[PdfDocumentPricing, int]:
+    """How much `token_counter(model=model, messages=messages, custom_tokenizer=custom_tokenizer)` changes when every
+    inline PDF it reads is priced with each of `pdf_pricings`. Only the PDF documents are priced, so no other content
+    is counted or fetched again, and each distinct PDF is read once to calculate all prices."""
+    count_function: Final = _get_count_function(model, custom_tokenizer)
+    counted_pricing: Final = pdf_page_pricing(model)
+    asked: Final = tuple(dict.fromkeys(pdf_pricings))
+    occurrences: Final = tuple(_inline_pdf_data_urls(messages))
+    prices: Final = MappingProxyType(
+        {
+            data_url: _inline_pdf_prices(data_url, count_function, (counted_pricing, *asked))
+            for data_url in dict.fromkeys(occurrences)
+        }
+    )
+    return MappingProxyType(
+        {
+            pricing: sum(prices[data_url][pricing] - prices[data_url][counted_pricing] for data_url in occurrences)
+            for pricing in asked
+        }
+    )
+
+
+def inline_pdf_token_delta(model: str, messages: object, pdf_pricing: PdfDocumentPricing) -> int:
+    """`inline_pdf_token_deltas` for one pricing."""
+    return inline_pdf_token_deltas(model, messages, (pdf_pricing,))[pdf_pricing]
+
+
+def _inline_pdf_data_urls(messages: object) -> Iterator[str]:
+    """Each inline PDF the message counter prices, once per occurrence, read through the content the counter reads.
+    A container inside itself is skipped, and the same document repeated elsewhere counts every time."""
+    pending: Final[list[tuple[object, frozenset[int]]]] = list(  # mutable-ok: traversal stack, recursion is banned
+        chain.from_iterable(map(_message_parts, as_object_list(messages) or ()))
+    )
+    while pending:
+        node, ancestors = pending.pop()
+        data_url, children = _inline_pdf_visit(node, ancestors)
+        if data_url is not None:
+            yield data_url
+        pending.extend(children)
+
+
+def _inline_pdf_visit(
+    node: object, ancestors: frozenset[int]
+) -> tuple[str | None, tuple[tuple[object, frozenset[int]], ...]]:
+    fields: Final = as_str_mapping(node)
+    if fields is None or id(node) in ancestors:
+        return None, ()
+    data_url: Final = _inline_pdf_data_url(fields)
+    if data_url is not None:
+        return data_url, ()
+    lineage: Final = ancestors | {id(node)}
+    return None, tuple((child, lineage) for child in _counted_children(fields))
+
+
+def _message_parts(message: object) -> Iterator[tuple[object, frozenset[int]]]:
+    content: Final = (as_str_mapping(message) or {}).get("content")
+    return ((part, frozenset({id(message)})) for part in as_object_list(content) or ())
+
+
+def _inline_pdf_data_url(block: Mapping[str, object]) -> str | None:
+    match block:
+        case {"type": "file", "file": {"file_data": str() as data}} | {
+            "type": "document",
+            "source": {"type": "url", "url": str() as data},
+        } if data.startswith(PDF_DATA_URL_PREFIX):
+            return data
+        case {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": str() as data}}:
+            return f"{PDF_DATA_URL_PREFIX}{data}"
+        case _:
+            return None
+
+
+def _counted_children(block: Mapping[str, object]) -> Sequence[object]:
+    block_type: Final = block.get("type")
+    content: Final = block.get("content")
+    if block_type == "tool_result":
+        return as_object_list(content) or ()
+    if block_type == "document":
+        source: Final = as_str_mapping(block.get("source")) or {}
+        nested: Final = source.get("content") if source.get("type") == "content" else None
+        return as_object_list(nested) or ()
+    if isinstance(block_type, str) and "content" in _ANTHROPIC_SERVER_TOOL_FIELDS.get(block_type, ()):
+        mapped_content: Final = as_str_mapping(content)
+        return (mapped_content,) if mapped_content is not None else as_object_list(content) or ()
+    return ()
 
 
 def _count_document_tokens(
@@ -1947,7 +2170,13 @@ def _count_anthropic_content(
 
 
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
-    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+    {
+        "text": "text",
+        "thinking": "thinking",
+        "redacted_thinking": "thinking",
+        "compaction": "content",
+        "fallback": "text",
+    }
 )
 
 

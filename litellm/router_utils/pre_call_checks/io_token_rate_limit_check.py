@@ -193,7 +193,7 @@ def _tokenizer_and_served_models(deployment: object) -> tuple[str, str]:
     return deployment_openai_model(deployment) or served, served
 
 
-def _estimate_input_tokens(request_kwargs: dict[str, Any] | None, model: str = "") -> int:
+def _estimate_input_tokens(request_kwargs: Mapping[str, Any] | None, model: str = "") -> int:
     if not request_kwargs:
         return 0
     messages: Final = request_kwargs.get("messages")
@@ -582,8 +582,8 @@ async def _increment_with_rollback(
 @with_service_target(ROUTER_USAGE_TARGET)
 def io_token_pre_call_check(
     usage: RouterUsage,
-    deployment: dict,
-) -> dict | None:
+    deployment: dict[str, object],
+) -> dict[str, object] | None:
     itpm_limit, otpm_limit = get_deployment_io_token_limits(deployment)
     if itpm_limit is None and otpm_limit is None:
         return deployment
@@ -646,8 +646,8 @@ def io_token_pre_call_check(
 @with_service_target(ROUTER_USAGE_TARGET)
 async def async_io_token_pre_call_check(
     usage: RouterUsage,
-    deployment: dict,
-) -> dict | None:
+    deployment: dict[str, object],
+) -> dict[str, object] | None:
     itpm_limit, otpm_limit = get_deployment_io_token_limits(deployment)
     if itpm_limit is None and otpm_limit is None:
         return deployment
@@ -657,7 +657,7 @@ async def async_io_token_pre_call_check(
     if request is not None and request.opens_responses_socket:
         _stash_reservation_in_metadata(
             request,
-            await async_admit_io_token_turn(usage, deployment, get_utc_datetime()),
+            await async_admit_io_token_turn(usage, deployment, get_utc_datetime(), request_kwargs),
         )
         return deployment
     _model, served_model = _tokenizer_and_served_models(deployment)
@@ -754,11 +754,60 @@ async def _raise_if_at_limit(usage: RouterUsage, counter: UsageCounter, limit: i
         raise _rate_limit_error(limit_label, limit, count)
 
 
+async def _turn_itpm_tokens(
+    deployment: Mapping[str, object],
+    limit: int,
+    turn_params: Mapping[str, object] | None,
+) -> int:
+    tokenizer_model, _ = _tokenizer_and_served_models(deployment)
+    turn_input: Final = (
+        MappingProxyType({"input": turn_params.get("input")})
+        if turn_params and turn_params.get("generate") is not False
+        else None
+    )
+    estimated_input: Final = await offload_token_count(_estimate_input_tokens)(turn_input, model=tokenizer_model)
+    return _reservation_value(estimated_input, limit)
+
+
+async def _raise_if_turn_input_passes_itpm(
+    usage: RouterUsage,
+    counter: UsageCounter,
+    limit: int,
+    deployment: Mapping[str, object],
+    turn_params: Mapping[str, object] | None,
+) -> None:
+    turn_tokens: Final = await _turn_itpm_tokens(deployment, limit, turn_params)
+    count: Final = await usage.shared_or_local(counter) or 0
+    with_turn: Final = count + turn_tokens
+    if with_turn <= limit:
+        return
+    refusal: Final = _rate_limit_error("ITPM", limit, with_turn)
+    refusal.deployment_has_itpm_room = count < limit  # pyright: ignore[reportAttributeAccessIssue]  # read by the router's refusal handling
+    raise refusal
+
+
+@with_service_target(ROUTER_USAGE_TARGET)
+async def async_socket_turn_misses_itpm_room(
+    usage: RouterUsage,
+    deployment: Mapping[str, object],
+    now: datetime,
+    turn_params: Mapping[str, object],
+) -> bool:
+    configured: Final = dict(deployment)
+    itpm_limit, _ = get_deployment_io_token_limits(configured)
+    counters: Final = _get_counters(configured, now.strftime("%H-%M"))
+    if itpm_limit is None or counters is None:
+        return False
+    count: Final = await usage.shared_or_local(counters[0]) or 0
+    return count < itpm_limit and count + await _turn_itpm_tokens(configured, itpm_limit, turn_params) > itpm_limit
+
+
 @with_service_target(ROUTER_USAGE_TARGET)
 async def async_admit_io_token_turn(
     usage: RouterUsage,
     deployment: Mapping[str, object],
     now: datetime,
+    turn_params: Mapping[str, object] | None,
 ) -> Mapping[str, object]:
     configured: Final = dict(deployment)
     itpm_limit, otpm_limit = get_deployment_io_token_limits(configured)
@@ -768,7 +817,8 @@ async def async_admit_io_token_turn(
     if counters is None:
         return MappingProxyType({})
     itpm_counter, otpm_counter = counters
-    await _raise_if_at_limit(usage, itpm_counter, itpm_limit, "ITPM")
+    if itpm_limit is not None:
+        await _raise_if_turn_input_passes_itpm(usage, itpm_counter, itpm_limit, configured, turn_params)
     await _raise_if_at_limit(usage, otpm_counter, otpm_limit, "OTPM")
     return _reservation(
         0, 0, itpm_counter if itpm_limit is not None else None, otpm_counter if otpm_limit is not None else None

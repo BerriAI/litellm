@@ -69,7 +69,7 @@ class VertexAIModelGardenModels(VertexBase):
         custom_prompt_dict: dict,
         headers: Mapping[str, object] | None,
         timeout: float | httpx.Timeout,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,

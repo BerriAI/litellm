@@ -5,7 +5,10 @@
 //! runtime task is queued and delivered from the blocking pool, so a Python handler never runs on an async worker.
 //! An event on any other thread, such as the Python thread of a sync call, is delivered there and then.
 
-use std::{cell::Cell, sync::OnceLock};
+use std::{
+    cell::Cell,
+    sync::{LazyLock, OnceLock},
+};
 
 use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 use pyo3::prelude::*;
@@ -27,6 +30,8 @@ const BYTE_BUDGET: usize = 64 * 1024 * 1024;
 
 static FLOORS: Floors = Floors::new();
 static PROCESS: OnceLock<Logger> = OnceLock::new();
+static BACKGROUND: LazyLock<Background<ToPython>> =
+    LazyLock::new(|| Background::new(ToPython, CAPACITY, BYTE_BUDGET));
 
 thread_local! {
     static DELIVERING: Cell<bool> = const { Cell::new(false) };
@@ -108,9 +113,7 @@ impl Delivery for ToPython {
     }
 }
 
-struct Process {
-    background: Background<ToPython>,
-}
+struct Process;
 
 impl Process {
     fn accepts(floors: &Floors, metadata: &Metadata<'_>) -> bool {
@@ -141,18 +144,19 @@ impl Sink for Process {
             return;
         }
         match runtime_task() {
-            Some(runtime) => self.background.push(&runtime, record.clone()),
+            Some(runtime) => BACKGROUND.push(&runtime, record.clone()),
             None => deliver(record),
         }
     }
 }
 
 pub(crate) fn process() -> &'static Logger {
-    PROCESS.get_or_init(|| {
-        Logger::new(Process {
-            background: Background::new(ToPython, CAPACITY, BYTE_BUDGET),
-        })
-    })
+    PROCESS.get_or_init(|| Logger::new(Process))
+}
+
+/// Waits until every line queued so far has gone through Python's handlers.
+pub(crate) async fn delivered() {
+    BACKGROUND.delivered().await;
 }
 
 /// The logger of the call the calling thread is making. Work scoped to it logs with that call's request ids, and
@@ -372,7 +376,7 @@ mod tests {
 
     fn event(level: litellm_tracing::Level, target: &'static str) -> bool {
         let floors = super::Floors::new();
-        floors.refresh([20, 40]);
+        floors.refresh([20, 40, 10]);
         let callsite = tracing::callsite::Identifier(&CALLSITE);
         let fields = tracing::field::FieldSet::new(&[], callsite);
         let metadata = litellm_tracing::Metadata::new(
@@ -415,6 +419,11 @@ mod tests {
         litellm_tracing::Level::WARN,
         "litellm_callbacks_parallel_request_limiter::hosted",
         false
+    )]
+    #[case::at_the_router_floor(
+        litellm_tracing::Level::DEBUG,
+        "litellm_router_core::model_info",
+        true
     )]
     #[case::dependency(litellm_tracing::Level::ERROR, "hyper::proto::h1", false)]
     fn an_event_is_logged_when_its_python_logger_takes_its_level(

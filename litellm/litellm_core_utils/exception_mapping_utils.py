@@ -2307,7 +2307,7 @@ def _map_azure_exception(
     # payload in addition to string matching.
     azure_error_code: str | None = None
     try:
-        body_dict: Final = getattr(original_exception, "body", None) or {}
+        body_dict: Final[object] = getattr(original_exception, "body", None) or {}
         if isinstance(body_dict, dict):
             if isinstance(body_dict.get("error"), dict):
                 azure_error_code = body_dict["error"].get("code")

@@ -86,7 +86,7 @@ class OCIRequestWrapper:
 
     method: str
     url: str
-    headers: dict
+    headers: dict[str, str]
     body: bytes
 
     @property
@@ -491,7 +491,7 @@ def sign_with_manual_credentials(
 
 def sign_oci_request(
     headers: dict[str, str],
-    optional_params: dict,
+    optional_params: dict[str, object],
     request_data: Mapping[str, object],
     api_base: str,
     api_key: str | None = None,

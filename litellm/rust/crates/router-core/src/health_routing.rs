@@ -38,7 +38,7 @@ pub enum WhenAllUnhealthy {
     Nothing,
 }
 
-impl<C: RouterCache> Health<C> {
+impl<C: RouterCache> Health<'_, C> {
     /// The deployments the background health checks have not marked unhealthy, as the
     /// router's health-check routing settings say.
     pub async fn health_check_filter(

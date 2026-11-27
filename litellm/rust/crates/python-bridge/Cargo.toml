@@ -17,8 +17,10 @@ panic-test = []
 fast = ["litellm-token-counter/fast"]
 huggingface = ["litellm-token-counter/huggingface"]
 tiktoken = ["litellm-token-counter/tiktoken"]
+fips = ["rustls/fips", "litellm-http/fips"]
 
 [dependencies]
+litellm-call-scope.workspace = true
 litellm-env.workspace = true
 rustls.workspace = true
 litellm-secret-value.workspace = true
@@ -50,7 +52,7 @@ litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-gcp.workspace = true
-azure_core = "1.0.0"
+azure_core = { version = "1.0.0", default-features = false, features = ["reqwest", "reqwest_deflate", "reqwest_gzip", "tokio"] }
 litellm-callbacks-legacy-python.workspace = true
 litellm-callbacks-budgets.workspace = true
 litellm-callbacks.workspace = true
@@ -111,7 +113,7 @@ sqlx = { workspace = true, features = ["migrate"] }
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
 wiremock.workspace = true
-aws-sdk-secretsmanager = "1.117.0"
+aws-sdk-secretsmanager = { version = "1.117.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-credential-types = "1.3.0"
 
 [[bench]]

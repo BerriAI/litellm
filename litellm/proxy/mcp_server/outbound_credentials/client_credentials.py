@@ -15,8 +15,7 @@ Implements the client-credentials behavior contract for the v2 resolver:
 - **401 recovery**: ``ClientCredentialsBearerAuth`` retries an upstream request exactly once
   after a 401 — discard the cached token, mint a fresh one, resend; a second failure surfaces
   the upstream's own auth error unchanged.
-- **No user context**: nothing here reads a ``Subject``; every caller shares the one client
-  identity.
+- **No user context**: callers selecting the same profile share its client identity.
 
 The token-endpoint POST is injected (``M2MTokenEndpointPost``) so the grant orchestration is
 testable without a live IdP; ``post_client_credentials_grant`` is the httpx edge. Failures are
@@ -33,6 +32,7 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from dataclasses import dataclass
 from typing import Annotated, Final, Literal
+from weakref import WeakValueDictionary
 
 import httpx
 import httpx2
@@ -172,12 +172,14 @@ class _PreparedGrant:
 
 
 class ClientCredentialsTokenSource:
-    """Cached M2M access tokens, one per ``(client identity, server)``.
+    """Cached M2M access tokens, one per client identity, server and optional auth profile.
 
     ``get`` serves from the cache while the entry's TTL (derived from ``expires_in`` minus
-    ``expiry_skew_seconds``) holds, fetching under a per-server lock so concurrent misses
+    ``expiry_skew_seconds``) holds, fetching under a per-token lock so concurrent misses
     produce one grant. ``refetch`` is the 401-recovery path: it drops the failed token and
     mints a fresh one, unless a concurrent caller already replaced it.
+
+    ``max_locks`` is accepted for compatibility. Idle locks are released immediately.
     """
 
     def __init__(
@@ -196,19 +198,12 @@ class ClientCredentialsTokenSource:
         self._default_ttl_seconds = default_ttl_seconds
         self._expiry_skew_seconds = expiry_skew_seconds
         self._min_cache_seconds = min_cache_seconds
-        self._max_locks = max_locks
         self._clock = clock
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: Final[WeakValueDictionary[tuple[str, str], asyncio.Lock]] = WeakValueDictionary()
 
-    def _lock(self, server_id: str) -> asyncio.Lock:
-        """Per-server single-flight lock, bounded so ephemeral server ids (e.g. the REST tools
-        preview mints a fresh id per call) cannot grow the dict for the life of the process.
-        Evicting the oldest entry while a task still holds it only means a concurrent caller for
-        that server may run its own grant — single-flight is an optimization, not correctness.
-        """
-        if server_id not in self._locks and len(self._locks) >= self._max_locks:
-            self._locks.pop(next(iter(self._locks)), None)
-        return self._locks.setdefault(server_id, asyncio.Lock())
+    def _lock(self, server_id: str, identity_key: str) -> asyncio.Lock:
+        """Holders and waiters keep this lock alive until the last request leaves."""
+        return self._locks.setdefault((server_id, identity_key), asyncio.Lock())
 
     async def get(self, server_id: str, config: ClientCredentialsConfig) -> Result[OAuthToken, CredError]:
         match _prepare_grant(config):
@@ -218,16 +213,21 @@ class ClientCredentialsTokenSource:
                 cached = await self._backend.get(grant.identity_key, server_id)
                 if cached is not None:
                     return Ok(cached)
-                async with self._lock(server_id):
+                async with self._lock(server_id, grant.identity_key):
                     cached = await self._backend.get(grant.identity_key, server_id)
                     if cached is not None:
                         return Ok(cached)
                     return await self._fetch_and_cache(server_id, grant)
 
-    async def refetch(self, server_id: str, config: ClientCredentialsConfig, failed_access_token: str) -> str | None:
+    async def refetch(
+        self,
+        server_id: str,
+        config: ClientCredentialsConfig,
+        failed_access_token: str,
+    ) -> str | None:
         """Replace a token the upstream just 401'd; returns the fresh bearer value or ``None``.
 
-        Runs under the same per-server lock as ``get``: if a concurrent caller already replaced
+        Runs under the same lock as ``get``: if a concurrent caller already replaced
         the failed token, that replacement is returned without another grant, so a burst of 401s
         yields one fetch. A failed refetch returns ``None`` and the caller surfaces the
         upstream's original auth error (the contract's retry-once-then-give-up clause).
@@ -236,7 +236,7 @@ class ClientCredentialsTokenSource:
             case Error(_):
                 return None
             case Ok(grant):
-                async with self._lock(server_id):
+                async with self._lock(server_id, grant.identity_key):
                     cached: Final = await self._backend.get(grant.identity_key, server_id)
                     if cached is not None and cached.access_token != failed_access_token:
                         return cached.access_token
@@ -274,7 +274,7 @@ class ClientCredentialsTokenSource:
         )
         # The min-cache floor is itself capped at the token's real lifetime, so a token whose
         # expires_in is below the skew is never served past its actual expiry; a non-positive
-        # expires_in caches nothing (every request re-fetches, serialized by the per-server lock).
+        # expires_in caches nothing (every request re-fetches under the token's lock).
         ttl: Final = (
             max(expires_in - self._expiry_skew_seconds, min(float(expires_in), self._min_cache_seconds), 0.0)
             if expires_in is not None
@@ -326,18 +326,19 @@ def _prepare_grant(config: ClientCredentialsConfig) -> Result[_PreparedGrant, Cr
 
 def _identity_key(config: ClientCredentialsConfig) -> str:
     """Hash of everything that names the client identity; any rotation yields a new key."""
-    material: Final = "\n".join(
-        (
-            config.token_url or "",
-            config.client_id or "",
-            config.client_secret.get_secret_value() if config.client_secret else "",
-            config.token_endpoint_auth_method or "",
-            " ".join(config.scopes),
-            config.audience or "",
-            config.upstream_resource or "",
-        )
+    fields: Final = (
+        config.token_url or "",
+        config.client_id or "",
+        config.client_secret.get_secret_value() if config.client_secret else "",
+        config.token_endpoint_auth_method or "",
+        " ".join(config.scopes),
+        config.audience or "",
+        config.upstream_resource or "",
     )
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+    if config.profile_id is None:
+        return hashlib.sha256("\n".join(fields).encode("utf-8")).hexdigest()
+    named_identity: Final = json.dumps((config.profile_id.lower(), *fields))
+    return "profile-" + hashlib.sha256(named_identity.encode("utf-8")).hexdigest()
 
 
 class ClientCredentialsBearerAuth(httpx2.Auth):

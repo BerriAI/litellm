@@ -34,6 +34,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.noma import NomaV2StreamingP
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
@@ -128,7 +130,7 @@ class NomaV2Guardrail(CustomGuardrail):
         super().__init__(**options)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
             NomaV2GuardrailConfigModel,
         )

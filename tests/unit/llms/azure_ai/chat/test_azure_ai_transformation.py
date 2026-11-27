@@ -2655,3 +2655,146 @@ def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_t
 
     assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
     assert messages[0]["content"] == "You are terse.\n\nAnswer with exactly one word."
+
+
+@pytest.mark.parametrize("base_model", ["azure_ai/gpt-chat-latest", "gpt-chat-latest"])
+def test_a_custom_named_foundry_deployment_takes_its_base_models_request_shape(
+    local_model_cost_map: None, base_model: str
+) -> None:
+    params: Final = litellm.get_optional_params(
+        model="prod-chat",
+        custom_llm_provider="azure_ai",
+        base_model=base_model,
+        max_tokens=50,
+        reasoning_effort="high",
+        drop_params=True,
+    )
+    assert params["max_completion_tokens"] == 50
+    assert "max_tokens" not in params
+    assert "reasoning_effort" not in params
+
+
+_GET_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+_FOUNDRY_REQUEST_PARAMS: Final = (
+    MappingProxyType({"stop": ["END"]}),
+    MappingProxyType({"presence_penalty": 0.5}),
+    MappingProxyType({"top_p": 0.5}),
+    MappingProxyType({"temperature": 0.2}),
+    MappingProxyType({"user": "u-1"}),
+    MappingProxyType({"tools": [_GET_WEATHER_TOOL], "tool_choice": "auto"}),
+    MappingProxyType({"max_tokens": 50, "reasoning_effort": "high"}),
+)
+
+
+def _foundry_outcome(
+    model: str, base_model: str | None, request_params: MappingProxyType[str, object], drop_params: bool
+) -> dict[str, object] | str:
+    try:
+        return litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="azure_ai",
+            base_model=base_model,
+            drop_params=drop_params,
+            **request_params,
+        )
+    except litellm.UnsupportedParamsError as refusal:
+        return refusal.message
+
+
+def _foundry_optional_params(
+    model: str, base_model: str | None, request_params: MappingProxyType[str, object], drop_params: bool
+) -> dict[str, object] | None:
+    outcome: Final = _foundry_outcome(model, base_model, request_params, drop_params)
+    return outcome if isinstance(outcome, dict) else None
+
+
+@pytest.mark.parametrize(
+    "base_model", ["azure_ai/gpt-5.5", "gpt-5.5", "openai/gpt-5.5", "azure/gpt-5.5", "azure_ai/gpt-chat-latest"]
+)
+@pytest.mark.parametrize("request_params", _FOUNDRY_REQUEST_PARAMS)
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_custom_named_foundry_deployment_answers_like_the_deployment_its_base_model_names(
+    local_model_cost_map: None, base_model: str, request_params: MappingProxyType[str, object], drop_params: bool
+) -> None:
+    assert _foundry_optional_params("prod-deployment", base_model, request_params, drop_params) == (
+        _foundry_optional_params(base_model.rsplit("/", 1)[-1], None, request_params, drop_params)
+    )
+
+
+@pytest.mark.parametrize("deployment", ["gpt-5.6-qa-name", "prod-gpt-chat-latest"])
+@pytest.mark.parametrize("base_model", ["azure_ai/gpt-5.5", "azure_ai/gpt-chat-latest"])
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_foundry_deployment_named_after_a_gpt_5_model_takes_reasoning_effort_by_its_own_name(
+    local_model_cost_map: None, deployment: str, base_model: str, drop_params: bool
+) -> None:
+    request_params: Final = MappingProxyType({"max_tokens": 50, "reasoning_effort": "high"})
+
+    assert _foundry_outcome(deployment, base_model, request_params, drop_params) == (
+        _foundry_outcome(deployment, None, request_params, drop_params)
+    )
+
+
+_KNOWN_NAME_WITH_GPT_5_BASE_MODEL: Final = (
+    ("gpt-5.5", "openai/gpt-5.5"),
+    ("gpt-5.5", "azure/gpt-5.5"),
+    ("model-router", "azure_ai/gpt-5.5"),
+    ("Phi-4", "gpt-5.5"),
+)
+
+
+@pytest.mark.parametrize(("model", "base_model"), _KNOWN_NAME_WITH_GPT_5_BASE_MODEL)
+@pytest.mark.parametrize("request_params", _FOUNDRY_REQUEST_PARAMS)
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_gpt_5_base_model_keeps_what_a_known_foundry_deployment_name_accepts(
+    local_model_cost_map: None,
+    model: str,
+    base_model: str,
+    request_params: MappingProxyType[str, object],
+    drop_params: bool,
+) -> None:
+    by_name: Final = _foundry_optional_params(model, None, request_params, drop_params)
+    with_base_model: Final = _foundry_optional_params(model, base_model, request_params, drop_params) or {}
+    assert by_name is None or by_name.items() <= with_base_model.items()
+
+
+@pytest.mark.parametrize(("model", "base_model"), _KNOWN_NAME_WITH_GPT_5_BASE_MODEL)
+def test_a_gpt_5_base_model_keeps_the_params_a_known_foundry_deployment_name_lists(
+    local_model_cost_map: None, model: str, base_model: str
+) -> None:
+    by_name: Final = litellm.get_supported_openai_params(model=model, custom_llm_provider="azure_ai")
+    with_base_model: Final = litellm.get_supported_openai_params(
+        model=model, custom_llm_provider="azure_ai", base_model=base_model
+    )
+    assert by_name is not None and with_base_model is not None
+    assert set(by_name) <= set(with_base_model)
+
+
+_GET_TIME_TOOL: Final = {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}
+
+
+@pytest.mark.parametrize(
+    ("tool_params", "expected_tool_choice"),
+    [
+        ({"tool_choice": "none"}, None),
+        ({"tools": [], "tool_choice": "auto"}, None),
+        ({"tools": [_GET_TIME_TOOL], "tool_choice": "none"}, "none"),
+        ({"functions": [_GET_TIME_TOOL["function"]], "tool_choice": "auto"}, "auto"),
+    ],
+)
+def test_azure_ai_sends_tool_choice_only_with_tools(
+    _local_model_cost_map, tool_params: Mapping[str, object], expected_tool_choice: str | None
+):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="grok-4.7",
+        messages=[{"role": "user", "content": "What time is it?"}],
+        optional_params=dict(tool_params),
+        litellm_params={},
+        headers={},
+    )
+
+    assert request.get("tool_choice") == expected_tool_choice

@@ -31,17 +31,19 @@ import { cn } from "@/lib/cva.config";
 export const LENS_FRAME_CHANNEL = "litellm-lens:v1";
 
 const option = z.object({ value: z.string(), label: z.string() });
-const model = z.object({
+const navigationFields = {
   activeTab: z.string(),
   tabs: z.array(option.extend({ status: z.string().optional() })),
   currentAgent: z.string().nullable(),
   agents: z.array(option),
   agentLabel: z.string(),
   bookCallLabel: z.string(),
-});
+};
+const model = z.object(navigationFields);
 
 export const lensFrameMessage = z.discriminatedUnion("type", [
   z.object({ channel: z.literal(LENS_FRAME_CHANNEL), type: z.literal("ready") }),
+  z.object({ channel: z.literal(LENS_FRAME_CHANNEL), type: z.literal("auth-ready") }),
   z.object({ channel: z.literal(LENS_FRAME_CHANNEL), type: z.literal("navigation"), navigation: model }),
 ]);
 

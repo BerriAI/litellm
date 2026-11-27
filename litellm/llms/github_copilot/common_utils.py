@@ -41,7 +41,7 @@ class GithubCopilotError(BaseLLMException):
         message: str,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
-        headers: httpx.Headers | dict | None = None,
+        headers: httpx.Headers | dict[str, str] | None = None,
         body: dict | None = None,
     ):
         super().__init__(

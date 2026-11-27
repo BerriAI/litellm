@@ -19,14 +19,14 @@ class MyCustomHandler(CustomLogger):  # https://docs.litellm.ai/docs/observabili
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
     ):
         return data
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: Optional[str] = None,
@@ -35,7 +35,7 @@ class MyCustomHandler(CustomLogger):  # https://docs.litellm.ai/docs/observabili
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):
@@ -44,7 +44,7 @@ class MyCustomHandler(CustomLogger):  # https://docs.litellm.ai/docs/observabili
 
     async def async_moderation_hook(  # call made in parallel to llm api call
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ):

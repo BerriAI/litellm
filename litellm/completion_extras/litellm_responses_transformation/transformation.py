@@ -9,8 +9,6 @@ from itertools import accumulate, chain, count
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, TypeVar, Union, cast
 
-from openai.types.chat import ChatCompletion
-from openai.types.responses import Response
 from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.response_input_param import (
     FunctionCallOutput,
@@ -56,6 +54,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_unrendered_block_without_text
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_with_readable_mode,
     whole_prompt_cache_breakpoint_or_none,
@@ -128,8 +127,19 @@ if TYPE_CHECKING:
 
 
 _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"))
-_RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
-    ChatCompletion.model_fields
+_HIDDEN_RESPONSES_FIELDS: Final = frozenset(
+    (
+        *ResponsesAPIResponse.model_fields,
+        "background",
+        "completed_at",
+        "conversation",
+        "max_tool_calls",
+        "prompt",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+        "safety_identifier",
+        "top_logprobs",
+    )
 )
 
 
@@ -335,7 +345,7 @@ def responses_provider_metadata(response_fields: Mapping[str, object] | None) ->
         {
             key: value
             for key, value in (response_fields.items() if response_fields else ())
-            if value is not None and key not in _CHAT_COMPLETION_FIELDS and key not in _RESPONSES_API_ONLY_FIELDS
+            if value is not None and key not in _CHAT_COMPLETION_FIELDS and key not in _HIDDEN_RESPONSES_FIELDS
         }
     )
 
@@ -2071,6 +2081,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     converted = self._convert_content_str_to_input_text(item, role)
                     result.append(converted)
                     verbose_logger.debug("Chat provider:   -> %s", converted)
+                elif is_unrendered_block_without_text(item):
+                    verbose_logger.debug("Chat provider:   unrendered block has no text; skipped")
                 elif isinstance(item, dict):
                     # Handle multimodal content
                     original_type = item.get("type")
@@ -2410,9 +2422,6 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if isinstance(str_line, BaseModel):
             return self.chunk_parser(str_line.model_dump())
 
-        if not str_line or str_line.startswith("event:"):
-            # ignore.
-            return GenericStreamingChunk(text="", tool_use=None, is_finished=False, finish_reason="", usage=None)
         index: Final = str_line.find("data:")
         if index != -1:
             str_line = str_line[index + 5 :]
@@ -2476,6 +2485,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
         if isinstance(parsed_chunk, BaseModel):
             parsed_chunk = _DECODED_JSON.validate_python(parsed_chunk.model_dump())
+        stream_event: Final = parsed_chunk
         if not isinstance(parsed_chunk, dict):
             raise ValueError(f"Chat provider: Invalid chunk type {type(parsed_chunk)}")
 
@@ -2636,6 +2646,21 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif (
+            event_type == ResponsesAPIStreamEvents.REFUSAL_DELTA.value
+            and isinstance(refusal := require_attributes(stream_event, _StreamEvent, "get").get("delta"), str)
+            and refusal
+        ):
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(content=refusal),
+                        finish_reason=None,
+                    )
+                ],
+                provider_specific_fields={PHASE_FIELD: item_phase} if item_phase is not None else None,
+            )
         elif event_type == "response.reasoning_summary_part.added" and reasoning_summary_streamed:
             return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=" "))])
         elif event_type == "response.reasoning_summary_text.delta":
@@ -2781,7 +2806,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         return (
             self._structured_output
             and self._first_message_item_done
-            and _responses_event_type(chunk) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA.value
+            and _responses_event_type(chunk)
+            in (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA.value, ResponsesAPIStreamEvents.REFUSAL_DELTA.value)
         )
 
     @staticmethod

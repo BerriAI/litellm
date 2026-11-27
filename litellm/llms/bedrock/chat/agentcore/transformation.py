@@ -56,7 +56,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
@@ -309,7 +309,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return bool(value)
         return False
 
-    def _extract_sse_json(self, line: str) -> dict | None:
+    def _extract_sse_json(self, line: str) -> dict[str, object] | None:
         """Extract and parse JSON from an SSE data line."""
         if not line.startswith("data:"):
             return None

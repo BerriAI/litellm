@@ -88,7 +88,9 @@ class AzureOpenAIAssistantsAPIConfig:
             "metadata",
         ]
 
-    def map_openai_params_create_message_params(self, non_default_params: Mapping[str, object], optional_params: dict):
+    def map_openai_params_create_message_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object]
+    ):
         for param, value in non_default_params.items():
             if param == "role":
                 optional_params["role"] = value
@@ -431,7 +433,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token_provider: Callable[..., object] | None = None,
         convert_tool_call_to_json_mode: bool | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,  # this is the AsyncAzureOpenAI
-        litellm_params: dict | None = {},
+        litellm_params: dict[str, object] | None = {},
     ):
         response = None
         try:
@@ -538,7 +540,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token: str | None = None,
         azure_ad_token_provider: Callable[..., object] | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = {},
+        litellm_params: dict[str, object] | None = {},
     ):
         # init AzureOpenAI Client
         azure_client_params = {
@@ -615,7 +617,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token: str | None = None,
         azure_ad_token_provider: Callable[..., object] | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = {},
+        litellm_params: dict[str, object] | None = {},
     ):
         try:
             azure_client: Final = self.get_azure_openai_client(
@@ -694,7 +696,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         max_retries: int | None = None,
         azure_ad_token: str | None = None,
         azure_ad_token_provider: Callable[..., object] | None = None,
-        litellm_params: dict | None = {},
+        litellm_params: dict[str, object] | None = {},
     ) -> EmbeddingResponse:
         response = None
         try:
@@ -786,7 +788,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         aembedding: object = None,
         headers: dict | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
         if headers:
             optional_params["extra_headers"] = headers
@@ -882,8 +884,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_base: str,
         api_version: str,
         api_key: str,
-        data: dict,
-        headers: dict,
+        data: dict[str, object],
+        headers: Mapping[str, object],
         deployment_name: str | None = None,
     ) -> httpx.Response:
         if client is None:
@@ -902,7 +904,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         else:
             async_handler = client
 
-        request_json: Final = azure_deployment_image_generation_json_body(api_base, data, deployment_name)
+        request_json: Final[dict[str, object]] = azure_deployment_image_generation_json_body(
+            api_base, data, deployment_name
+        )
         return await async_handler.post(
             url=api_base,
             json=request_json,
@@ -917,7 +921,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str,
         api_key: str,
         data: dict,
-        headers: dict,
+        headers: Mapping[str, object],
         deployment_name: str | None = None,
     ) -> httpx.Response:
         if client is None:
@@ -933,7 +937,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         else:
             sync_handler = client
 
-        request_json: Final = azure_deployment_image_generation_json_body(api_base, data, deployment_name)
+        request_json: Final[dict[str, object]] = azure_deployment_image_generation_json_body(
+            api_base, data, deployment_name
+        )
         return sync_handler.post(
             url=api_base,
             json=request_json,
@@ -1295,7 +1301,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         stream: bool = False,
     ) -> HttpxBinaryResponseContent:
         azure_client: Final[AsyncAzureOpenAI] = self.get_azure_openai_client(

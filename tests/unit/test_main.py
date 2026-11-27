@@ -2565,6 +2565,198 @@ def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_sta
     assert model_info.get("mode") != "responses"
 
 
+@pytest.mark.parametrize(
+    "model_name, base_model, reasoning_effort, bridges",
+    [
+        pytest.param("qa-prod-reasoner", "azure_ai/gpt-5.6-sol", "high", True, id="custom-name-gpt-5.6-base"),
+        pytest.param("qa-prod-reasoner", "gpt-5.6-sol", "high", True, id="custom-name-unprefixed-base"),
+        pytest.param("qa-prod-reasoner", "azure_ai/gpt-5.6-sol", None, False, id="custom-name-unset-effort"),
+        pytest.param("qa-prod-reasoner", "azure_ai/gpt-5.5", "high", False, id="custom-name-gpt-5.5-base"),
+        pytest.param("qa-prod-reasoner", None, "high", False, id="custom-name-no-base"),
+        pytest.param("Phi-4", "azure_ai/gpt-5.6-sol", "high", False, id="known-name-keeps-own"),
+        pytest.param("gpt-5.6-qa-name", "azure_ai/gpt-5.5", "high", True, id="gpt-5.6-name-keeps-own-with-older-base"),
+    ],
+)
+def test_responses_api_bridge_check_azure_ai_custom_name_routes_by_gpt_5_base_model(
+    model_name, base_model, reasoning_effort, bridges
+):
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider="azure_ai",
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort=reasoning_effort,
+        api_base=_FOUNDRY_API_BASE,
+        base_model=base_model,
+    )
+
+    assert model == model_name
+    assert (model_info.get("mode") == "responses") is bridges
+
+
+def test_completion_bridges_azure_ai_custom_name_with_gpt_5_6_base_model_to_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort="high",
+        max_tokens=200,
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        model_info={"base_model": "azure_ai/gpt-5.6-sol"},
+    )
+
+    assert [str(call.request.url) for call in respx_mock.calls] == [f"{_FOUNDRY_API_BASE}/openai/v1/responses"]
+    request_body: Final = json.loads(responses_route.calls[0].request.content)
+    assert request_body["model"] == "qa-prod-reasoner"
+    assert request_body["reasoning"]["effort"] == "high"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+def _bridged_foundry_completion(**request_params: object) -> ModelResponse:
+    response: Final = litellm.completion(
+        model="azure_ai/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort="high",
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        **request_params,
+    )
+    assert isinstance(response, ModelResponse)
+    return response
+
+
+@pytest.mark.parametrize(
+    "base_model_source",
+    [{"model_info": {"base_model": "azure_ai/gpt-5.6-sol"}}, {"base_model": "azure_ai/gpt-5.6-sol"}],
+    ids=["model_info", "litellm_params"],
+)
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("seed", 7), ("seed", 0)])
+def test_completion_refuses_a_param_responses_lacks_when_a_gpt_5_base_model_bridges_a_custom_foundry_name(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    base_model_source: Mapping[str, object],
+    param: str,
+    value: int,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"`{param}`") as refusal:
+        _bridged_foundry_completion(**base_model_source, **{param: value})
+
+    assert "litellm_settings: drop_params: true" in str(refusal.value)
+    assert responses_route.call_count == 0
+
+
+def test_completion_sends_n_of_1_when_a_gpt_5_base_model_bridges_a_custom_foundry_name(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = _bridged_foundry_completion(model_info={"base_model": "azure_ai/gpt-5.6-sol"}, n=1)
+
+    assert responses_route.call_count == 1
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+def _responses_prefixed_foundry_request_body(respx_mock: respx.MockRouter, **request_params: object) -> object:
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+    litellm.completion(
+        model="azure_ai/responses/qa-prod-reasoner",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        **request_params,
+    )
+    return json.loads(responses_route.calls[-1].request.content)
+
+
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("seed", 7)])
+def test_a_gpt_5_base_model_leaves_n_and_seed_alone_on_a_foundry_name_already_routed_to_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: str, value: int
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with_base_model: Final = _responses_prefixed_foundry_request_body(
+        respx_mock, model_info={"base_model": "azure_ai/gpt-5.6-sol"}, **{param: value}
+    )
+
+    assert with_base_model == _responses_prefixed_foundry_request_body(respx_mock, **{param: value})
+
+
+def test_completion_drops_n_and_seed_under_drop_params_when_a_gpt_5_base_model_bridges_a_custom_foundry_name(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = _bridged_foundry_completion(
+        model_info={"base_model": "azure_ai/gpt-5.6-sol"}, n=2, seed=7, drop_params=True
+    )
+
+    request_body: Final = json.loads(responses_route.calls[0].request.content)
+    assert "n" not in request_body
+    assert "seed" not in request_body
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info"),
+    [
+        ("azure_ai/responses/qa-prod-reasoner", {"base_model": "azure_ai/gpt-5.6-sol"}),
+        ("azure_ai/qa-prod-reasoner", {"base_model": "azure_ai/gpt-5.6-sol", "mode": "responses"}),
+    ],
+    ids=["responses_prefix", "pinned_mode"],
+)
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("seed", 7)])
+def test_completion_keeps_main_handling_when_the_route_not_the_gpt_5_base_model_chose_responses(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    model_info: Mapping[str, object],
+    param: str,
+    value: int,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+        tools=_FOUNDRY_FUNCTION_TOOL,
+        reasoning_effort="high",
+        api_base=_FOUNDRY_API_BASE,
+        api_key="fake-foundry-key",
+        model_info=model_info,
+        **{param: value},
+    )
+
+    assert responses_route.call_count == 1
+    assert json.loads(responses_route.calls[0].request.content)["model"] == "qa-prod-reasoner"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
     """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
     from litellm.main import responses_api_bridge_check
@@ -7641,6 +7833,289 @@ def test_speech_mistral_routes_to_configured_api_base(respx_mock: respx.MockRout
 
     assert gateway_route.called
     assert response.content == audio_bytes
+
+
+
+TTS_AUDIO: Final = b"ID3\x04\x00\x00\x00fake-mp3-payload"
+
+
+def _clear_global_tts_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    for attribute in ("api_key", "openai_key", "azure_key", "api_base"):
+        monkeypatch.setattr(litellm, attribute, None)
+
+
+def _set_or_clear_env(monkeypatch: pytest.MonkeyPatch, values: dict[str, str | None]) -> None:
+    for name, value in values.items():
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+
+@pytest.mark.parametrize(
+    ("provider_key", "openai_key", "sent_authorization"),
+    [
+        ("hosted-vllm-scoped-key", None, "Bearer hosted-vllm-scoped-key"),
+        ("hosted-vllm-scoped-key", "generic-openai-key", "Bearer hosted-vllm-scoped-key"),
+        (None, "generic-openai-key", "Bearer generic-openai-key"),
+        (None, None, "Bearer fake-api-key"),
+    ],
+    ids=["provider-key-alone", "provider-key-beats-generic", "generic-key-beats-placeholder", "placeholder-when-unset"],
+)
+def test_speech_openai_compatible_sends_the_provider_scoped_key(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_key: str | None,
+    openai_key: str | None,
+    sent_authorization: str,
+):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(monkeypatch, {"HOSTED_VLLM_API_KEY": provider_key, "OPENAI_API_KEY": openai_key})
+    route: Final = respx_mock.post("https://vllm.internal/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+    )
+
+    response: Final = litellm.speech(
+        model="hosted_vllm/tts-1", input="which key goes out", voice="alloy", api_base="https://vllm.internal/v1"
+    )
+
+    assert response.content == TTS_AUDIO
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["authorization"] == sent_authorization
+
+
+@pytest.mark.parametrize(
+    ("generic_azure_key", "sent_api_key"),
+    [(None, "azure-ai-scoped-key"), ("generic-azure-key", "azure-ai-scoped-key")],
+    ids=["provider-key-alone", "provider-key-beats-generic"],
+)
+def test_speech_azure_sends_the_provider_scoped_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, generic_azure_key: str | None, sent_api_key: str
+):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(
+        monkeypatch,
+        {"AZURE_AI_API_KEY": "azure-ai-scoped-key", "AZURE_OPENAI_API_KEY": None, "AZURE_API_KEY": generic_azure_key},
+    )
+    route: Final = respx_mock.post(
+        url__regex=r"https://foundry\.internal/openai/deployments/tts-1/audio/speech\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"}))
+
+    response: Final = litellm.speech(
+        model="azure_ai/tts-1",
+        input="which key goes out",
+        voice="alloy",
+        api_base="https://foundry.internal",
+        api_version="2024-05-01-preview",
+    )
+
+    assert response.content == TTS_AUDIO
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["api-key"] == sent_api_key
+
+
+@pytest.mark.parametrize(
+    ("model", "provider_env", "module_key", "header", "sent_key"),
+    [
+        ("hosted_vllm/tts-1", "HOSTED_VLLM_API_KEY", "api_key", "authorization", "Bearer provider-scoped-key"),
+        ("hosted_vllm/tts-1", "HOSTED_VLLM_API_KEY", "openai_key", "authorization", "Bearer provider-scoped-key"),
+        ("azure_ai/tts-1", "AZURE_AI_API_KEY", "api_key", "api-key", "provider-scoped-key"),
+        ("azure_ai/tts-1", "AZURE_AI_API_KEY", "azure_key", "api-key", "provider-scoped-key"),
+    ],
+    ids=["openai-compatible-over-api_key", "openai-compatible-over-openai_key", "azure-over-api_key", "azure-over-azure_key"],
+)
+def test_speech_provider_scoped_key_beats_module_level_keys(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    provider_env: str,
+    module_key: str,
+    header: str,
+    sent_key: str,
+):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(
+        monkeypatch,
+        {provider_env: "provider-scoped-key", "OPENAI_API_KEY": None, "AZURE_OPENAI_API_KEY": None, "AZURE_API_KEY": None},
+    )
+    monkeypatch.setattr(litellm, module_key, "module-level-key")
+    route: Final = respx_mock.post(url__regex=r"https://tts\.internal/.*audio/speech.*").mock(
+        return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+    )
+
+    litellm.speech(
+        model=model,
+        input="which key goes out",
+        voice="alloy",
+        api_base="https://tts.internal/v1" if model.startswith("hosted_vllm/") else "https://tts.internal",
+        api_version="2024-05-01-preview",
+    )
+
+    assert route.calls.last.request.headers[header] == sent_key
+
+
+def test_speech_azure_ai_keeps_the_deployments_entra_token_over_the_provider_scoped_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(
+        monkeypatch,
+        {"AZURE_AI_API_KEY": "key-for-another-resource", "AZURE_OPENAI_API_KEY": None, "AZURE_API_KEY": None},
+    )
+    route: Final = respx_mock.post(url__regex=r"https://foundry\.internal/openai/v1/audio/speech.*").mock(
+        return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+    )
+
+    litellm.speech(
+        model="azure_ai/tts-1",
+        input="which key goes out",
+        voice="alloy",
+        api_base="https://foundry.internal",
+        api_version="preview",
+        azure_ad_token="deployment-entra-token",
+    )
+
+    sent_headers: Final = route.calls.last.request.headers
+    assert sent_headers["authorization"] == "Bearer deployment-entra-token"
+    assert "key-for-another-resource" not in sent_headers.get("api-key", "")
+
+
+@pytest.mark.parametrize(
+    ("entra_env", "deployment_params", "token_refresh"),
+    [
+        ({"AZURE_TENANT_ID": "t", "AZURE_CLIENT_ID": "c", "AZURE_CLIENT_SECRET": "s"}, {}, False),
+        ({"AZURE_CLIENT_SECRET": "s"}, {"tenant_id": "t", "client_id": "c"}, False),
+        ({}, {}, True),
+    ],
+    ids=["service-principal-in-env", "ids-in-config-secret-in-env", "token-refresh"],
+)
+def test_speech_azure_ai_entra_id_setups_keep_the_key_chain_they_had_before_the_provider_key(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    entra_env: dict[str, str],
+    deployment_params: dict[str, str],
+    token_refresh: bool,
+):
+    _clear_global_tts_keys(monkeypatch)
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", token_refresh)
+    _set_or_clear_env(
+        monkeypatch,
+        {
+            "AZURE_TENANT_ID": None,
+            "AZURE_CLIENT_ID": None,
+            "AZURE_CLIENT_SECRET": None,
+            "AZURE_OPENAI_API_KEY": None,
+            "AZURE_AI_API_KEY": "key-for-another-resource",
+            "AZURE_API_KEY": "generic-azure-key",
+            **entra_env,
+        },
+    )
+    route: Final = respx_mock.post(url__regex=r"https://foundry\.internal/openai/v1/audio/speech.*").mock(
+        return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+    )
+
+    litellm.speech(
+        model="azure_ai/tts-1",
+        input="which key goes out",
+        voice="alloy",
+        api_base="https://foundry.internal",
+        api_version="preview",
+        **deployment_params,
+    )
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer generic-azure-key"
+
+
+@pytest.mark.parametrize(
+    ("unsent_env", "request_params"),
+    [
+        ({"AZURE_AD_TOKEN": "token-tts-never-sends"}, {}),
+        ({}, {"extra_body": {"azure_ad_token": "token-tts-never-sends"}}),
+        ({}, {"extra_body": ["not", "an", "object"]}),
+    ],
+    ids=["ad-token-in-env", "ad-token-in-extra-body", "non-object-extra-body"],
+)
+def test_speech_azure_ai_sends_the_provider_scoped_key_next_to_an_ad_token_tts_never_sends(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    unsent_env: dict[str, str],
+    request_params: Mapping[str, object],
+):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(
+        monkeypatch,
+        {
+            "AZURE_AD_TOKEN": None,
+            "AZURE_OPENAI_API_KEY": None,
+            "AZURE_API_KEY": None,
+            "AZURE_AI_API_KEY": "azure-ai-scoped-key",
+            **unsent_env,
+        },
+    )
+    route: Final = respx_mock.post(
+        url__regex=r"https://foundry\.internal/openai/deployments/tts-1/audio/speech\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"}))
+
+    response: Final = litellm.speech(
+        model="azure_ai/tts-1",
+        input="which key goes out",
+        voice="alloy",
+        api_base="https://foundry.internal",
+        api_version="2024-05-01-preview",
+        **request_params,
+    )
+
+    assert response.content == TTS_AUDIO
+    assert route.calls.last.request.headers["api-key"] == "azure-ai-scoped-key"
+
+
+def test_speech_docker_model_runner_placeholder_does_not_beat_a_real_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(monkeypatch, {"DOCKER_MODEL_RUNNER_API_KEY": None, "OPENAI_API_KEY": "generic-openai-key"})
+    route: Final = respx_mock.post("https://dmr.internal/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+    )
+
+    litellm.speech(
+        model="docker_model_runner/tts-1", input="which key goes out", voice="alloy", api_base="https://dmr.internal/v1"
+    )
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer generic-openai-key"
+
+
+def test_speech_keeps_an_explicitly_passed_api_key_over_the_provider_scoped_one(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _clear_global_tts_keys(monkeypatch)
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "hosted-vllm-scoped-key")
+    route: Final = respx_mock.post("https://vllm.internal/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+    )
+
+    litellm.speech(
+        model="hosted_vllm/tts-1",
+        input="which key goes out",
+        voice="alloy",
+        api_base="https://vllm.internal/v1",
+        api_key="caller-supplied-key",
+    )
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer caller-supplied-key"
+
+
+def test_speech_keyless_json_configured_provider_sends_no_openai_key(monkeypatch: pytest.MonkeyPatch):
+    _clear_global_tts_keys(monkeypatch)
+    _set_or_clear_env(monkeypatch, {"PARASAIL_API_KEY": None, "OPENAI_API_KEY": "openai-env-canary"})
+    monkeypatch.setattr(litellm, "openai_key", "openai-module-canary")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.route().respond(200, content=TTS_AUDIO, headers={"content-type": "audio/mpeg"})
+        with pytest.raises(litellm.AuthenticationError, match="PARASAIL_API_KEY"):
+            litellm.speech(model="parasail/tts-1", input="which key goes out", voice="alloy")
+
+    assert route.call_count == 0
 
 
 FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"

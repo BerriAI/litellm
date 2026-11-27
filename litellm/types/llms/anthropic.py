@@ -86,6 +86,8 @@ class AnthropicWebSearchTool(TypedDict, total=False):
     cache_control: dict | ChatCompletionCachedContent | None
     max_uses: int | None
     user_location: AnthropicWebSearchUserLocation | None
+    allowed_domains: ReadOnly[Sequence[str] | None]
+    blocked_domains: ReadOnly[Sequence[str] | None]
     defer_loading: bool | None
     allowed_callers: list[str] | None
     input_examples: list[dict[str, object]] | None
@@ -224,6 +226,7 @@ AllAnthropicToolsValues = (
 
 class AnthropicMcpServerToolConfiguration(TypedDict, total=False):
     allowed_tools: list[str] | None
+    enabled: ReadOnly[bool | None]
 
 
 class AnthropicMcpServerTool(TypedDict, total=False):
@@ -232,6 +235,18 @@ class AnthropicMcpServerTool(TypedDict, total=False):
     name: Required[str]
     tool_configuration: AnthropicMcpServerToolConfiguration
     authorization_token: str
+
+
+class AnthropicMcpToolConfig(TypedDict, total=False):
+    enabled: ReadOnly[bool]
+    defer_loading: ReadOnly[bool]
+
+
+class AnthropicMcpToolset(TypedDict, total=False):
+    type: Required[ReadOnly[Literal["mcp_toolset"]]]
+    mcp_server_name: Required[ReadOnly[str]]
+    default_config: ReadOnly[AnthropicMcpToolConfig]
+    configs: ReadOnly[Mapping[str, AnthropicMcpToolConfig]]
 
 
 class AnthropicMessagesTextParam(TypedDict, total=False):
@@ -476,7 +491,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     mcp_servers: list[AnthropicMcpServerTool] | None
     context_management: dict[str, object] | None
     compaction: ReadOnly[AnthropicCompaction | None]
-    container: dict[str, object] | None  # Container config with skills for code execution
+    container: ReadOnly[str | dict[str, object] | None]  # Container id, or config with skills for code execution
     output_format: AnthropicOutputSchema | None  # Structured outputs support
     speed: str | None  # Fast mode support for Opus models
     output_config: AnthropicOutputConfig | None  # Configuration for Claude's output behavior
@@ -877,6 +892,9 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     WEB_FETCH = "web_fetch"
     MEMORY = "memory"
     TOOL_SEARCH_TOOL = "tool_search_tool"
+
+
+ANTHROPIC_UNRENDERED_BLOCK_TYPES: Final = frozenset({"fallback"})
 
 
 class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):

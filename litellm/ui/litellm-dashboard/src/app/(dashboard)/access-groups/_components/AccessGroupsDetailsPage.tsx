@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
 import type { TFunction } from "i18next";
 import {
@@ -110,7 +111,7 @@ function ResourceBadge({
 }
 
 export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const { data: accessGroup, isLoading } = useAccessGroupDetails(accessGroupId);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
@@ -189,7 +190,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             <dd className="text-foreground">{accessGroup.description || "—"}</dd>
             <dt className="text-muted-foreground">{t("accessGroups.detail.created")}</dt>
             <dd className="flex items-center gap-1 text-foreground">
-              {new Date(accessGroup.created_at).toLocaleString()}
+              {displayTimestamp(new Date(accessGroup.created_at), locale.language)}
               {accessGroup.created_by && (
                 <>
                   <span>{t("accessGroups.detail.by")}</span>
@@ -199,7 +200,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             </dd>
             <dt className="text-muted-foreground">{t("accessGroups.detail.lastUpdated")}</dt>
             <dd className="flex items-center gap-1 text-foreground">
-              {new Date(accessGroup.updated_at).toLocaleString()}
+              {displayTimestamp(new Date(accessGroup.updated_at), locale.language)}
               {accessGroup.updated_by && (
                 <>
                   <span>{t("accessGroups.detail.by")}</span>

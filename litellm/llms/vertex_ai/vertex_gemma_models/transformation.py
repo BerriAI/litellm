@@ -116,7 +116,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict[str, object]:
         """
         Transform request to Vertex Gemma format.

@@ -2,7 +2,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use litellm_llms_types::formats::chat_completions::{ChatCompletionsUsage, PromptTokensDetails};
+use litellm_llms_types::formats::chat_completions::{
+    ChatCompletionsUsage, CompletionTokensDetails, PromptTokensDetails,
+};
 
 /// OpenAI finish reasons, mirroring Python's `_FINISH_REASON_MAP` for the
 /// reasons the providers on this route can emit. Python warns and falls back to
@@ -29,8 +31,8 @@ pub fn finish_reason_for(provider_reason: &str) -> &'static str {
         .map_or("stop", |(_, mapped)| *mapped)
 }
 
-/// Python folds cache tokens into `prompt_tokens` and reports the split under
-/// `prompt_tokens_details`; mirror that so cost tracking agrees on both paths.
+/// Python's Anthropic and Bedrock usage builders: cache tokens fold into `prompt_tokens`, the
+/// split goes under `prompt_tokens_details`, and the top-level cache counts are echoed.
 pub fn usage_from_parts(
     input_tokens: u64,
     output_tokens: u64,
@@ -39,14 +41,24 @@ pub fn usage_from_parts(
 ) -> ChatCompletionsUsage {
     let prompt_tokens = input_tokens + cache_read_tokens + cache_creation_tokens;
     ChatCompletionsUsage {
-        prompt_tokens,
         completion_tokens: output_tokens,
+        prompt_tokens,
         total_tokens: prompt_tokens + output_tokens,
-        prompt_tokens_details: PromptTokensDetails {
-            cached_tokens: cache_read_tokens,
-            cache_creation_tokens,
-            text_tokens: input_tokens,
-        },
+        completion_tokens_details: Some(CompletionTokensDetails {
+            reasoning_tokens: Some(0),
+            text_tokens: Some(output_tokens),
+            ..CompletionTokensDetails::default()
+        }),
+        prompt_tokens_details: Some(PromptTokensDetails {
+            cached_tokens: Some(cache_read_tokens),
+            text_tokens: Some(input_tokens),
+            cache_write_tokens: Some(cache_creation_tokens),
+            cache_creation_tokens: Some(cache_creation_tokens),
+            ..PromptTokensDetails::default()
+        }),
+        cache_creation_input_tokens: Some(cache_creation_tokens),
+        cache_read_input_tokens: Some(cache_read_tokens),
+        ..ChatCompletionsUsage::default()
     }
 }
 
@@ -71,6 +83,7 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use serde_json::json;
 
     #[rstest]
     #[case::end_turn("end_turn", "stop")]
@@ -93,22 +106,27 @@ mod tests {
         assert_eq!(finish_reason_for(reason), "stop");
     }
 
-    #[test]
-    fn folds_cache_tokens_into_prompt_tokens() {
-        let usage = usage_from_parts(10, 4, 7, 3);
-        assert_eq!(usage.prompt_tokens, 20);
-        assert_eq!(usage.completion_tokens, 4);
-        assert_eq!(usage.total_tokens, 24);
-        assert_eq!(usage.prompt_tokens_details.cached_tokens, 7);
-        assert_eq!(usage.prompt_tokens_details.cache_creation_tokens, 3);
-        assert_eq!(usage.prompt_tokens_details.text_tokens, 10);
-    }
-
-    #[test]
-    fn reports_raw_input_tokens_when_no_cache_is_involved() {
-        let usage = usage_from_parts(12, 5, 0, 0);
-        assert_eq!(usage.prompt_tokens, 12);
-        assert_eq!(usage.total_tokens, 17);
-        assert_eq!(usage.prompt_tokens_details.text_tokens, 12);
+    #[rstest]
+    #[case::cache_read_and_write(10, 4, 7, 3, json!({
+        "completion_tokens": 4, "prompt_tokens": 20, "total_tokens": 24,
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 4},
+        "prompt_tokens_details": {"cached_tokens": 7, "text_tokens": 10, "cache_write_tokens": 3, "cache_creation_tokens": 3},
+        "cache_creation_input_tokens": 3, "cache_read_input_tokens": 7
+    }))]
+    #[case::no_cache(12, 5, 0, 0, json!({
+        "completion_tokens": 5, "prompt_tokens": 12, "total_tokens": 17,
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 5},
+        "prompt_tokens_details": {"cached_tokens": 0, "text_tokens": 12, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0
+    }))]
+    fn builds_the_usage_python_builds_from_provider_counts(
+        #[case] input: u64,
+        #[case] output: u64,
+        #[case] cache_read: u64,
+        #[case] cache_creation: u64,
+        #[case] expected: serde_json::Value,
+    ) {
+        let usage = usage_from_parts(input, output, cache_read, cache_creation);
+        assert_eq!(serde_json::to_value(usage).unwrap(), expected);
     }
 }

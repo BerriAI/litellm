@@ -3,7 +3,7 @@ import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networ
 import useAuthorized from "../useAuthorized";
 
 export interface StoreModelInDBParams {
-  store_model_in_db: boolean;
+  store_model_in_db: unknown;
 }
 
 export interface StoreModelInDBResponse {

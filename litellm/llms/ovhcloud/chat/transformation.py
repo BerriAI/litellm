@@ -51,7 +51,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         return mapped_openai_params
 
@@ -62,7 +62,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         optional_params: dict,
         litellm_params: dict[str, object],
         headers: dict[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         extra_body: Final = optional_params.pop("extra_body", {})
         response: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)

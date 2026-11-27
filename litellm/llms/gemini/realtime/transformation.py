@@ -387,6 +387,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         activity_end: Final[BidiGenerateContentRealtimeInput] = {"activityEnd": {}}
         return (json.dumps({"realtimeInput": activity_end}),)
 
+    def client_event_starts_response(self, client_event: Mapping[str, object]) -> bool:
+        match client_event.get("type"):
+            case "conversation.item.create":
+                item: Final = as_str_mapping(client_event.get("item"))
+                return item is not None and item.get("type") != "function_call_output"
+            case "response.create" | "input_audio_buffer.commit" | "input_audio_buffer.end":
+                return self._manual_activity_open
+            case _:
+                return False
+
     def _handle_input_audio_buffer_commit_or_end(self, session_configuration_request: str | None) -> list[str]:
         """Map OpenAI buffer commit/end to Gemini Live turn-boundary signals."""
         if self._manual_turn_detection_enabled(session_configuration_request):

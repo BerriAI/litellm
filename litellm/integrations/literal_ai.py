@@ -7,16 +7,22 @@ from datetime import datetime
 from typing import Final
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.utils import StandardLoggingPayload
+
+
+class _LiteralAILoggingKwargs(TypedDict, total=False, extra_items=object):
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
 
 
 class LiteralAILogger(CustomBatchLogger):
@@ -45,7 +51,9 @@ class LiteralAILogger(CustomBatchLogger):
             batch_size=int(batch_size) if batch_size else None,
         )
 
-    def log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
+    def log_success_event(
+        self, kwargs: _LiteralAILoggingKwargs, response_obj: object, start_time: datetime, end_time: datetime
+    ):
         try:
             verbose_logger.debug(
                 "Literal AI Layer Logging - kwargs: %s, response_obj: %s",
@@ -64,7 +72,9 @@ class LiteralAILogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Literal AI Layer Error - error logging success event.")
 
-    def log_failure_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
+    def log_failure_event(
+        self, kwargs: _LiteralAILoggingKwargs, response_obj: object, start_time: datetime, end_time: datetime
+    ):
         verbose_logger.info("Literal AI Failure Event Logging!")
         try:
             data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
@@ -103,7 +113,9 @@ class LiteralAILogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Literal AI Layer Error")
 
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
+    async def async_log_success_event(
+        self, kwargs: _LiteralAILoggingKwargs, response_obj: object, start_time: datetime, end_time: datetime
+    ):
         try:
             verbose_logger.debug(
                 "Literal AI Async Layer Logging - kwargs: %s, response_obj: %s",
@@ -122,7 +134,9 @@ class LiteralAILogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Literal AI Layer Error - error logging async success event.")
 
-    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
+    async def async_log_failure_event(
+        self, kwargs: _LiteralAILoggingKwargs, response_obj: object, start_time: datetime, end_time: datetime
+    ):
         verbose_logger.info("Literal AI Failure Event Logging!")
         try:
             data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
@@ -164,14 +178,14 @@ class LiteralAILogger(CustomBatchLogger):
             verbose_logger.exception("Literal AI Layer Error")
 
     def _prepare_log_data(
-        self, kwargs, response_obj: object, start_time: datetime, end_time: datetime
+        self, kwargs: _LiteralAILoggingKwargs, response_obj: object, start_time: datetime, end_time: datetime
     ) -> Mapping[str, object]:
         logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
         if logging_payload is None:
             raise ValueError("standard_logging_object not found in kwargs")
         clean_metadata: Final = logging_payload["metadata"]
-        metadata: Final = kwargs.get("litellm_params", {}).get("metadata", {})
+        raw_metadata: Final = require_get(kwargs.get("litellm_params", {})).get("metadata", {})
 
         settings: Final = logging_payload["model_parameters"]
         messages: Final = logging_payload["messages"]
@@ -193,6 +207,7 @@ class LiteralAILogger(CustomBatchLogger):
                     message["templated"] = True
 
         tools: Final = settings.pop("tools", None)
+        metadata: Final = require_get(raw_metadata)
 
         step: Final[dict[str, object]] = {
             "id": metadata.get("step_id", str(uuid.uuid4())),

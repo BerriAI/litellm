@@ -42,6 +42,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -510,7 +511,7 @@ class SlackAlerting(CustomBatchLogger):
 
     async def response_taking_too_long(
         self,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ):
         if self.alerting is None or self.alert_types is None:
             return
@@ -1465,11 +1466,12 @@ Model Info:
             "html": email_html_content,
         }
 
-        await send_email(
-            receiver_email=email_event["to"],
-            subject=email_event["subject"],
-            html=email_event["html"],
-        )
+        if recipient_email is not None:
+            await send_email(
+                receiver_email=recipient_email,
+                subject=email_event["subject"],
+                html=email_event["html"],
+            )
         if webhook_event.event_group == Litellm_EntityType.TEAM:
             from litellm.integrations.email_alerting import send_team_budget_alert
 
@@ -1775,7 +1777,7 @@ Model Info:
         _model_info: Final = _litellm_params.get("model_info", {}) or {}
         model_id: Final = _model_info.get("id", "")
         try:
-            if "daily_reports" in self.alert_types:
+            if "daily_reports" in self.alert_types and not is_answer_without_an_image(kwargs.get("exception")):
                 try:
                     await self.async_update_daily_reports(
                         DeploymentMetrics(
@@ -1802,7 +1804,7 @@ Model Info:
 
     async def _run_scheduler_helper(
         self,
-        llm_router,
+        llm_router: Router,
         pod_lock_manager: "PodLockManager | None" = None,
     ) -> bool:
         """
@@ -1855,7 +1857,7 @@ Model Info:
 
     async def _run_scheduled_daily_report(
         self,
-        llm_router: object | None = None,
+        llm_router: Router | None = None,
         pod_lock_manager: "PodLockManager | None" = None,
     ):
         """

@@ -1,12 +1,32 @@
 "use client";
 
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/cva.config";
 
-export function PageHeader({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="page-header" className={cn("shrink-0", className)} {...props} />;
+type PageHeaderProps = ComponentProps<"div"> & { aside?: ReactNode };
+
+export function PageHeader({ aside, className, children, ...props }: PageHeaderProps) {
+  if (!aside) {
+    return (
+      <div data-slot="page-header" className={cn("shrink-0", className)} {...props}>
+        {children}
+      </div>
+    );
+  }
+  return (
+    <div
+      data-slot="page-header"
+      className={cn("flex shrink-0 flex-wrap items-start justify-between gap-x-6 gap-y-3", className)}
+      {...props}
+    >
+      <div className="min-w-0 flex-[1_1_16rem]">{children}</div>
+      <div data-slot="page-header-aside" className="flex min-h-8 flex-wrap items-center gap-2">
+        {aside}
+      </div>
+    </div>
+  );
 }
 
 export function PageHeaderTitle({ className, ...props }: ComponentProps<"h1">) {

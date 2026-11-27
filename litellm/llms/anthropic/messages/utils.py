@@ -11,7 +11,12 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
-from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
+from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
+    X_LITELLM_DISABLE_CALLBACKS,
+)
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -33,6 +38,7 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
 REASONING_EFFORT_OFF: Final = "none"
 KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
+_PROVIDERS_ROUNDING_REASONING_EFFORT: Final = frozenset({"zai"})
 _LOWEST_REASONING_TIERS: Final = ("minimal", "low")
 _UNCONFIRMED_MINIMAL_LOWEST_TIERS: Final = ("low",)
 
@@ -78,16 +84,105 @@ def openai_strict_json_schema(schema: object) -> object:
     properties: Final = object_mapping(source.get("properties"))
     closing: Final[Mapping[str, object]] = (
         {"required": list(properties), "additionalProperties": False}
-        if properties is not None and _is_object_type(source.get("type"))
+        if properties is not None and _includes_type(source.get("type"), "object")
         else {}
     )
     return {**{key: _strict_subschema(key, value) for key, value in source.items()}, **closing}
 
 
-def _is_object_type(schema_type: object) -> bool:
-    """Whether a ``type`` keyword names an object, alone or in a union such as ``["object", "null"]``."""
+_OPENAI_STRICT_MODE_KEYWORDS: Final = frozenset(
+    {
+        "type",
+        "enum",
+        "const",
+        "format",
+        "pattern",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minItems",
+        "maxItems",
+        "items",
+        "properties",
+        "required",
+        "additionalProperties",
+        "anyOf",
+        *_SUBSCHEMA_MAP_KEYWORDS,
+        "title",
+        "description",
+        "default",
+        "examples",
+        "$schema",
+        "$id",
+        "$comment",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "nullable",
+        "contentEncoding",
+        "contentMediaType",
+        "discriminator",
+    }
+)
+_OPENAI_STRICT_MODE_FORMATS: Final = frozenset(
+    {"date-time", "time", "date", "duration", "email", "hostname", "ipv4", "ipv6", "uuid"}
+)
+_OPENAI_STRICT_MODE_TYPE_KEYWORDS: Final = frozenset({"type", "anyOf", "enum"})
+
+
+def fits_openai_strict_mode(schema: object) -> bool:
+    source: Final = object_mapping(schema)
+    if source is None:
+        return False
+    if "$ref" in source:
+        return all(key == "$ref" or key in _SUBSCHEMA_MAP_KEYWORDS for key in source) and _subschemas_fit(source)
+    return (
+        all(key in _OPENAI_STRICT_MODE_KEYWORDS or key.startswith("x-") for key in source)
+        and not _OPENAI_STRICT_MODE_TYPE_KEYWORDS.isdisjoint(source)
+        and _has_strict_mode_format(source)
+        and _has_strict_mode_shape(source)
+        and _subschemas_fit(source)
+    )
+
+
+def _has_strict_mode_format(source: Mapping[str, object]) -> bool:
+    if "format" not in source:
+        return True
+    schema_format: Final = source["format"]
+    return isinstance(schema_format, str) and schema_format in _OPENAI_STRICT_MODE_FORMATS
+
+
+def _has_strict_mode_shape(source: Mapping[str, object]) -> bool:
+    schema_type: Final = source.get("type")
+    if _includes_type(schema_type, "array") and "items" not in source:
+        return False
+    return not _includes_type(schema_type, "object") or object_mapping(source.get("properties")) is not None
+
+
+def _subschemas_fit(source: Mapping[str, object]) -> bool:
+    subschemas: Final = chain.from_iterable(_subschemas(key, value) for key, value in source.items())
+    return all(fits_openai_strict_mode(subschema) for subschema in subschemas)
+
+
+def _subschemas(key: str, value: object) -> tuple[object, ...]:
+    if key == "items":
+        return (value,)
+    if key == "properties" or key in _SUBSCHEMA_MAP_KEYWORDS:
+        named: Final = object_mapping(value)
+        return (None,) if named is None else tuple(named.values())
+    if key in _SUBSCHEMA_LIST_KEYWORDS:
+        variants: Final = _json_array(value)
+        return (None,) if variants is None else tuple(variants)
+    return ()
+
+
+def _includes_type(schema_type: object, name: str) -> bool:
     types: Final = _json_array(schema_type)
-    return schema_type == "object" if types is None else "object" in types
+    return schema_type == name if types is None else name in types
 
 
 def _strict_subschema(key: str, value: object) -> object:
@@ -151,7 +246,10 @@ PROXY_SUB_CALL_METADATA_KEYS: Final = (
     "litellm_call_id",
     "litellm_parent_otel_span",
     "headers",
+    SESSION_ID_GENERATED_METADATA_KEY,
+    CALLER_SESSION_ID_METADATA_KEY,
 )
+_LANGFUSE_EXISTING_TRACE_HEADER: Final = "langfuse_existing_trace_id"
 _USER_API_KEY_AUTH_METADATA_KEY: Final = "user_api_key_auth"
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
@@ -174,12 +272,16 @@ def proxy_sub_call_metadata(
 ) -> dict[str, object]:  # mutable-ok: the router writes model_group and fallback keys into the metadata it is handed
     """The parent request's auth, budget, and header fields, so a sub-call bills the same key, team, and end
     user, the router filters deployments by the caller's access groups, and header-driven logging options
-    such as message redaction apply to it. The caller's auth object goes without its budget reservation,
-    which belongs to the parent request."""
+    such as message redaction apply to it, plus the marker of a session the proxy minted, so the sub-call never
+    sends that session upstream as a provider affinity header, and the caller's session an ``x-litellm-trace-id``
+    header displaced, so the sub-call logs in the session the parent does. The sub-call is marked as inheriting that
+    session, so session-keyed routers never count it as a turn of the parent's conversation. The caller's auth object
+    goes without its budget reservation, which belongs to the parent request."""
     if not parent_litellm_metadata:
-        return {}
+        return {SESSION_ID_INHERITED_METADATA_KEY: True}
     carried: Final = {
-        key: parent_litellm_metadata[key] for key in PROXY_SUB_CALL_METADATA_KEYS if key in parent_litellm_metadata
+        **{key: parent_litellm_metadata[key] for key in PROXY_SUB_CALL_METADATA_KEYS if key in parent_litellm_metadata},
+        SESSION_ID_INHERITED_METADATA_KEY: True,
     }
     caller: Final = parent_litellm_metadata.get(_USER_API_KEY_AUTH_METADATA_KEY)
     if caller is None:
@@ -190,23 +292,32 @@ def proxy_sub_call_metadata(
 class ProxySubCallLoggingKwargs(StandardCallbackDynamicParams, total=False):
     litellm_trusted_callback_vars: ReadOnly[Mapping[str, object]]
     proxy_server_request: ReadOnly[Mapping[str, Mapping[str, str]]]
+    litellm_session_id: ReadOnly[str]
+    litellm_trace_id: ReadOnly[str]
 
 
 def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxySubCallLoggingKwargs:
-    """The parent request's callback params and proxy-stamped callback vars, so a sub-call logs under the same
-    message-logging and callback-disable settings as the request it serves. Of the parent's ``proxy_server_request``
-    only the ``x-litellm-disable-callbacks`` header is carried, since dispatch reads it there: the router reads
-    per-request routing inputs from the rest, such as the Claude Code session that would pull a sub-call off its
-    configured model, and redaction headers already ride in ``proxy_sub_call_metadata``."""
+    """The parent request's callback params, proxy-stamped callback vars, and session and trace ids, so a sub-call
+    logs in the same session and under the same message-logging and callback-disable settings as the request it
+    serves. The session, sent top-level or in ``litellm_metadata``, goes as the top-level ``litellm_session_id``
+    only, never as metadata ``session_id``, which
+    deployment affinity and complexity router tier pins read. Of the parent's ``proxy_server_request`` only the
+    ``x-litellm-disable-callbacks`` header is carried, since dispatch reads it there: the router reads per-request
+    routing inputs from the rest, such as the Claude Code session that would pull a sub-call off its configured model,
+    and redaction headers already ride in ``proxy_sub_call_metadata``. Beside it goes the Langfuse trace the parent
+    logs to, as ``langfuse_existing_trace_id``, so the sub-call lands in that trace without renaming it."""
     parent_logging: Final = litellm_logging_obj_from_kwargs(parent_kwargs)
+    session: Final = _parent_session(parent_kwargs)
     parent_params: Final[ProxySubCallLoggingKwargs] = (
-        {**parent_logging.standard_callback_dynamic_params} if parent_logging is not None else {}
+        {**parent_logging.standard_callback_dynamic_params, **session} if parent_logging is not None else session
     )
     disable_header: Final = _disable_callbacks_header(parent_kwargs)
+    sub_call_headers: Final = {
+        **({} if disable_header is None else {X_LITELLM_DISABLE_CALLBACKS: disable_header}),
+        **_parent_langfuse_trace_header(parent_kwargs, parent_logging),
+    }
     dynamic_params: Final[ProxySubCallLoggingKwargs] = (
-        parent_params
-        if disable_header is None
-        else {**parent_params, "proxy_server_request": {"headers": {X_LITELLM_DISABLE_CALLBACKS: disable_header}}}
+        {**parent_params, "proxy_server_request": {"headers": sub_call_headers}} if sub_call_headers else parent_params
     )
     trusted_vars: Final = object_mapping(parent_kwargs.get(TRUSTED_CALLBACK_VARS_FIELD))
     if trusted_vars is None:
@@ -223,6 +334,49 @@ def proxy_sub_call_trace_id(parent_kwargs: Mapping[str, object]) -> str | None:
     parent_logging: Final = litellm_logging_obj_from_kwargs(parent_kwargs)
     logged_trace_id: Final = parent_logging.litellm_trace_id if parent_logging is not None else None
     return logged_trace_id if isinstance(logged_trace_id, str) and logged_trace_id else None
+
+
+def _parent_session(parent_kwargs: Mapping[str, object]) -> ProxySubCallLoggingKwargs:
+    session_id: Final = _parent_session_id(parent_kwargs)
+    trace_id: Final = proxy_sub_call_trace_id(parent_kwargs)
+    session: Final[ProxySubCallLoggingKwargs] = {"litellm_session_id": session_id} if session_id else {}
+    return session if trace_id is None else {**session, "litellm_trace_id": trace_id}
+
+
+def _parent_session_id(parent_kwargs: Mapping[str, object]) -> str | None:
+    top_level: Final = parent_kwargs.get("litellm_session_id")
+    if isinstance(top_level, str) and top_level:
+        return top_level
+    litellm_metadata: Final = object_mapping(parent_kwargs.get("litellm_metadata"))
+    in_metadata: Final = litellm_metadata.get("session_id") if litellm_metadata is not None else None
+    return in_metadata if isinstance(in_metadata, str) and in_metadata else None
+
+
+def _parent_langfuse_trace_header(
+    parent_kwargs: Mapping[str, object], parent_logging: "LiteLLMLoggingObject | None"
+) -> Mapping[str, str]:
+    if parent_logging is None:
+        return {}
+    from litellm.integrations.langfuse.langfuse import request_langfuse_trace_id
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    parent_logged_params: Final = object_mapping(
+        parent_logging.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+    )
+    logged_params: Final = {**(parent_logged_params or {}), **parent_kwargs}
+    params: Final = {
+        **logged_params,
+        "metadata": parent_kwargs["litellm_metadata"]
+        if "litellm_metadata" in parent_kwargs
+        else logged_params.get("metadata"),
+    }
+    trace_id: Final = request_langfuse_trace_id(
+        params,
+        standard_trace_id=StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(parent_logging, params),
+        litellm_trace_id=parent_logging.litellm_trace_id,
+        litellm_call_id=parent_logging.litellm_call_id,
+    )
+    return {} if trace_id is None else {_LANGFUSE_EXISTING_TRACE_HEADER: trace_id}
 
 
 def _disable_callbacks_header(parent_kwargs: Mapping[str, object]) -> str | None:
@@ -431,6 +585,26 @@ def is_unconfirmed_none(
     ) is None and _reasons_without_confirming_none(model_info)
 
 
+def model_excludes_effort(
+    effort: str, *, model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> bool:
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
+
+    if deployment_rounds_reasoning_effort(deployment_model_info):
+        return False
+    row_model: Final = _cost_map_model(model, deployment_model_info)
+    levels: Final = deployment_reasoning_efforts(row_model, custom_llm_provider, deployment_model_info) or ()
+    return (bool(levels) and effort not in levels) or is_unconfirmed_none(
+        effort, row_model, custom_llm_provider, deployment_model_info=deployment_model_info
+    )
+
+
+def _cost_map_model(model: str, deployment_model_info: object) -> str:
+    own_info: Final = as_str_mapping(deployment_model_info)
+    base_model: Final = own_info.get("base_model") if own_info is not None else None
+    return base_model if isinstance(base_model, str) and base_model else model
+
+
 def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, deployment_model_info: object) -> bool:
     from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
@@ -442,6 +616,14 @@ def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, depl
     )
 
 
+def _provider_rounds_reasoning_effort(model: str, custom_llm_provider: str | None) -> bool:
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except litellm.exceptions.BadRequestError:
+        return False
+    return provider in _PROVIDERS_ROUNDING_REASONING_EFFORT
+
+
 def normalize_reasoning_effort_value(
     effort: str,
     model: str,
@@ -451,7 +633,8 @@ def normalize_reasoning_effort_value(
     """Lower a tier the deployment does not accept to the nearest one it does, leaving others alone.
 
     A deployment whose own reasoning_effort_levels name a strength tier keeps the tier as sent, since
-    completion() and responses() round it onto those levels.
+    completion() and responses() round it onto those levels. So does a provider whose chat config rounds
+    the tier onto its models' levels itself, like zai.
 
     The accepted set is resolved by the same owner that answers ``/model_group/info``, so a level
     the proxy advertises is a level this path forwards.
@@ -469,10 +652,12 @@ def normalize_reasoning_effort_value(
 
     from litellm.litellm_core_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
 
-    if deployment_rounds_reasoning_effort(deployment_model_info):
+    if deployment_rounds_reasoning_effort(deployment_model_info) or _provider_rounds_reasoning_effort(
+        model, custom_llm_provider
+    ):
         return effort
 
-    supported: Final = model_reasoning_efforts(model, custom_llm_provider)
+    supported: Final = model_reasoning_efforts(_cost_map_model(model, deployment_model_info), custom_llm_provider)
     if not supported:
         return chain[-1]
 

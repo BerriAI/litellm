@@ -145,12 +145,12 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for Black Forest Labs.
 
@@ -291,7 +291,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: Mapping[str, str],
+        headers: Mapping[str, object],
     ) -> tuple[dict[str, object], RequestFiles]:
         downloaded_image: Final = await self._fetch_remote_image(image)
         downloaded_mask: Final = await self._fetch_remote_image(image_edit_optional_request_params.get("mask"))

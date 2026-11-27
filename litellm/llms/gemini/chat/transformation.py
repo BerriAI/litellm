@@ -120,7 +120,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
         self,
         messages: list[AllMessageValues],
         model: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> list[ContentType]:
         """
         Google AI Studio Gemini does not support HTTP/HTTPS URLs for files.

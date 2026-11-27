@@ -2,17 +2,17 @@
 
 use std::sync::Arc;
 
-use chrono::{NaiveDateTime, SecondsFormat};
-use jiff::Timestamp;
+use chrono::SecondsFormat;
 use litellm_gateway_auth_core::KeyHash;
-use litellm_python_compat::{Value, json};
-use litellm_redis_store::{
-    FromValue,
-    auth_cache::{CachedKey, CachedMember, CachedObjectPermission},
-};
-use litellm_repositories::{KeyRepository, KeyView, ObjectPermissionRepository, RawJson, Side};
+use litellm_redis_store::auth_cache::{KeyEntry, ObjectPermissionEntry};
+use litellm_repositories::{KeyRepository, KeyView, ObjectPermissionRepository, Side};
 
-use crate::{Error, object_permission::cached_object_permission};
+use crate::{
+    Error,
+    column::{column, nullable, time},
+    member::team_member_column,
+    object_permission::ObjectPermissions,
+};
 
 /// The key as the database holds it, in the shape the auth cache holds it: the `combined_view`
 /// row with the object permission the key points at. These are the database steps of a key
@@ -20,7 +20,7 @@ use crate::{Error, object_permission::cached_object_permission};
 /// a policy of its own wraps exactly these.
 pub struct KeyDatabase {
     keys: Arc<KeyRepository>,
-    object_permissions: Arc<ObjectPermissionRepository>,
+    object_permissions: ObjectPermissions,
 }
 
 impl KeyDatabase {
@@ -30,110 +30,36 @@ impl KeyDatabase {
     ) -> Self {
         Self {
             keys,
-            object_permissions,
+            object_permissions: ObjectPermissions::new(object_permissions),
         }
     }
 
     /// The key whose hash is `hash` with nothing nested, or `None` when no key has it. A hash
     /// rotated away from a key within its grace period answers with the active key. One query,
     /// so a host bounds it alone and reads the object permission under a bound of its own.
-    pub async fn key(&self, hash: &KeyHash, side: Side) -> Result<Option<CachedKey>, Error> {
+    pub async fn key(&self, hash: &KeyHash, side: Side) -> Result<Option<KeyEntry>, Error> {
         let Some(found) = self.keys.find(hash.as_str(), side).await? else {
             return Ok(None);
         };
-        cached_key(found.view(), None, found.last_refreshed_at).map(Some)
+        key_entry(found.view(), None, found.last_refreshed_at).map(Some)
     }
 
     /// [`Self::key`] with the object permission it points at, for a host with no bound of its
-    /// own to put between the two reads.
-    ///
-    /// A permission row that cannot be read, or that the model would refuse, leaves a replica
-    /// read without it, as `get_key_object` did, and fails a writer read. One that is gone leaves
-    /// `object_permission` empty on either side, for the caller to refuse.
-    pub async fn read(&self, hash: &KeyHash, side: Side) -> Result<Option<CachedKey>, Error> {
+    /// own to put between the two reads. A permission row that is gone leaves `object_permission`
+    /// empty on either side, for the caller to refuse.
+    pub async fn read(&self, hash: &KeyHash, side: Side) -> Result<Option<KeyEntry>, Error> {
         let Some(key) = self.key(hash, side).await? else {
             return Ok(None);
         };
-        let id = key
-            .object_permission_id
-            .as_deref()
-            .filter(|id| !id.is_empty());
-        let object_permission = match (id, side) {
-            (None, _) => None,
-            (Some(id), Side::Writer) => self.object_permission(id, side).await?,
-            (Some(id), Side::Read) => {
-                self.object_permission(id, side)
-                    .await
-                    .unwrap_or_else(|error| {
-                        tracing::debug!(
-                            error = %litellm_error::Report::new(&error),
-                            "a key's object permission was not loaded"
-                        );
-                        None
-                    })
-            }
-        };
-        Ok(Some(CachedKey {
+        let object_permission = self
+            .object_permissions
+            .nested(key.object_permission_id.as_deref(), side)
+            .await?;
+        Ok(Some(KeyEntry {
             object_permission,
             ..key
         }))
     }
-
-    async fn object_permission(
-        &self,
-        id: &str,
-        side: Side,
-    ) -> Result<Option<CachedObjectPermission>, Error> {
-        self.object_permissions
-            .find_by_object_permission_id(id, side)
-            .await?
-            .map(cached_object_permission)
-            .transpose()
-    }
-}
-
-/// A JSON column as the record's field `V`, or the column the model would refuse the row for.
-fn column<V: FromValue>(name: &'static str, raw: &RawJson) -> Result<V, Error> {
-    json::loads(raw.get())
-        .ok()
-        .and_then(|value| V::from_value(&value).ok())
-        .ok_or(Error::Row { column: name })
-}
-
-/// [`column`] for a field the model lets be unset: no value and a JSON `null` are both unset.
-pub(crate) fn nullable<V: FromValue>(
-    name: &'static str,
-    raw: Option<&RawJson>,
-) -> Result<Option<V>, Error> {
-    match raw.map(|raw| json::loads(raw.get())) {
-        None | Some(Ok(Value::None)) => Ok(None),
-        Some(Ok(value)) => V::from_value(&value)
-            .map(Some)
-            .map_err(|_| Error::Row { column: name }),
-        Some(Err(_)) => Err(Error::Row { column: name }),
-    }
-}
-
-/// [`nullable`] for a field that is a list of `V`.
-fn nullable_list<V: FromValue>(
-    name: &'static str,
-    raw: Option<&RawJson>,
-) -> Result<Option<Vec<V>>, Error> {
-    match raw.map(|raw| json::loads(raw.get())) {
-        None | Some(Ok(Value::None)) => Ok(None),
-        Some(Ok(Value::List(items))) => items
-            .iter()
-            .map(|item| V::from_value(item).map_err(|_| Error::Row { column: name }))
-            .collect::<Result<_, _>>()
-            .map(Some),
-        Some(_) => Err(Error::Row { column: name }),
-    }
-}
-
-fn time(column: &'static str, at: Option<NaiveDateTime>) -> Result<Option<Timestamp>, Error> {
-    at.map(|at| Timestamp::from_microsecond(at.and_utc().timestamp_micros()))
-        .transpose()
-        .map_err(|_| Error::Row { column })
 }
 
 /// The entry `main`'s `get_key_object` cached for the row, which Python's `cache_key_object` still
@@ -146,11 +72,11 @@ fn time(column: &'static str, at: Option<NaiveDateTime>) -> Result<Option<Timest
 /// `allowed_routes`, `rotation_count` and `auto_rotate`. `expires` is the text the repository hands
 /// Python, since the model keeps a string there. The team member is what `Member` dumps. Fields
 /// only a cache entry carries are unset.
-fn cached_key(
+fn key_entry(
     view: &KeyView,
-    object_permission: Option<CachedObjectPermission>,
+    object_permission: Option<ObjectPermissionEntry>,
     last_refreshed_at: f64,
-) -> Result<CachedKey, Error> {
+) -> Result<KeyEntry, Error> {
     let KeyView {
         token,
         key_name,
@@ -224,7 +150,7 @@ fn cached_key(
         organization_metadata,
         project_alias,
     } = view;
-    Ok(CachedKey {
+    Ok(KeyEntry {
         key_id: None,
         token: Some(token.clone()),
         key_name: key_name.clone(),
@@ -274,7 +200,7 @@ fn cached_key(
         last_rotation_at: time("last_rotation_at", *last_rotation_at)?,
         key_rotation_at: time("key_rotation_at", *key_rotation_at)?,
         router_settings: nullable("router_settings", router_settings.as_ref())?,
-        budget_limits: nullable_list("budget_limits", budget_limits.as_ref())?,
+        budget_limits: nullable("budget_limits", budget_limits.as_ref())?,
         team_spend: *team_spend,
         team_alias: team_alias.clone(),
         team_tpm_limit: *team_tpm_limit,
@@ -287,7 +213,7 @@ fn cached_key(
         team_blocked: *team_blocked,
         soft_budget: *soft_budget,
         team_model_aliases: nullable("team_model_aliases", team_model_aliases.as_ref())?,
-        team_member: team_member.as_ref().map(member).transpose()?,
+        team_member: team_member.as_ref().map(team_member_column).transpose()?,
         team_metadata: nullable("team_metadata", team_metadata.as_ref())?,
         team_object_permission_id: team_object_permission_id.clone(),
         team_member_spend: *team_member_spend,
@@ -330,20 +256,5 @@ fn cached_key(
         team_object_permission: None,
         jwt_claims: None,
         unread: Vec::new(),
-    })
-}
-
-/// The roster entry as `Member` dumps it: its three fields, whatever else the entry holds. The
-/// model refuses an entry that names neither a user id nor an email.
-fn member(entry: &RawJson) -> Result<CachedMember, Error> {
-    let member: CachedMember = column("team_member", entry)?;
-    if member.user_id.is_none() && member.user_email.is_none() {
-        return Err(Error::Row {
-            column: "team_member",
-        });
-    }
-    Ok(CachedMember {
-        unread: Vec::new(),
-        ..member
     })
 }

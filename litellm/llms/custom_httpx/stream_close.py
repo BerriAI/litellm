@@ -14,6 +14,16 @@ async def aclose_if_supported(stream: object) -> None:
         await stream.aclose()
 
 
+@runtime_checkable
+class SupportsClose(Protocol):
+    def close(self) -> None: ...
+
+
+def close_if_supported(stream: object) -> None:
+    if isinstance(stream, SupportsClose):
+        stream.close()
+
+
 async def _yield_then_close(chunks: AsyncIterator[bytes], response: httpx.Response) -> AsyncGenerator[bytes, None]:
     try:
         async for chunk in chunks:

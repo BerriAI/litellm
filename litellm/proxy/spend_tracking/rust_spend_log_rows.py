@@ -20,6 +20,7 @@ from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     DEFAULT_MAX_RECURSE_DEPTH,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import (
     claude_subscription_usage,
@@ -70,6 +71,7 @@ _REQUEST_METADATA_KEYS: Final = frozenset(
         "session_id",
         "trace_id",
         SESSION_ID_GENERATED_METADATA_KEY,
+        SESSION_ID_INHERITED_METADATA_KEY,
     }
 )
 _MESSAGE_REDACTION_HEADERS: Final = frozenset({"litellm-disable-message-redaction", *MESSAGE_REDACTION_ENABLE_HEADERS})

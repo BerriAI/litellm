@@ -57,12 +57,12 @@ class MinimaxImageEditConfig(OpenAIImageEditConfig):
 
     def validate_environment(
         self,
-        headers: Mapping[str, str],
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: mirrors override contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
         resolved_key: Final = MinimaxChatConfig.get_api_key(api_key=api_key)
         if not resolved_key:
             raise ValueError("Missing MiniMax API Key - set MINIMAX_API_KEY or pass api_key")

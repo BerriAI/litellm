@@ -256,7 +256,9 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         }
         return {**optional_params, **language_params, **response_format_params, **passthrough_params}
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return SonioxException(message=error_message, status_code=status_code, headers=headers)
 
     def validate_environment(

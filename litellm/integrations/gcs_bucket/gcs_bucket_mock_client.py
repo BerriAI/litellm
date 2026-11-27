@@ -10,7 +10,7 @@ Usage:
 
 import asyncio
 import os
-from collections.abc import AsyncIterable, Iterable
+from collections.abc import AsyncIterable, Iterable, Mapping
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
@@ -52,8 +52,8 @@ _MOCK_LATENCY_SECONDS: Final = float(os.getenv("GCS_MOCK_LATENCY_MS", "150")) / 
 async def _mock_async_handler_get(
     self: "AsyncHTTPHandler",
     url,
-    params: dict[object, object] | None = None,
-    headers: dict[object, object] | None = None,
+    params: Mapping[str, object] | None = None,
+    headers: Mapping[str, object] | None = None,
     follow_redirects: bool | None = None,
 ) -> "MockResponse | httpx.Response":
     """Monkey-patched AsyncHTTPHandler.get that intercepts GCS calls."""
@@ -120,10 +120,10 @@ async def _mock_async_handler_get(
 async def _mock_async_handler_delete(
     self: "AsyncHTTPHandler",
     url,
-    data=None,
-    json=None,
-    params: dict[object, object] | None = None,
-    headers: dict[object, object] | None = None,
+    data: Mapping[str, object] | str | bytes | None = None,
+    json: dict[str, object] | None = None,
+    params: Mapping[str, object] | None = None,
+    headers: Mapping[str, object] | None = None,
     timeout: "float | httpx.Timeout | None" = None,
     stream: bool = False,
     content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,

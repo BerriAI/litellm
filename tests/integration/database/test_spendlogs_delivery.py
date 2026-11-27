@@ -1,6 +1,9 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
+from datetime import timedelta
+from itertools import count
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
@@ -267,6 +270,50 @@ async def test_an_unreachable_database_reported_as_a_data_error_never_parks_a_de
     assert delivery_database.execute('SELECT state::text, attempts FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
         ("pending", 3)
     ]
+
+
+class _RetriedElsewhereBeforeFailureIsRecorded:
+    def __init__(self, client: Prisma, database: psycopg.Connection[tuple[object, ...]], timeout: timedelta) -> None:
+        self._client: Final = client
+        self._database: Final = database
+        self._timeout: Final = timeout
+        self._transactions: Final = count(1)
+
+    def tx(self, *, timeout: timedelta) -> AbstractAsyncContextManager[Prisma]:
+        if next(self._transactions) == 2:
+            self._database.execute(
+                """UPDATE "LiteLLM_SpendLogDelivery" SET attempts = 7 WHERE delivery_id = 'request-1'"""
+            )
+        return self._client.tx(timeout=min(timeout, self._timeout))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_full_batch_is_scheduled_for_retry_within_one_short_transaction(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    batch: Final = 5000
+    _insert(delivery_database, tuple(_row(f"request-{index}") for index in range(batch)))
+    delivery_database.execute("""UPDATE "LiteLLM_SpendLogDelivery" SET attempts = 3 WHERE delivery_id = 'request-0'""")
+
+    async def apply(transaction: LedgerTransaction, deliveries: tuple[DeliveryProjection, ...]) -> None:
+        raise ConnectionError("database went away")
+
+    repository: Final = AccountingDeliveryRepository(
+        _RetriedElsewhereBeforeFailureIsRecorded(delivery_client, delivery_database, timedelta(seconds=2))
+    )
+    before_failure: Final = delivery_database.execute("SELECT NOW() AT TIME ZONE 'UTC'").fetchall()[0][0]
+    result: Final = await repository.apply_pending(apply, batch_size=batch, retry_only=False)
+
+    assert (result.failed, result.parked, result.error) == (batch - 1, (), "ConnectionError")
+    assert delivery_database.execute(
+        """SELECT state::text, attempts, last_error, bool_and(next_attempt_at > %s), count(*)
+        FROM "LiteLLM_SpendLogDelivery" GROUP BY 1, 2, 3 ORDER BY attempts""",
+        (before_failure,),
+    ).fetchall() == [
+        ("pending", 1, "ConnectionError", True, batch - 2),
+        ("pending", 3, None, False, 1),
+        ("pending", 7, None, False, 1),
+    ], "every claimed delivery backs off once, and one another worker already retried is left alone"
 
 
 @pytest_asyncio.fixture(loop_scope="function")

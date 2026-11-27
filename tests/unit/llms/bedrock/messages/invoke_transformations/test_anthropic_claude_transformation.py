@@ -333,6 +333,37 @@ def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
     assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
 
 
+def test_bedrock_invoke_messages_transform_names_only_custom_tools() -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg: Final = AmazonAnthropicClaudeMessagesConfig()
+    result: Final = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Take a screenshot"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 128,
+            "tools": [
+                {"type": "computer_toolset_20260801"},
+                {"type": "browser_toolset_20260801"},
+                {"type": "text_editor_20250728"},
+                {"type": "bash_20250124", "name": "bash"},
+                {"type": "custom", "input_schema": {"type": "object", "properties": {}}},
+                {"input_schema": {"type": "object", "properties": {}}},
+            ],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"] == [
+        {"type": "computer_toolset_20260801"},
+        {"type": "browser_toolset_20260801"},
+        {"type": "text_editor_20250728"},
+        {"type": "bash_20250124", "name": "bash"},
+        {"type": "custom", "input_schema": {"type": "object", "properties": {}}, "name": "litellm_unnamed_tool_4"},
+        {"input_schema": {"type": "object", "properties": {}}, "name": "litellm_unnamed_tool_5"},
+    ]
+
+
 def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled(
     local_model_cost_map,
 ):

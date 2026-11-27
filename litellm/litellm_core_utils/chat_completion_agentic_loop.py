@@ -164,11 +164,12 @@ def _check_agentic_loop_safety(
     depth: int,
     max_loops: int,
     model: str,
+    answered_at_cap: bool = False,
 ) -> str:
     fingerprint: Final = _fingerprint_tools(tool_calls)
     if fingerprint in fingerprints:
         raise AgenticLoopSafetyError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
-    if depth >= max_loops:
+    if depth > max_loops or (depth == max_loops and not answered_at_cap):
         raise AgenticLoopLimitError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
     return fingerprint
 
@@ -324,6 +325,7 @@ def _fingerprint_of_a_turn_to_run(
     max_loops: int,
     model: str,
     stream: bool,
+    answered_at_cap: bool,
 ) -> str | None:
     if holds_a_call_the_choice_excludes(_called_tool_names(response), request_kwargs, callbacks):
         return None
@@ -334,6 +336,7 @@ def _fingerprint_of_a_turn_to_run(
             depth=depth,
             max_loops=max_loops,
             model=model,
+            answered_at_cap=answered_at_cap,
         )
     except AgenticLoopSafetyError as e:
         if stream:
@@ -577,6 +580,7 @@ async def maybe_run_chat_completion_agentic_loop(
             max_loops=max_loops,
             model=model,
             stream=stream,
+            answered_at_cap=callback.answers_tool_calls_at_agentic_loop_cap(custom_llm_provider),
         )
         if fingerprint is None:
             return _end_refused_turn(
@@ -730,6 +734,7 @@ async def run_chat_completion_agentic_hooks(
             max_loops=max_loops,
             model=model,
             stream=stream,
+            answered_at_cap=callback.answers_tool_calls_at_agentic_loop_cap(custom_llm_provider),
         )
         if fingerprint is None:
             return await _refused_chat_turn(

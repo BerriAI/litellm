@@ -15,7 +15,7 @@ class HuggingFaceDetector(RegexBasedDetector):
         return "Hugging Face Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Hugging Face Access token
             re.compile(r"""(?:^|[\\'"` >=:])(hf_[a-zA-Z]{34})(?:$|[\\'"` <])"""),

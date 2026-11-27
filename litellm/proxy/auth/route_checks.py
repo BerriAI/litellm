@@ -350,7 +350,7 @@ class RouteChecks:
         route: str,
         request: Request,
         valid_token: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: Mapping[str, object],
     ):
         """
         Checks if Non Proxy Admin User is allowed to access the route
