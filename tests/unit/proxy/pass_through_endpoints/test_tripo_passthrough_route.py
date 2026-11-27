@@ -250,3 +250,110 @@ async def test_tripo_forwards_stream_flag_and_returns_the_json_task(
     assert not isinstance(result, StreamingResponse)
     assert result.status_code == 200
     assert json.loads(result.body) == task
+
+
+class _RejectRateLimit(CustomLogger):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: Mapping[str, object],
+        call_type: CallTypesLiteral,
+    ) -> Mapping[str, object]:
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        raise ProxyRateLimitError(
+            detail="Rate limit exceeded for api_key: alias. Limit type: requests. Current limit: 0, Remaining: 0.",
+            headers={"retry-after": "60"},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ["tripo", "cn.tripo"])
+async def test_tripo_route_keeps_proxy_rate_limit_for_the_tripo_body(
+    monkeypatch: pytest.MonkeyPatch, prefix: str
+) -> None:
+    import json
+    from typing import Final
+
+    from starlette.requests import Request
+    from starlette.types import Message
+
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import PassthroughEndpointRouter
+    from litellm.proxy.proxy_server import otlp_http_exception_handler
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "callbacks", [_RejectRateLimit()])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache()))
+    domain: Final = "openapi.tripo3d.com" if prefix == "cn.tripo" else "openapi.tripo3d.ai"
+    router: Final = litellm.Router(model_list=[{
+        "model_name": "tripo-rate-limit",
+        "litellm_params": {
+            "model": "tripo/task", "custom_llm_provider": "tripo", "api_key": "test-key",
+            "api_base": f"https://{domain}/v3", "use_in_pass_through": True,
+        },
+    }])
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b'{"prompt":"a chair"}', "more_body": False}
+
+    request: Final = Request({
+        "type": "http", "method": "POST", "path": f"/{prefix}/v3/generation/text-to-model",
+        "headers": [(b"content-type", b"application/json")],
+        "query_string": b"", "scheme": "http", "server": ("test", 80),
+    }, receive=receive)
+    with pytest.raises(ProxyRateLimitError) as caught:
+        await endpoints.tripo_proxy_route(
+            endpoint="v3/generation/text-to-model", request=request,
+            user_api_key_dict=UserAPIKeyAuth(models=["tripo-rate-limit"]),
+            credentials_router=PassthroughEndpointRouter(llm_router_getter=lambda: router),
+        )
+    response: Final = await otlp_http_exception_handler(request, caught.value)
+    body: Final = json.loads(response.body)
+    assert response.status_code == 429
+    assert body["code"] == 9105
+    assert body["message"].startswith("Rate limit exceeded for api_key: alias.")
+    assert body["suggestion"] == "Retry after the limit resets"
+    assert response.headers["retry-after"] == "60"
+    assert "error" not in body
+
+
+@pytest.mark.asyncio
+async def test_other_passthrough_still_wraps_proxy_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Final
+
+    from starlette.requests import Request
+    from starlette.types import Message
+
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_request
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "callbacks", [_RejectRateLimit()])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache()))
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b'{"model":"gpt-4o-mini"}', "more_body": False}
+
+    request: Final = Request({
+        "type": "http", "method": "POST", "path": "/openai/v1/chat/completions",
+        "headers": [(b"content-type", b"application/json")],
+        "query_string": b"", "scheme": "http", "server": ("test", 80),
+    }, receive=receive)
+    with pytest.raises(ProxyException) as caught:
+        await pass_through_request(
+            request=request,
+            target="https://api.openai.com/v1/chat/completions",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(),
+            custom_llm_provider="openai",
+        )
+    assert caught.value.type == "throttling_error"
+    assert caught.value.code == "429"

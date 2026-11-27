@@ -145,9 +145,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
 )
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
+from litellm.proxy.common_utils.tripo_error_payload import is_tripo_pass_through_route
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
     ROUTER_RESERVED_METADATA_FIELDS,
     LiteLLMProxyRequestSetup,
@@ -1417,6 +1419,10 @@ def _prepare_passthrough_client_body(
     return _PassthroughClientBody(scoped_body, eu_jev_body)
 
 
+def _tripo_route_keeps_rate_limit(request: Request, exc: Exception) -> bool:
+    return isinstance(exc, ProxyRateLimitError) and is_tripo_pass_through_route(get_request_route(request))
+
+
 def _passthrough_streams(custom_llm_provider: str | None, parsed_body: dict, stream: bool | None) -> bool | None:
     # Tripo ignores this field and still returns one JSON task body. Following it would skip task billing.
     if custom_llm_provider == "tripo":
@@ -2358,6 +2364,8 @@ async def pass_through_request(
         #########################################################
 
         if isinstance(e, ProxyException):
+            raise
+        if _tripo_route_keeps_rate_limit(request, e):
             raise
         if isinstance(e, HTTPException):
             raise ProxyException(
