@@ -81,6 +81,8 @@ fn without_stores(inference: Inference) -> AppState {
         variables: Environment::default(),
         gateway_requests: None,
         gateway_requests_flush: None,
+        retired_flushes: litellm_gateway::RetiredFlushes::default(),
+        mcp_servers: litellm_gateway::McpServers::default(),
     }
 }
 

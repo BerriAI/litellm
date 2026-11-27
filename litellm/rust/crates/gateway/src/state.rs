@@ -20,7 +20,8 @@ use litellm_repositories::{Database, GatewayRequestRepository};
 use tokio::runtime::Handle;
 
 use crate::{
-    Error, Gateway, Inference, KeyLimiter, RedisClients, Resources, SpendLog,
+    Error, Gateway, Inference, KeyLimiter, McpServers, RedisClients, Resources, RetiredFlushes,
+    SpendLog,
     callbacks::parallel_request_limiter,
     db,
     gateway_requests::GatewayRequests,
@@ -60,6 +61,11 @@ pub struct AppState {
     pub gateway_requests: Option<Arc<GatewayRequests>>,
     /// The job that writes `gateway_requests` every `PROXY_BATCH_WRITE_AT` seconds.
     pub gateway_requests_flush: Option<Arc<PeriodicJob>>,
+    /// The last flushes of the callbacks of each config this state's lineage replaced.
+    pub retired_flushes: RetiredFlushes,
+    /// Whether a stored MCP server forwards a caller's header upstream, read again for the life of
+    /// the process.
+    pub mcp_servers: McpServers,
 }
 
 impl AppState {
@@ -84,6 +90,17 @@ impl AppState {
         let spend_logs = connected
             .as_ref()
             .map(|(_, repositories)| Arc::new(SpendLog::start(repositories, &redis, &variables)));
+        let retired_flushes = RetiredFlushes::default();
+        let mcp_servers = match &connected {
+            Some((_, repositories)) => {
+                Box::pin(McpServers::read(
+                    repositories.clone(),
+                    crate::reload_every(config),
+                ))
+                .await
+            }
+            None => McpServers::default(),
+        };
         let Inference {
             gateway: inference,
             key_limiter,
@@ -95,6 +112,7 @@ impl AppState {
             &redis,
             counters.clone(),
             spend_logs.as_deref(),
+            &retired_flushes,
         )
         .await?;
         let (database, connected) = connected
@@ -128,6 +146,8 @@ impl AppState {
             variables,
             gateway_requests,
             gateway_requests_flush,
+            retired_flushes,
+            mcp_servers,
         })
     }
 
@@ -155,6 +175,7 @@ impl AppState {
             &self.redis,
             self.counters.clone(),
             self.spend_logs.as_deref(),
+            &self.retired_flushes,
         )
         .await?;
         if let Some(auth_store) = &self.auth_store {
@@ -177,15 +198,19 @@ impl AppState {
         host::auth::auth(config, self.auth_store.clone(), self.spend_logs.is_some())
     }
 
-    /// Drains the spend logs still queued, writes the gateway request counts still in memory,
-    /// then closes the database pools.
+    /// Flushes what the callbacks still batch and waits out the last flush of a replaced
+    /// config's callbacks, drains the spend logs still queued, writes the gateway request counts
+    /// still in memory, then closes the database pools.
     pub async fn close(&self) {
+        self.inference.host().flush_callbacks().await;
+        self.retired_flushes.finish().await;
         if let Some(spend_logs) = &self.spend_logs {
             spend_logs.drain().await;
         }
         if let Some(flush) = &self.gateway_requests_flush {
             flush.close().await;
         }
+        self.mcp_servers.close().await;
         if let Some(database) = &self.database {
             database.close().await;
         }

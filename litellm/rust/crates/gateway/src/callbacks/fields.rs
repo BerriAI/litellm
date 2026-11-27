@@ -26,12 +26,21 @@ use serde_json::{Map, Value};
 
 use super::{
     parallel_request_limiter::{MASTER_KEY_ALIAS, PROXY_ADMIN_NAME},
+    payloads::Logged,
     spend_log_input::{self, Served},
     standard_logging::deployment_provider,
 };
 use crate::host::NativeRows;
 
 const MODEL: &str = "model";
+
+/// The fields read from the call's `StandardLoggingPayload`, which is built for a hook only when
+/// a callback on it reads one of them.
+pub const FROM_THE_PAYLOAD: FieldSet = FieldSet::of(&[
+    Field::StandardLoggingPayloadRef,
+    Field::StandardLoggingPayload,
+    Field::LogId,
+]);
 
 /// A patch operation the gateway has no place to write.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -375,15 +384,41 @@ fn facts(entries: &CallState) -> CallFacts {
     }
 }
 
-/// What a callback that reads `reads` is handed on `hook`.
-pub fn input(entries: &CallState, hook: Hook, reads: FieldSet) -> HookInput {
-    let fields = reads
+/// The fields of [`FROM_THE_PAYLOAD`] that `reads` names, from the call's payload as the
+/// proxy's `payload_copy` and `log_id` derive them: the payload by reference, its wire JSON, and
+/// its `id`.
+fn from_the_payload(fields: &mut FieldValues, reads: FieldSet, logged: &Logged<'_>) {
+    if reads.contains(Field::StandardLoggingPayloadRef) {
+        fields.set_payload(logged.host.hold(logged.payload.clone()));
+    }
+    if reads.contains(Field::StandardLoggingPayload)
+        && let Some(document) = record(logged.payload)
+    {
+        fields.insert(Field::StandardLoggingPayload, document);
+    }
+    if reads.contains(Field::LogId) {
+        fields.insert(Field::LogId, Value::from(logged.payload.id.as_str()));
+    }
+}
+
+/// What a callback that reads `reads` is handed on `hook`. `logged` is the call's payload for
+/// the hook, which a call that has not ended has none of.
+pub fn input(
+    entries: &CallState,
+    hook: Hook,
+    reads: FieldSet,
+    logged: Option<Logged<'_>>,
+) -> HookInput {
+    let mut fields = reads
         .iter()
         .filter(|field| !field.by_reference())
         .filter_map(|field| Some((field, read(entries, field)?)))
         .fold(FieldValues::new(reads), |fields, (field, value)| {
             fields.with(field, value)
         });
+    if let Some(logged) = &logged {
+        from_the_payload(&mut fields, reads, logged);
+    }
     HookInput {
         hook,
         fields,
@@ -443,6 +478,8 @@ pub fn write(entries: &mut CallState, op: PatchOp) -> Result<(), Unwritable> {
 
 #[cfg(test)]
 mod tests {
+    use futures_util::FutureExt;
+    use litellm_callbacks::{RenderOptions, typed};
     use litellm_gateway_auth_core::{
         Holder, TeamCopy,
         record::{EndUserRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
@@ -455,6 +492,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::callbacks::payloads::LoggingPayloads;
 
     /// Runs `look` on a fresh record of a Messages call holding a body that names `claude`.
     fn on_a_call<R>(look: impl FnOnce(&mut CallState) -> R) -> R {
@@ -596,7 +634,7 @@ mod tests {
     /// What a callback that reads the model is told of the call: the field, and the model and
     /// the stream flag among the call's facts.
     fn told(entries: &CallState, hook: Hook) -> (Option<Value>, String, bool) {
-        let input = input(entries, hook, FieldSet::of(&[Field::Model]));
+        let input = input(entries, hook, FieldSet::of(&[Field::Model]), None);
         let call = input.call.unwrap();
         (
             input.fields.raw(Field::Model).unwrap().cloned(),
@@ -687,10 +725,62 @@ mod tests {
                 entries,
                 Hook::AttemptEnded,
                 FieldSet::of(&[Field::SpendLogInput]),
+                None,
             )
         });
         let read = input.fields.raw(Field::SpendLogInput).unwrap();
         assert_eq!(read.and_then(|input| input["kind"].as_str()), kind);
+    }
+
+    #[rstest]
+    fn a_callback_that_reads_the_payload_is_handed_what_the_builder_built() {
+        let payloads = LoggingPayloads::default();
+        let (built, input) = on_a_call(|entries| {
+            entries.release();
+            entries.call_id = Some("call-1".to_owned());
+            entries.fail();
+            let built = payloads.build(entries).unwrap();
+            let logged = Logged {
+                payload: &built,
+                host: payloads.host(),
+            };
+            let input = input(entries, Hook::AttemptEnded, FROM_THE_PAYLOAD, Some(logged));
+            (built, input)
+        });
+        let rendered = input
+            .fields
+            .payload()
+            .unwrap()
+            .unwrap()
+            .render(RenderOptions::default())
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                rendered,
+                input.fields.raw(Field::StandardLoggingPayload).unwrap(),
+                input.fields.get::<typed::LogId>().unwrap()
+            ),
+            (
+                litellm_python_compat::json::dumps_serde(&built).unwrap(),
+                Some(&serde_json::to_value(&built).unwrap()),
+                Some("call-1".to_owned())
+            )
+        );
+    }
+
+    #[rstest]
+    fn a_call_with_no_payload_hands_none_of_its_fields() {
+        let input = on_a_call(|entries| input(entries, Hook::PreCall, FROM_THE_PAYLOAD, None));
+        assert_eq!(
+            (
+                input.fields.payload().unwrap(),
+                input.fields.raw(Field::StandardLoggingPayload).unwrap(),
+                input.fields.raw(Field::LogId).unwrap()
+            ),
+            (None, None, None)
+        );
     }
 
     #[rstest]
@@ -859,6 +949,7 @@ mod tests {
                 entries,
                 Hook::AttemptEnded,
                 FieldSet::of(&[Field::KeyIdentity, Field::LoggedKeyIdentity]),
+                None,
             )
         });
         let read = |field| input.fields.raw(field).unwrap().unwrap().clone();

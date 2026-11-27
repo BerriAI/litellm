@@ -56,7 +56,8 @@ pub const REQUEST_SETTINGS: [&str; 2] = ["drop_params", "additional_drop_params"
 
 pub async fn create<H: Host>(Checked { call, body }: Checked<H, JsonObject>) -> Response {
     if let Ok(JsonObject(body)) = &body {
-        record::write(|entries| entries.logged_request.sent(body));
+        let max_base64_length = call.gateway.max_base64_length_for_logging;
+        record::write(|entries| entries.logged_request.sent(body, max_base64_length));
     }
     serve::run(&call, body.map(|JsonObject(body)| body), |body| {
         MessagesAttempt::new(&call, body)

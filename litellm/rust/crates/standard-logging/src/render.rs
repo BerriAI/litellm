@@ -869,4 +869,50 @@ mod tests {
             golden.trim_end()
         );
     }
+
+    /// Each `tests/fixtures/json_dumps` file is CPython's `json.dumps(json.loads(golden))` of the
+    /// golden of the same name: the bytes the Python payload host writes for that payload.
+    #[rstest]
+    #[case::unary_success(
+        unary_success,
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/unary_success.json")),
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/json_dumps/unary_success.json"))
+    )]
+    #[case::stream_success(
+        stream_success,
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/stream_success.json")),
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/json_dumps/stream_success.json"))
+    )]
+    #[case::cache_hit(
+        cache_hit,
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/cache_hit.json")),
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/json_dumps/cache_hit.json"))
+    )]
+    #[case::provider_4xx(
+        provider_4xx,
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/provider_4xx.json")),
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/json_dumps/provider_4xx.json"))
+    )]
+    #[case::key_limit_429(
+        key_limit_429,
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/key_limit_429.json")),
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/json_dumps/key_limit_429.json"))
+    )]
+    #[case::client_disconnect(
+        client_disconnect,
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/client_disconnect.json")),
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/json_dumps/client_disconnect.json"))
+    )]
+    fn a_messages_call_dumps_to_the_bytes_python_json_dumps_writes_for_it(
+        #[case] scenario: Scenario,
+        #[case] golden: &str,
+        #[case] dumped: &str,
+    ) {
+        let document: Value = serde_json::from_str(golden).unwrap();
+
+        assert_eq!(
+            litellm_python_compat::json::dumps_serde(&scenario(&document)).unwrap(),
+            dumped.trim_end().as_bytes()
+        );
+    }
 }

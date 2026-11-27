@@ -24,4 +24,6 @@ pub enum Error {
     Callback(#[from] crate::callbacks::Unregistrable),
     #[error("MODEL_COST_MAP_MAX_SHRINK_RATIO must be between 0 and 1, got {0}")]
     ShrinkRatio(f64),
+    #[error(transparent)]
+    Secrets(#[from] litellm_secrets::Error),
 }
