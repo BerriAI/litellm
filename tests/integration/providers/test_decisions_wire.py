@@ -140,6 +140,15 @@ _PROVIDERS: Final = (
         "databricks/databricks-openjev-qwen35-4b",
     ),
     _Provider("empiriolabs", "empiriolabs/aplomb-test", "/v1/decisions", "aplomb-test", _API_KEY, False, None),
+    _Provider(
+        "levanto",
+        "levanto/levanto-sage-2",
+        "/v1/systemone",
+        "levanto-sage-2",
+        _API_KEY,
+        False,
+        "levanto/levanto-sage-2",
+    ),
 )
 _LOCAL_PROVIDERS: Final = (
     pytest.param(

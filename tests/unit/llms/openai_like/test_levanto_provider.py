@@ -40,7 +40,9 @@ _EXPECTED_ENDPOINTS: Final = {
 }
 LEVANTO_MODELS: Final = tuple(sorted(name for name in litellm.model_cost if name.startswith("levanto/")))
 LEVANTO_PRICED_MODELS: Final = tuple(
-    name for name in LEVANTO_MODELS if "input_cost_per_token" in litellm.model_cost[name]
+    name
+    for name in LEVANTO_MODELS
+    if litellm.model_cost[name]["mode"] == "chat" and "input_cost_per_token" in litellm.model_cost[name]
 )
 
 
