@@ -180,7 +180,7 @@ fn message(sent: Recognized<SentMessage>) -> (Value, usize) {
 }
 
 /// What of a prompt is counted, in the shape the counter reads.
-pub(super) struct Countable {
+pub(crate) struct Countable {
     messages: Vec<Value>,
     tools: Option<Value>,
     media: usize,
@@ -188,7 +188,7 @@ pub(super) struct Countable {
 
 impl Countable {
     /// `None` for a body with no list of messages.
-    pub(super) fn of(prompt: &Prompt<'_>) -> Option<Self> {
+    pub(crate) fn of(prompt: &Prompt<'_>) -> Option<Self> {
         let Prompt::Messages(body) = prompt;
         let fields = body.iter().map(|(name, value)| (name.as_str(), value));
         let Sent {
@@ -213,7 +213,7 @@ impl Countable {
     }
 
     /// The estimate. It tokenizes the whole prompt, so it blocks for as long as that takes.
-    pub(super) fn tokens(&self) -> Option<i64> {
+    pub(crate) fn tokens(&self) -> Option<i64> {
         let counter = TokenCounter::from_tiktoken(ENCODING).ok()?;
         let read = |tools: Option<&Value>| {
             let fields = json!({"messages": self.messages, "tools": tools});
