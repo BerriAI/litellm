@@ -34,6 +34,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.mcp_server.auth_profile_selection import resolve_usable_server, unusable_profile_status
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.exceptions import (
     MCPServerListError,
@@ -41,6 +42,7 @@ from litellm.proxy.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
 from litellm.proxy.mcp_server.faults.list_outcomes import (
+    ServerListFault,
     ServerListOk,
     ServerOutcome,
     classify_list_exception,
@@ -261,6 +263,7 @@ if MCP_AVAILABLE:
         filter_tools_by_key_team_permissions,
         fire_mcp_tool_call_failure_logging,
         resolve_native_tool_name_for_server,
+        split_usable_mcp_servers,
     )
     from litellm.proxy.mcp_server.server import (  # noqa: F401  # legacy module exports
         _apply_toolset_scope,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -934,13 +937,14 @@ if MCP_AVAILABLE:
                     "message": f"The key is not allowed to access server {server_id}",
                 },
             )
-        server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-        if server is None:
+        registered_server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if registered_server is None:
             return {
                 "tools": [],
                 "error": "server_not_found",
                 "message": f"Server with id {server_id} not found",
             }
+        server: Final = await resolve_usable_server(registered_server, user_api_key_dict)
 
         server_auth_header: Final = _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header)
         user_oauth_extra_headers: Final = await _get_user_oauth_extra_headers(server, user_api_key_dict)
@@ -1177,15 +1181,23 @@ if MCP_AVAILABLE:
                         return (), classify_list_exception(e)
                     return tools_result, ServerListOk(tool_count=len(tools_result))
 
-                queried_servers: Final = tuple(
+                registered_servers: Final = tuple(
                     server
                     for server in map(global_mcp_server_manager.get_mcp_server_by_id, allowed_server_ids)
                     if server is not None
                 )
+                usable_servers, left_out = await split_usable_mcp_servers(registered_servers, user_api_key_dict)
+                queried_servers: Final = tuple(usable_servers)
                 listings: Final = tuple([await list_server(server) for server in queried_servers])
                 list_tools_result: Final = [tool for tools, _ in listings for tool in tools]
                 server_outcomes: Final = MappingProxyType(
                     {_aggregate_server_key(server): outcome for server, (_, outcome) in zip(queried_servers, listings)}
+                    | {
+                        _aggregate_server_key(server): ServerListFault(
+                            tag="internal", status_code=unusable_profile_status(unusable)
+                        )
+                        for server, unusable in left_out
+                    }
                 )
                 errors: Final = tuple(
                     f"{key}: {outcome.tag}" for key, outcome in server_outcomes.items() if outcome.tag != "ok"

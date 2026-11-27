@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager, nullcontext
 from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from mcp.types import CallToolResult, ListToolsResult, TextContent
@@ -28,6 +29,7 @@ from tests._support.mcp_auth_profiles import (
     install_profile_manager,
     plain_server,
     profile_manager,
+    stored_caller_granted,
     tickets_server,
 )
 
@@ -3600,3 +3602,139 @@ async def test_gateway_initialize_never_serves_a_profile_caller_the_instructions
     served: Final = await _gateway_initialize_instructions("bots")
 
     assert (cached_by_a_default_caller, served) == ("instructions for default_credential", None)
+
+
+def _oauth_scope() -> dict[str, object]:
+    return {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/tickets",
+        "headers": [(b"host", b"gateway.test")],
+        "scheme": "http",
+        "server": ("gateway.test", 80),
+        "query_string": b"",
+    }
+
+
+def _interactive_oauth_server() -> MCPServer:
+    return tickets_server(
+        overrides={
+            "auth_type": MCPAuth.oauth2,
+            "authentication_token": None,
+            "oauth2_flow": "authorization_code",
+            "authorization_url": "https://issuer.example/authorize",
+            "token_url": "https://issuer.example/token",
+            "client_id": "gateway-client",
+            "client_secret": "gateway-secret",
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@pytest.mark.parametrize(
+    ("granted", "challenged"),
+    [
+        pytest.param(None, True, id="no-grant-is-sent-to-the-upstream-sign-in"),
+        pytest.param("default", True, id="the-default-grant-is-sent-to-the-upstream-sign-in"),
+        pytest.param("bots", False, id="a-static-profile-needs-no-sign-in"),
+        pytest.param("ghost", False, id="an-unusable-profile-is-left-out-of-the-challenge"),
+    ],
+)
+async def test_the_connect_challenge_follows_the_credential_the_caller_will_use(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, challenged: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server import server as mcp_server
+
+    install_profile_manager(monkeypatch, profile_manager(_interactive_oauth_server(), ProfileUpstream()))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    caller: Final = stored_caller_granted(granted)
+
+    async def connect() -> None:
+        await mcp_server._raise_preemptive_401_for_unauthenticated_servers(
+            scope=_oauth_scope(),
+            mcp_servers=["tickets"],
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=caller,
+            client_ip=None,
+        )
+
+    if not challenged:
+        await connect()
+        return
+    with pytest.raises(HTTPException) as challenge:
+        await connect()
+    assert challenge.value.status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_server_ids", "targets"),
+    [
+        pytest.param(None, ["tickets"], id="an-unnarrowed-caller-is-challenged-for-the-server"),
+        pytest.param({"tickets"}, ["tickets"], id="a-scope-holding-the-server-is-challenged-for-it"),
+        pytest.param({"other"}, [], id="a-scope-excluding-the-server-is-never-challenged-for-it"),
+    ],
+)
+async def test_the_connect_challenge_only_targets_servers_in_the_callers_scope(
+    monkeypatch: pytest.MonkeyPatch, allowed_server_ids: set[str] | None, targets: list[str]
+) -> None:
+    from litellm.proxy.mcp_server import server as mcp_server
+
+    install_profile_manager(monkeypatch, profile_manager(_interactive_oauth_server(), ProfileUpstream()))
+
+    usable: Final = await mcp_server._usable_connect_targets(["tickets"], caller_granted(None), None, allowed_server_ids)
+
+    assert list(usable) == targets
+
+
+class _ProbeClient:
+    def __init__(self) -> None:
+        self.probed: Final[list[str]] = []  # mutable-ok: the fake records the probes it was sent
+
+    async def post(self, url: str, headers: dict[str, str], **_: object) -> httpx.Response:  # kwargs-ok: fake client
+        self.probed.append(headers.get("Authorization", ""))
+        return httpx.Response(200)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@pytest.mark.parametrize(
+    ("granted", "probed"),
+    [
+        pytest.param(None, ["Bearer caller-token"], id="without-a-grant-the-callers-token-is-probed"),
+        pytest.param("bots", [], id="a-selected-profile-is-never-probed-with-the-callers-token"),
+    ],
+)
+async def test_the_connect_probe_never_sends_the_callers_token_to_a_server_using_a_profile(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, probed: list[str]
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server import server as mcp_server
+
+    client: Final = _ProbeClient()
+    monkeypatch.setattr(mcp_server, "get_async_httpx_client", lambda **_: client)
+    passthrough: Final = tickets_server(
+        overrides={
+            "auth_type": MCPAuth.none,
+            "authentication_token": None,
+            "extra_headers": ["Authorization"],
+            "oauth_passthrough": True,
+        }
+    )
+    install_profile_manager(monkeypatch, profile_manager(passthrough, ProfileUpstream()))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    await mcp_server._check_passthrough_upstream_auth(
+        scope=_oauth_scope(),
+        user_api_key_auth=stored_caller_granted(granted),
+        mcp_servers=["tickets"],
+        client_ip=None,
+        oauth2_headers={"Authorization": "Bearer caller-token"},
+        mcp_server_auth_headers=None,
+        raw_headers={"authorization": "Bearer caller-token", "x-litellm-api-key": "sk-1"},
+    )
+
+    assert client.probed == probed

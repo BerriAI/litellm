@@ -1935,6 +1935,27 @@ if MCP_AVAILABLE:
 
     from litellm.proxy.mcp_server.catalog import catalog_operation
 
+    async def _usable_connect_targets(
+        mcp_servers: Sequence[str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        client_ip: str | None,
+        allowed_server_ids: Set[str] | None,
+    ) -> Mapping[str, MCPServer]:
+        manager: Final = operations.global_mcp_server_manager
+        found: Final = ((name, manager.get_mcp_server_by_name(name, client_ip=client_ip)) for name in mcp_servers or ())
+        in_scope: Final = tuple(
+            (name, server)
+            for name, server in found
+            if server is not None and (allowed_server_ids is None or server.server_id in allowed_server_ids)
+        )
+        usable, _ = await operations.split_usable_mcp_servers(
+            tuple(server for _, server in in_scope), user_api_key_auth
+        )
+        by_id: Final = {server.server_id: server for server in usable}
+        return types.MappingProxyType(
+            {name: by_id[server.server_id] for name, server in in_scope if server.server_id in by_id}
+        )
+
     @catalog_operation(lambda: operations.global_mcp_server_manager)
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
@@ -1957,13 +1978,9 @@ if MCP_AVAILABLE:
         excludes a passthrough server is not pushed into an OAuth flow for
         a server it will be 403'd on immediately after authentication.
         """
+        usable: Final = await _usable_connect_targets(mcp_servers, user_api_key_auth, client_ip, allowed_server_ids)
         for server_name in mcp_servers or []:
-            server = operations.global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
-            if server is not None and allowed_server_ids is not None and server.server_id not in allowed_server_ids:
-                # Caller's narrowed scope excludes this server — skip the
-                # preemptive challenge and let downstream authorization
-                # return 403.
-                continue
+            server = usable.get(server_name)
             if server is not None and server.auth_type == MCPAuth.oauth2 and server.oauth2_flow == "client_credentials":
                 # Stamped M2M: the challenge decision below never reads discovered
                 # metadata, so deferred-discovery failures must not 503 this loop.
@@ -2279,10 +2296,13 @@ if MCP_AVAILABLE:
 
         # Use the authorized server set, not the raw user-supplied names, so that
         # a caller cannot force a probe to a server their key is not allowed to use.
-        allowed_servers: Final = await operations._get_allowed_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
-            mcp_servers=mcp_servers,
-            client_ip=client_ip,
+        allowed_servers, _ = await operations.split_usable_mcp_servers(
+            await operations._get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=mcp_servers,
+                client_ip=client_ip,
+            ),
+            user_api_key_auth,
         )
         # A legacy delegate is probed only when the single requested name resolves to it the way admission
         # resolves it, so neither a multi-server connect nor an access group can be failed by one rejected
