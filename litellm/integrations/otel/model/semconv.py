@@ -218,7 +218,6 @@ class LiteLLMError:
 
     CODE: Final = "litellm.provider.error.code"
     STACK_TRACE: Final = "litellm.provider.error.stack_trace"
-    STACK_TRACE_LEGACY: Final = "error.stack_trace"
     LLM_PROVIDER: Final = "litellm.provider.error.llm_provider"
 
 

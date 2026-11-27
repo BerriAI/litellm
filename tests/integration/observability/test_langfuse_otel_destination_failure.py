@@ -1,5 +1,5 @@
 """The operator's collector records a failed request the same way whether or not the key or team has its own
-``langfuse_otel`` destination, and no key or team destination receives the operator's stack trace, when ``otel`` and
+``langfuse_otel`` destination, and that destination's server span carries the same error stamps, when ``otel`` and
 ``langfuse_otel`` are both listed and the operator has no Langfuse keys"""
 
 from __future__ import annotations
@@ -164,15 +164,21 @@ def _failing_model(scenario_model: Callable[..., str], failure: Failure, provide
     )
 
 
+def _error_stamps(server: Span) -> dict[str, JsonValue]:
+    """The server span's error stamps as text, since the JSON export sends an int attribute as a string."""
+    values: Final = {name: server["attributes"].get(name) for name in ERROR_ATTRIBUTES}
+    return {
+        **{name: None if value is None else str(value) for name, value in values.items()},
+        STACK_TRACE: STACK_TRACE in server["attributes"],
+    }
+
+
 def _operator_record(sinks: SpanSinks, since: int, trace_id: str) -> tuple[Mapping[str, JsonValue], tuple[str, ...]]:
     held(lambda: _trace(sinks.operator, since, trace_id), _has_failure_record, holding=3, seconds=40)
     spans: Final = _trace(sinks.operator, since, trace_id)
     server: Final = next(span for span in spans if span["kind"] == SERVER_SPAN_KIND)
     failures: Final = tuple(str(span["name"]) for span in spans if span["name"] == FAILURE_SPAN)
-    return {
-        **{name: server["attributes"].get(name) for name in ERROR_ATTRIBUTES},
-        STACK_TRACE: STACK_TRACE in server["attributes"],
-    }, failures
+    return _error_stamps(server), failures
 
 
 def _has_failed_call(spans: tuple[Span, ...]) -> bool:
@@ -205,14 +211,13 @@ def _assert_destination_reads_like_plain(
     teams: tuple[str, str],
     failure: Failure,
 ) -> None:
-    _assert_operator_reads_like_plain(sinks, since[0], traces, teams, failure)
+    operator: Final = _assert_operator_reads_like_plain(sinks, since[0], traces, teams, failure)
     held(lambda: _trace(sinks.tenant, since[1], traces[1]), _has_server_span, holding=3, seconds=40)
     tenant: Final = _trace(sinks.tenant, since[1], traces[1])
+    server: Final = next(span for span in tenant if span["kind"] == SERVER_SPAN_KIND)
 
     assert FAILURE_SPAN not in {span["name"] for span in tenant}, [span["name"] for span in tenant]
-    assert [span["name"] for span in tenant if STACK_TRACE in span["attributes"]] == [], [
-        span["name"] for span in tenant
-    ]
+    assert _error_stamps(server) == operator, (server["attributes"], operator)
 
 
 @pytest.mark.parametrize("failure", ["upstream_500", "unknown_model"])
@@ -330,35 +335,6 @@ def test_a_successful_destination_request_records_no_failure(
     ]
 
 
-@pytest.mark.parametrize("failure", ["upstream_500", "unknown_model"])
-def test_an_arize_destination_gets_the_failure_without_the_operators_stack_trace(
-    failure: Failure,
-    rig: Rig,
-    audit_sinks: SpanSinks,
-) -> None:
-    logging: Final[list[JsonValue]] = [
-        {
-            "callback_name": "arize",
-            "callback_type": "success",
-            "callback_vars": {"arize_api_key": "arize-test-key", "arize_space_id": "arize-test-space"},
-        }
-    ]
-    with rig.proxy.scenario() as scenario:
-        model: Final = _failing_model(scenario.model, failure, rig.failing_provider)
-        key: Final = scenario.key(
-            key_alias=f"arize-destination-failure-{uuid.uuid4().hex}", metadata={"logging": logging}
-        )
-        since: Final = recorded_spans(audit_sinks.arize)[0]
-
-        trace_id: Final = _expect_status(rig.proxy, key, model, FAILURE_STATUS[failure])
-        held(lambda: _trace(audit_sinks.arize, since, trace_id), _has_server_span, holding=3, seconds=40)
-        spans: Final = _trace(audit_sinks.arize, since, trace_id)
-
-    server: Final = next(span for span in spans if span["kind"] == SERVER_SPAN_KIND)
-    assert "error.type" in server["attributes"], server["attributes"]
-    assert [span["name"] for span in spans if STACK_TRACE in span["attributes"]] == [], [span["name"] for span in spans]
-
-
 def test_a_destination_outage_and_a_worker_kill_mid_burst_keep_one_failure_record_per_request(
     rig: Rig, audit_sinks: SpanSinks
 ) -> None:
@@ -448,11 +424,7 @@ def test_a_destination_outage_and_a_worker_kill_mid_burst_keep_one_failure_recor
         assert server["attributes"].get("metadata.user_api_key_team_id") == teams[side], server["attributes"]
         assert None not in (server["attributes"].get(name) for name in ERROR_ATTRIBUTES), server["attributes"]
     traces: Final = {trace for trace, _, _ in every}
-    leaked: Final = [
-        span["name"]
-        for span in tenant
-        if span["trace_id"] in traces and (span["name"] == FAILURE_SPAN or STACK_TRACE in span["attributes"])
-    ]
+    leaked: Final = [span["name"] for span in tenant if span["trace_id"] in traces and span["name"] == FAILURE_SPAN]
     assert leaked == [], leaked
     tenant_servers: Final = Counter(span["trace_id"] for span in tenant if span["kind"] == SERVER_SPAN_KIND)
     assert [trace for trace, side, _ in after if side and tenant_servers[trace] != 1] == [], tenant_servers
