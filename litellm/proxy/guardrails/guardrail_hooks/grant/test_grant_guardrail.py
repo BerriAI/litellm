@@ -27,6 +27,7 @@ try:  # package import when collected inside LiteLLM
         GrantApprovalRequired,
         GrantDenied,
         GrantGuardrail,
+        GrantResponsesStreamError,
         _redacted_scope,
         resolve_grant_base_url,
     )
@@ -38,6 +39,7 @@ except ImportError:  # standalone invocation from the Grant repository
         GrantApprovalRequired,
         GrantDenied,
         GrantGuardrail,
+        GrantResponsesStreamError,
         _redacted_scope,
         resolve_grant_base_url,
     )
@@ -139,6 +141,127 @@ STREAM_CHUNKS = [
             }
         ]
     },
+]
+MULTI_CHOICE_STREAM_CHUNKS = [
+    {
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_choice_0",
+                            "function": {"name": "send_email", "arguments": ""},
+                        }
+                    ]
+                },
+            },
+            {
+                "index": 1,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_choice_1",
+                            "function": {"name": "send_email", "arguments": ""},
+                        }
+                    ]
+                },
+            },
+        ]
+    },
+    {
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {"index": 0, "function": {"arguments": '{"order_ref": "A"}'}}
+                    ]
+                },
+            },
+            {
+                "index": 1,
+                "delta": {
+                    "tool_calls": [
+                        {"index": 0, "function": {"arguments": '{"order_ref": "B"}'}}
+                    ]
+                },
+            },
+        ]
+    },
+]
+MULTI_CHOICE_LEGACY_STREAM_CHUNKS = [
+    {
+        "choices": [
+            {"index": 0, "delta": {"function_call": {"name": "send_email", "arguments": ""}}},
+            {"index": 1, "delta": {"function_call": {"name": "send_email", "arguments": ""}}},
+        ]
+    },
+    {
+        "choices": [
+            {"index": 0, "delta": {"function_call": {"arguments": '{"order_ref": "A"}'}}},
+            {"index": 1, "delta": {"function_call": {"arguments": '{"order_ref": "B"}'}}},
+        ]
+    },
+]
+RESPONSES_STREAM_CHUNKS = [
+    {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_responses",
+            "name": "send_email",
+            "arguments": "",
+        },
+    },
+    {
+        "type": "response.function_call_arguments.delta",
+        "item_id": "fc_1",
+        "output_index": 0,
+        "delta": '{"to": "priva',
+    },
+    {
+        "type": "response.function_call_arguments.delta",
+        "item_id": "fc_1",
+        "output_index": 0,
+        "delta": 'te@example.test"}',
+    },
+    {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_responses",
+            "name": "send_email",
+            "arguments": '{"to": "private@example.test"}',
+        },
+    },
+    {
+        "type": "response.completed",
+        "response": {
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_responses",
+                    "name": "send_email",
+                    "arguments": '{"to": "private@example.test"}',
+                }
+            ]
+        },
+    },
+]
+RESPONSES_TERMINAL_EVENT = RESPONSES_STREAM_CHUNKS[-1]
+UNKNOWN_RESPONSES_STREAM_CHUNKS = [
+    {
+        "type": "response.future_tool_call.event",
+        "response": {"output": RESPONSES_TERMINAL_EVENT["response"]["output"]},
+    }
 ]
 SCOPE_KEYS = {"tool_call_id", "argument_key_count", "arguments_hmac_sha256"}
 
@@ -393,6 +516,134 @@ def test_allow_streaming_yields_chunks_only_after_approval() -> None:
 
     asyncio.run(run())
     assert seen == ["/v1/approvals"]
+
+
+def test_multi_choice_streaming_never_merges_identical_tool_names() -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(201, json=APPROVED)
+
+    async def run() -> None:
+        async with _client(handler) as client:
+            guard = GrantGuardrail(client=client, allow_streaming=True)
+            yielded = [
+                chunk
+                async for chunk in guard.async_post_call_streaming_iterator_hook(
+                    response=_chunks(MULTI_CHOICE_STREAM_CHUNKS),
+                    request_data={"stream": True, "n": 2},
+                )
+            ]
+            assert yielded == MULTI_CHOICE_STREAM_CHUNKS
+
+    asyncio.run(run())
+    assert len(seen) == 2
+    assert [body["tool_name"] for body in seen] == ["send_email", "send_email"]
+    assert {body["scope"]["tool_call_id"] for body in seen} == {
+        "call_choice_0",
+        "call_choice_1",
+    }
+
+
+def test_multi_choice_legacy_function_call_fragments_are_separate() -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(201, json=APPROVED)
+
+    async def run() -> None:
+        async with _client(handler) as client:
+            guard = GrantGuardrail(client=client, allow_streaming=True)
+            async for _ in guard.async_post_call_streaming_iterator_hook(
+                response=_chunks(MULTI_CHOICE_LEGACY_STREAM_CHUNKS),
+                request_data={"stream": True, "n": 2},
+            ):
+                pass
+
+    asyncio.run(run())
+    assert len(seen) == 2
+    assert {body["tool_name"] for body in seen} == {"send_email"}
+    assert all(set(body["scope"]) == SCOPE_KEYS for body in seen)
+
+
+def test_responses_streaming_function_call_events_are_gated_once() -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(202, json=PENDING)
+
+    async def run() -> None:
+        async with _client(handler) as client:
+            guard = GrantGuardrail(client=client, allow_streaming=True)
+            iterator = guard.async_post_call_streaming_iterator_hook(
+                response=_chunks(RESPONSES_STREAM_CHUNKS),
+                request_data={"stream": True},
+            )
+            with pytest.raises(GrantApprovalRequired):
+                await iterator.__anext__()
+
+    asyncio.run(run())
+    assert len(seen) == 1
+    assert seen[0]["tool_name"] == "send_email"
+    assert seen[0]["scope"]["tool_call_id"] == "call_responses"
+    assert "private@example.test" not in json.dumps(seen)
+
+
+def test_responses_terminal_event_is_gated_by_non_streaming_hook() -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(201, json=APPROVED)
+
+    async def run() -> None:
+        async with _client(handler) as client:
+            guard = GrantGuardrail(client=client)
+            assert (
+                await guard.async_post_call_success_hook(
+                    data={}, response=RESPONSES_TERMINAL_EVENT
+                )
+                is None
+            )
+
+    asyncio.run(run())
+    assert len(seen) == 1
+    assert seen[0]["tool_name"] == "send_email"
+    assert seen[0]["scope"]["tool_call_id"] == "call_responses"
+
+
+def test_unknown_responses_stream_event_fails_closed_unless_fail_open() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(201, json=APPROVED)
+
+    async def run() -> None:
+        async with _client(handler) as client:
+            guard = GrantGuardrail(client=client, allow_streaming=True, fail_open=False)
+            iterator = guard.async_post_call_streaming_iterator_hook(
+                response=_chunks(UNKNOWN_RESPONSES_STREAM_CHUNKS),
+                request_data={"stream": True},
+            )
+            with pytest.raises(GrantResponsesStreamError, match="unrecognized event type"):
+                await iterator.__anext__()
+
+            permissive = GrantGuardrail(client=client, allow_streaming=True, fail_open=True)
+            yielded = [
+                chunk
+                async for chunk in permissive.async_post_call_streaming_iterator_hook(
+                    response=_chunks(UNKNOWN_RESPONSES_STREAM_CHUNKS),
+                    request_data={"stream": True},
+                )
+            ]
+            assert yielded == UNKNOWN_RESPONSES_STREAM_CHUNKS
+
+    asyncio.run(run())
+    assert seen == []
 
 
 @pytest.mark.parametrize(

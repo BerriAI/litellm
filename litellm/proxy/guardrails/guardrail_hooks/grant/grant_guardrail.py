@@ -55,6 +55,46 @@ DEFAULT_PROTECTED_TOOLS = frozenset(
 )
 _EPHEMERAL_HMAC_SECRET = secrets.token_bytes(32)
 
+# OpenAI /v1/responses streaming events. Unknown ``response.*`` events are
+# rejected under strict mode because a future event type could carry a tool
+# call that this guardrail would otherwise release without approval.
+_RESPONSES_TOOL_ITEM_TYPES = frozenset({"function_call", "tool_use"})
+_RESPONSES_TOOL_EVENT_TYPES = frozenset(
+    {
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.completed",
+        "response.done",
+    }
+)
+_RESPONSES_KNOWN_EVENT_TYPES = _RESPONSES_TOOL_EVENT_TYPES | frozenset(
+    {
+        "response.created",
+        "response.in_progress",
+        "response.queued",
+        "response.failed",
+        "response.error",
+        "response.incomplete",
+        "response.content_part.added",
+        "response.content_part.done",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.output_text.annotation.added",
+        "response.reasoning_summary_part.added",
+        "response.reasoning_summary_part.done",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.done",
+        "response.refusal.delta",
+        "response.refusal.done",
+        "response.audio.delta",
+        "response.audio.done",
+        "response.audio_transcript.delta",
+        "response.audio_transcript.done",
+    }
+)
+
 
 def resolve_grant_base_url(explicit: str | None = None) -> str:
     """Explicit setting → env vars → documented hosted default.
@@ -154,21 +194,39 @@ def _iter_tool_calls(response: Any) -> Iterable[Any]:
                 }
             )
 
-    # Responses API function_call output items.
-    output = data.get("output")
-    if isinstance(output, list):
+    # Responses API function_call output items, including terminal stream
+    # events that nest the output array under ``response``.
+    yield from _iter_responses_calls(data)
+
+
+def _iter_responses_calls(data: dict[str, Any]) -> Iterable[Any]:
+    """Yield function_call items from a Responses object or terminal event."""
+    seen: set[str] = set()
+    for container in (data, _as_dict(data.get("response"))):
+        output = container.get("output")
+        if not isinstance(output, list):
+            continue
         for item in output:
             item_data = _as_dict(item)
-            if str(item_data.get("type") or "").casefold() not in {"function_call", "tool_use"}:
+            if str(item_data.get("type") or "").casefold() not in _RESPONSES_TOOL_ITEM_TYPES:
                 continue
-            arguments = item_data.get("arguments", item_data.get("input", {}))
+            call_id = str(item_data.get("call_id") or item_data.get("id") or "")
+            name = str(item_data.get("name") or "")
+            fingerprint = f"{call_id}:{name}"
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
             yield _normalized_call(
                 {
-                    "id": item_data.get("call_id") or item_data.get("id") or "",
-                    "name": item_data.get("name") or "",
-                    "arguments": arguments,
+                    "id": call_id,
+                    "name": name,
+                    "arguments": item_data.get("arguments", item_data.get("input", {})),
                 }
             )
+
+
+class GrantResponsesStreamError(ValueError):
+    """An unrecognized /v1/responses stream was refused instead of bypassed."""
 
 
 def _iter_sse_events(payload: Any) -> Iterable[dict[str, Any]]:
@@ -205,25 +263,133 @@ def _append_arguments(current: Any, addition: Any) -> Any:
     return addition
 
 
-def _iter_tool_calls_from_chunks(chunks: Iterable[Any]) -> Iterable[Any]:
-    """Rebuild tool calls from buffered stream chunks before any chunk is yielded."""
+def _iter_tool_calls_from_chunks(
+    chunks: Iterable[Any], *, strict_responses: bool = False
+) -> Iterable[Any]:
+    """Rebuild tool calls from buffered stream chunks before any chunk is yielded.
+
+    ``strict_responses=True`` means a /v1/responses stream we cannot fully
+    reconstruct must fail closed instead of being released without a gate.
+    """
     fragments: dict[str, dict[str, Any]] = {}
     legacy: dict[str, dict[str, Any]] = {}
     complete: list[Any] = []
     anthropic: dict[str, dict[str, Any]] = {}
+    responses: dict[str, dict[str, Any]] = {}
+
+    def fail_closed(event_type: str, reason: str) -> None:
+        if not strict_responses:
+            return
+        raise GrantResponsesStreamError(
+            "GrantGuardrail could not safely parse /v1/responses event "
+            f"{event_type!r} ({reason}); refusing to release the stream"
+        )
+
+    def consume_responses(data: dict[str, Any], event_type: str) -> None:
+        if event_type not in _RESPONSES_KNOWN_EVENT_TYPES:
+            fail_closed(event_type, "unrecognized event type")
+            return
+
+        if event_type in {"response.output_item.added", "response.output_item.done"}:
+            item = _as_dict(data.get("item"))
+            if not item:
+                fail_closed(event_type, "missing item")
+                return
+            if str(item.get("type") or "").casefold() not in _RESPONSES_TOOL_ITEM_TYPES:
+                return
+            key = str(
+                item.get("id")
+                or item.get("call_id")
+                or data.get("output_index")
+                or len(responses)
+            )
+            entry = responses.setdefault(key, {"id": "", "name": "", "arguments": ""})
+            entry["id"] = str(item.get("call_id") or item.get("id") or entry["id"])
+            if item.get("name"):
+                entry["name"] = str(item["name"])
+            elif event_type == "response.output_item.done":
+                fail_closed(event_type, "function_call item has no name")
+            if "arguments" in item or "input" in item:
+                arguments = item.get("arguments", item.get("input"))
+                if arguments not in (None, ""):
+                    entry["arguments"] = arguments
+            return
+
+        if event_type in {
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+        }:
+            key = str(
+                data.get("item_id")
+                or data.get("call_id")
+                or data.get("output_index")
+                or ""
+            )
+            if not key:
+                fail_closed(event_type, "missing item_id/call_id/output_index")
+                return
+            entry = responses.setdefault(key, {"id": "", "name": "", "arguments": ""})
+            if not entry["id"]:
+                entry["id"] = str(data.get("call_id") or data.get("item_id") or key)
+            if event_type.endswith(".delta"):
+                if "delta" not in data:
+                    fail_closed(event_type, "missing delta")
+                    return
+                entry["arguments"] = _append_arguments(entry["arguments"], data["delta"])
+            else:
+                if "arguments" not in data:
+                    fail_closed(event_type, "missing arguments")
+                    return
+                entry["arguments"] = data["arguments"]
+            return
+
+        if event_type in {"response.completed", "response.done"}:
+            response_obj = _as_dict(data.get("response"))
+            if not response_obj:
+                fail_closed(event_type, "missing response object")
+                return
+            output = response_obj.get("output")
+            if not isinstance(output, list):
+                fail_closed(event_type, "missing response.output list")
+                return
+            for item in output:
+                item_data = _as_dict(item)
+                if str(item_data.get("type") or "").casefold() not in _RESPONSES_TOOL_ITEM_TYPES:
+                    continue
+                name = str(item_data.get("name") or "")
+                if not name:
+                    fail_closed(event_type, "function_call output item has no name")
+                    continue
+                key = str(
+                    item_data.get("id")
+                    or item_data.get("call_id")
+                    or data.get("output_index")
+                    or len(responses)
+                )
+                entry = responses.setdefault(key, {"id": "", "name": "", "arguments": ""})
+                entry["id"] = str(item_data.get("call_id") or item_data.get("id") or entry["id"])
+                entry["name"] = name
+                entry["arguments"] = item_data.get("arguments", item_data.get("input", {}))
 
     def consume(data: dict[str, Any]) -> None:
+        event_type = str(data.get("type") or "")
+        if event_type.startswith("response."):
+            consume_responses(data, event_type)
+            return
+
         choices = data.get("choices")
         if isinstance(choices, list):
-            for choice in choices:
+            for choice_pos, choice in enumerate(choices):
                 choice_data = _as_dict(choice)
+                choice_index = str(choice_data.get("index", choice_pos))
                 delta = _as_dict(choice_data.get("delta"))
                 streamed_calls = delta.get("tool_calls")
                 if isinstance(streamed_calls, list):
                     for call in streamed_calls:
                         call_data = _as_dict(call)
-                        index = str(call_data.get("index") or "0")
-                        entry = fragments.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                        call_index = str(call_data.get("index") or "0")
+                        key = f"{choice_index}:{call_index}"
+                        entry = fragments.setdefault(key, {"id": "", "name": "", "arguments": ""})
                         if call_data.get("id"):
                             entry["id"] = str(call_data["id"])
                         function = _as_dict(call_data.get("function"))
@@ -233,7 +399,7 @@ def _iter_tool_calls_from_chunks(chunks: Iterable[Any]) -> Iterable[Any]:
                 function_call = delta.get("function_call")
                 if function_call:
                     call_data = _as_dict(function_call)
-                    entry = legacy.setdefault("legacy", {"id": "", "name": "", "arguments": ""})
+                    entry = legacy.setdefault(choice_index, {"id": "", "name": "", "arguments": ""})
                     if call_data.get("name"):
                         entry["name"] += str(call_data["name"])
                     entry["arguments"] = _append_arguments(entry["arguments"], call_data.get("arguments"))
@@ -267,7 +433,6 @@ def _iter_tool_calls_from_chunks(chunks: Iterable[Any]) -> Iterable[Any]:
                 if "input" in block_data:
                     entry["arguments"] = _append_arguments(entry["arguments"], block_data["input"])
 
-        event_type = str(data.get("type") or "")
         if event_type == "content_block_start":
             block_data = _as_dict(data.get("content_block"))
             if str(block_data.get("type") or "").casefold() == "tool_use":
@@ -299,6 +464,13 @@ def _iter_tool_calls_from_chunks(chunks: Iterable[Any]) -> Iterable[Any]:
         for event in _iter_sse_events("".join(raw_parts)):
             consume(event)
 
+    for entry in responses.values():
+        if not entry["name"] and strict_responses:
+            raise GrantResponsesStreamError(
+                "GrantGuardrail could not reconstruct a /v1/responses function_call "
+                "name; refusing to release the stream"
+            )
+
     for call in complete:
         yield _normalized_call(call)
     for entry in fragments.values():
@@ -312,6 +484,11 @@ def _iter_tool_calls_from_chunks(chunks: Iterable[Any]) -> Iterable[Any]:
                 {"id": entry["id"], "function": {"name": entry["name"], "arguments": entry["arguments"]}}
             )
     for entry in anthropic.values():
+        if entry["name"]:
+            yield _normalized_call(
+                {"id": entry["id"], "name": entry["name"], "arguments": entry["arguments"]}
+            )
+    for entry in responses.values():
         if entry["name"]:
             yield _normalized_call(
                 {"id": entry["id"], "name": entry["name"], "arguments": entry["arguments"]}
@@ -587,6 +764,9 @@ class GrantGuardrail(CustomGuardrail):
         if response is None:
             return
         buffered = [chunk async for chunk in response]
-        await self._gate_calls(_iter_tool_calls_from_chunks(buffered))
+        strict_responses = self.allow_streaming and not self.fail_open
+        await self._gate_calls(
+            _iter_tool_calls_from_chunks(buffered, strict_responses=strict_responses)
+        )
         for chunk in buffered:
             yield chunk
