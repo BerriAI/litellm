@@ -64,6 +64,7 @@ from .common_utils import (
     model_dump_provider_response,
 )
 from .workload_identity import (
+    FEDERATED_BATCH_CREATE_MESSAGE,
     build_async_openai_client,
     build_openai_client,
     openai_static_api_key,
@@ -2226,6 +2227,11 @@ class OpenAIBatchesAPI(BaseLLM):
         client: OpenAI | AsyncOpenAI | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
+        if (
+            resolve_openai_workload_identity_config(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
+            is not None
+        ):
+            raise litellm.BadRequestError(message=FEDERATED_BATCH_CREATE_MESSAGE, model="n/a", llm_provider="openai")
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
