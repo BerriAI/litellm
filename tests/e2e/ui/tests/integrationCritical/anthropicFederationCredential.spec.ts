@@ -159,10 +159,15 @@ async function openEditDialog(
   await expect(page.getByText(UPDATED_TOAST)).toHaveCount(0);
   const row = page.locator("tr", { hasText: name });
   await expect(row).toBeVisible({ timeout: 15_000 });
-  await row.getByTestId(`credential-actions-${name}`).click();
-  await page.getByTestId("credential-action-edit").click();
+  const actions = row.getByTestId(`credential-actions-${name}`);
+  const edit = page.getByTestId("credential-action-edit");
   const dialog = page.getByRole("dialog", { name: "Edit Credential" });
-  await expect(dialog).toBeVisible();
+  await expect(async () => {
+    if (await dialog.isVisible()) return;
+    if (!(await edit.isVisible())) await actions.click({ timeout: 1_000 });
+    await edit.click({ timeout: 1_000 });
+    await expect(dialog).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
   const credentialNameField = dialog.getByLabel("Credential Name:", {
     exact: true,
   });
