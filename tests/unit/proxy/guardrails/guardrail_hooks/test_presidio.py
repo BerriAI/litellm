@@ -12,6 +12,7 @@ import re
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from itertools import chain
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
@@ -5120,7 +5121,6 @@ async def test_mixed_responses_stream_restores_arguments_and_terminal_text(
     mock_user_api_key: UserAPIKeyAuth, terminal_type: str
 ) -> None:
     guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
-    chat: Final = ModelResponseStream(choices=[])
     token: Final = "<PERSON_1>"
     original: Final = 'Jane "Q"'
     arguments: Final = json.dumps({"name": token})
@@ -5135,11 +5135,12 @@ async def test_mixed_responses_stream_restores_arguments_and_terminal_text(
     }
 
     async def upstream() -> AsyncIterator[object]:
-        yield chat
+        yield _chat_delta_chunk("Guest <PER")
         yield {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": arguments}
+        yield _chat_delta_chunk("SON_1> confirmed")
         yield terminal
 
-    first, delta, ended = [
+    first, delta, second, ended = [
         chunk
         async for chunk in guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=mock_user_api_key,
@@ -5147,7 +5148,10 @@ async def test_mixed_responses_stream_restores_arguments_and_terminal_text(
             request_data={"metadata": {"pii_tokens": {token: original}}},
         )
     ]
-    assert first is chat
+    assert isinstance(first, ModelResponseStream)
+    assert isinstance(second, ModelResponseStream)
+    chat_text: Final = (first.choices[0].delta.content or "") + (second.choices[0].delta.content or "")
+    assert chat_text == f"Guest {original} confirmed"
     assert json.loads(delta["delta"]) == {"name": original}
     tool, message = ended["response"]["output"]
     assert ended["type"] == terminal_type
@@ -6852,7 +6856,16 @@ class _InMemoryPresidioTransport(asyncio.Transport):
             self._analyzed.put_nowait(analyze_request)
             return _card_and_email_spans(analyze_request.get("text") or "")
         assert path == "/anonymize", path
-        return _PresidioAnonymizeReply(text=_ANONYMIZE_REQUEST.validate_json(body)["text"], items=())
+        payload: Final = _ANONYMIZE_REQUEST.validate_json(body)
+        text: Final = payload["text"]
+        spans: Final = sorted(payload.get("analyzer_results", ()), key=lambda span: span["start"])
+        starts: Final = (0, *(span["end"] for span in spans))
+        ends: Final = (*(span["start"] for span in spans), len(text))
+        markers: Final = (*(f"<{span['entity_type']}>" for span in spans), "")
+        redacted: Final = "".join(
+            text[start:end] + marker for start, end, marker in zip(starts, ends, markers, strict=True)
+        )
+        return _PresidioAnonymizeReply(text=redacted, items=())
 
     def writelines(self, list_of_data: Iterable[bytes | bytearray | memoryview]) -> None:
         self.write(b"".join(bytes(chunk) for chunk in list_of_data))
@@ -8133,3 +8146,160 @@ async def test_reversible_presidio_restores_anthropic_streaming_tool_use_via_pro
             for callback in callbacks:
                 if isinstance(callback, OPTIONAL_PresidioPIIMasking):
                     await callback._close_http_session()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uses_unified_hook", (False, True), ids=("direct", "unified"))
+@pytest.mark.parametrize("has_delta", (False, True), ids=("item-only", "cut-argument-delta"))
+async def test_reversible_presidio_restores_finished_responses_tool_item_without_an_envelope(
+    uses_unified_hook: bool, has_delta: bool
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, event_hook="post_call", default_on=True, output_parse_pii=True, _callback_role="restore"
+    )
+    token: Final = "<PERSON_1>"
+    original: Final = 'Jane "Q"'
+    arguments: Final = json.dumps({"name": token})
+    finished: Final = OutputItemDoneEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        output_index=0,
+        item=BaseLiteLLMOpenAIResponseObject(
+            type="function_call", id="fc_1", call_id="call_1", name="lookup", arguments=arguments, status="completed"
+        ),
+    )
+
+    async def upstream() -> AsyncIterator[object]:
+        if has_delta:
+            yield FunctionCallArgumentsDeltaEvent(
+                type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+                item_id="fc_1",
+                output_index=0,
+                delta='{"name": "<PER',
+            )
+        yield finished
+
+    auth: Final = UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses")
+    data: Final = {"metadata": {"pii_tokens": {token: original}}}
+    stream: Final = (
+        UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=auth, response=upstream(), request_data=data, guardrail_to_apply=guardrail
+        )
+        if uses_unified_hook
+        else guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=auth, response=upstream(), request_data=data
+        )
+    )
+    sent: Final = [event async for event in stream]
+    assert len(sent) == (2 if has_delta else 1)
+    item: Final = sent[-1]
+    assert isinstance(item, OutputItemDoneEvent)
+    assert json.loads(item.item.arguments) == {"name": original}
+    if has_delta:
+        delta: Final = sent[0]
+        assert isinstance(delta, FunctionCallArgumentsDeltaEvent)
+        assert json.loads(delta.delta) == {"name": original}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "scope", "streaming", "expected"),
+    (
+        ("pre_call", None, True, _EMAIL),
+        (["pre_call", "post_call"], None, True, _EMAIL),
+        (["pre_call", "post_call"], None, False, _EMAIL),
+        (["pre_call", "post_call"], "input", False, _EMAIL),
+        ("pre_call", "output", True, "<EMAIL_ADDRESS>"),
+        ("pre_call", "both", True, "<EMAIL_ADDRESS>"),
+    ),
+    ids=("default-stream", "two-hooks-stream", "issue-config", "input-non-stream", "output-stream", "both-stream"),
+)
+async def test_reversible_presidio_chat_tool_arguments_follow_the_configured_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str | list[str],
+    scope: Literal["input", "output", "both"] | None,
+    streaming: bool,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    callbacks: Final = initialize_presidio(
+        LitellmParams(
+            guardrail="presidio",
+            mode=mode,
+            default_on=True,
+            output_parse_pii=True,
+            presidio_filter_scope=scope,
+            presidio_analyzer_api_base="http://presidio.test/",
+            presidio_anonymizer_api_base="http://presidio.test/",
+        ),
+        {"guardrail_name": "presidio-tool-round-trip"},
+    )
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    for callback in callbacks:
+        assert isinstance(callback, OPTIONAL_PresidioPIIMasking)
+        callback._http_session = aiohttp.ClientSession(connector=_InMemoryPresidioConnector(analyzed))
+    auth: Final = UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions")
+    proxy: Final = ProxyLogging(user_api_key_cache=DualCache())
+    try:
+        data: Final = await proxy.pre_call_hook(
+            auth,
+            {"model": "test-model", "messages": [{"role": "user", "content": _EMAIL}]},
+            "acompletion",
+            guardrails_only=True,
+        )
+        forwarded: Final = data["messages"][0]["content"]
+        assert forwarded == (_EMAIL if scope == "output" else "<EMAIL_ADDRESS_1>")
+        arguments: Final = json.dumps({"to": forwarded})
+        expected_text: Final = _CARD_NUMBER if scope == "input" else "<CREDIT_CARD>"
+        if streaming:
+
+            async def upstream() -> AsyncIterator[ModelResponseStream]:
+                call: Final = ChatCompletionDeltaToolCall(
+                    id="call_1", type="function", index=0, function=Function(name="lookup", arguments=arguments)
+                )
+                yield ModelResponseStream(
+                    id="chatcmpl-1",
+                    choices=[
+                        StreamingChoices(
+                            index=0, delta=Delta(role="assistant", content=_CARD_NUMBER, tool_calls=[call])
+                        )
+                    ],
+                )
+                yield _chat_delta_chunk("", finish_reason="tool_calls")
+
+            data["litellm_logging_obj"] = Logging(
+                model="test-model",
+                messages=data["messages"],
+                stream=True,
+                call_type="acompletion",
+                start_time=datetime.datetime(2026, 1, 1),
+                litellm_call_id="call-presidio-round-trip",
+                function_id="test",
+            )
+            chunks: Final = proxy.async_post_call_streaming_iterator_hook(
+                response=upstream(), user_api_key_dict=auth, request_data=data
+            )
+            deltas: Final = [chunk.choices[0].delta async for chunk in chunks if chunk.choices]
+            calls: Final = chain.from_iterable(delta.tool_calls or () for delta in deltas)
+            assert "".join(delta.content or "" for delta in deltas) == expected_text
+            assert json.loads("".join(call.function.arguments for call in calls)) == {"to": expected}
+        else:
+            response: Final = ModelResponse(
+                choices=[
+                    Choices(
+                        index=0,
+                        finish_reason="tool_calls",
+                        message=Message(
+                            role="assistant",
+                            content=_CARD_NUMBER,
+                            tool_calls=[_function_tool_call("call_1", arguments)],
+                        ),
+                    )
+                ]
+            )
+            sent: Final = await proxy.post_call_success_hook(data=data, response=response, user_api_key_dict=auth)
+            assert sent.choices[0].message.content == expected_text
+            assert json.loads(sent.choices[0].message.tool_calls[0].function.arguments) == {"to": expected}
+    finally:
+        for callback_to_close in callbacks:
+            if isinstance(callback_to_close, OPTIONAL_PresidioPIIMasking):
+                await callback_to_close._close_http_session()

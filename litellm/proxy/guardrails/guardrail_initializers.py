@@ -1,5 +1,5 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -129,8 +129,16 @@ def _is_logging_only_mode(mode: str | list[str] | Mode) -> bool:
 _EventMode: TypeAlias = str | list[str] | Mode
 
 
-def _presidio_output_mode(mode: _EventMode, *, include_mcp: bool, masks_the_log: bool = False) -> _EventMode:
-    def output_hooks(hooks: str | list[str]) -> list[str]:
+def _presidio_mode(
+    mode: _EventMode,
+    *,
+    phase: Literal["input", "output"],
+    include_mcp: bool = True,
+    masks_the_log: bool = False,
+) -> _EventMode:
+    def phase_hooks(hooks: str | list[str]) -> list[str]:
+        if phase == "input":
+            return [hook for hook in configured_event_hooks(hooks) if hook != GuardrailEventHooks.post_call.value]
         if not hooks:
             return []
         if _is_logging_only_mode(hooks):
@@ -141,10 +149,10 @@ def _presidio_output_mode(mode: _EventMode, *, include_mcp: bool, masks_the_log:
 
     if isinstance(mode, Mode):
         return Mode(
-            tags={tag: output_hooks(hooks) for tag, hooks in mode.tags.items()},
-            default=output_hooks(mode.default) if mode.default is not None else None,
+            tags={tag: phase_hooks(hooks) for tag, hooks in mode.tags.items()},
+            default=phase_hooks(mode.default) if mode.default is not None else None,
         )
-    return output_hooks(mode)
+    return phase_hooks(mode)
 
 
 def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> tuple[CustomGuardrail, ...]:
@@ -156,10 +164,8 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     filter_scope: Final = explicit_filter_scope or ("input" if _is_mcp_only_mode(litellm_params.mode) else "both")
     run_input: Final = filter_scope in ("input", "both")
     run_output: Final = filter_scope in ("output", "both")
-    asks_to_scan_output: Final = run_output and (
-        explicit_filter_scope is not None
-        or GuardrailEventHooks.post_call.value in configured_event_hooks(litellm_params.mode)
-    )
+    config_has_post_call: Final = GuardrailEventHooks.post_call.value in configured_event_hooks(litellm_params.mode)
+    asks_to_scan_output: Final = run_output and (explicit_filter_scope is not None or config_has_post_call)
     mask_tool_calls: Final = asks_to_scan_output and bool(litellm_params.pii_entities_config)
 
     def _make_presidio_callback(**overrides) -> CustomGuardrail:
@@ -188,24 +194,32 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             mask_tool_calls=mask_tool_calls,
             **params,
         )
-        litellm.logging_callback_manager.add_litellm_callback(callback)
         return callback
 
-    input_callback: Final = _make_presidio_callback() if run_input else None
+    reversible: Final = run_input and litellm_params.output_parse_pii is True
+    input_mode: Final = (
+        _presidio_mode(litellm_params.mode, phase="input")
+        if reversible and config_has_post_call
+        else litellm_params.mode
+    )
+    input_callback: Final = _make_presidio_callback(event_hook=input_mode) if run_input else None
     unmask_output_callback: Final = (
         _make_presidio_callback(
             output_parse_pii=True,
-            event_hook=_presidio_output_mode(litellm_params.mode, include_mcp=True),
+            event_hook=_presidio_mode(litellm_params.mode, phase="output"),
             _callback_role="restore",
         )
-        if run_input and litellm_params.output_parse_pii
+        if reversible
         else None
     )
     mask_output_callback: Final = (
         _make_presidio_callback(
             apply_to_output=True,
-            event_hook=_presidio_output_mode(
-                litellm_params.mode, include_mcp=explicit_filter_scope is not None, masks_the_log=not run_input
+            event_hook=_presidio_mode(
+                litellm_params.mode,
+                phase="output",
+                include_mcp=explicit_filter_scope is not None,
+                masks_the_log=not run_input,
             ),
             output_parse_pii=False,
             mask_response_content=True,
@@ -213,9 +227,15 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
         if run_output
         else None
     )
-    return tuple(
-        callback for callback in (input_callback, unmask_output_callback, mask_output_callback) if callback is not None
+    output_callbacks: Final = (
+        (mask_output_callback, unmask_output_callback)
+        if explicit_filter_scope is None
+        else (unmask_output_callback, mask_output_callback)
     )
+    callbacks: Final = tuple(callback for callback in (input_callback, *output_callbacks) if callback is not None)
+    for callback in callbacks:
+        litellm.logging_callback_manager.add_litellm_callback(callback)
+    return callbacks
 
 
 def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:

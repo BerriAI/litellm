@@ -730,7 +730,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.output_parse_pii = output_parse_pii or False
         self.apply_to_output = apply_to_output
         self.mask_tool_calls: Final = mask_tool_calls
-        self._callback_role = _callback_role
+        self.callback_role: Final = _callback_role
         if self.output_parse_pii and not self.apply_to_output and not hasattr(self, "streaming_buffer_until_moderated"):
             self.streaming_buffer_until_moderated = True
 
@@ -1659,7 +1659,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Masks the input and output before logging to langfuse, datadog, etc.
         """
-        masks_response_only: Final = self._callback_role is not None and self.apply_to_output
+        masks_response_only: Final = self.callback_role is not None and self.apply_to_output
         if call_type in ("completion", "acompletion") and not masks_response_only:  # /chat/completions requests
             messages: Final[list | None] = kwargs.get("messages", None)
             tasks: Final[list[Awaitable[str]]] = []
@@ -2218,8 +2218,36 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     return
                 _write_item_field(event, "delta", _unmask_exact_pii_json(delta, pii_tokens))
 
+    @staticmethod
+    async def _restore_chat_in_mixed_stream(
+        chunks: Sequence[object],
+        guardrail: CustomGuardrail,
+        request_data: dict[str, object],  # mutable-ok: guardrail handlers share the per-request state dict
+    ) -> tuple[object, ...]:
+        from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+
+        chat_chunks: Final = [
+            copy.deepcopy(chunk) for chunk in chunks if isinstance(chunk, ModelResponseStream) and chunk.choices
+        ]
+        if not chat_chunks:
+            return tuple(chunks)
+
+        handler: Final = OpenAIChatCompletionsHandler()
+        ended: Final = handler.released_stream_as_ended(chat_chunks)
+        await handler.process_output_streaming_response(
+            responses_so_far=[chunk for chunk in ended if isinstance(chunk, ModelResponseStream)],
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+            deliver_ended_stream_rewrites=True,
+        )
+        restored: Final = iter(chat_chunks)
+        return tuple(
+            next(restored) if isinstance(chunk, ModelResponseStream) and chunk.choices else chunk for chunk in chunks
+        )
+
     async def _unmask_responses_stream(
         self,
+        chat_prefix: Sequence[ModelResponseStream],
         first_event: object,
         rest: AsyncIterator[object],
         request_data: dict[str, object],  # mutable-ok: guardrail handlers share the per-request state dict
@@ -2228,10 +2256,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-        chunks: Final = [
+        tail: Final = [
             self._unmask_sse_bytes_chunk(chunk, pii_tokens) if isinstance(chunk, bytes) else chunk
             async for chunk in _prepended(first_event, rest)
         ]
+        guardrail: Final[CustomGuardrail] = self if self.callback_role != "scan" else _PresidioRestoreGuardrail(self)
+        chunks: Final = await self._restore_chat_in_mixed_stream((*chat_prefix, *tail), guardrail, request_data)
         events: Final = [chunk for chunk in chunks if _is_responses_stream_item(chunk)]
         if len(events) == 1 and stream_item_field(events[0], "type") in (
             "response.completed",
@@ -2239,9 +2269,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             "response.function_call_arguments.delta",
         ):
             self._unmask_standalone_responses_event(events[0], pii_tokens)
-            return tuple(chunks)
+            return chunks
         rewritten: Final = copy.deepcopy(events)
-        guardrail: Final[CustomGuardrail] = self if self._callback_role != "scan" else _ResponsesRestoreGuardrail(self)
         try:
             await OpenAIResponsesHandler().process_output_streaming_response(
                 responses_so_far=rewritten,
@@ -2252,7 +2281,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except UndeliverableStreamRewrite:
             for event in events:
                 self._unmask_standalone_responses_event(event, pii_tokens)
-            return tuple(chunks)
+            return chunks
         restored: Final = iter(rewritten)
         return tuple(next(restored) if _is_responses_stream_item(chunk) else chunk for chunk in chunks)
 
@@ -2283,14 +2312,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
                     yield self._unmask_sse_bytes_chunk(chunk, pii_tokens) if pii_tokens else chunk
+                elif _is_responses_stream_item(chunk):
+                    for event in await self._unmask_responses_stream(
+                        remaining_chunks, chunk, stream, request_data, pii_tokens
+                    ):
+                        yield event
+                    return
                 else:
                     for buffered_chunk in remaining_chunks:
                         yield buffered_chunk
                     remaining_chunks.clear()
-                    if _is_responses_stream_item(chunk):
-                        for event in await self._unmask_responses_stream(chunk, stream, request_data, pii_tokens):
-                            yield event
-                        return
                     saw_non_chat_chunk = True
                     yield chunk
 
@@ -2413,8 +2444,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         pii_tokens: Final = metadata.get("pii_tokens", {})
 
         if input_type == "response" and (
-            self._callback_role == "restore"
-            or (self._callback_role is None and not self.apply_to_output and pii_tokens)
+            self.callback_role == "restore" or (self.callback_role is None and not self.apply_to_output and pii_tokens)
         ):
             return await self.apply_exact_unmask(inputs, _metadata_pii_tokens(metadata))
 
@@ -2481,7 +2511,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
 
 
-class _ResponsesRestoreGuardrail(CustomGuardrail):
+class _PresidioRestoreGuardrail(CustomGuardrail):
     def __init__(self, presidio: _OPTIONAL_PresidioPIIMasking) -> None:
         super().__init__(guardrail_name=presidio.guardrail_name)
         self._presidio: Final = presidio

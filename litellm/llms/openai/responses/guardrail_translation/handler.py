@@ -689,9 +689,11 @@ def _released_tool_call_payload(responses_so_far: Sequence[object], item_id: obj
     return "".join(deltas) if deltas else None
 
 
-def _with_released_payload(item: Mapping[str, object], responses_so_far: Sequence[object]) -> Mapping[str, object]:
+def _with_released_payload(
+    item: Mapping[str, object], responses_so_far: Sequence[object], *, finished: bool
+) -> Mapping[str, object]:
     field: Final = _TOOL_CALL_PAYLOAD_FIELDS.get(str(item.get("type")))
-    if field is None:
+    if field is None or (finished and isinstance(item.get(field), str)):
         return item
     payload: Final = _released_tool_call_payload(responses_so_far, item.get("id"))
     return item if payload is None else {**item, field: payload}
@@ -922,16 +924,16 @@ def _has_unplaceable_stream_text(responses_so_far: Sequence[object]) -> bool:
 
 def _released_tool_call_items(responses_so_far: Sequence[object]) -> tuple[Mapping[str, object], ...]:
     announced: Final = tuple(
-        item
-        for item in (
-            _tool_call_output_item_mapping(stream_item_field(event, "item"))
-            for event in responses_so_far
-            if stream_item_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES
-        )
-        if item is not None
+        (item, event_type)
+        for event in responses_so_far
+        if (event_type := stream_item_field(event, "type")) in _OUTPUT_ITEM_EVENT_TYPES
+        and (item := _tool_call_output_item_mapping(stream_item_field(event, "item"))) is not None
     )
-    latest_by_id: Final = MappingProxyType({item.get("id"): item for item in announced})
-    return tuple(_with_released_payload(item, responses_so_far) for item in latest_by_id.values())
+    latest_by_id: Final = MappingProxyType({item.get("id"): (item, event_type) for item, event_type in announced})
+    return tuple(
+        _with_released_payload(item, responses_so_far, finished=event_type == "response.output_item.done")
+        for item, event_type in latest_by_id.values()
+    )
 
 
 def _released_stream_output(responses_so_far: Sequence[object]) -> tuple[Mapping[str, object], ...]:
@@ -1974,13 +1976,33 @@ class OpenAIResponsesHandler(BaseTranslation):
                     self._sync_stream_events_with_output_rewrites(responses_so_far, response_obj, outside_rewrites)
                 return responses_so_far
 
+        ends_on_finished_item: Final = stream_item_field(final_chunk, "type") == "response.output_item.done"
+        finished_item: Final = stream_item_field(final_chunk, "item") if ends_on_finished_item else None
+        if (
+            deliver_ended_stream_rewrites
+            and (
+                _is_output_tool_call_item(finished_item)
+                or (_released_reasoning_items(responses_so_far) and not _envelope_has_reasoning_text(final_chunk))
+            )
+            and not _has_unplaceable_stream_text(responses_so_far)
+        ):
+            await self.process_output_streaming_response(
+                responses_so_far=[*responses_so_far, _released_envelope(responses_so_far)],
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                stream_transform_sink=stream_transform_sink,
+                deliver_ended_stream_rewrites=True,
+            )
+            return responses_so_far
+
         # ------------------------------------------------------------------ #
         # Case 2: response.output_item.done — extract tool calls only, then  #
         # fall through to the text fallback when a caller expects rewrites   #
         # delivered, so a truncated buffer still reports text undeliverable. #
         # ------------------------------------------------------------------ #
-        if final_chunk.get("type") == "response.output_item.done":
-            finished_item: Final = stream_item_field(final_chunk, "item")
+        if ends_on_finished_item:
             finished_summary: Final = output_compaction_summary(finished_item)
             model_response_stream: Final = (
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
@@ -2006,23 +2028,6 @@ class OpenAIResponsesHandler(BaseTranslation):
                 )
             if not deliver_ended_stream_rewrites:
                 return responses_so_far
-
-        if (
-            deliver_ended_stream_rewrites
-            and _released_reasoning_items(responses_so_far)
-            and not _has_unplaceable_stream_text(responses_so_far)
-            and not _envelope_has_reasoning_text(final_chunk)
-        ):
-            await self.process_output_streaming_response(
-                responses_so_far=[*responses_so_far, _released_envelope(responses_so_far)],
-                guardrail_to_apply=guardrail_to_apply,
-                litellm_logging_obj=litellm_logging_obj,
-                user_api_key_dict=user_api_key_dict,
-                request_data=request_data,
-                stream_transform_sink=stream_transform_sink,
-                deliver_ended_stream_rewrites=True,
-            )
-            return responses_so_far
 
         # ------------------------------------------------------------------ #
         # Fallback: apply guardrail to the accumulated text string. With no   #
