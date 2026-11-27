@@ -11,7 +11,7 @@ import os
 import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import EllipsisType, SimpleNamespace
 from typing import Any, Dict, Final, Literal, Optional, TypeVar, cast
@@ -49,6 +49,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import MCP_METADATA_TIMEOUT, MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.mcp_client.client import MCPClient, PersistentMCPSession
 from litellm.proxy import proxy_server
@@ -67,6 +68,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth import auth_checks
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server import discoverable_endpoints
+from litellm.proxy.mcp_server.auth_profile_selection import resolve_usable_server
 from litellm.proxy.mcp_server.auth_profiles import parse_auth_profiles
 from litellm.proxy.mcp_server.exceptions import (
     MCPServerListError,
@@ -107,6 +109,18 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPServer,
     MCPServerEventsConfig,
     PinnedMCPTool,
+)
+from tests._support.mcp_auth_profiles import (
+    MINTED_PROFILE_TOKEN,
+    ProfileUpstream,
+    RecordingTokenEndpoint,
+    TICKETS_PROFILES,
+    TokenRequest,
+    caller_granted,
+    install_profile_manager,
+    minted_token,
+    profile_manager,
+    tickets_server,
 )
 
 _TSessionResult = TypeVar("_TSessionResult")
@@ -10822,7 +10836,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
     def test_remember_stores_stripped_value(self):
         """_remember_upstream_initialize_instructions stores a stripped string."""
         manager = MCPServerManager()
-        fake_server = MagicMock(server_id="srv")
+        fake_server = MagicMock(server_id="srv", uses_auth_profile=False)
         fake_client = MagicMock(_last_initialize_instructions="  hello \n")
         manager._remember_upstream_initialize_instructions(fake_server, fake_client)
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") == "hello"
@@ -10830,7 +10844,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
     def test_remember_ignores_empty_string(self):
         """Whitespace-only instructions are not stored."""
         manager = MCPServerManager()
-        fake_server = MagicMock(server_id="srv")
+        fake_server = MagicMock(server_id="srv", uses_auth_profile=False)
         fake_client = MagicMock(_last_initialize_instructions="   ")
         manager._remember_upstream_initialize_instructions(fake_server, fake_client)
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
@@ -10838,7 +10852,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
     def test_remember_ignores_none(self):
         """None instructions are not stored."""
         manager = MCPServerManager()
-        fake_server = MagicMock(server_id="srv")
+        fake_server = MagicMock(server_id="srv", uses_auth_profile=False)
         fake_client = MagicMock(_last_initialize_instructions=None)
         manager._remember_upstream_initialize_instructions(fake_server, fake_client)
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
@@ -23458,6 +23472,237 @@ def test_the_debug_registry_dump_hides_the_credentials_of_a_servers_profiles(sec
     )
 
     assert secret not in json.dumps(_redacted_registry_dump({"tickets": server}))
+
+
+_OPS_TOKEN_REQUEST: Final = TokenRequest(
+    authorization=None,
+    form={"grant_type": "client_credentials", "client_id": "ops-client", "client_secret": "ops-secret"},
+)
+
+
+@pytest.mark.asyncio
+async def test_a_client_credentials_profile_mints_with_its_own_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    upstream: Final = ProfileUpstream()
+    endpoint: Final = RecordingTokenEndpoint()
+    manager: Final = profile_manager(tickets_server(), upstream, endpoint)
+    install_profile_manager(monkeypatch, manager)
+
+    await manager.call_tool(server_name="tickets", name="add", arguments={}, user_api_key_auth=caller_granted("ops"))
+
+    assert endpoint.requests == [_OPS_TOKEN_REQUEST]
+    assert upstream.credentials_seen() == {f"Bearer {MINTED_PROFILE_TOKEN}"}
+
+
+@pytest.mark.asyncio
+async def test_a_minted_profile_token_is_reused_by_the_next_call_of_the_same_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = ProfileUpstream()
+    endpoint: Final = RecordingTokenEndpoint()
+    manager: Final = profile_manager(tickets_server(), upstream, endpoint)
+    install_profile_manager(monkeypatch, manager)
+
+    for _ in range(2):
+        await manager.call_tool(
+            server_name="tickets", name="add", arguments={}, user_api_key_auth=caller_granted("ops")
+        )
+
+    assert endpoint.requests == [_OPS_TOKEN_REQUEST]
+    assert upstream.authorizations("tools/call") == (f"Bearer {MINTED_PROFILE_TOKEN}",) * 2
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_401_refetches_the_profiles_token_with_its_own_client_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = ProfileUpstream(unauthorized_calls=1)
+    endpoint: Final = RecordingTokenEndpoint()
+    manager: Final = profile_manager(tickets_server(), upstream, endpoint)
+    install_profile_manager(monkeypatch, manager)
+
+    result: Final = await manager.call_tool(
+        server_name="tickets", name="add", arguments={}, user_api_key_auth=caller_granted("ops")
+    )
+
+    assert isinstance(result, CallToolResult) and result.is_error is not True
+    assert endpoint.requests == [_OPS_TOKEN_REQUEST, _OPS_TOKEN_REQUEST]
+    assert upstream.authorizations("tools/call") == (f"Bearer {minted_token(1)}", f"Bearer {minted_token(2)}")
+
+
+@pytest.mark.asyncio
+async def test_a_profile_server_resolved_before_a_configuration_change_is_refused_afterwards() -> None:
+    registered: Final = tickets_server(overrides={"updated_at": datetime(2026, 1, 1, tzinfo=UTC)})
+    manager: Final = profile_manager(registered, ProfileUpstream())
+
+    async with manager.catalog.operation():
+        effective: Final = await resolve_usable_server(registered, caller_granted("bots"))
+        assert await manager.ensure_oauth_metadata_discovered(effective) is effective
+        manager.config_mcp_servers = {
+            registered.server_id: registered.model_copy(update={"updated_at": datetime(2026, 1, 2, tzinfo=UTC)})
+        }
+        with pytest.raises(HTTPException) as stale:
+            await manager.ensure_oauth_metadata_discovered(effective)
+
+    assert (stale.value.status_code, stale.value.detail) == (
+        503,
+        "MCP server configuration changed; retry the operation",
+    )
+
+
+class _InputSchemasSeenByTheHook(CustomLogger):
+    def __init__(self) -> None:
+        self.input_schemas: Final[list[object]] = []  # mutable-ok: the hook records what it was sent
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
+        self.input_schemas.append(data.get("mcp_input_schema"))
+        return data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "tool"),
+    [
+        pytest.param(None, "tool_default_credential", id="no-grant"),
+        pytest.param("bots", "tool_bots_token", id="a-selected-profile"),
+    ],
+)
+async def test_a_tool_listed_for_a_caller_is_found_again_when_that_caller_calls_it(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, tool: str
+) -> None:
+    from litellm.proxy.mcp_server import operations
+
+    server: Final = tickets_server(overrides={"extra_headers": ["x-tenant"]})
+    manager: Final = profile_manager(server, ProfileUpstream())
+    install_profile_manager(monkeypatch, manager)
+    hook: Final = _InputSchemasSeenByTheHook()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    caller: Final = caller_granted(granted)
+    raw_headers: Final = {"x-tenant": "acme"}
+
+    listing: Final = await operations._get_tools_from_mcp_servers(
+        user_api_key_auth=caller,
+        mcp_auth_header=None,
+        mcp_servers=["tickets"],
+        raw_headers=raw_headers,
+        record_listing=True,
+    )
+    await manager.call_tool(
+        server_name="tickets",
+        name=tool,
+        arguments={},
+        user_api_key_auth=caller,
+        raw_headers=raw_headers,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+    )
+
+    assert [listed.name for listed in listing.tools] == [f"tickets-{tool}"]
+    assert hook.input_schemas == [{"type": "object"}]
+
+
+@pytest.mark.asyncio
+async def test_a_listed_tool_is_found_only_under_the_profile_it_was_listed_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.mcp_server import operations
+
+    server: Final = tickets_server()
+    manager: Final = profile_manager(server, ProfileUpstream())
+    caller: Final = caller_granted("bots")
+    install_profile_manager(monkeypatch, manager)
+    await operations._get_tools_from_mcp_servers(
+        user_api_key_auth=caller, mcp_auth_header=None, mcp_servers=["tickets"], record_listing=True
+    )
+    selected: Final = await resolve_usable_server(server, caller)
+    slot: Final = listed_tools_caller_for(server, caller, None, None, None, None)
+
+    assert manager.get_listed_tool(selected, "tool_bots_token", slot) is not None
+    assert manager.get_listed_tool(server, "tool_bots_token", slot) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first", "second", "fetches"),
+    [
+        pytest.param("bots", "ops", 2, id="a-grant-moved-to-a-profile-with-another-credential"),
+        pytest.param("a", "b", 2, id="a-grant-moved-to-another-profile-with-the-same-credential"),
+        pytest.param("bots", "bots", 1, id="an-unchanged-grant-is-served-from-the-cache"),
+        pytest.param(None, None, 1, id="no-grant-is-served-from-the-cache"),
+    ],
+)
+async def test_a_cached_listing_is_not_served_after_the_callers_grant_moves_to_another_profile(
+    monkeypatch: pytest.MonkeyPatch, first: str, second: str, fetches: int
+) -> None:
+    from litellm.proxy.mcp_server import operations
+
+    upstream: Final = ProfileUpstream()
+    twin_profiles: Final = (
+        {"id": "a", "auth_type": "bearer_token", "auth_value": "twin-token"},
+        {"id": "b", "auth_type": "bearer_token", "auth_value": "twin-token"},
+    )
+    install_profile_manager(monkeypatch, profile_manager(tickets_server((*TICKETS_PROFILES, *twin_profiles)), upstream))
+
+    for granted in (first, second):
+        await operations._get_tools_from_mcp_servers(caller_granted(granted), None, None)
+
+    assert len(upstream.authorizations("tools/list")) == fetches
+
+
+async def _list_the_tools(caller: UserAPIKeyAuth) -> None:
+    from litellm.proxy.mcp_server import operations
+
+    await operations._get_tools_from_mcp_servers(caller, None, None)
+
+
+async def _call_a_tool(caller: UserAPIKeyAuth) -> None:
+    from litellm.proxy.mcp_server import operations
+
+    await operations.global_mcp_server_manager.call_tool(
+        server_name="tickets", name="add", arguments={}, user_api_key_auth=caller
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "remembered"),
+    [
+        pytest.param(None, {"tickets": "instructions for default_credential"}, id="no-grant-is-remembered"),
+        pytest.param("bots", {}, id="a-selected-profile-is-never-remembered"),
+    ],
+)
+@pytest.mark.parametrize("surface", [_list_the_tools, _call_a_tool], ids=["tool-listing", "tool-call"])
+async def test_a_profiles_upstream_instructions_are_never_shared_with_other_callers(
+    monkeypatch: pytest.MonkeyPatch,
+    surface: Callable[[UserAPIKeyAuth], Awaitable[None]],
+    granted: str | None,
+    remembered: Mapping[str, str],
+) -> None:
+    from litellm.proxy.mcp_server import operations
+
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), ProfileUpstream()))
+
+    await surface(caller_granted(granted))
+
+    assert operations.global_mcp_server_manager._upstream_initialize_instructions_by_server_id == remembered
+
+
+@pytest.mark.parametrize(
+    "caller",
+    [
+        pytest.param(ListedToolsCaller(user_api_key_auth=caller_granted(None)), id="a-keyed-caller"),
+        pytest.param(ListedToolsCaller(user_api_key_auth=None), id="an-anonymous-caller"),
+    ],
+)
+def test_a_listed_tool_is_looked_up_under_the_profile_it_was_listed_with(caller: ListedToolsCaller) -> None:
+    manager: Final = MCPServerManager()
+    server: Final = tickets_server()
+    listed: Final = [MCPTool(name="tool", inputSchema={"type": "object"})]
+    bots: Final = server.model_copy(update={"auth_profile_id": "bots"})
+
+    manager.record_listed_tools(bots, listed, caller)
+
+    assert manager.get_listed_tool(bots, "tool", caller) is not None
+    assert manager.get_listed_tool(server.model_copy(update={"auth_profile_id": "ops"}), "tool", caller) is None
+    assert manager.get_listed_tool(server, "tool", caller) is None
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 import asyncio
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -8,8 +8,12 @@ from unittest.mock import AsyncMock, patch
 
 import httpx2
 import pytest
+from fastapi import HTTPException
 from mcp.server.context import ServerRequestContext
 from mcp.types import (
+    CallToolRequest,
+    CallToolRequestParams,
+    CallToolResult,
     GetPromptRequest,
     GetPromptRequestParams,
     GetPromptResult,
@@ -17,6 +21,7 @@ from mcp.types import (
     JSONRPCRequest,
     ListToolsResult,
     ReadResourceResult,
+    TextContent,
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
@@ -33,6 +38,14 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.mcp_server import operations, rest_endpoints
+from litellm.proxy.mcp_server.auth_profile_selection import (
+    IncompleteProfile,
+    MissingProfile,
+    UnusableProfile,
+    unusable_profile_detail,
+    unusable_profile_status,
+)
+from litellm.types.mcp_server.auth_profile_grants import UnreadableGrants
 from litellm.proxy.mcp_server.mcp_server_manager import (
     HTTPException as MCPServerManagerHTTPException,
 )
@@ -41,12 +54,25 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
     MCPServerConfig,
     MCPServerManager,
 )
+from litellm.proxy.mcp_server.openapi_to_mcp_generator import request_auth_header, request_resolved_auth_headers
 from litellm.proxy.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPResourceURIMatch, MCPServer
+from tests._support.mcp_auth_profiles import (
+    DEFAULT_CREDENTIAL,
+    MINTED_PROFILE_TOKEN,
+    ProfileUpstream,
+    RecordingTokenEndpoint,
+    call_tickets_add,
+    call_tickets_tool,
+    caller_granted,
+    install_profile_manager,
+    profile_manager,
+    tickets_server,
+)
 
 
 class _CatalogHookCapture(CustomLogger):
@@ -2706,3 +2732,332 @@ async def test_discovery_optional_probes_use_remaining_listing_budget(delay, mon
     else:
         assert entered.is_set()
         assert cleaned.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "expected"),
+    [
+        pytest.param(None, f"Bearer {DEFAULT_CREDENTIAL}", id="no-grant-keeps-the-default-credential"),
+        pytest.param("default", f"Bearer {DEFAULT_CREDENTIAL}", id="the-default-grant-keeps-the-default-credential"),
+        pytest.param("bots", "Bearer bots-token", id="a-static-profile-sends-its-own-token"),
+        pytest.param("BOTS", "Bearer bots-token", id="a-grant-matches-the-profile-ignoring-case"),
+        pytest.param(
+            "ops", f"Bearer {MINTED_PROFILE_TOKEN}", id="a-client-credentials-profile-sends-the-token-it-minted"
+        ),
+    ],
+)
+async def test_a_tool_call_dispatches_with_the_callers_selected_credential(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, expected: str
+) -> None:
+    upstream: Final = ProfileUpstream()
+    server: Final = tickets_server()
+    install_profile_manager(monkeypatch, profile_manager(server, upstream))
+
+    result: Final = await call_tickets_add(server, caller_granted(granted))
+
+    assert isinstance(result, CallToolResult) and result.content == [TextContent(type="text", text="added")]
+    assert upstream.credentials_seen() == {expected}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "tool", "expected"),
+    [
+        pytest.param(None, "tool_default_credential", f"Bearer {DEFAULT_CREDENTIAL}", id="no-grant"),
+        pytest.param("bots", "tool_bots_token", "Bearer bots-token", id="a-static-profile"),
+        pytest.param(
+            "ops", "tool_ops_minted_token", f"Bearer {MINTED_PROFILE_TOKEN}", id="a-client-credentials-profile"
+        ),
+    ],
+)
+async def test_a_cold_catalog_is_listed_and_called_with_the_callers_selected_credential(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, tool: str, expected: str
+) -> None:
+    upstream: Final = ProfileUpstream()
+    server: Final = tickets_server()
+    install_profile_manager(monkeypatch, profile_manager(server, upstream, warm=False))
+
+    result: Final = await call_tickets_tool(f"tickets-{tool}", server, caller_granted(granted))
+
+    assert isinstance(result, CallToolResult) and result.content == [TextContent(type="text", text="added")]
+    assert "tools/list" in {method for method, _ in upstream.requests}
+    assert upstream.credentials_seen() == {expected}
+
+
+_UNUSABLE_CALLERS: Final = (
+    pytest.param((caller_granted("ghost"), MissingProfile("tickets", "ghost")), id="a-grant-to-a-profile-that-does-not-exist"),
+    pytest.param((caller_granted("empty"), IncompleteProfile("tickets", "empty")), id="a-granted-profile-without-a-credential"),
+    pytest.param(
+        (UserAPIKeyAuth(api_key="hashed-key", object_permission_id="unreadable-row"), UnreadableGrants()),
+        id="grants-that-cannot-be-read",
+    ),
+)
+
+
+async def _call_through_the_gateway(server: MCPServer, caller: UserAPIKeyAuth) -> None:
+    await call_tickets_add(server, caller)
+
+
+async def _call_through_the_manager(server: MCPServer, caller: UserAPIKeyAuth) -> None:
+    await operations.global_mcp_server_manager.call_tool(
+        server_name="tickets", name="add", arguments={}, user_api_key_auth=caller
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_case", _UNUSABLE_CALLERS)
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(_call_through_the_gateway, id="gateway-operation"),
+        pytest.param(_call_through_the_manager, id="manager-direct"),
+    ],
+)
+async def test_an_unusable_profile_fails_the_call_before_anything_reaches_the_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+    caller_case: tuple[UserAPIKeyAuth, UnusableProfile],
+    call: Callable[[MCPServer, UserAPIKeyAuth], Awaitable[None]],
+) -> None:
+    caller, expected = caller_case
+    upstream: Final = ProfileUpstream()
+    endpoint: Final = RecordingTokenEndpoint()
+    server: Final = tickets_server()
+    manager: Final = profile_manager(server, upstream, endpoint)
+    install_profile_manager(monkeypatch, manager)
+
+    with pytest.raises(HTTPException) as unavailable:
+        await call(server, caller)
+
+    assert (unavailable.value.status_code, unavailable.value.detail) == (
+        unusable_profile_status(expected),
+        unusable_profile_detail(expected),
+    )
+    assert upstream.request_count() == 0
+    assert endpoint.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_case", _UNUSABLE_CALLERS)
+async def test_an_unusable_profile_is_refused_before_a_cold_catalog_is_listed(
+    monkeypatch: pytest.MonkeyPatch, caller_case: tuple[UserAPIKeyAuth, UnusableProfile]
+) -> None:
+    caller, expected = caller_case
+    upstream: Final = ProfileUpstream()
+    server: Final = tickets_server()
+    install_profile_manager(monkeypatch, profile_manager(server, upstream, warm=False))
+
+    with pytest.raises(HTTPException) as unavailable:
+        await call_tickets_add(server, caller)
+
+    assert (unavailable.value.status_code, unavailable.value.detail) == (
+        unusable_profile_status(expected),
+        unusable_profile_detail(expected),
+    )
+    assert upstream.request_count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_case", _UNUSABLE_CALLERS)
+@pytest.mark.parametrize("warm", [True, False], ids=["warm-catalog", "cold-catalog"])
+async def test_a_caller_who_is_not_admitted_is_refused_before_any_profile_is_resolved(
+    monkeypatch: pytest.MonkeyPatch, caller_case: tuple[UserAPIKeyAuth, UnusableProfile], warm: bool
+) -> None:
+    caller, _ = caller_case
+    upstream: Final = ProfileUpstream()
+    server: Final = tickets_server()
+    install_profile_manager(monkeypatch, profile_manager(server, upstream, warm=warm))
+
+    with pytest.raises(HTTPException) as refused:
+        await call_tickets_tool("tickets-add", server, caller, allowed_mcp_servers=[])
+
+    assert (refused.value.status_code, refused.value.detail) == (403, "User not allowed to call this tool.")
+    assert upstream.request_count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "refusal"),
+    [
+        pytest.param(
+            None,
+            (403, {"error": "Tool add is not allowed for server tickets. Contact proxy admin to allow this tool."}),
+            id="without-a-grant-the-tool-ban-answers",
+        ),
+        pytest.param(
+            "ghost",
+            (500, unusable_profile_detail(MissingProfile("tickets", "ghost"))),
+            id="an-unusable-profile-is-refused-before-the-tool-checks",
+        ),
+    ],
+)
+async def test_an_unusable_profile_is_refused_before_the_tool_is_checked(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, refusal: tuple[int, object]
+) -> None:
+    upstream: Final = ProfileUpstream()
+    server: Final = tickets_server(overrides={"disallowed_tools": ["add"]})
+    install_profile_manager(monkeypatch, profile_manager(server, upstream))
+
+    with pytest.raises(HTTPException) as refused:
+        await call_tickets_add(server, caller_granted(granted))
+
+    assert (refused.value.status_code, refused.value.detail) == refusal
+    assert upstream.request_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_server_without_profiles_keeps_the_default_credential_when_grants_are_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = ProfileUpstream()
+    server: Final = tickets_server(profiles=())
+    install_profile_manager(monkeypatch, profile_manager(server, upstream))
+
+    await call_tickets_add(server, UserAPIKeyAuth(api_key="hashed-key", object_permission_id="unreadable-row"))
+
+    assert upstream.credentials_seen() == {f"Bearer {DEFAULT_CREDENTIAL}"}
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_over_the_mcp_protocol_answers_an_unusable_profile_with_a_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = ProfileUpstream()
+    server: Final = tickets_server()
+    install_profile_manager(monkeypatch, profile_manager(server, upstream))
+
+    result: Final = await GatewayOperations().execute(
+        CallToolRequest(params=CallToolRequestParams(name="tickets-add", arguments={})),
+        prepare_context(user_api_key_auth=caller_granted("ghost")),
+    )
+
+    assert isinstance(result, CallToolResult) and result.is_error is True
+    assert result.content == [
+        TextContent(type="text", text=f"Error: {unusable_profile_detail(MissingProfile('tickets', 'ghost'))}")
+    ]
+    assert upstream.request_count() == 0
+
+
+async def _run_config_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    seen: list[tuple[str | None, Mapping[str, str] | None]],
+    granted: str | None,
+    mcp_auth_header: str | None = None,
+) -> None:
+
+    async def export() -> str:
+        seen.append((request_auth_header.get(), request_resolved_auth_headers.get()))
+        return "exported"
+
+    server: Final = tickets_server()
+    manager: Final = profile_manager(server, ProfileUpstream())
+    manager.tool_name_to_mcp_server_name_mapping["tickets-export"] = "tickets"
+    install_profile_manager(monkeypatch, manager)
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    global_mcp_tool_registry.register_tool("tickets-export", "export", {}, export)
+    await call_tickets_tool("tickets-export", server, caller_granted(granted), mcp_auth_header=mcp_auth_header)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "mcp_auth_header", "expected"),
+    [
+        pytest.param(None, None, (None, {"Authorization": f"Bearer {DEFAULT_CREDENTIAL}"}), id="no-grant"),
+        pytest.param("bots", None, (None, {"Authorization": "Bearer bots-token"}), id="a-selected-profile"),
+        pytest.param(
+            "bots",
+            "Bearer caller-header",
+            (None, {"Authorization": "Bearer bots-token"}),
+            id="a-selected-profile-takes-no-caller-credential",
+        ),
+    ],
+)
+async def test_a_config_tool_runs_with_the_callers_selected_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    granted: str | None,
+    mcp_auth_header: str | None,
+    expected: tuple[str | None, Mapping[str, str]],
+) -> None:
+    seen: Final[
+        list[tuple[str | None, Mapping[str, str] | None]]
+    ] = []  # mutable-ok: the handler records what it ran with
+
+    await _run_config_tool(monkeypatch, seen, granted, mcp_auth_header)
+
+    assert seen == [expected]
+
+
+@pytest.mark.asyncio
+async def test_an_unusable_profile_never_runs_a_config_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: Final[
+        list[tuple[str | None, Mapping[str, str] | None]]
+    ] = []  # mutable-ok: the handler records what it ran with
+
+    with pytest.raises(HTTPException) as unavailable:
+        await _run_config_tool(monkeypatch, seen, "ghost")
+
+    assert (unavailable.value.status_code, unavailable.value.detail) == (
+        500,
+        unusable_profile_detail(MissingProfile("tickets", "ghost")),
+    )
+    assert seen == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "tool", "expected"),
+    [
+        pytest.param(None, "tool_default_credential", f"Bearer {DEFAULT_CREDENTIAL}", id="no-grant"),
+        pytest.param("bots", "tool_bots_token", "Bearer bots-token", id="a-static-profile"),
+        pytest.param(
+            "ops", "tool_ops_minted_token", f"Bearer {MINTED_PROFILE_TOKEN}", id="a-client-credentials-profile"
+        ),
+    ],
+)
+async def test_a_tool_listing_serves_the_callers_selected_credential(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, tool: str, expected: str
+) -> None:
+    upstream: Final = ProfileUpstream()
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), upstream))
+
+    listing: Final = await operations._get_tools_from_mcp_servers(caller_granted(granted), None, None)
+
+    assert [listed.name for listed in listing.tools] == [f"tickets-{tool}"]
+    assert upstream.credentials_seen() == {expected}
+
+
+def _tickets_and_wiki(monkeypatch: pytest.MonkeyPatch, upstream: ProfileUpstream) -> None:
+    manager: Final = profile_manager(tickets_server(), upstream)
+    wiki: Final = tickets_server(
+        profiles=(),
+        overrides={"server_id": "wiki", "name": "wiki", "alias": "wiki", "url": "https://wiki.example.com/mcp"},
+    )
+    manager.config_mcp_servers = {**manager.config_mcp_servers, "wiki": wiki}
+    install_profile_manager(monkeypatch, manager)
+
+
+@pytest.mark.asyncio
+async def test_a_tool_listing_leaves_out_a_server_whose_profile_is_unusable_and_keeps_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = ProfileUpstream()
+    _tickets_and_wiki(monkeypatch, upstream)
+
+    listing: Final = await operations._get_tools_from_mcp_servers(caller_granted("ghost"), None, None)
+
+    assert [listed.name for listed in listing.tools] == ["wiki-tool_default_credential"]
+    assert upstream.credentials_seen() == {f"Bearer {DEFAULT_CREDENTIAL}"}
+
+
+@pytest.mark.asyncio
+async def test_a_tool_listing_with_no_usable_server_fails_without_reaching_the_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = ProfileUpstream()
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), upstream))
+
+    with pytest.raises(HTTPException) as unavailable:
+        await operations._get_tools_from_mcp_servers(caller_granted("ghost"), None, None)
+
+    assert (unavailable.value.status_code, unavailable.value.detail) == (503, PROFILE_UNAVAILABLE)
+    assert upstream.request_count() == 0

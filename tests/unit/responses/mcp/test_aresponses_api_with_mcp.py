@@ -2376,7 +2376,8 @@ def _serve_the_demo_mcp_listing(monkeypatch: pytest.MonkeyPatch) -> _ListingReco
         by_name=False,
     )
     demo_server: Final = SimpleNamespace(
-        server_id="demo", name="demo", alias="demo", server_name="demo", auth_type=None, extra_headers=None
+        server_id="demo", name="demo", alias="demo", server_name="demo", auth_type=None, extra_headers=None,
+        uses_auth_profile=False, additional_auth=None, auth_profiles_unreadable=False,
     )
     monkeypatch.setitem(
         sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)

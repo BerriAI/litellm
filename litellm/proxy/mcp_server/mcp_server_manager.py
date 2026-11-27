@@ -106,6 +106,7 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: F401 
     _is_mcp_admitted_user_subject,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_mcp_admitted_user_subject,
 )
+from litellm.proxy.mcp_server.auth_profile_selection import resolve_usable_server
 from litellm.proxy.mcp_server.catalog import _configuration_identity, _DiscoveryCache, _DiscoveryKey
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.elicitation_handler import (
@@ -1524,6 +1525,8 @@ def resolve_openapi_tool_auth(
     credential, never also in the forwarded headers, because the resolver pops Authorization out of
     those and would otherwise have two sources to reconcile.
     """
+    if mcp_server.uses_auth_profile:
+        return None, None, None
     forwarded: Final = _openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth)
     per_server: Final = (
         lookup_mcp_server_auth_in_headers(
@@ -2565,6 +2568,9 @@ class MCPServerManager:
         needed_endpoint: Callable[[MCPServer], str | None] | None = None,
         _retry_stale: bool = True,
     ) -> MCPServer:
+        if server.uses_auth_profile:
+            self.catalog.assert_current(server)
+            return server
         return await self.catalog.resolve_oauth_metadata(
             server,
             lambda selected: self._ensure_oauth_metadata_discovered(
@@ -2657,7 +2663,7 @@ class MCPServerManager:
 
     def _remember_upstream_initialize_instructions(self, server: MCPServer, client: MCPClient) -> None:
         raw: Final[str | None] = getattr(client, "_last_initialize_instructions", None)
-        if raw and str(raw).strip():
+        if raw and str(raw).strip() and not server.uses_auth_profile:
             self._upstream_initialize_instructions_by_server_id[server.server_id] = str(raw).strip()
 
     async def ensure_upstream_initialize_instructions_cached(self, server: MCPServer) -> None:
@@ -4922,7 +4928,11 @@ class MCPServerManager:
         return listing.page_to_serve()
 
     def _remember_instructions_if_missing(self, server: MCPServer, seen_by_this_caller: str | None) -> None:
-        if seen_by_this_caller and not self._upstream_initialize_instructions_by_server_id.get(server.server_id):
+        if (
+            seen_by_this_caller
+            and not server.uses_auth_profile
+            and not self._upstream_initialize_instructions_by_server_id.get(server.server_id)
+        ):
             self._upstream_initialize_instructions_by_server_id[server.server_id] = seen_by_this_caller
 
     async def _cached_or_upstream_tools(
@@ -5018,10 +5028,13 @@ class MCPServerManager:
             else self._tool_subject_token(server, caller.oauth2_headers, caller.raw_headers, auth)
         )
         identity: Final = None if auth is None else _admission_identity(auth, caller.raw_headers)
-        if not (identity or caller.mcp_auth_header or forwarded or stdio_env or caller_bearer):
+        if not (
+            identity or caller.mcp_auth_header or forwarded or stdio_env or caller_bearer or server.auth_profile_id
+        ):
             return None
+        profile: Final = () if server.auth_profile_id is None else (server.auth_profile_id,)
         material: Final = json.dumps(
-            (identity, caller.mcp_auth_header, forwarded, stdio_env, caller_bearer),
+            (identity, caller.mcp_auth_header, forwarded, stdio_env, caller_bearer, *profile),
             sort_keys=True,
             separators=(",", ":"),
         )
@@ -5109,6 +5122,7 @@ class MCPServerManager:
                 subject_token,
                 credential_fingerprint,
                 page_cursor,
+                *(() if server.auth_profile_id is None else (server.auth_profile_id,)),
             ),
             sort_keys=True,
             separators=(",", ":"),
@@ -7450,7 +7464,9 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         start_time: Final = datetime.datetime.now()
-        mcp_server: Final = self._resolve_mcp_server_for_tool_call(server_name, name)
+        mcp_server: Final = await resolve_usable_server(
+            self._resolve_mcp_server_for_tool_call(server_name, name), user_api_key_auth
+        )
         effective_guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
             guardrail_auth=guardrail_auth,
             user_api_key_auth=user_api_key_auth,
