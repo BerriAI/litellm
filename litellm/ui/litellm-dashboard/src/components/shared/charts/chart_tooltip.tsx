@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import type { TooltipContentProps, TooltipValueType } from "recharts";
 
 import i18n from "@/i18n/i18n";
@@ -12,13 +14,29 @@ export type ChartTooltipProps = Pick<
 
 export type ChartTooltipComponent = React.ComponentType<ChartTooltipProps>;
 
-export const formatCategoryName = (name: string): string =>
-  name
+const METRIC_LABELS = new Map<string, ParseKeys>([
+  ["metrics.spend", "activityMetrics.series.spend"],
+  ["metrics.prompt_tokens", "activityMetrics.series.promptTokens"],
+  ["metrics.completion_tokens", "activityMetrics.series.completionTokens"],
+  ["metrics.total_tokens", "activityMetrics.series.totalTokens"],
+  ["metrics.api_requests", "activityMetrics.series.apiRequests"],
+  ["metrics.successful_requests", "activityMetrics.series.successfulRequests"],
+  ["metrics.failed_requests", "activityMetrics.series.failedRequests"],
+  ["metrics.avg_response_time_ms", "activityMetrics.series.avgResponseTimeMs"],
+  ["metrics.cache_read_input_tokens", "activityMetrics.series.cacheReadInputTokens"],
+  ["metrics.cache_creation_input_tokens", "activityMetrics.series.cacheCreationInputTokens"],
+]);
+
+export const formatCategoryName = (name: string, t = i18n.t): string => {
+  const label = METRIC_LABELS.get(name);
+  if (label) return t(label);
+  return name
     .replace("metrics.", "")
     .replace(/_/g, " ")
     .split(" ")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+};
 
 export const ValueTooltip = ({
   active,
@@ -70,6 +88,7 @@ const formatMetricValue = (rawValue: number | undefined, isSpend: boolean): stri
 };
 
 export const CustomTooltip = ({ active, payload, label }: ChartTooltipProps) => {
+  const { t } = useTranslation();
   if (!active || !payload || payload.length === 0) return null;
 
   return (
@@ -88,7 +107,7 @@ export const CustomTooltip = ({ active, payload, label }: ChartTooltipProps) => 
                 className="h-2 w-2 shrink-0 rounded-full ring-2 ring-white drop-shadow-md"
                 style={{ backgroundColor: item.color }}
               />
-              <p className="font-medium text-muted-foreground">{formatCategoryName(dataKey)}</p>
+              <p className="font-medium text-muted-foreground">{formatCategoryName(dataKey, t)}</p>
             </div>
             <p className="font-medium text-foreground">{formattedValue}</p>
           </div>

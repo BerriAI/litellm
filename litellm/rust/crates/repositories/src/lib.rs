@@ -67,9 +67,13 @@ pub use spend_log::{
 };
 pub use stored_objects::{StoredObjects, StoredObjectsRepository};
 pub use tag::{Tag, TagRepository};
-pub use team::{Team, TeamRepository};
+pub use team::{InsertedTeam, NewTeam, Team, TeamRepository};
 pub use team_membership::{
-    AddedMember, MemberAdd, MemberBudget, NewMemberBudget, TeamMembership, TeamMembershipRepository,
+    AddedMember, JoinBudget, MemberAdd, MemberBudget, MemberRemove, NewCappedMemberBudget,
+    NewMemberBudget, RefusedRoster, RemovedMember, RosterRole, TeamMembership,
+    TeamMembershipRepository,
 };
 pub use ui_settings::UiSettingsRepository;
-pub use user::{NewUserDefaults, OrganizationMembership, SignIn, User, UserRepository};
+pub use user::{
+    NewUserDefaults, OrganizationMembership, Resolution, SignIn, SsoLink, User, UserRepository,
+};

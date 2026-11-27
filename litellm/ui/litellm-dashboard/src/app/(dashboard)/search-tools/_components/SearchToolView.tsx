@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { ArrowLeft, Check, Copy } from "lucide-react";
 import React, { useState } from "react";
@@ -22,7 +23,7 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
   accessToken,
   availableProviders,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
 
   const copyToClipboard = async (text: string | null | undefined, key: string) => {
@@ -110,7 +111,7 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
             <p className="text-sm text-muted-foreground">{t("searchTools.view.createdAt")}</p>
             <p className="mt-2 text-foreground">
               {searchTool.created_at
-                ? new Date(searchTool.created_at).toLocaleString()
+                ? displayTimestamp(new Date(searchTool.created_at), locale.language)
                 : t("searchTools.view.createdUnknown")}
             </p>
           </CardContent>

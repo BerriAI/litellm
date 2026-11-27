@@ -46,6 +46,7 @@ import {
 import { cn } from "@/lib/cva.config";
 import { SidebarBrand } from "@/components/shared/SidebarBrand";
 import ChatAccountMenu from "./ChatAccountMenu";
+import { displayConversationTitle } from "./conversationTitle";
 import { Kbd } from "@/components/ui/kbd";
 import { useShortcutLabel } from "@/components/CommandPalette/useShortcutLabel";
 import { useHotkeys } from "react-hotkeys-hook";
@@ -245,7 +246,7 @@ function ChatShellLayout({ children }: { children: React.ReactNode }) {
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const title =
     isChatsRoute && activeConversation?.messages.length
-      ? activeConversation.title
+      ? displayConversationTitle(activeConversation, t)
       : titles.find((item) => item.route === pathname)?.label ?? t("shell.viewSwitcher.chat");
 
   return (

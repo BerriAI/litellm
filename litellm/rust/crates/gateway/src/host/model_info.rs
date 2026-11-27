@@ -78,10 +78,6 @@ impl RegistryHost for NativeModelInfoHost<'_> {
             }
             ModelInfoLookup::UserModelInfo => Value::Object(self.deployment.model_info.raw.clone()),
             ModelInfoLookup::BedrockBase { model_id } => Value::String(model_id.clone()),
-            ModelInfoLookup::Log { level, message } => {
-                tracing::debug!(target: "litellm::router", ?level, message, "model info");
-                Value::Null
-            }
             ModelInfoLookup::PatternModels { .. }
             | ModelInfoLookup::Discovered { .. }
             | ModelInfoLookup::GroupParams { .. }

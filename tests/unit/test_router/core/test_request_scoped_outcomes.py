@@ -226,8 +226,12 @@ def test_a_sync_failure_records_nothing(
 
 @RELEASES
 async def test_a_success_counts_its_usage_and_no_success(
-    make_core: MakeCore, host: RequestLoggingHost, release: Callable[[RouterCore], None]
+    make_core: MakeCore,
+    host: RequestLoggingHost,
+    release: Callable[[RouterCore], None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     core: Final = weighted_pair(make_core, rpm=100)
     release(core)
 
@@ -235,13 +239,17 @@ async def test_a_success_counts_its_usage_and_no_success(
 
     assert not isinstance(answered, Exception)
     assert successes(core, "d1") is None
-    assert await core.health().usage("g") == (10, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (10, 1)
 
 
 @RELEASES
 async def test_a_sync_success_counts_its_usage_and_no_success(
-    make_core: MakeCore, host: RequestLoggingHost, release: Callable[[RouterCore], None]
+    make_core: MakeCore,
+    host: RequestLoggingHost,
+    release: Callable[[RouterCore], None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     core: Final = weighted_pair(make_core, rpm=100)
     release(core)
 
@@ -249,7 +257,7 @@ async def test_a_sync_success_counts_its_usage_and_no_success(
 
     assert not isinstance(answered, Exception)
     assert successes(core, "d1") is None
-    assert await core.health().usage("g") == (10, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (10, 1)
 
 
 async def test_an_endpoint_outside_make_call_counts_no_usage(make_core: MakeCore, host: RequestLoggingHost) -> None:
@@ -264,8 +272,12 @@ async def test_an_endpoint_outside_make_call_counts_no_usage(make_core: MakeCore
 
 @RELEASES
 async def test_a_stream_counts_its_request_when_it_opens_and_nothing_when_it_ends(
-    make_core: MakeCore, host: RequestLoggingHost, release: Callable[[RouterCore], None]
+    make_core: MakeCore,
+    host: RequestLoggingHost,
+    release: Callable[[RouterCore], None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     host.answer("openai/d1", chat_stream("hello", usage=USAGE, logged=True))
     core: Final = weighted_pair(make_core, rpm=100)
     release(core)
@@ -275,7 +287,7 @@ async def test_a_stream_counts_its_request_when_it_opens_and_nothing_when_it_end
     await settle()
 
     assert successes(core, "d1") is None
-    assert await core.health().usage("g") == (0, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (0, 1)
 
 
 @RELEASES
@@ -436,8 +448,12 @@ async def test_a_blocked_fallback_failure_respects_the_deployments_auth_scope(
 
 @pytest.mark.parametrize("release", [observed, retired], ids=["observe", "retire"])
 async def test_a_binding_records_a_failure_for_that_request_only(
-    make_core: MakeCore, host: RequestLoggingHost, release: Callable[[RouterCore], None]
+    make_core: MakeCore,
+    host: RequestLoggingHost,
+    release: Callable[[RouterCore], None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    started: Final = datetime.now(timezone.utc)
     core: Final = weighted_pair(make_core)
     host.answer("openai/d1", fresh(server_error))
     release(core)
@@ -452,7 +468,7 @@ async def test_a_binding_records_a_failure_for_that_request_only(
 
     assert list(cooled_down(core, ["d1", "d2"])) == ["d1"]
     assert core.health().failures_this_minute("d1") == 1
-    assert await core.health().usage("g") == (None, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (None, 1)
 
 
 async def test_a_binding_records_an_async_success(make_core: MakeCore, host: RequestLoggingHost) -> None:
@@ -496,7 +512,10 @@ async def test_a_binding_records_a_sync_failure_with_no_request(make_core: MakeC
     assert await core.health().usage("g") == (None, None)
 
 
-async def test_a_binding_records_a_stream_that_ends(make_core: MakeCore, host: RequestLoggingHost) -> None:
+async def test_a_binding_records_a_stream_that_ends(
+    make_core: MakeCore, host: RequestLoggingHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: Final = datetime.now(timezone.utc)
     host.answer("openai/d1", chat_stream("hello", usage=USAGE, logged=True))
     core: Final = weighted_pair(make_core, rpm=100)
     observed(core)
@@ -510,10 +529,13 @@ async def test_a_binding_records_a_stream_that_ends(make_core: MakeCore, host: R
     await settle()
 
     assert successes(core, "d1") == 1
-    assert await core.health().usage("g") == (12, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (12, 1)
 
 
-async def test_a_binding_records_a_stream_failing_after_content(make_core: MakeCore, host: RequestLoggingHost) -> None:
+async def test_a_binding_records_a_stream_failing_after_content(
+    make_core: MakeCore, host: RequestLoggingHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: Final = datetime.now(timezone.utc)
     host.answer("openai/d1", chat_stream("partial", error=rate_limit(message="mid stream"), logged=True))
     core: Final = weighted_pair(make_core)
     observed(core)
@@ -530,7 +552,7 @@ async def test_a_binding_records_a_stream_failing_after_content(make_core: MakeC
     assert list(cooled_down(core, ["d1", "d2"])) == ["d1"]
     assert core.health().failures_this_minute("d1") == 1
     # No limit on the deployment, so the open counted nothing: the failure is the one request.
-    assert await core.health().usage("g") == (None, 1)
+    assert await usage_since(core, monkeypatch, "g", started) == (None, 1)
 
 
 # --- retire ----------------------------------------------------------------------------------------

@@ -21,12 +21,9 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Scenario {
     config: serde_yaml_ng::Value,
-    /// The virtual keys the database holds, each token with its model list.
+    /// The virtual keys the database holds, each token with the columns set on its row.
     #[serde(default)]
-    keys: BTreeMap<String, Vec<String>>,
-    /// The `tpm_limit` of each key that holds one.
-    #[serde(default)]
-    tpm_limits: BTreeMap<String, i64>,
+    keys: BTreeMap<String, Columns>,
     /// What boot read of the config the proxy stores in its database.
     #[serde(default)]
     stored: Stored,
@@ -97,16 +94,14 @@ fn stored_config(stored: Stored, held: Held) -> StoredConfig {
     }
 }
 
-/// The database holding each key of the scenario, a plain row with the model list and the token
-/// limit it gives.
-async fn listed(
-    keys: &BTreeMap<String, Vec<String>>,
-    tpm_limits: &BTreeMap<String, i64>,
-) -> keys::Held {
+type Columns = serde_json::Map<String, serde_json::Value>;
+
+/// The database holding each key of the scenario, a plain row with its columns set on it.
+async fn listed(keys: &BTreeMap<String, Columns>) -> keys::Held {
     let held = keys::Held::start().await;
-    for (token, models) in keys {
-        let columns = serde_json::json!({"models": models, "tpm_limit": tpm_limits.get(token)});
-        held.key(token, columns).await;
+    for (token, columns) in keys {
+        held.key(token, serde_json::Value::Object(columns.clone()))
+            .await;
     }
     held
 }
@@ -219,12 +214,12 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
         .unwrap();
     let held = match scenario.keys.is_empty() {
         true => None,
-        false => Some(listed(&scenario.keys, &scenario.tpm_limits).await),
+        false => Some(listed(&scenario.keys).await),
     };
     let state = match &held {
         None => state,
         Some(held) => litellm_gateway::AppState {
-            keys: Some(Arc::new(AuthStore::new(
+            auth_store: Some(Arc::new(AuthStore::new(
                 keys::memory_cache(),
                 held.database(),
             ))),

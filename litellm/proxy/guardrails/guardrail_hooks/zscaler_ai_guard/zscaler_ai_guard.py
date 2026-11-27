@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.guardrails import LitellmParams
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import ZscalerAIGuardConfigModel
 
 DEFAULT_GUARDRAIL_TIMEOUT: Final = 5.0
 _ZSCALER_RESPONSE: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
@@ -442,7 +442,7 @@ class ZscalerAIGuard(CustomGuardrail):
             raise HTTPException(status_code=500, detail=user_facing_error)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[ZscalerAIGuardConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import (
             ZscalerAIGuardConfigModel,
         )

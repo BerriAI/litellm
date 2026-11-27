@@ -3901,12 +3901,14 @@ dependencies = [
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-store",
+ "litellm-tracing",
  "parking_lot",
  "rstest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5112,6 +5114,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sqlx",
+ "strum",
  "tokio",
  "tracing",
  "uuid",

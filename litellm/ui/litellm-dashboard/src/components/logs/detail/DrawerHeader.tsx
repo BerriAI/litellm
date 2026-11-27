@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Check, ChevronDown, ChevronUp, Copy, X } from "lucide-react";
 import moment from "moment";
 import { useTranslation } from "react-i18next";
+import { formatDateWithEnglishPattern } from "@/i18n/formats";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -218,16 +219,30 @@ function StatusBar({
   statusColor: "error" | "success";
   environment: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const start = moment(log.startTime);
+  const requestTimestampOptions: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  };
   return (
     <div className="flex items-center gap-3">
       <Badge variant={statusColor === "error" ? "destructive" : "secondary"}>{statusLabel}</Badge>
       <Badge variant="outline">{t("logs.detail.header.environment", { environment })}</Badge>
       <div className="flex items-center gap-2">
         <span className="text-[13px] text-muted-foreground">
-          {moment(log.startTime).format("MMM D, YYYY h:mm:ss A")}
+          {formatDateWithEnglishPattern(
+            start.toDate(),
+            i18n.language,
+            start.format("MMM D, YYYY h:mm:ss A"),
+            requestTimestampOptions,
+          )}
         </span>
-        <span className="text-[13px] text-muted-foreground">({moment(log.startTime).fromNow()})</span>
+        <span className="text-[13px] text-muted-foreground">({start.fromNow()})</span>
       </div>
     </div>
   );
