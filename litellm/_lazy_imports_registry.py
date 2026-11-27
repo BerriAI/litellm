@@ -171,6 +171,7 @@ LAZY_ATTRIBUTES: Final[Mapping[str, Mapping[str, tuple[str, str]]]] = MappingPro
                     "EmpirioLabsDecisionsConfig",
                 ),
                 "EuJevDecisionsConfig": (".llms.eu_jev.decisions.transformation", "EuJevDecisionsConfig"),
+                "LevantoDecisionsConfig": (".llms.levanto.decisions.transformation", "LevantoDecisionsConfig"),
                 "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
                 "AzureDecisionsConfig": (".llms.azure.decisions.transformation", "AzureDecisionsConfig"),
                 "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),

@@ -141,6 +141,7 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
         "typesafe/jev-1.13",
     ),
     ("empiriolabs", "empiriolabs/aplomb-1", "https://api.empiriolabs.ai/v1/decisions", "aplomb-1"),
+    ("levanto", "levanto/levanto-sage-2", "https://api.levanto.ai/v1/systemone", "levanto-sage-2"),
 )
 
 _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
@@ -4936,6 +4937,58 @@ def test_empiriolabs_upstream_errors_keep_their_status_and_message(
 
     assert getattr(caught.value, "status_code") == status
     assert route.call_count == 1
+
+
+_LEVANTO_MODEL: Final = "levanto/levanto-sage-2"
+_LEVANTO_DEFAULT_URL: Final = "https://api.levanto.ai/v1/systemone"
+_LEVANTO_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "levanto-sage-2",
+    "answers": {"is_refund": {"type": "noul", "noul": 0.97, "confidence": 0.97}},
+    "usage": {"input_tokens": 1_000_000, "output_tokens": 0},
+}
+
+
+@pytest.mark.parametrize(
+    ("api_base", "environment_api_base", "url"),
+    (
+        (None, None, _LEVANTO_DEFAULT_URL),
+        (None, "https://api.levanto.ai/v1", _LEVANTO_DEFAULT_URL),
+        ("https://gateway.example/v1/", "https://api.levanto.ai/v1", "https://gateway.example/v1/systemone"),
+    ),
+    ids=("default_base", "llm_base_url_from_environment", "explicit_base_over_environment"),
+)
+def test_levanto_posts_the_systemone_body_to_v1_systemone_and_bills_input_tokens(
+    api_base: str | None,
+    environment_api_base: str | None,
+    url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("LEVANTO_BASE_URL", raising=False)
+    monkeypatch.setenv("LEVANTO_API_KEY", "environment-key")
+    if environment_api_base is not None:
+        monkeypatch.setenv("LEVANTO_BASE_URL", environment_api_base)
+    route: Final = respx_mock.post(url).respond(json=_LEVANTO_RESPONSE)
+
+    response: Final = litellm.systemone(
+        model=_LEVANTO_MODEL,
+        state=_EMPIRIOLABS_STATE,
+        questions=_EMPIRIOLABS_QUESTIONS,
+        api_base=api_base,
+    )
+
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer environment-key"
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "levanto-sage-2",
+        "state": _EMPIRIOLABS_STATE,
+        "questions": {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}},
+    }
+    assert response.answers["is_refund"] == NoulAnswer(type="noul", noul=0.97, confidence=0.97)
+    assert response._hidden_params["custom_llm_provider"] == "levanto"
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        1_000_000 * litellm.model_cost[_LEVANTO_MODEL]["input_cost_per_token"]
+    )
 
 
 _BOX_QUESTION_REQUESTS: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
