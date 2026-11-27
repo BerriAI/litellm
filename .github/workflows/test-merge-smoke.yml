@@ -44,14 +44,33 @@ jobs:
           stale-cost-map: ${{ steps.cost-map-only.outputs.decision == 'run' }}
 
   core-checks:
-    name: core-checks
+    name: ${{ matrix.name }}
     needs: rust-bridge
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core-checks
+            interpreters: |
+              3.10
+              3.11
+              3.12
+              3.13
+            core-versions: "3.10 3.11 3.12 3.13"
+            all-extras-versions: "3.12 3.13"
+            uv-cache-suffix: smoke-core-checks
+          - name: py3.14
+            interpreters: "3.14"
+            core-versions: "3.14"
+          - name: py3.15
+            interpreters: "3.15"
+            core-versions: "3.15"
     env:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
-      CORE_VERSIONS: "3.10 3.11 3.12 3.13 3.14 3.15"
-      ALL_EXTRAS_VERSIONS: "3.12 3.13"
+      CORE_VERSIONS: ${{ matrix.core-versions }}
+      ALL_EXTRAS_VERSIONS: ${{ matrix.all-extras-versions }}
     steps:
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -61,20 +80,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: |
-            3.10
-            3.11
-            3.12
-            3.13
-            3.14
-            3.15
+          python-version: ${{ matrix.interpreters }}
 
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
           rust-toolchain: ${{ needs.rust-bridge.outputs.artifact == '' }}
-          cache-suffix: smoke-core-checks
+          cache-suffix: ${{ matrix.uv-cache-suffix }}
 
       - name: Download the Rust bridge
         uses: ./.github/actions/rust-bridge
@@ -126,7 +139,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: merge-smoke-diagnostics
+          name: merge-smoke-diagnostics-${{ matrix.name }}
           path: ${{ runner.temp }}/smoke-diagnostics
           if-no-files-found: ignore
 
