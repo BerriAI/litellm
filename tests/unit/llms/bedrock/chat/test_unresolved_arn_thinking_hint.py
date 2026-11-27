@@ -1,0 +1,186 @@
+import asyncio
+import json
+from typing import Final
+
+import httpx
+import pytest
+
+import litellm
+from litellm.llms.bedrock.chat.converse_transformation import UNRESOLVED_ARN_BASE_MODEL_EXAMPLE
+from litellm.llms.bedrock.chat.unresolved_arn_thinking_hint import UNRESOLVED_ARN_THINKING_HINT
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+_PROFILE_ARN: Final = "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+_CONVERSE_LIKE_PROFILE_ARN: Final = (
+    "bedrock/converse_like/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+)
+_NAMED_MODEL: Final = "bedrock/converse/us.anthropic.claude-opus-4-8"
+_ENABLED_THINKING_REJECTION: Final = (
+    r'{"message":"The model returned the following errors: \"thinking.type.enabled\" is not supported for this model. '
+    r'Use \"thinking.type.adaptive\" and \"output_config.effort\" to control thinking behavior."}'
+)
+_MALFORMED_THINKING: Final = (
+    '{"message":"Malformed input request: #/thinking: thinking.type.enabled requires budget_tokens, '
+    'please reformat your input and try again."}'
+)
+_OTHER_UNSUPPORTED_FIELD: Final = (
+    r'{"message":"The model returned the following errors: \"top_k\" is not supported for this model."}'
+)
+_REQUEST_ID: Final = "8f1c2a7e-request-id"
+_ANSWER: Final = (
+    '{"output":{"message":{"role":"assistant","content":[{"text":"hello"}]}},"stopReason":"end_turn",'
+    '"usage":{"inputTokens":10,"outputTokens":5,"totalTokens":15},"metrics":{"latencyMs":1}}'
+)
+
+
+def _bedrock_answering(body: str, status: int = 400) -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda request: httpx.Response(status, content=body, headers={"x-amzn-requestid": _REQUEST_ID}, request=request)
+    )
+
+
+def _answer_only_adaptive_thinking(request: httpx.Request) -> httpx.Response:
+    if json.loads(request.content)["additionalModelRequestFields"]["thinking"]["type"] != "adaptive":
+        return httpx.Response(400, content=_ENABLED_THINKING_REJECTION, request=request)
+    return httpx.Response(200, content=_ANSWER, request=request)
+
+
+def _send(model: str, transport: httpx.MockTransport, *, asynchronous: bool, stream: bool, **deployment: str) -> object:
+    request: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "thinking": {"type": "adaptive"},
+        "max_tokens": 16000,
+        "stream": stream,
+        "aws_access_key_id": "AKIAPROFILEKEY",
+        "aws_secret_access_key": "profile-secret",
+        "aws_region_name": "us-east-1",
+        **deployment,
+    }
+    if asynchronous:
+        return asyncio.run(litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport)))
+    return litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport)))
+
+
+def _raised(model: str, body: str, *, asynchronous: bool, stream: bool, **deployment: str) -> litellm.BadRequestError:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        _send(model, _bedrock_answering(body), asynchronous=asynchronous, stream=stream, **deployment)
+    return raised.value
+
+
+@pytest.mark.parametrize(
+    ("model", "deployment"),
+    [(_PROFILE_ARN, {}), (_CONVERSE_LIKE_PROFILE_ARN, {"api_base": "https://bedrock-like.example.com"})],
+    ids=["converse", "converse_like"],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_profile_arn_without_base_model_names_base_model_when_bedrock_rejects_enabled_thinking(
+    model: str, deployment: dict[str, str], asynchronous: bool, stream: bool
+) -> None:
+    error: Final = _raised(model, _ENABLED_THINKING_REJECTION, asynchronous=asynchronous, stream=stream, **deployment)
+
+    assert error.status_code == 400
+    assert _ENABLED_THINKING_REJECTION in error.message
+    assert error.message.endswith(f"\n\n{UNRESOLVED_ARN_THINKING_HINT}")
+    assert "Set `model_info.base_model` on the deployment" in error.message
+    assert "Model Info JSON in the Admin UI" in error.message
+    assert error.litellm_response_headers["x-amzn-requestid"] == _REQUEST_ID
+
+
+@pytest.mark.parametrize(
+    ("model", "body", "deployment"),
+    [
+        (_PROFILE_ARN, _MALFORMED_THINKING, {}),
+        (_PROFILE_ARN, _OTHER_UNSUPPORTED_FIELD, {}),
+        (_NAMED_MODEL, _ENABLED_THINKING_REJECTION, {}),
+        (_PROFILE_ARN, _ENABLED_THINKING_REJECTION, {"base_model": "us.anthropic.claude-opus-4-8"}),
+        (
+            _CONVERSE_LIKE_PROFILE_ARN,
+            _ENABLED_THINKING_REJECTION,
+            {"api_base": "https://bedrock-like.example.com", "base_model": "us.anthropic.claude-opus-4-8"},
+        ),
+    ],
+    ids=[
+        "other_thinking_400",
+        "other_unsupported_field",
+        "named_model",
+        "profile_arn_with_base_model",
+        "converse_like_profile_arn_with_base_model",
+    ],
+)
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_bedrock_400_keeps_its_message_without_the_hint(
+    model: str, body: str, deployment: dict[str, str], asynchronous: bool
+) -> None:
+    error: Final = _raised(model, body, asynchronous=asynchronous, stream=False, **deployment)
+
+    assert error.status_code == 400
+    assert error.message.endswith(body)
+    assert UNRESOLVED_ARN_THINKING_HINT not in error.message
+
+
+@pytest.mark.parametrize(
+    "body", [_MALFORMED_THINKING, _OTHER_UNSUPPORTED_FIELD], ids=["other_thinking_400", "other_unsupported_field"]
+)
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_streamed_bedrock_400_other_than_the_enabled_thinking_rejection_gets_no_hint(
+    body: str, asynchronous: bool
+) -> None:
+    error: Final = _raised(_PROFILE_ARN, body, asynchronous=asynchronous, stream=True)
+
+    assert error.status_code == 400
+    assert UNRESOLVED_ARN_THINKING_HINT not in error.message
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_bedrock_server_error_with_the_same_wording_keeps_its_message_without_the_hint(asynchronous: bool) -> None:
+    with pytest.raises(litellm.ServiceUnavailableError) as raised:
+        _send(
+            _PROFILE_ARN,
+            _bedrock_answering(_ENABLED_THINKING_REJECTION, status=500),
+            asynchronous=asynchronous,
+            stream=False,
+        )
+
+    assert _ENABLED_THINKING_REJECTION in raised.value.message
+    assert UNRESOLVED_ARN_THINKING_HINT not in raised.value.message
+
+
+@pytest.mark.parametrize(
+    "base_model",
+    [
+        UNRESOLVED_ARN_BASE_MODEL_EXAMPLE,
+        f"arn:aws:bedrock:us-east-1:123456789012:inference-profile/{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}",
+        f"arn:aws:bedrock:us-east-1::foundation-model/{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE.removeprefix('us.')}",
+    ],
+    ids=["model_id", "system_inference_profile_arn", "foundation_model_arn"],
+)
+def test_every_base_model_form_the_hint_names_is_priced_and_gets_adaptive_thinking(base_model: str) -> None:
+    error: Final = _raised(_PROFILE_ARN, _ENABLED_THINKING_REJECTION, asynchronous=False, stream=False)
+    response: Final = _send(
+        _PROFILE_ARN,
+        httpx.MockTransport(_answer_only_adaptive_thinking),
+        asynchronous=False,
+        stream=False,
+        base_model=base_model,
+    )
+
+    assert f"`{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}`" in error.message
+    assert "system inference profile or foundation model" in error.message
+    assert "pass that value as the `base_model` argument" in error.message
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "hello"
+    assert (response._hidden_params.get("response_cost") or 0) > 0
+
+
+def test_profile_arn_set_as_its_own_base_model_still_names_base_model() -> None:
+    error: Final = _raised(
+        _PROFILE_ARN,
+        _ENABLED_THINKING_REJECTION,
+        asynchronous=False,
+        stream=False,
+        base_model=_PROFILE_ARN.removeprefix("bedrock/"),
+    )
+
+    assert error.message.endswith(f"\n\n{UNRESOLVED_ARN_THINKING_HINT}")
