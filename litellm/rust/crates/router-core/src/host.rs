@@ -804,9 +804,12 @@ pub trait RouterHost: Send + Sync {
         target: &str,
     ) -> impl Future<Output = Result<bool, AttemptError>> + Send;
 
-    // TODO: a pure check of each dict target's keys, which moves into the core
-    /// Whether `run_async_fallback` refuses a chain for one of its dict `targets`, a server-owned
-    /// federation field or an `oidc/` api key. The chain is walked by `level`.
+    // TODO: decided by the host until the server-owned field names and the stored credentials a
+    // target names are facts the core reads
+    /// Whether `run_async_fallback` refuses a chain for one of its dict `targets`: a server-owned
+    /// federation field, an `oidc/` api key, or a `litellm_credential_name` naming a stored
+    /// credential that holds one. The host keeps the error it raises. The chain is walked by
+    /// `level`.
     fn refuses_fallbacks(
         &self,
         level: u32,
