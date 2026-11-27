@@ -3,9 +3,9 @@
 # the native spend log charges no team yet. A team that holds a budget or a model entry the model
 # rule does not read is not native, and one the database does not hold is the core's to refuse.
 # With no header, the core picks the listed team that may call the model the request names, which
-# the gateway reads before it authenticates a JWT. Whether a team may call it is a step the
-# gateway declines, so a JWT listing a team that exists goes to Python. One listing only teams
-# that do not exist is the core's to refuse, for naming a model no team of its reaches.
+# the gateway reads before it authenticates a JWT. A listed team that exists is picked, and its
+# caller still goes to Python over the team. One listing only teams that do not exist is the
+# core's to refuse, for naming a model no team of its reaches.
 enterprise: true
 
 config:
@@ -89,7 +89,7 @@ requests:
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: not_native
+    over: team
 
   - name: a JWT listing only a team that does not exist, with no header
     jwt: {claims: {sub: user-123, groups: [team-gone]}}

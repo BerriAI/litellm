@@ -192,6 +192,7 @@ impl AppState {
             Some(self.jwt_io.clone()),
             self.entitlements.is_enterprise(),
             &*self.environment,
+            Some(self.inference.router.clone()),
         )
     }
 

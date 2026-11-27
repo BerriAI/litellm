@@ -158,15 +158,25 @@ fn known<H: Host>(gateway: &Gateway<H>, request: &RouterRequest) -> bool {
     !routable.is_empty()
 }
 
-/// Whether the model lists the host read for `identity` reach `name`, which the auth core
-/// decides. The route only says what the router resolves the name to: the model group its alias
-/// names and the access groups of the name's deployments, as `can_key_call_model` reads them.
+/// Whether the model lists the host read for `identity` reach `name`.
 fn authorize<H: Host>(
     gateway: &Gateway<H>,
     identity: &Authenticated<H::Rows>,
     name: &str,
 ) -> Result<(), AuthzDenial> {
-    let registry = gateway.router.registry();
+    reaches(&gateway.router, gateway.host.layers(identity), name)
+}
+
+/// Whether the model lists `layers` reach `name`, which the auth core decides. This only says
+/// what `router` resolves the name to: the model group its alias names and the access groups of
+/// the name's deployments, as `can_key_call_model` reads them. Every model list a host judges
+/// goes through here, a caller's after authentication and a team's while one is picked.
+pub fn reaches<'a>(
+    router: &Router,
+    layers: impl IntoIterator<Item = Layer<'a>>,
+    name: &str,
+) -> Result<(), AuthzDenial> {
+    let registry = router.registry();
     let access_groups: Vec<String> = resolve::model_access_groups(&registry, name, None)
         .into_iter()
         .collect();
@@ -175,7 +185,7 @@ fn authorize<H: Host>(
         candidates: &authz::candidates(name, registry.alias_of(name)),
         access_groups: &access_groups,
     };
-    authz::authorize(gateway.host.layers(identity), &ask)
+    authz::authorize(layers, &ask)
 }
 
 fn retry_after(headers: &[(String, String)]) -> Option<Duration> {

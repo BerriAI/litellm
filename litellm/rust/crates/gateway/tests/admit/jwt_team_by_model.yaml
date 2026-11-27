@@ -1,0 +1,103 @@
+# A JWT that lists its teams in a claim acts in the one whose model list reaches the model the
+# request names. The gateway answers whether a team reaches it from its own router, by the rule
+# it judges a key's model list by, so the core picks the team natively. The caller it picks still
+# goes to Python over that team, since the native spend log charges no team yet, so no case here
+# turns to rust. The core reads the listed teams in sorted order and stops at the first that
+# reaches the model, so a team whose list holds a provider pattern, which the gateway does not
+# read, is not native only when the core gets to it. When no listed team reaches the model the
+# core falls back to the first one the route allows, and Python refuses that caller for its model.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        access_groups: [fast]
+  router_settings:
+    model_group_alias:
+      sonnet: claude
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      team_ids_jwt_field: groups
+
+teams:
+  team-claude: {models: [claude]}
+  team-other: {models: [other-model]}
+  team-open: {}
+  team-every: {models: [all-proxy-models]}
+  team-fast: {models: [fast]}
+  team-provider: {models: ["anthropic/*"]}
+
+requests:
+  - name: a team that names the model, listed after one that does not
+    jwt: {claims: {groups: [team-other, team-claude]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a team with no model list
+    jwt: {claims: {groups: [team-open]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a team that reaches every proxy model
+    jwt: {claims: {groups: [team-every]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a team that names an access group of the model
+    jwt: {claims: {groups: [team-fast]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a team that names the group a router alias stands for
+    jwt: {claims: {groups: [team-claude]}}
+    body: {model: sonnet, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: only a team that does not reach the model
+    jwt: {claims: {groups: [team-other]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a team that reaches the model, read before one whose model list holds a provider pattern
+    jwt: {claims: {groups: [team-claude, team-provider]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a team whose model list holds a provider pattern, read after one that does not reach the model
+    jwt: {claims: {groups: [team-other, team-provider]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: only a team the database does not hold
+    jwt: {claims: {groups: [team-gone]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: forbidden
+
+  - name: a JWT listing no team
+    jwt: {claims: {sub: user-123}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
