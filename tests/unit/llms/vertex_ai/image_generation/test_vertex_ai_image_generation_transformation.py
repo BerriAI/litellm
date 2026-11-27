@@ -1,6 +1,7 @@
 import base64
 import datetime
 import json
+import threading
 from collections.abc import Mapping
 from unittest.mock import MagicMock, patch
 from typing import Final
@@ -9,13 +10,13 @@ import httpx
 import pytest
 import respx
 from google.oauth2.credentials import Credentials
+from google.auth.transport import Request
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import UnprocessableEntityError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.llms.vertex_ai.image_generation import (
     get_vertex_ai_image_generation_config,
@@ -1357,7 +1358,6 @@ async def test_vertex_gemini_generation_accept_encoding_on_the_wire(
 async def test_native_async_vertex_gemini_generation_defaults_to_identity_encoding(
     remove_client_encoding: bool,
 ) -> None:
-    model: Final = "gemini-3.1-flash-image"
     url: Final = "https://vertex.test/generate"
     handler: Final = AsyncHTTPHandler()
     if remove_client_encoding:
@@ -1366,26 +1366,115 @@ async def test_native_async_vertex_gemini_generation_defaults_to_identity_encodi
     try:
         with respx.mock(using="httpx") as upstream:
             route: Final = upstream.post(url).respond(json=_GEMINI_IMAGE_REPLY)
-            await BaseLLMHTTPHandler().async_image_generation_handler(
-                model=model,
+            await litellm.aimage_generation(
+                model="vertex_ai/gemini-3.1-flash-image",
                 prompt="a lighthouse",
-                image_generation_provider_config=VertexAIGeminiImageGenerationConfig(),
-                image_generation_optional_request_params={},
-                custom_llm_provider="vertex_ai",
-                litellm_params={"api_base": url},
-                logging_obj=Logging(
-                    model=model,
-                    messages=[],
-                    stream=False,
-                    call_type="aimage_generation",
-                    start_time=datetime.datetime(2024, 1, 1),
-                    litellm_call_id="encoding",
-                    function_id="encoding",
-                ),
-                timeout=30,
+                api_base=url,
                 client=handler,
             )
             assert route.calls.last.request.headers.get_list("accept-encoding") == ["identity"]
             assert handler.client.headers.raw == original_headers
     finally:
         await handler.close()
+
+
+@pytest.mark.parametrize(
+    ("forwarded", "extra", "expected"),
+    (
+        ({}, {}, "gzip, identity;q=0"),
+        ({}, {"accept-encoding": "br"}, "br"),
+        ({"aCcEpT-EnCoDiNg": "gzip, identity;q=0"}, {}, "gzip, identity;q=0"),
+        ({"Accept-Encoding": "gzip"}, {"X-Test": "1"}, "gzip"),
+        ({"Accept-Encoding": "gzip"}, {"accept-encoding": "br"}, "br"),
+    ),
+)
+async def test_async_vertex_gemini_generation_honors_client_encoding(
+    forwarded: dict[str, str], extra: dict[str, str], expected: str
+) -> None:
+    url: Final = "https://vertex.test/generate"
+    client_encoding: Final = "gzip, identity;q=0" if not forwarded else "deflate"
+    async with httpx.AsyncClient(headers={"Accept-Encoding": client_encoding, "X-Image-Client": "supplied"}) as client:
+        original_headers: Final = client.headers.raw
+        with respx.mock(using="httpx") as upstream:
+            route: Final = upstream.post(url).respond(json=_GEMINI_IMAGE_REPLY)
+            await litellm.aimage_generation(
+                model="vertex_ai/gemini-3.1-flash-image",
+                prompt="a lighthouse",
+                api_base=url,
+                client=AsyncHTTPHandler(client=client),
+                headers=forwarded,
+                extra_headers=extra,
+            )
+            sent: Final = route.calls.last.request.headers
+            assert sent.get_list("accept-encoding") == [expected]
+            assert sent["X-Image-Client"] == "supplied"
+        assert client.headers.raw == original_headers
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_vertex_gemini_generation_reuses_extra_headers_without_stale_encoding(asynchronous: bool) -> None:
+    url: Final = "https://vertex.test/generate"
+    extra: Final = {"accept-encoding": "gzip"}
+    with respx.mock(using="httpx") as upstream:
+        route: Final = upstream.post(url).respond(json=_GEMINI_IMAGE_REPLY)
+        handler: Final = AsyncHTTPHandler()
+        try:
+            for encoding in ("gzip", "br"):
+                extra["accept-encoding"] = encoding
+                params: Final = dict(
+                    model="vertex_ai/gemini-3.1-flash-image", prompt="test", api_base=url, extra_headers=extra
+                )
+                if asynchronous:
+                    await litellm.aimage_generation(**params, client=handler)
+                else:
+                    litellm.image_generation(**params)
+            assert [call.request.headers.get_list("accept-encoding") for call in route.calls] == [["gzip"], ["br"]]
+            assert extra == {"accept-encoding": "br"}
+        finally:
+            await handler.close()
+
+
+async def test_async_vertex_gemini_generation_keeps_client_encoding_on_connection_retry() -> None:
+    url: Final = "https://vertex.test/generate"
+    encoding: Final = "gzip, identity;q=0"
+    with respx.mock(using="httpx") as upstream:
+        route: Final = upstream.post(url).mock(
+            side_effect=[httpx.ConnectError("scripted retry"), httpx.Response(200, json=_GEMINI_IMAGE_REPLY)]
+        )
+        handler: Final = AsyncHTTPHandler()
+        handler.client.headers["Accept-Encoding"] = encoding
+        try:
+            await litellm.aimage_generation(
+                model="vertex_ai/gemini-3.1-flash-image", prompt="test", api_base=url, client=handler
+            )
+        finally:
+            await handler.close()
+        assert [call.request.headers.get_list("accept-encoding") for call in route.calls] == [[encoding], [encoding]]
+
+
+async def test_async_vertex_gemini_generation_refreshes_credentials_off_event_loop() -> None:
+    event_loop_thread: Final = threading.get_ident()
+
+    class LocalCredentials(Credentials):
+        def refresh(self, request: Request) -> None:
+            assert threading.get_ident() != event_loop_thread
+            self.token = "offline-test"
+
+    url: Final = "https://us-central1-aiplatform.googleapis.com/v1/projects/local-project/locations/us-central1/publishers/google/models/gemini-3.1-flash-image:generateContent"
+    with (
+        patch("google.auth.default", return_value=(LocalCredentials(token=None), "local-project")),
+        respx.mock(using="httpx") as upstream,
+    ):
+        route: Final = upstream.post(url).respond(json=_GEMINI_IMAGE_REPLY)
+        handler: Final = AsyncHTTPHandler()
+        try:
+            await litellm.aimage_generation(
+                model="vertex_ai/gemini-3.1-flash-image",
+                prompt="test",
+                vertex_project="local-project",
+                vertex_location="us-central1",
+                client=handler,
+            )
+        finally:
+            await handler.close()
+        assert route.calls.last.request.headers["Authorization"] == "Bearer offline-test"

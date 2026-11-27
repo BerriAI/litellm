@@ -295,7 +295,9 @@ def _image_wire_headers(
 
     overrides: Final = {key: value for key, value in (extra_headers or {}).items() if key.lower() == "accept-encoding"}
     return {
-        **({"Accept-Encoding": "identity"} if handler.uses_default_accept_encoding else {}),
+        "Accept-Encoding": "identity"
+        if handler.uses_default_accept_encoding
+        else handler.client.headers["accept-encoding"],
         **{
             "Accept-Encoding" if key.lower() == "accept-encoding" else key: value
             for key, value in chain(headers.items(), overrides.items())
@@ -8000,7 +8002,7 @@ class BaseLLMHTTPHandler:
 
         headers: Final[dict[str, object]] = image_generation_provider_config.validate_environment(
             api_key=api_key,
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            headers=dict(as_str_mapping(image_generation_optional_request_params.get("extra_headers")) or {}),
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -8094,7 +8096,7 @@ class BaseLLMHTTPHandler:
         model: str,
         prompt: str,
         image_generation_provider_config: BaseImageGenerationConfig,
-        image_generation_optional_request_params: dict,
+        image_generation_optional_request_params: dict[str, object],
         custom_llm_provider: str,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
@@ -8119,9 +8121,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final[dict[str, object]] = image_generation_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(
+            image_generation_provider_config.validate_environment,
             api_key=api_key,
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            headers=dict(as_str_mapping(image_generation_optional_request_params.get("extra_headers")) or {}),
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
