@@ -1569,6 +1569,97 @@ def test_get_file_ids_from_responses_tools_empty():
     assert file_ids == []
 
 
+def test_get_file_ids_from_responses_tools_shell_environment():
+    """Verify shell environment.file_ids are extracted alongside code_interpreter."""
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+
+    tools = [
+        {
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+                "file_ids": ["file-ci-1"],
+            },
+        },
+        {
+            "type": "shell",
+            "environment": {
+                "type": "container_auto",
+                "file_ids": ["file-sh-1", "file-sh-2"],
+            },
+        },
+        {
+            "type": "shell",
+            "environment": "local",
+        },
+        {
+            "type": "shell",
+            "environment": {
+                "type": "container_auto",
+            },
+        },
+    ]
+
+    file_ids = proxy_managed_files.get_file_ids_from_responses_tools(tools)
+    assert file_ids == ["file-ci-1", "file-sh-1", "file-sh-2"]
+
+
+@pytest.mark.asyncio
+async def test_responses_shell_file_access_and_mapping():
+    """Verify shell environment.file_ids enforce ownership checks and receive mapping."""
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9qc29uO3VuaWZpZWRfaWQsNzc3Nzc3Nzc7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1YWVo7bGxtX291dHB1dF9maWxlX21vZGVsX2lkLG1vZGVsXzEyMw"
+    expected_mapping = {unified_file_id: {"gpt-4o": "file-provider-shell"}}
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+
+    internal_usage_cache = MagicMock()
+    internal_usage_cache.async_get_cache = AsyncMock(return_value=None)
+
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=internal_usage_cache,
+        prisma_client=prisma_client,
+    )
+    proxy_managed_files.get_model_file_id_mapping = AsyncMock(return_value=expected_mapping)
+    proxy_managed_files.can_user_call_unified_file_id = AsyncMock(return_value=True)
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_user_123",
+        parent_otel_span=MagicMock(),
+    )
+
+    tools_payload = [
+        {
+            "type": "shell",
+            "environment": {
+                "type": "container_auto",
+                "file_ids": [unified_file_id],
+            },
+        }
+    ]
+    result = await proxy_managed_files.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data={"input": "hello", "tools": tools_payload, "model": "gpt-4o"},
+        call_type="aresponses",
+    )
+
+    assert proxy_managed_files.can_user_call_unified_file_id.call_count == 1
+    assert result["model_file_id_mapping"] == expected_mapping
+
+    proxy_managed_files.can_user_call_unified_file_id = AsyncMock(return_value=False)
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_managed_files.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data={"input": "hello", "tools": tools_payload, "model": "gpt-4o"},
+            call_type="aresponses",
+        )
+    assert exc_info.value.status_code == 403
+
+
 @pytest.mark.asyncio
 async def test_check_file_ids_access_with_unified_file_ids():
     """

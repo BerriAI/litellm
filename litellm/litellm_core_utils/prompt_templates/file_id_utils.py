@@ -281,7 +281,7 @@ def _resolve_tool_file_id(
     return file_id
 
 
-_RESPONSE_TOOL_FILE_ID_KEYS: Final[Mapping[str, str]] = {
+RESPONSE_TOOL_FILE_ID_KEYS: Final[Mapping[str, str]] = {
     "code_interpreter": "container",
     "shell": "environment",
 }
@@ -324,7 +324,7 @@ def update_responses_tools_with_model_file_ids(
         updated_tool: Final = tool.copy()
 
         tool_type: Final = tool.get("type")
-        nested_key: Final = _RESPONSE_TOOL_FILE_ID_KEYS.get(tool_type) if isinstance(tool_type, str) else None
+        nested_key: Final = RESPONSE_TOOL_FILE_ID_KEYS.get(tool_type) if isinstance(tool_type, str) else None
         if nested_key is not None:
             nested: Final = tool.get(nested_key)
             if isinstance(nested, dict):
