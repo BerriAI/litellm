@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import React, { useMemo, useState } from "react";
+import React, { useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { availableRoleDisplayLabel, all_admin_roles, isProxyAdminRole } from "@/utils/roles";
@@ -13,7 +13,7 @@ import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermis
 import type { ObjectPermission } from "@/components/object_permission_types";
 import SkillSelector from "@/components/skills/SkillSelector";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { FieldGroup } from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { SemanticCacheJsonControls } from "@/components/shared/SemanticCacheControls";
 import { Button } from "@/components/ui/button";
@@ -61,7 +61,6 @@ const MCP_SELECTION_SHAPE = z.object({
 // antd forwarded whatever it was handed, so nullish is what keeps a loaded user
 // editable at all.
 const userEditShape = (t: TFunction) => ({
-  user_id: z.string().nullish(),
   user_email: z.string().nullish(),
   user_alias: z.string().nullish(),
   user_role: z.string().nullish(),
@@ -113,7 +112,6 @@ const toFormValues = (
     ...(isBulkEdit
       ? {}
       : {
-          user_id: userData.user_id,
           user_email: userData.user_info?.user_email,
           tpm_limit: userData.user_info?.tpm_limit ?? "",
           rpm_limit: userData.user_info?.rpm_limit ?? "",
@@ -171,6 +169,7 @@ export function UserEditView({
   premiumUser = false,
 }: UserEditViewProps) {
   const { t } = useTranslation();
+  const userIdFieldId = useId();
   const canEditPermissions = !isBulkEdit && isProxyAdminRole(userRole || "");
   const [unlimitedBudget, setUnlimitedBudget] = useState(false);
   const [modelMaxBudget, setModelMaxBudget] = useSeededState<ModelMaxBudget>(
@@ -208,6 +207,7 @@ export function UserEditView({
     const rpmLimit = changedLimit(rpmLimitInput, userData.user_info?.rpm_limit);
     const payload = {
       ...formValues,
+      ...(!isBulkEdit && { user_id: userData.user_id }),
       ...("metadata" in values ? { metadata: metadata.value } : {}),
       ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
       ...(tpmLimit !== undefined && { tpm_limit: tpmLimit }),
@@ -236,15 +236,24 @@ export function UserEditView({
       <form onSubmit={form.handleSubmit(handleSubmit)}>
         <FieldGroup>
           {!isBulkEdit && (
-            <FormField control={form.control} name="user_id" label={t("users.editView.fields.userId")}>
-              {({ ref, value, ...control }) => <Input {...control} ref={ref} value={value ?? ""} disabled />}
-            </FormField>
-          )}
+            <>
+              <Field>
+                <FieldLabel htmlFor={userIdFieldId}>{t("users.editView.fields.userId")}</FieldLabel>
+                <Input
+                  id={userIdFieldId}
+                  value={userData.user_id ?? ""}
+                  disabled
+                  readOnly
+                  autoComplete="off"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                />
+              </Field>
 
-          {!isBulkEdit && (
-            <FormField control={form.control} name="user_email" label={t("users.editView.fields.email")}>
-              {({ ref, value, ...control }) => <Input {...control} ref={ref} value={value ?? ""} />}
-            </FormField>
+              <FormField control={form.control} name="user_email" label={t("users.editView.fields.email")}>
+                {({ ref, value, ...control }) => <Input {...control} ref={ref} value={value ?? ""} />}
+              </FormField>
+            </>
           )}
 
           <FormField control={form.control} name="user_alias" label={t("users.editView.fields.userAlias")}>

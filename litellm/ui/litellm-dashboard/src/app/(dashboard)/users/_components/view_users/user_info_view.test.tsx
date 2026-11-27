@@ -484,6 +484,22 @@ describe("UserInfoView", () => {
       expect(screen.queryByText("MCP Servers / Access Groups")).not.toBeInTheDocument();
     });
   });
+
+  it("should pin the open user's user_id when saving even if the User ID input is autofilled", async () => {
+    const user = userEvent.setup();
+    render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
+
+    const userIdInput = await screen.findByLabelText("User ID");
+    fireEvent.change(userIdInput, { target: { value: "admin" } });
+    await user.click(screen.getByText("Save Changes"));
+
+    await waitFor(() => {
+      expect(mockUserUpdateUserCall).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = mockUserUpdateUserCall.mock.calls[0];
+    expect(payload.user_id).toBe("user-123");
+  });
 });
 
 describe("extractMcpEntitlement", () => {
