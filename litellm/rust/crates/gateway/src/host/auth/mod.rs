@@ -8,8 +8,9 @@
 //! A step this host does not answer yet declines, which sends the request to Python. A later
 //! change serves more keys by answering one more step.
 
-#[macro_use]
+mod carried;
 mod key;
+mod models;
 mod store;
 
 use std::{convert::Infallible, sync::Arc, time::Duration};
@@ -37,6 +38,7 @@ use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
 pub use key::Key;
+pub(crate) use models::{allowed_models, layers};
 pub use store::AuthStore;
 
 /// The rows the native host hands the core: a key's, and a core record for each thing a caller
@@ -61,7 +63,7 @@ impl Rows for NativeRows {
 pub struct NativeAuthHost {
     /// Where a virtual key is read from. `None` without a database, where the master key is the
     /// only caller.
-    keys: Option<Arc<AuthStore>>,
+    store: Option<Arc<AuthStore>>,
     /// The hash Python caches the master key's identity under, which is no key row.
     master: Option<KeyHash>,
 }
@@ -70,9 +72,14 @@ impl NativeAuthHost {
     /// The host the request body check reads stored credentials through, which reads no key.
     pub(crate) fn credential_store() -> Self {
         Self {
-            keys: None,
+            store: None,
             master: None,
         }
+    }
+
+    /// The store, or `step` declined without a database to read.
+    fn store(&self, step: &'static str) -> Result<&AuthStore, Error> {
+        self.store.as_deref().map_or_else(|| declined(step), Ok)
     }
 }
 
@@ -123,12 +130,12 @@ fn settings(config: &Config, database: bool) -> Settings {
 }
 
 /// Who the inference routes and `admit` authenticate: the callers the core finds over this host
-/// for `config`, the master key and with `keys` a virtual key read from them, taken from the
+/// for `config`, the master key and with `store` a virtual key read through it, taken from the
 /// header an inference client sends its key in.
-pub fn auth(config: &Config, keys: Option<Arc<AuthStore>>) -> Auth<NativeRows> {
-    let settings = settings(config, keys.is_some());
+pub fn auth(config: &Config, store: Option<Arc<AuthStore>>) -> Auth<NativeRows> {
+    let settings = settings(config, store.is_some());
     let host = NativeAuthHost {
-        keys,
+        store,
         master: master_key(config).map(|key| Token::new(key.clone()).hash()),
     };
     let keys = KeyAuthenticator::new(host, settings, Arc::new(SystemClock));
@@ -150,7 +157,7 @@ impl AuthHost for NativeAuthHost {
         if self.master.as_ref() == Some(hash) {
             return Ok(None);
         }
-        let Some(store) = &self.keys else {
+        let Some(store) = &self.store else {
             return Ok(None);
         };
         match Box::pin(store.cached(hash)).await {
@@ -162,9 +169,7 @@ impl AuthHost for NativeAuthHost {
     /// The core asks here only after `cached_key` missed, so the cache is not read again. The
     /// store caches the key it found, whoever answers the request.
     async fn db_key(&self, hash: &KeyHash, _: &EndUserRecord) -> Result<Option<Keyed<Key>>, Error> {
-        let Some(store) = &self.keys else {
-            return declined("db_key");
-        };
+        let store = self.store("db_key")?;
         match Box::pin(store.loaded(hash)).await {
             Ok(Some(key)) => keyed(&key),
             Ok(None) => Ok(None),
@@ -435,11 +440,11 @@ mod tests {
         routing::get,
     };
     use jiff::Timestamp;
-    use litellm_auth_store::KeyDatabase;
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
     use litellm_gateway_auth_core::Credential;
     use litellm_redis_store::cache_invalidation::CacheInvalidation;
     use litellm_redis_testing::{RedisServer, eventually};
+    use litellm_repositories::Database;
     use rstest::rstest;
     use serde_json::{Value as Columns, json};
     use tower::ServiceExt;
@@ -483,13 +488,13 @@ mod tests {
     }
 
     /// The store a gateway with no coordination Redis reads `database` through.
-    fn memory_only(database: KeyDatabase) -> Arc<AuthStore> {
+    fn memory_only(database: Database) -> Arc<AuthStore> {
         Arc::new(AuthStore::new(keys::memory_cache(), database))
     }
 
     async fn authenticate(
         config: &Config,
-        keys: Option<KeyDatabase>,
+        keys: Option<Database>,
         header: (&str, &str),
     ) -> Result<Authenticated<NativeRows>, Rejected> {
         auth(config, keys.map(memory_only))
@@ -509,7 +514,7 @@ mod tests {
 
     /// What `token` gets as a bearer from a gateway that reads its keys from `database`.
     async fn presenting(
-        database: KeyDatabase,
+        database: Database,
         token: &str,
     ) -> Result<Authenticated<NativeRows>, Rejected> {
         bearing(
@@ -539,7 +544,7 @@ mod tests {
     #[case::with_a_database_that_is_never_read(Some(keys::unreachable()))]
     #[tokio::test]
     async fn the_master_key_is_the_admin_caller_with_and_without_a_database(
-        #[case] keys: Option<KeyDatabase>,
+        #[case] keys: Option<Database>,
         #[values(("authorization", "Bearer sk-master-credential"), ("x-api-key", MASTER_KEY))]
         header: (&str, &str),
     ) {
@@ -655,7 +660,7 @@ mod tests {
                 caller.hash(),
                 caller.role(),
                 key.record.expires,
-                crate::host::allowed_models(&caller),
+                allowed_models(&caller),
             ),
             (
                 Some(&Token::new(VIRTUAL_KEY).hash()),
@@ -836,8 +841,8 @@ mod tests {
     async fn pod_for(config: &Config, held: &Held) -> Auth<NativeRows> {
         let resources = crate::Resources::build(config).unwrap();
         let clients = crate::redis::connect(config, &resources).await.unwrap();
-        let keys = crate::state::keys(config, &clients, held.repositories());
-        auth(config, Some(Arc::new(keys)))
+        let store = crate::state::auth_store(config, &clients, held.database());
+        auth(config, Some(Arc::new(store)))
     }
 
     /// One gateway pod as `AppState` builds its auth with `enable_redis_auth_cache` on: its own
