@@ -10,7 +10,7 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
-_DEFAULT_API_BASE: Final = "https://api.hiapi.ai/v1"
+_DEFAULT_API_BASE: Final = "https://api.hiapi.sh/v1"
 _CHAT_COMPLETIONS_URL: Final = f"{_DEFAULT_API_BASE}/chat/completions"
 _CHAT_COMPLETION: Final = {
     "id": "chatcmpl_hiapi",
