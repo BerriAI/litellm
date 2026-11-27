@@ -8331,6 +8331,8 @@ async def test_add_litellm_data_to_request_refuses_a_model_config_credential_hol
     [
         ("Authorization", True),
         ("X-Api-Key", True),
+        ("X-API-Key-ID", True),
+        ("X-Pass-X-API-Key-ID", True),
         ("x-goog-api-key", True),
         ("Ocp-Apim-Subscription-Key", True),
         ("API-Key", True),
