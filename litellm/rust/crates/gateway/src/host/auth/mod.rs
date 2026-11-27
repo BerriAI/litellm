@@ -40,7 +40,9 @@ use litellm_gateway_auth_core::{
 use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
-pub(crate) use affiliation::{unserved, unserved_org, unserved_project, unserved_user};
+pub(crate) use affiliation::{
+    unserved, unserved_membership, unserved_org, unserved_project, unserved_user,
+};
 pub(crate) use end_user::{end_user, unserved as unserved_end_user};
 pub use key::Key;
 pub(crate) use models::{allowed_models, layers};
@@ -358,10 +360,18 @@ impl AuthHost for NativeAuthHost {
 
     async fn load_team_membership(
         &self,
-        _: &str,
-        _: &str,
+        user_id: &str,
+        team_id: &str,
+        read: AffiliationRead,
     ) -> Result<Option<MembershipRecord>, Error> {
-        declined("load_team_membership")
+        let store = self.store("load_team_membership")?;
+        let membership = store.team_membership(user_id, team_id).await;
+        match unless_failed(membership, "load_team_membership")? {
+            Some(membership) => affiliation::membership(&membership, read)
+                .map(Some)
+                .or_else(declined),
+            None => Ok(None),
+        }
     }
 
     async fn org(&self, id: &str, read: AffiliationRead) -> Result<Option<Org<OrgRecord>>, Error> {
@@ -454,13 +464,8 @@ impl AuthHost for NativeAuthHost {
         declined("team_model_access")
     }
 
-    /// Only an owner in the key's team has a membership that budgets it, which this host does not
-    /// read.
-    async fn team_member_budget(&self, key: &Key, owner: Option<&UserRecord>) -> Result<(), Error> {
-        match (&key.record.team_id, owner) {
-            (Some(_), Some(_)) => declined("team_member_budget"),
-            (None, _) | (_, None) => Ok(()),
-        }
+    async fn team_member_budget(&self, _: &Key, _: Option<&UserRecord>) -> Result<(), Error> {
+        Ok(())
     }
 
     /// A key's own budget is enforced by `BudgetCheck` at read time, so it is served while the

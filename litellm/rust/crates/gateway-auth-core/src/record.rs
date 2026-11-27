@@ -1,8 +1,8 @@
 //! The rows a caller belongs to, as the core reads them: one record per entity, holding its id and
 //! what its stored row says, and nothing a request or another row adds. A host builds a record
 //! from the row it read and decides nothing while it does. A record grows a field with the first
-//! rule that reads it, except for the plain values of a team, user, organization, project or end
-//! user, which are copied whether or not the gateway uses them. The host refuses a caller whose
+//! rule that reads it, except for the plain values of a team, user, membership, organization,
+//! project or end user, which are copied whether or not the gateway uses them. The host refuses a caller whose
 //! association holds a column the gateway does not honor.
 
 use std::collections::BTreeMap;
@@ -62,6 +62,11 @@ pub struct MembershipRecord {
     pub team_id: String,
     pub limits: MinuteLimits,
     pub budget: Budget,
+    pub rollover_credit: Option<f64>,
+    pub soft_budget: Option<f64>,
+    pub tpd_limit: Option<i64>,
+    pub max_parallel_requests: Option<i64>,
+    pub budget_duration: Option<String>,
 }
 
 /// An organization. Its limits and budget are its budget row's.

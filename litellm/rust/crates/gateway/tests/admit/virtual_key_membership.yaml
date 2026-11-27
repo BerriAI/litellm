@@ -1,0 +1,70 @@
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+
+teams:
+  squad: {}
+
+users:
+  plain: {}
+  missing: {}
+  capped: {}
+  structured: {}
+  unread: {}
+
+rows:
+  - LiteLLM_BudgetTable: {budget_id: limited, max_budget: 10, created_by: test, updated_by: test}
+  - LiteLLM_BudgetTable: {budget_id: structured, model_max_budget: {claude: 10}, created_by: test, updated_by: test}
+  - LiteLLM_TeamMembership: {team_id: squad, user_id: plain, spend: 1}
+  - LiteLLM_TeamMembership: {team_id: squad, user_id: capped, budget_id: limited}
+  - LiteLLM_TeamMembership: {team_id: squad, user_id: structured, budget_id: structured}
+  - LiteLLM_TeamMembership: {team_id: squad, user_id: unread}
+
+keys:
+  sk-plain: {team_id: squad, user_id: plain}
+  sk-missing: {team_id: squad, user_id: missing}
+  sk-capped: {team_id: squad, user_id: capped}
+  sk-structured: {team_id: squad, user_id: structured}
+  sk-unread: {team_id: squad, user_id: unread}
+
+requests:
+  - name: a key owner's stored membership
+    headers: {authorization: Bearer sk-plain}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: no row for the key owner's membership
+    headers: {authorization: Bearer sk-missing}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: the key owner's membership has an unserved budget
+    headers: {authorization: Bearer sk-capped}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: max_budget
+
+  - name: the key owner's membership budget has a per-model map
+    headers: {authorization: Bearer sk-structured}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: the database fails the membership query
+    unavailable: membership
+    headers: {authorization: Bearer sk-unread}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

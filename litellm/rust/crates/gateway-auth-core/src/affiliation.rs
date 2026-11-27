@@ -34,7 +34,7 @@ pub enum Holder<R: Rows> {
     Nobody,
     User(Named<R::User>),
     Team(Team<R>),
-    /// `membership` is the user's row in `team`, which only a JWT reads for now.
+    /// `membership` is the user's stored membership in `team`, if there is one.
     Member {
         user: Named<R::User>,
         team: Team<R>,

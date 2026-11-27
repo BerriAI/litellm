@@ -4,7 +4,7 @@ use litellm_config::ClaimPath;
 
 use super::claims;
 use crate::{
-    AuthHost, Error, Rows, TeamDenial,
+    AffiliationRead, AuthHost, Error, Rows, TeamDenial,
     authn::jwt::{Claims, JwtRequest, JwtSettings},
     authz::{TeamEligibility, Verdict as Eligibility},
     host::{MembershipRow, TeamRow},
@@ -338,7 +338,10 @@ async fn join<H: AuthHost>(
     team: HostTeam<H>,
 ) -> Result<Joined<H::Rows>, Error> {
     let membership: Option<MembershipRow<H>> = match user_id.filter(|text| !text.is_empty()) {
-        Some(user_id) => host.load_team_membership(user_id, &team.team_id).await?,
+        Some(user_id) => {
+            host.load_team_membership(user_id, &team.team_id, AffiliationRead::Jwt)
+                .await?
+        }
         None => None,
     };
     Ok(Joined { team, membership })

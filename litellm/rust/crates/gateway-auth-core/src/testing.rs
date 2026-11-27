@@ -369,6 +369,7 @@ impl AuthHost for ScriptedHost {
         &self,
         user_id: &str,
         team_id: &str,
+        _: crate::AffiliationRead,
     ) -> Result<Option<String>, Error> {
         self.record(format!("membership {user_id} {team_id}"));
         if self.membership_fails {
