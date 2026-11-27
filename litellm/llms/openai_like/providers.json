@@ -397,5 +397,14 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "qcode": {
+    "base_url": "https://api.qcode.cc/openai/v1",
+    "api_key_env": "QCODE_API_KEY",
+    "api_base_env": "QCODE_API_BASE",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    }
   }
 }
