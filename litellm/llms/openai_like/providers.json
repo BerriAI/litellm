@@ -377,6 +377,11 @@
     "api_key_env": "HUAWEI_MAAS_API_KEY",
     "api_base_env": "HUAWEI_MAAS_API_BASE"
   },
+  "klinch": {
+    "base_url": "https://api.klinch.cloud/v1",
+    "api_key_env": "KLINCH_API_KEY",
+    "api_base_env": "KLINCH_API_BASE"
+  },
   "wally": {
     "base_url": "https://inference.runanywhere.ai/v1",
     "api_key_env": "WALLY_API_KEY",
