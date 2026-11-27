@@ -401,7 +401,7 @@ const buildMemberDefaultsSchema = (t: TFunction) => {
     team_member_key_duration: z
       .string()
       .transform((value) => value.trim() || null)
-      .optional(),
+      .nullish(),
     team_member_tpm_limit: numericInputSchema,
     team_member_rpm_limit: numericInputSchema,
     team_member_max_budget_alert_emails: budgetAlertRowsSchema((issue) =>
