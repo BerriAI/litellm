@@ -2428,6 +2428,14 @@ def _map_azure_exception(
                 litellm_debug_info=extra_information,
                 response=response,
             )
+        elif original_exception.status_code == 403:
+            raise PermissionDeniedError(
+                message=f"AzureException PermissionDeniedError - {message}",
+                llm_provider="azure",
+                model=model,
+                litellm_debug_info=extra_information,
+                response=response,
+            )
         elif original_exception.status_code == 404:
             raise NotFoundError(
                 message=f"AzureException NotFoundError - {message}",
