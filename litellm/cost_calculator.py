@@ -645,7 +645,10 @@ def cost_per_token(
             if model_with_provider_and_region in model_cost_ref:  # use region based pricing, if it's available
                 model_with_provider = model_with_provider_and_region
     else:
-        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        if model_is_str:
+            _, custom_llm_provider = _resolve_model_provider_for_cost(model=model)
+        else:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
 
     assert custom_llm_provider is not None  # caller-supplied or get_llm_provider
 
@@ -956,6 +959,19 @@ def has_hidden_params(obj: object) -> bool:
     return hasattr(obj, "_hidden_params")
 
 
+def _resolve_model_provider_for_cost(model: str, custom_llm_provider: str | None = None) -> tuple[str, str]:
+    """Resolve model and provider without running OAuth device login for declared providers."""
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
+    declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+    if declared is not None:
+        return model.removeprefix(f"{declared}/"), declared
+    resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    return resolved_model, resolved_provider
+
+
 def _get_provider_for_cost_calc(
     model: str | None,
     custom_llm_provider: str | None = None,
@@ -965,14 +981,14 @@ def _get_provider_for_cost_calc(
     if model is None:
         return None
     try:
-        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        _, resolved_provider = _resolve_model_provider_for_cost(model=model)
     except Exception as e:
         verbose_logger.debug(
             "litellm.cost_calculator.py::_get_provider_for_cost_calc() - Error inferring custom_llm_provider - %s", e
         )
         return None
 
-    return custom_llm_provider
+    return resolved_provider
 
 
 def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None:
@@ -2443,7 +2459,7 @@ def completion_cost(
                     raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
                 if custom_llm_provider is None:
                     try:
-                        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                        model, custom_llm_provider = _resolve_model_provider_for_cost(
                             model=model
                         )  # strip the llm provider from the model name -> for image gen cost calculation
                     except Exception as e:

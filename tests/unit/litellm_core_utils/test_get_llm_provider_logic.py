@@ -925,3 +925,82 @@ def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
         .group("codex")
     )
     assert group is not None and group.providers == ["chatgpt"]
+
+
+@pytest.fixture
+def authenticating_login_calls(
+    chatgpt_login_tripwire: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> list[str]:
+    from litellm.llms.chatgpt.chat.transformation import ChatGPTConfig
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+
+    blocked_copilot: Final = tmp_path / "blocked_copilot"
+    blocked_copilot.write_text("ordinary file")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(blocked_copilot / "unused"))
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    calls: Final[list[str]] = []
+
+    def _forbid_login(provider: str):
+        def _fail(self: object, *args: object, **kwargs: object) -> tuple[str | None, str | None, str]:
+            calls.append(provider)
+            raise RuntimeError(f"device login must not run for {provider}")
+
+        return _fail
+
+    monkeypatch.setattr(ChatGPTConfig, "get_openai_compatible_provider_info", _forbid_login("chatgpt"))
+    monkeypatch.setattr(GithubCopilotConfig, "get_openai_compatible_provider_info", _forbid_login("github_copilot"))
+    return calls
+
+
+@pytest.mark.parametrize("model", ["chatgpt/gpt-5.5", "github_copilot/gpt-4o"])
+def test_validate_environment_and_response_schema_skip_oauth_login(
+    authenticating_login_calls: list[str], model: str
+) -> None:
+    env_result: Final = litellm.validate_environment(model=model)
+    assert env_result == {"keys_in_environment": True, "missing_keys": []}
+    assert litellm.supports_response_schema(model=model) is True
+    assert authenticating_login_calls == []
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("gpt-5.5", "chatgpt"),
+        ("gpt-4o", "github_copilot"),
+    ],
+)
+def test_supports_response_schema_explicit_auth_provider_skips_login(
+    authenticating_login_calls: list[str], model: str, custom_llm_provider: str
+) -> None:
+    assert litellm.supports_response_schema(model=model, custom_llm_provider=custom_llm_provider) is True
+    assert authenticating_login_calls == []
+
+
+def test_supports_response_schema_matches_model_info_for_chatgpt(authenticating_login_calls: list[str]) -> None:
+    expected: Final = litellm.get_model_info(model="chatgpt/gpt-5.5").get("supports_response_schema")
+    assert expected is True
+    assert litellm.supports_response_schema(model="chatgpt/gpt-5.5") == expected
+    assert authenticating_login_calls == []
+
+
+@pytest.mark.parametrize("model", ["chatgpt/gpt-5.5", "github_copilot/gpt-4o"])
+def test_cost_helpers_and_potential_names_skip_oauth_login(authenticating_login_calls: list[str], model: str) -> None:
+    expected_provider: Final = model.split("/", 1)[0]
+    potential: Final = litellm.utils.get_potential_model_names(model=model, custom_llm_provider=None)
+    assert potential["custom_llm_provider"] == expected_provider
+    assert litellm.cost_per_token(model=model, prompt_tokens=10, completion_tokens=10) == (0.0, 0.0)
+    assert litellm.completion_cost(model=model, prompt="hi", completion="hello") == 0.0
+    assert authenticating_login_calls == []
+
+
+def test_validate_environment_and_response_schema_preserve_other_providers(
+    authenticating_login_calls: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert litellm.validate_environment(model="openai/gpt-4o") == {
+        "keys_in_environment": False,
+        "missing_keys": ["OPENAI_API_KEY"],
+    }
+    assert litellm.supports_response_schema(model="openai/gpt-4o") is True
+    assert authenticating_login_calls == []

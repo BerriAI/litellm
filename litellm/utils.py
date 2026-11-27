@@ -3797,6 +3797,20 @@ def supports_native_streaming(model: str, custom_llm_provider: str | None) -> bo
         return False
 
 
+def _resolve_provider_without_authenticating_login(
+    model: str, custom_llm_provider: str | None = None
+) -> tuple[str, str]:
+    """Resolve model and provider without running OAuth device login for declared providers."""
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
+    declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+    if declared is not None:
+        return model.removeprefix(f"{declared}/"), declared
+    get_llm_provider: Final = litellm_utils.get_llm_provider
+    resolved_model, resolved_provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    return resolved_model, resolved_provider
+
+
 def supports_response_schema(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model + provider supports 'response_schema' as a param.
@@ -3812,8 +3826,9 @@ def supports_response_schema(model: str, custom_llm_provider: str | None = None)
     """
     ## GET LLM PROVIDER ##
     try:
-        get_llm_provider: Final = litellm_utils.get_llm_provider
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        resolved_model, resolved_provider = _resolve_provider_without_authenticating_login(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
     except Exception as e:
         verbose_logger.debug(
             "Model not found or error in checking response schema support. You passed model=%s, custom_llm_provider=%s. Error: %s",
@@ -3832,11 +3847,11 @@ def supports_response_schema(model: str, custom_llm_provider: str | None = None)
         litellm.LlmProviders.DATABRICKS,
     ]
 
-    if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
+    if resolved_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
         return True
     return supports_factory(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
+        model=resolved_model,
+        custom_llm_provider=resolved_provider,
         key="supports_response_schema",
     )
 
@@ -7553,8 +7568,7 @@ def get_potential_model_names(model: str, custom_llm_provider: str | None) -> Po
     if custom_llm_provider is None:
         # Get custom_llm_provider
         try:
-            get_llm_provider: Final = litellm_utils.get_llm_provider
-            split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+            split_model, custom_llm_provider = _resolve_provider_without_authenticating_login(model=model)
         except Exception:
             split_model = model
         combined_model_name = model
@@ -8687,9 +8701,9 @@ def validate_environment(
             "missing_keys": missing_keys,
         }
     ## EXTRACT LLM PROVIDER - if model name provided
+    custom_llm_provider: str | None
     try:
-        get_llm_provider: Final = litellm_utils.get_llm_provider
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        _, custom_llm_provider = _resolve_provider_without_authenticating_login(model=model)
     except Exception:
         custom_llm_provider = None
 
