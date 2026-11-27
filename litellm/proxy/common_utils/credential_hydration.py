@@ -32,9 +32,14 @@ _FEDERATION_SURFACE_FIELDS: Final = frozenset(
         "client_secret",
         "configurable_clientside_auth_params",
         "litellm_credential_name",
+        "upstream_proxy",
         *server_owned_wif_litellm_params,
     )
 )
+
+# Decides whether the connection that carries the token is encrypted. Only switching it off matters,
+# so the write is inspected by value rather than by key.
+_CONNECTION_INTEGRITY_FIELD: Final = "ssl_verify"
 
 
 def write_touches_federation_surface(incoming: Mapping[str, object] | None) -> bool:
@@ -49,8 +54,17 @@ def write_touches_federation_surface(incoming: Mapping[str, object] | None) -> b
     resulting token is sent. A write setting none of them leaves the delegated-token configuration
     exactly as the proxy admin left it, so renaming a deployment or changing its rpm stays an
     ordinary team-admin edit.
+
+    ``upstream_proxy`` belongs to that group for the same reason as ``api_base``: it decides which
+    host actually receives the request, and it does so without changing the hostname the proxy admin
+    pinned. Turning off ``ssl_verify`` is the other half of that move, since it is what lets the
+    chosen host read the token instead of only relaying it.
     """
-    return incoming is not None and not _FEDERATION_SURFACE_FIELDS.isdisjoint(incoming.keys())
+    if incoming is None:
+        return False
+    if incoming.get(_CONNECTION_INTEGRITY_FIELD) is False:
+        return True
+    return not _FEDERATION_SURFACE_FIELDS.isdisjoint(incoming.keys())
 
 
 def stored_credential_provider(credential_provider: object) -> str | None:

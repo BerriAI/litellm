@@ -14,6 +14,7 @@ vi.mock("./panels/AllModelsPanel", () => ({ default: () => <div data-testid="pan
 vi.mock("./panels/AddModelPanel", () => ({ default: () => <div data-testid="panel-add" /> }));
 vi.mock("./panels/AutoRoutersTabPanel", () => ({ default: () => <div data-testid="panel-auto-routers" /> }));
 vi.mock("./panels/LlmCredentialsPanel", () => ({ default: () => <div data-testid="panel-credentials" /> }));
+vi.mock("./panels/UpstreamProxiesPanel", () => ({ default: () => <div data-testid="panel-upstream-proxies" /> }));
 vi.mock("./panels/PassThroughPanel", () => ({ default: () => <div data-testid="panel-pass-through" /> }));
 vi.mock("./panels/HealthStatusPanel", () => ({ default: () => <div data-testid="panel-health" /> }));
 vi.mock("./panels/ModelRetrySettingsPanel", () => ({ default: () => <div data-testid="panel-retry" /> }));
@@ -157,6 +158,7 @@ describe("ModelsAndEndpointsPage", () => {
       "Add Model",
       "Auto-Routers Beta",
       "LLM Credentials",
+      "Upstream Proxies",
       "Pass-Through Endpoints",
       "Health Status",
       "Model Retry Settings",
@@ -171,6 +173,7 @@ describe("ModelsAndEndpointsPage", () => {
     renderPage();
     expect(screen.getByRole("tab", { name: "Deployed Models" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Health Status" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Upstream Proxies" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Pass-Through Endpoints" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Model Retry Settings" })).not.toBeInTheDocument();

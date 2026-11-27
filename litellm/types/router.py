@@ -49,6 +49,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
+from litellm.llms.custom_httpx.upstream_proxy import validate_configured_upstream_proxy
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
@@ -634,6 +635,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
     provider_affinity_header: str | None = None
+    upstream_proxy: str | None = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: str | None = None
@@ -730,6 +732,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         cls, value: float | str | httpx.Timeout | SDKTimeout | None
     ) -> float | str | httpx.Timeout | None:
         return CompletionTimeout.normalize(value) if isinstance(value, (httpx.Timeout, SDKTimeout)) else value
+
+    @field_validator("upstream_proxy")
+    @classmethod
+    def validate_upstream_proxy(cls, value: str | None) -> str | None:
+        return validate_configured_upstream_proxy(value)
 
     @field_validator("provider_affinity_header")
     @classmethod
@@ -855,6 +862,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     max_retries: int | None
     organization: list | str | None  # for openai orgs
     provider_affinity_header: ReadOnly[str | None]
+    upstream_proxy: ReadOnly[str | None]
     configurable_clientside_auth_params: (
         CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     )

@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { credentialOptions } from "@/components/shared/credentialOptions";
 import { AttachedCredential, CredentialNameHint } from "@/components/shared/CredentialIdentity";
+import { UpstreamProxySelect } from "@/components/upstream_proxies/UpstreamProxySelect";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -134,6 +135,7 @@ const modelEditShape = {
   tags: z.array(z.string()).optional(),
   health_check_model: z.string().nullish(),
   litellm_credential_name: z.string().nullish(),
+  upstream_proxy: z.string().nullish(),
   litellm_extra_params: textish,
   model_info: textish,
   team_id: textish,
@@ -254,6 +256,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   // antd never mounted this field for a non-wildcard model, so the key must be absent, not null.
   ...(isWildcardModel ? { health_check_model: localModelData.model_info?.health_check_model } : {}),
   litellm_credential_name: localModelData.litellm_params?.litellm_credential_name ?? null,
+  upstream_proxy: localModelData.litellm_params?.upstream_proxy ?? null,
   litellm_extra_params: JSON.stringify(editableModelExtraParams(localModelData.litellm_params ?? {}), null, 2),
   team_id: localModelData.model_info?.team_id ?? undefined,
 });
@@ -705,6 +708,21 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                     credentialName={localModelData.litellm_params?.litellm_credential_name}
                     credentials={credentialsList}
                   />
+                </Display>
+              )}
+            </div>
+
+            <div>
+              <FieldLabel>{t("modelInfoEditForm.fields.upstreamProxy.label")}</FieldLabel>
+              {isEditing ? (
+                <FormField control={form.control} name="upstream_proxy">
+                  {({ id, value, onChange }) => (
+                    <UpstreamProxySelect id={id} value={value as string | null | undefined} onChange={onChange} />
+                  )}
+                </FormField>
+              ) : (
+                <Display>
+                  {localModelData.litellm_params?.upstream_proxy || t("upstreamProxies.environmentDefault")}
                 </Display>
               )}
             </div>

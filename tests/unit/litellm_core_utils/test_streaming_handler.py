@@ -43,6 +43,7 @@ from litellm.llms.anthropic.chat.handler import ModelResponseIterator as Anthrop
 from litellm.llms.azure_ai.chat.transformation import AzureAIChatCompletionResponseIterator
 from litellm.llms.base_llm.base_model_iterator import UPSTREAM_ABORT_MESSAGE
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
+from litellm.llms.custom_httpx.upstream_proxy import current_upstream_proxy, upstream_proxy_scope
 from litellm.llms.databricks.chat.transformation import DatabricksChatResponseIterator
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator as OpenAILikeModelResponseIterator
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
@@ -1542,6 +1543,36 @@ async def test_a_stream_that_opens_is_opened_once(logging_obj: Logging, sync_mod
     opened: Final = await _fetch(stream, sync_mode)
     assert isinstance(opened, ModelResponseListIterator)
     assert await _fetch(stream, sync_mode) is opened
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_lazy_stream_opens_through_the_deployment_proxy(logging_obj: Logging, sync_mode: bool) -> None:
+    """Gemini and Vertex hand back a wrapper whose HTTP call has not happened yet, so it opens
+    after the request scope that carries the deployment's proxy has already unwound."""
+    seen: list[str | None] = []
+
+    def make_sync_call(client: object) -> ModelResponseListIterator:
+        seen.append(current_upstream_proxy())
+        return ModelResponseListIterator(model_responses=[])
+
+    async def make_call(client: object) -> ModelResponseListIterator:
+        seen.append(current_upstream_proxy())
+        return ModelResponseListIterator(model_responses=[])
+
+    with upstream_proxy_scope("http://egress.jp:3128", lambda: True):
+        stream: Final = CustomStreamWrapper(
+            completion_stream=None,
+            model="gemini-2.5-flash",
+            logging_obj=logging_obj,
+            custom_llm_provider="gemini",
+            make_call=make_sync_call if sync_mode else make_call,
+        )
+    assert current_upstream_proxy() is None
+
+    await _fetch(stream, sync_mode)
+
+    assert seen == ["http://egress.jp:3128"]
+    assert current_upstream_proxy() is None
 
 
 def _bedrock_error_event(exception_type: str):

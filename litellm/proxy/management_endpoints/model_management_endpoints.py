@@ -2865,6 +2865,20 @@ class ModelManagementAuthChecks:
         return True
 
     @staticmethod
+    def _non_admin_rejection_message(field: str, wif_field: str) -> str:
+        if field == wif_field:
+            return (
+                f"Only proxy admins can change the credentials of a deployment configured for "
+                f"{server_owned_param_kind(wif_field)}, or holding an oidc/ api_key secret "
+                f"reference ({wif_field!r})."
+            )
+        return (
+            f"Only proxy admins can change {field!r} on a deployment configured for "
+            f"{server_owned_param_kind(wif_field)}, or holding an oidc/ api_key secret "
+            f"reference ({wif_field!r}), because it moves the request the credential is sent with."
+        )
+
+    @staticmethod
     async def _reject_non_admin_wif_write(
         *,
         model_params: Deployment,
@@ -2881,15 +2895,15 @@ class ModelManagementAuthChecks:
         if wif_fields:
             # ProxyException rather than HTTPException so the offending field stays a structured
             # `param`, which is the contract the narrower gate this replaced already published.
+            egress_field: Final = next(
+                (field for field in ("upstream_proxy", "ssl_verify") if field in (incoming_params or {})),
+                wif_fields[0],
+            )
             raise ProxyException(
-                message=(
-                    f"Only proxy admins can change the credentials of a deployment configured for "
-                    f"{server_owned_param_kind(wif_fields[0])}, or holding an oidc/ api_key secret "
-                    f"reference ({wif_fields[0]!r})."
-                ),
+                message=ModelManagementAuthChecks._non_admin_rejection_message(egress_field, wif_fields[0]),
                 type=ProxyErrorTypes.auth_error.value,
                 code=status.HTTP_403_FORBIDDEN,
-                param=wif_fields[0],
+                param=egress_field,
             )
         # A name the caller expects an admin to create later would resolve to nothing today and
         # start federating the moment it exists, so a non-admin may only attach one that is already there.

@@ -28,6 +28,7 @@ import {
   type CredentialSubmission,
 } from "./credential_form_helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { MountedUpstreamProxyField } from "@/components/upstream_proxies/UpstreamProxySelect";
 import FederationFields from "./FederationFields";
 import InternalIssuerJwks from "./InternalIssuerJwks";
 import { DEFAULT_IDENTITY_SOURCE, inferIdentitySource, type IdentitySourceId } from "./anthropic_federation";
@@ -290,6 +291,8 @@ export default function CredentialModal({
               )}
 
               <InternalIssuerJwks panel={jwksPanelFor(existingCredential, selection)} />
+
+              <MountedUpstreamProxyField />
 
               <div className="flex justify-between items-center">
                 <SimpleTooltip content={t("modelAdd.credentialModal.helpTooltip")}>

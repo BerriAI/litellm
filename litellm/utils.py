@@ -530,6 +530,7 @@ from litellm.llms.base_llm.completion.transformation import BaseTextCompletionCo
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
+from litellm.llms.custom_httpx.upstream_proxy import UPSTREAM_PROXY_PARAM, upstream_proxy_scope
 from litellm.secret_managers.main import (
     API_KEY_OIDC_SECRET_PREFIXES,
     GOOGLE_OIDC_SECRET_PREFIX,
@@ -2450,6 +2451,12 @@ def clamp_max_tokens(
             print_verbose(f"Error while checking max token limit: {e}")
 
 
+def _aiohttp_transport_in_use() -> bool:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    return AsyncHTTPHandler.should_use_aiohttp_transport()
+
+
 def client(original_function):
     from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
 
@@ -2577,7 +2584,8 @@ def client(original_function):
             clamp_max_tokens(model, args, kwargs, call_type)
             # MODEL CALL
             try:
-                result = original_function(*args, **kwargs)
+                with upstream_proxy_scope(kwargs.get(UPSTREAM_PROXY_PARAM), lambda: False):
+                    result = original_function(*args, **kwargs)
             except Exception as deployment_error:
                 report_failed_sync_fallback_attempt(kwargs, call_type, deployment_error)
                 raise
@@ -2888,7 +2896,8 @@ def client(original_function):
                 else kwargs
             )
             try:
-                result = await original_function(*args, **call_kwargs)
+                with upstream_proxy_scope(call_kwargs.get(UPSTREAM_PROXY_PARAM), _aiohttp_transport_in_use):
+                    result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:

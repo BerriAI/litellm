@@ -6,6 +6,10 @@ import type { CredentialItem } from "@/components/networking";
 
 import ModelInfoEditForm, { perMillionToPerToken } from "./ModelInfoEditForm";
 
+vi.mock("@/app/(dashboard)/hooks/upstreamProxies/useUpstreamProxies", () => ({
+  useUpstreamProxies: () => ({ data: { proxies: [] } }),
+}));
+
 vi.mock("@/components/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/networking")>();
   return {
