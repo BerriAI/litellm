@@ -157,6 +157,10 @@ class MCPToolSearchSettings(LiteLLMBaseModel):
         default=(),
         description="Tool names always returned first when the caller can access them, e.g. `my_server-get_rates`.",
     )
+    enable_workflow_discovery: bool = Field(
+        default=False,
+        description="Expose read-only schema-based workflow discovery and pair checks on /mcp/proxy.",
+    )
 
 
 # OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).

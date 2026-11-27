@@ -348,6 +348,7 @@ class TestMcpToolSearchSettings:
             "top_k": 3,
             "similarity_threshold": 0.2,
             "core_tools": ("a", "b"),
+            "enable_workflow_discovery": False,
         }
 
 

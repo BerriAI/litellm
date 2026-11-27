@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain, islice
 from types import EllipsisType, MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, SupportsIndex, SupportsInt, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, SupportsIndex, SupportsInt, TypedDict, cast, runtime_checkable
 
 import anyio
 from anyio import to_process
@@ -42,8 +42,16 @@ MCP_TOOL_CALL_TOOL_NAME: Final[str] = "mcp_tool_call"
 MCP_PROXY_SEARCH_TOOL_NAME: Final[str] = "search_tools"
 MCP_PROXY_SCHEMA_TOOL_NAME: Final[str] = "get_tool_schema"
 MCP_PROXY_CALL_TOOL_NAME: Final[str] = "call_tool"
+MCP_PROXY_WORKFLOW_TOOL_NAME: Final[str] = "check_workflow"
+MCP_PROXY_WORKFLOW_SOURCES_TOOL_NAME: Final[str] = "find_workflow_sources"
 MCP_PROXY_TOOL_NAMES: Final = frozenset(
-    (MCP_PROXY_SEARCH_TOOL_NAME, MCP_PROXY_SCHEMA_TOOL_NAME, MCP_PROXY_CALL_TOOL_NAME)
+    (
+        MCP_PROXY_SEARCH_TOOL_NAME,
+        MCP_PROXY_SCHEMA_TOOL_NAME,
+        MCP_PROXY_CALL_TOOL_NAME,
+        MCP_PROXY_WORKFLOW_TOOL_NAME,
+        MCP_PROXY_WORKFLOW_SOURCES_TOOL_NAME,
+    )
 )
 AGENT_SEARCH_TOOL_NAME: Final[str] = "agent_search"
 SKILL_SEARCH_TOOL_NAME: Final[str] = "skill_search"
@@ -339,6 +347,11 @@ class _ToolParamSchema(TypedDict, total=False):
     type: Required[ReadOnly[str]]
     description: Required[ReadOnly[str]]
     default: ReadOnly[int]
+    items: ReadOnly[Mapping[str, str]]
+    minItems: ReadOnly[int]
+    maxItems: ReadOnly[int]
+    minimum: ReadOnly[int]
+    maximum: ReadOnly[int]
 
 
 class _ToolInputSchema(TypedDict):
@@ -460,13 +473,62 @@ _MCP_PROXY_CALL_DEFINITION: Final[VirtualToolDefinition] = {
     },
 }
 
+_MCP_PROXY_WORKFLOW_DEFINITION: Final[VirtualToolDefinition] = {
+    "name": MCP_PROXY_WORKFLOW_TOOL_NAME,
+    "description": "Check whether two accessible tools declare a compatible output-to-input field. Does not call them.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "tool_ids": {
+                "type": "array",
+                "description": "Two opaque tool IDs from search_tools, in execution order.",
+                "items": {"type": "string"},
+                "minItems": 2,
+                "maxItems": 2,
+            }
+        },
+        "required": _json_array("tool_ids"),
+    },
+}
+
+_MCP_PROXY_WORKFLOW_SOURCES_DEFINITION: Final[VirtualToolDefinition] = {
+    "name": MCP_PROXY_WORKFLOW_SOURCES_TOOL_NAME,
+    "description": "Find accessible tools whose declared output can fill a required input of the target tool. Does not call tools.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "target_tool_id": {"type": "string", "description": "Opaque destination tool ID from search_tools."},
+            "offset": {
+                "type": "integer",
+                "description": "Candidate offset for pagination.",
+                "default": 0,
+                "minimum": 0,
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum candidates returned in this page.",
+                "default": 10,
+                "minimum": 1,
+                "maximum": 50,
+            },
+        },
+        "required": _json_array("target_tool_id"),
+    },
+}
+
 
 def get_virtual_tool_definitions() -> tuple[VirtualToolDefinition, ...]:
     return (_MCP_TOOL_SEARCH_DEFINITION, _MCP_TOOL_CALL_DEFINITION, _AGENT_SEARCH_DEFINITION, _SKILL_SEARCH_DEFINITION)
 
 
 def get_mcp_proxy_tool_definitions() -> tuple[VirtualToolDefinition, ...]:
-    return (_MCP_PROXY_SEARCH_DEFINITION, _MCP_PROXY_SCHEMA_DEFINITION, _MCP_PROXY_CALL_DEFINITION)
+    base: Final = (_MCP_PROXY_SEARCH_DEFINITION, _MCP_PROXY_SCHEMA_DEFINITION, _MCP_PROXY_CALL_DEFINITION)
+    settings: Final = mcp_tool_search_settings()
+    return (
+        (*base, _MCP_PROXY_WORKFLOW_DEFINITION, _MCP_PROXY_WORKFLOW_SOURCES_DEFINITION)
+        if isinstance(settings, MCPToolSearchSettings) and settings.enable_workflow_discovery
+        else base
+    )
 
 
 def _text_tool_result(text: str, is_error: bool) -> CallToolResult:
@@ -618,6 +680,91 @@ async def handle_mcp_proxy_tool(
         _list_mcp_tools,
         find_mcp_proxy_tool,
     )
+
+    if name in (MCP_PROXY_WORKFLOW_TOOL_NAME, MCP_PROXY_WORKFLOW_SOURCES_TOOL_NAME):
+        from litellm.proxy.mcp_server.tool_workflows import check_tool_workflow, find_workflow_sources
+
+        workflow_settings: Final = mcp_tool_search_settings()
+        if not isinstance(workflow_settings, MCPToolSearchSettings) or not workflow_settings.enable_workflow_discovery:
+            return _text_tool_result("Workflow discovery is not enabled", is_error=True)
+        supplied_ids: Final = arguments.get("tool_ids")
+        target_id_arg: Final = arguments.get("target_tool_id")
+        offset_arg: Final = arguments.get("offset", 0)
+        limit_arg: Final = arguments.get("limit", 10)
+        if name == MCP_PROXY_WORKFLOW_SOURCES_TOOL_NAME:
+            if not isinstance(target_id_arg, str) or not target_id_arg:
+                return _text_tool_result("target_tool_id must be a nonempty string", is_error=True)
+            if type(offset_arg) is not int or offset_arg < 0 or type(limit_arg) is not int or not 1 <= limit_arg <= 50:
+                return _text_tool_result("offset must be nonnegative and limit must be between 1 and 50", is_error=True)
+        elif (
+            not isinstance(supplied_ids, list)
+            or len(supplied_ids) != 2
+            or not all(isinstance(item, str) for item in supplied_ids)
+        ):
+            return _text_tool_result("tool_ids must contain exactly two string IDs", is_error=True)
+        workflow_listing: Final = await _list_mcp_tools(
+            user_api_key_auth=user_api_key_dict,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            mcp_proxy_mode=True,
+            use_tool_list_cache=False,
+        )
+        available: Final = MappingProxyType({mcp_proxy_tool_id(tool): tool for tool in workflow_listing.tools})
+        if name == MCP_PROXY_WORKFLOW_SOURCES_TOOL_NAME:
+            target_id: Final = cast(str, target_id_arg)
+            offset: Final = cast(int, offset_arg)
+            limit: Final = cast(int, limit_arg)
+            target: Final = available.get(target_id)
+            if target is None:
+                return _text_tool_result("Unknown or unauthorized target_tool_id", is_error=True)
+            sources: Final = find_workflow_sources(workflow_listing.tools, target)
+            return _text_tool_result(
+                json.dumps(
+                    {
+                        "target_tool_id": target_id,
+                        "verification_scope": "declared_schema_only",
+                        "total_candidates": len(sources),
+                        "offset": offset,
+                        "sources": tuple(
+                            {
+                                "source_tool_id": mcp_proxy_tool_id(source),
+                                "source_tool_name": source.name,
+                                "binding_fields": check.binding_fields,
+                                "source_step_inputs": check.first_step_inputs,
+                                "target_step_inputs": check.second_step_inputs,
+                            }
+                            for source, check in sources[offset : offset + limit]
+                        ),
+                    }
+                ),
+                is_error=False,
+            )
+        tool_ids: Final = cast(list[str], supplied_ids)
+        first: Final = available.get(tool_ids[0])
+        second: Final = available.get(tool_ids[1])
+        if first is None or second is None:
+            return _text_tool_result("Unknown or unauthorized tool_id", is_error=True)
+        check: Final = check_tool_workflow(first, second)
+        return _text_tool_result(
+            json.dumps(
+                {
+                    "first_tool_id": tool_ids[0],
+                    "second_tool_id": tool_ids[1],
+                    "first_tool_name": first.name,
+                    "second_tool_name": second.name,
+                    "verification_scope": "declared_schema_only",
+                    "has_verified_binding": bool(check.binding_fields),
+                    "binding_fields": check.binding_fields,
+                    "first_step_inputs": check.first_step_inputs,
+                    "second_step_inputs": check.second_step_inputs,
+                }
+            ),
+            is_error=False,
+        )
 
     if name == MCP_PROXY_SEARCH_TOOL_NAME:
         listing: Final = await _list_mcp_tools(
