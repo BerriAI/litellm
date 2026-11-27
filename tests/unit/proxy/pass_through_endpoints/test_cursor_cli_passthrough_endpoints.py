@@ -40,10 +40,11 @@ from litellm.proxy._types import (
 from litellm.proxy.agent_endpoints import agent_registry
 from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.hooks.model_capacity_native import NativeDynamicRateLimiter
 from litellm.proxy.pass_through_endpoints.cursor_cli_passthrough_endpoints import cursor_cli_passthrough
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-from litellm.proxy.utils import hash_token
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.agents import AgentResponse
 from tests._master_key import MASTER_KEY
@@ -553,6 +554,31 @@ def test_log_payload_redaction_does_not_block_cursor(
     assert response.status_code == 200, response.text
     assert response.content == b"native-response"
     assert upstream.calls.last.request.content == b"\xff"
+
+
+@pytest.mark.parametrize("endpoint", [_RUN, _APPEND])
+def test_the_proxy_default_hooks_do_not_block_cursor(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    proxy_logging._add_proxy_hooks()  # pyright: ignore[reportPrivateUsage]  # the startup registration under test
+    upstream: Final = respx_mock.post(f"{_BASE}/{endpoint}").respond(content=b"native-response")
+    response: Final = client.post(f"/cursor-cli/{endpoint}", headers=_HEADERS, content=b"\xff")
+    assert response.status_code == 200, response.text
+    assert response.content == b"native-response"
+    assert upstream.called
+
+
+def test_the_dynamic_rate_limiter_does_not_block_cursor(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [NativeDynamicRateLimiter(DualCache())])
+    upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"native-response")
+    response: Final = client.post(f"/cursor-cli/{_RUN}", headers=_HEADERS, content=b"\xff")
+    assert response.status_code == 200, response.text
+    assert response.content == b"native-response"
+    assert upstream.called
 
 
 @pytest.mark.parametrize("enforcing", [False, True])

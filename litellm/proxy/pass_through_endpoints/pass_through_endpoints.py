@@ -1392,7 +1392,7 @@ def _raw_pass_through_body(request: Request) -> str | bytes | None:
 def _v2_requires_inference_controls(callback: object) -> bool:
     from litellm.integrations.custom_logger_v2 import HOOK_SPECS, CustomLoggerV2, Hook
 
-    if not isinstance(callback, CustomLoggerV2):
+    if not isinstance(callback, CustomLoggerV2) or not callback.inspects_request_content:
         return False
     return any(
         subscription.may_abort or bool(subscription.writes)

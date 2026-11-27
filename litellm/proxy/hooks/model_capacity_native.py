@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import count
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # a future a host coroutine yields is untyped
+from typing import TYPE_CHECKING, ClassVar, Final, cast  # noqa: TID251  # a future a host coroutine yields is untyped
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -692,6 +692,7 @@ def _targeted(hook: Hook, view: object) -> bool:
 
 
 class NativeDynamicRateLimiter(RustLogger):
+    inspects_request_content: ClassVar[bool] = False
     delegate: CapacityHost
     capacity: "NativeModelCapacity"
     rate_limits: RateLimitStore
