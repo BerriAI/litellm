@@ -1,5 +1,7 @@
 """Tests for the Redis lock: acquire NX/PX with a token, compare-and-delete release, namespacing."""
 
+from typing import Final
+
 import pytest
 
 from litellm.proxy.mcp_server.outbound_credentials.redis_distributed_lock import (
@@ -52,6 +54,11 @@ class _FakeRedis:
         if "exists" in self._raise_on:
             raise RuntimeError("redis down")
         return self._exists_returns
+
+    async def get(self, name: str) -> object:
+        if "get" in self._raise_on:
+            raise RuntimeError("redis down")
+        return self.store.get(name)
 
 
 @pytest.mark.asyncio
@@ -124,3 +131,13 @@ async def test_is_held_reflects_exists():
 @pytest.mark.asyncio
 async def test_is_held_degrades_to_false_on_redis_error():
     assert await RedisDistributedLock(_FakeRedis(raise_on=["exists"])).is_held("k") is False
+
+
+@pytest.mark.asyncio
+async def test_held_token_and_read_result_decode_bytes_replies() -> None:
+    redis: Final = _FakeRedis()
+    redis.store["k"] = b"tok-bytes"
+    redis.store["k:result:tok-bytes"] = b"reauth_required:revoked"
+    lock: Final = RedisDistributedLock(redis)
+    assert await lock.held_token("k") == "tok-bytes"
+    assert await lock.read_result("k", "tok-bytes") == "reauth_required:revoked"

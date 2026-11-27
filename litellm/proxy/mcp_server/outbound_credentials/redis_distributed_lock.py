@@ -42,6 +42,8 @@ class RedisCommands(Protocol):
 
     async def exists(self, *names: str) -> int: ...
 
+    async def get(self, name: str) -> object: ...
+
 
 @dataclass(frozen=True, slots=True)
 class RedisDistributedLock:
@@ -82,6 +84,37 @@ class RedisDistributedLock:
         # is Unknown under basedpyright, and the lock must never crash the resolve path.
         except Exception as exc:  # noqa: BLE001
             verbose_logger.warning("RedisDistributedLock.release failed: %s", exc)
+
+    def _result_key(self, key: str, token: str) -> str:
+        return f"{key}:result:{token}"
+
+    @staticmethod
+    def _decode_str(value: object) -> str | None:
+        if isinstance(value, bytes):
+            return value.decode()
+        return value if isinstance(value, str) else None
+
+    async def held_token(self, key: str) -> str | None:
+        try:
+            value: Final = await self.client.get(self.namespace_key(key))
+        except Exception as exc:  # noqa: BLE001  # degrade on Redis client error
+            verbose_logger.warning("RedisDistributedLock.held_token failed: %s", exc)
+            return None
+        return self._decode_str(value)
+
+    async def publish_result(self, key: str, token: str, outcome: str, ttl_seconds: float) -> None:
+        try:
+            await self.client.set(self.namespace_key(self._result_key(key, token)), outcome, px=int(ttl_seconds * 1000))
+        except Exception as exc:  # noqa: BLE001  # degrade on Redis client error
+            verbose_logger.warning("RedisDistributedLock.publish_result failed: %s", exc)
+
+    async def read_result(self, key: str, token: str) -> str | None:
+        try:
+            value: Final = await self.client.get(self.namespace_key(self._result_key(key, token)))
+        except Exception as exc:  # noqa: BLE001  # degrade on Redis client error
+            verbose_logger.warning("RedisDistributedLock.read_result failed: %s", exc)
+            return None
+        return self._decode_str(value)
 
     async def is_held(self, key: str) -> bool:
         try:
