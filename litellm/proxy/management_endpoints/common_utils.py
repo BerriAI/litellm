@@ -883,12 +883,17 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         # enabled any enterprise feature (see #20304, #30285); require a license
         # only for a truthy value. The falsy value is still persisted below so a
         # previously-set field can be cleared.
-        if updated_kv.get(field_name):
+        if updated_kv.get(field_name) and (
+            field_name != "team_member_key_duration" or _has_non_empty_value(updated_kv[field_name])
+        ):
             premium_user_check()
 
-    if field_name in updated_kv and updated_kv[field_name] is not None:
+    if field_name in updated_kv and (updated_kv[field_name] is not None or field_name == "team_member_key_duration"):
         # remove field from updated_kv
-        _value: Final = updated_kv.pop(field_name)
+        _raw_value: Final = updated_kv.pop(field_name)
+        _value: Final = (
+            None if field_name == "team_member_key_duration" and not _has_non_empty_value(_raw_value) else _raw_value
+        )
         if "metadata" in updated_kv and updated_kv["metadata"] is not None:
             updated_kv["metadata"][field_name] = _value
         else:
@@ -914,7 +919,7 @@ def update_metadata_fields(updated_kv: dict) -> None:
         updated_kv: The key-value dict being used for the update
     """
     for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        if field in updated_kv and updated_kv[field] is not None:
+        if field in updated_kv and (updated_kv[field] is not None or field == "team_member_key_duration"):
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:

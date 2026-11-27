@@ -1395,20 +1395,24 @@ class TestUpdateMetadataFieldsPremiumCheck:
         update_metadata_fields(updated_kv)
         mock_check.assert_not_called()
 
+    @pytest.mark.parametrize("duration", [None, "", "   "])
     @patch(
         "litellm.proxy.management_endpoints.common_utils.premium_user_check",
         side_effect=Exception("Should not be called"),
     )
-    def test_empty_string_team_member_key_duration_skips_premium_check(
-        self, mock_check
+    def test_cleared_team_member_key_duration_clears_metadata_without_a_license(
+        self, mock_check, duration: str | None
     ):
-        """team_member_key_duration: '' should NOT trigger premium user check."""
-        updated_kv = {
+        updated_kv: Final = {
             "team_id": "team-123",
-            "team_member_key_duration": "",
+            "team_member_key_duration": duration,
+            "metadata": {"team_member_key_duration": "30d", "cost_center": "engineering"},
         }
         update_metadata_fields(updated_kv)
-        mock_check.assert_not_called()
+        assert updated_kv == {
+            "team_id": "team-123",
+            "metadata": {"team_member_key_duration": None, "cost_center": "engineering"},
+        }
 
     @patch(
         "litellm.proxy.management_endpoints.common_utils.premium_user_check",

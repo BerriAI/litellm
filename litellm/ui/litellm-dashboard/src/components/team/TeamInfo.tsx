@@ -1100,7 +1100,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       ...(memberDefaultsForm.getFieldState("team_member_rollover_max_budget").isDirty
         ? { team_member_rollover_max_budget: numberOrNull(values.team_member_rollover_max_budget) }
         : {}),
-      team_member_key_duration: values.team_member_key_duration,
+      team_member_key_duration:
+        values.team_member_key_duration === undefined ? undefined : values.team_member_key_duration.trim() || null,
       ...(values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined
         ? {
             team_member_tpm_limit: numberOrNull(values.team_member_tpm_limit),

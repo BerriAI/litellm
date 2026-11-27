@@ -14446,6 +14446,15 @@ async def test_team_member_key_duration_only_update_preserves_stored_metadata(ki
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["post", "patch"])
+@pytest.mark.parametrize("duration", [None, "", "   "])
+async def test_clearing_team_member_key_duration_preserves_other_metadata(kind: str, duration: str | None) -> None:
+    written: Final = await _written_metadata_with_budget(kind, {"team_member_key_duration": duration})
+
+    assert written == {**_STORED_METADATA_WITH_BUDGET, "team_member_key_duration": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
 async def test_explicit_null_metadata_with_budget_field_still_clears_metadata(kind):
     """``metadata: null`` is an explicit clear, so only the server-owned budget link survives."""
     written = await _written_metadata_with_budget(kind, {"metadata": None, "team_member_budget": 7.0})
