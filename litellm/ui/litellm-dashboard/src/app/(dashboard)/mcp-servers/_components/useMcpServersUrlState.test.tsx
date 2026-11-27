@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,18 +31,19 @@ const server = (server_id: string): MCPServer => ({
 
 const SERVERS = [server("alpha"), server("bravo")];
 
-const wrapperFor =
-  (searchParams: string, onUrlUpdate: OnUrlUpdateFunction) =>
-  ({ children }: { children: ReactNode }) => (
-    <NuqsTestingAdapter
-      searchParams={searchParams}
-      onUrlUpdate={onUrlUpdate}
-      hasMemory
-      resetUrlUpdateQueueOnMount={false}
-    >
-      {children}
-    </NuqsTestingAdapter>
-  );
+const wrapperFor = (searchParams: string, onUrlUpdate: OnUrlUpdateFunction) =>
+  function UrlWrapper({ children }: { children: ReactNode }) {
+    return (
+      <NuqsTestingAdapter
+        searchParams={searchParams}
+        onUrlUpdate={onUrlUpdate}
+        hasMemory
+        resetUrlUpdateQueueOnMount={false}
+      >
+        {children}
+      </NuqsTestingAdapter>
+    );
+  };
 
 const renderPageState = (
   searchParams: string,
@@ -133,10 +134,14 @@ describe("useMcpServersUrlState page tab", () => {
   });
 
   it("writes nothing to a bare URL", async () => {
-    const { onUrlUpdate } = renderPageState("");
+    const { result, onUrlUpdate } = renderPageState("");
 
     await flushUrl();
     expect(onUrlUpdate).not.toHaveBeenCalled();
+
+    act(() => result.current.setTab("toolsets"));
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalledTimes(1));
+    expect(onUrlUpdate.mock.calls[0][0].searchParams.toString()).toBe("tab=toolsets");
   });
 });
 

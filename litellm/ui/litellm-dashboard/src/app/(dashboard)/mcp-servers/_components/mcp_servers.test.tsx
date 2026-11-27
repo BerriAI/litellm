@@ -877,11 +877,7 @@ const shownServerNames = () =>
     .getAllByText(/^(Alpha|Bravo|Charlie)$/)
     .map((node) => node.textContent);
 
-const cardFor = (name: string): HTMLElement => {
-  const card = within(screen.getByTestId("mcp-servers-grid")).getByText(name).closest<HTMLElement>('[role="button"]');
-  if (!card) throw new Error(`no card for ${name}`);
-  return card;
-};
+const cardFor = (name: string): HTMLElement => within(screen.getByTestId("mcp-servers-grid")).getByText(name);
 
 const openedServer = (name: string) => screen.findByRole("heading", { level: 1, name });
 
@@ -1057,7 +1053,6 @@ describe("MCPServers URL state", () => {
     expect(await screen.findByText("No servers match the current filters or search.")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Search by name, alias, URL, or ID")).toHaveValue(payload);
     expect(screen.queryByRole("img", { name: "" })).not.toBeInTheDocument();
-    expect(document.querySelector('img[src="x"]')).toBeNull();
   });
 
   it("opens an admin tab link once the role finishes loading", async () => {

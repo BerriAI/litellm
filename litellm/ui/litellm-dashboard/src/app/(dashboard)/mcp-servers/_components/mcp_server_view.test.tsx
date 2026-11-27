@@ -47,37 +47,32 @@ const newQueryClient = () => new QueryClient({ defaultOptions: { queries: { retr
 interface UrlOptions {
   searchParams?: string;
   onUrlUpdate?: OnUrlUpdateFunction;
-  keepMountWrites?: boolean;
 }
 
-const renderView = (
+const viewTree = (
   overrides: Partial<MCPServer> = {},
   props: Record<string, unknown> = {},
   queryClient: QueryClient = newQueryClient(),
-  { searchParams = "", onUrlUpdate, keepMountWrites = false }: UrlOptions = {},
-) =>
-  render(
-    <NuqsTestingAdapter
-      searchParams={searchParams}
-      onUrlUpdate={onUrlUpdate}
-      hasMemory
-      resetUrlUpdateQueueOnMount={!keepMountWrites}
-    >
-      <QueryClientProvider client={queryClient}>
-        <MCPServerView
-          mcpServer={{ ...baseServer, ...overrides } as MCPServer}
-          onBack={vi.fn()}
-          isProxyAdmin
-          isEditing={false}
-          accessToken="tok"
-          userRole="Admin"
-          userID="u1"
-          availableAccessGroups={[]}
-          {...props}
-        />
-      </QueryClientProvider>
-    </NuqsTestingAdapter>,
-  );
+  { searchParams = "", onUrlUpdate }: UrlOptions = {},
+) => (
+  <NuqsTestingAdapter searchParams={searchParams} onUrlUpdate={onUrlUpdate} hasMemory resetUrlUpdateQueueOnMount>
+    <QueryClientProvider client={queryClient}>
+      <MCPServerView
+        mcpServer={{ ...baseServer, ...overrides } as MCPServer}
+        onBack={vi.fn()}
+        isProxyAdmin
+        isEditing={false}
+        accessToken="tok"
+        userRole="Admin"
+        userID="u1"
+        availableAccessGroups={[]}
+        {...props}
+      />
+    </QueryClientProvider>
+  </NuqsTestingAdapter>
+);
+
+const renderView = (...args: Parameters<typeof viewTree>) => render(viewTree(...args));
 
 const renderViewAt = (searchParams: string, props: Record<string, unknown> = {}, onUrlUpdate?: OnUrlUpdateFunction) =>
   renderView({}, props, newQueryClient(), { searchParams, onUrlUpdate });
@@ -298,17 +293,16 @@ describe("MCPServerView", () => {
     expect(within(activePanel()).getByText("Host URL")).toBeInTheDocument();
   });
 
-  it("shows the overview for a settings link opened by a non-admin and keeps the link", async () => {
-    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-    renderView({}, { isProxyAdmin: false }, newQueryClient(), {
-      searchParams: "?server=srv-1&server_tab=settings",
-      onUrlUpdate,
-      keepMountWrites: true,
-    });
+  it("shows the overview for a settings link opened by a non-admin and keeps the link", () => {
+    const queryClient = newQueryClient();
+    const url = { searchParams: "?server=srv-1&server_tab=settings" };
+    const { rerender } = render(viewTree({}, { isProxyAdmin: false }, queryClient, url));
 
     expect(within(activePanel()).getByText("Host URL")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-    expect(onUrlUpdate.mock.calls.some(([update]) => !update.searchParams.has("server_tab"))).toBe(false);
+
+    rerender(viewTree({}, { isProxyAdmin: true }, queryClient, url));
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
   });
 
   it.each([
