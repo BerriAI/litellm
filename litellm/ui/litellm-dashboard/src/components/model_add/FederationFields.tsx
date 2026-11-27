@@ -4,7 +4,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { isMaskedSecret } from "@/utils/maskedSecretUtils";
-import { MountedFormField, type MountedFieldControlProps } from "../common_components/MountedFormField";
+import type { MountedFieldControlProps } from "../common_components/MountedFormField";
+import { DeploymentMountedField as MountedFormField } from "../add_model/deployment-form/DeploymentMountedField";
 import {
   FEDERATION_CORE_FIELDS,
   identitySourceById,
