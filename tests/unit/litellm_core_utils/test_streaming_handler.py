@@ -7031,6 +7031,37 @@ def test_interrupted_chat_margin_config_only_rebuilds_for_fixed_margin(
     assert (logging_obj.model_call_details.get("combined_usage_object") is not None) is expects_rebuild
 
 
+@pytest.mark.parametrize(
+    ("source", "pricing_entry", "expects_rebuild"),
+    (
+        ("custom_model_info", {"input_cost_per_second": 0.05}, True),
+        ("custom_model_info", {"input_cost_per_token": 0.001, "input_cost_per_second": 0.05}, False),
+        ("catalog", {"output_cost_per_second": 0.02, "mode": "chat"}, True),
+    ),
+)
+def test_interrupted_chat_preserves_per_second_model_pricing_when_counting_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    pricing_entry: dict[str, object],
+    expects_rebuild: bool,
+) -> None:
+    model_name: Final = "per-second-test-model"
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model=model_name,
+        model=model_name,
+        custom_llm_provider="openai",
+    )
+    if source == "custom_model_info":
+        logging_obj.set_per_call_pricing(pricing_entry)  # pyright: ignore[reportArgumentType]  # partial test ModelInfo
+    else:
+        monkeypatch.setitem(litellm.model_cost, model_name, pricing_entry)
+
+    wrapper._record_partial_usage_for_failure()
+
+    assert (logging_obj.model_call_details.get("combined_usage_object") is not None) is expects_rebuild
+
+
 def test_record_partial_usage_for_failure_prices_alias_restamped_chunks_at_real_model():
     wrapper, logging_obj = _wrapper_with_partial_chunks(
         chunk_model="bedrock-claude-opus-5",

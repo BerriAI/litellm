@@ -83,16 +83,56 @@ if TYPE_CHECKING:
     )
 
 
+_PER_SECOND_COST_FIELDS: Final = ("cost_per_second", "input_cost_per_second", "output_cost_per_second")
+
+
+def _is_positive_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
 def _margin_has_fixed_amount(margin: object) -> bool:
     fields: Final = as_str_mapping(margin)
-    if fields is None:
-        return False
-    fixed: Final[object] = fields.get("fixed_amount")
-    return isinstance(fixed, (int, float)) and not isinstance(fixed, bool) and fixed > 0
+    return fields is not None and _is_positive_number(fields.get("fixed_amount"))
 
 
 def _cost_margin_has_fixed_amount() -> bool:
     return bool(litellm.cost_margin_config) and any(map(_margin_has_fixed_amount, litellm.cost_margin_config.values()))
+
+
+def _model_info_bills_per_second(model_info: object) -> bool:
+    fields: Final = as_str_mapping(model_info)
+    if fields is None:
+        return False
+    if (
+        _is_positive_number(fields.get("input_cost_per_token"))
+        or _is_positive_number(fields.get("output_cost_per_token"))
+        or fields.get("tiered_pricing") is not None
+    ):
+        return False
+    return any(fields.get(field) is not None for field in _PER_SECOND_COST_FIELDS)
+
+
+def _logging_uses_per_second_model_pricing(logging_obj: "Logging") -> bool:
+    custom_info: Final[object] = getattr(logging_obj, "custom_model_info", None)
+    if custom_info is not None:
+        return _model_info_bills_per_second(custom_info)
+    router_model_id: Final = logging_obj.get_router_model_id()
+    if router_model_id is not None and _model_info_bills_per_second(litellm.model_cost.get(router_model_id)):
+        return True
+    base_model: Final = get_base_model_from_metadata(logging_obj.model_call_details)
+    model_name: Final = base_model or logging_obj.model
+    if not model_name:
+        return False
+    raw_provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
+    provider: Final = raw_provider if isinstance(raw_provider, str) else None
+    try:
+        from litellm.utils import cached_get_model_info_helper
+
+        return _model_info_bills_per_second(
+            cached_get_model_info_helper(model=model_name, custom_llm_provider=provider)
+        )
+    except Exception:  # noqa: BLE001  # unmapped models raise plain Exception
+        return False
 
 
 def has_stream_cost_without_token_usage(logging_obj: "Logging | None") -> bool:
@@ -109,6 +149,7 @@ def has_stream_cost_without_token_usage(logging_obj: "Logging | None") -> bool:
     if (
         getattr(logging_obj, "_provider_reported_cost", None) is not None
         or getattr(logging_obj, "_route_priced_cost", None) is not None
+        or _logging_uses_per_second_model_pricing(logging_obj)
     ):
         return True
     if any(value is not None for value in logging_obj.standard_built_in_tools_params.values()):
