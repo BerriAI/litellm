@@ -16,6 +16,11 @@ func resourceLiteLLMJWTKeyMapping() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
+			"jwt_issuer": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Issuer (iss) the mapping is scoped to. Must match an issuer configured in litellm_jwtauth.issuers. When unset the mapping is global and matches the claim value in a token from any trusted issuer. Unique together with jwt_claim_name and jwt_claim_value. Changing it updates the mapping in place",
+			},
 			"jwt_claim_name": {
 				Type:        schema.TypeString,
 				Required:    true,
@@ -26,7 +31,7 @@ func resourceLiteLLMJWTKeyMapping() *schema.Resource {
 				Type:        schema.TypeString,
 				Required:    true,
 				ForceNew:    true,
-				Description: "Value of the claim identifying the JWT client. Unique together with jwt_claim_name",
+				Description: "Value of the claim identifying the JWT client. Unique together with jwt_claim_name and jwt_issuer",
 			},
 			"key": {
 				Type:         schema.TypeString,
