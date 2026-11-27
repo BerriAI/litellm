@@ -11,14 +11,21 @@ collaborators acquire their globals per call, mirroring v1's lazy-import pattern
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final
+
+import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.proxy.mcp_server.oauth_identity_binding import credential_binding_matches
 from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
+    AuthorizationCodeTokenDenied,
+    AuthorizationCodeTokenSuccess,
+    AuthorizationCodeTokenUnreachable,
 )
 from litellm.proxy.mcp_server.outbound_credentials.dual_cache_token_backend import (
     DualCacheTokenCacheBackend,
@@ -50,6 +57,7 @@ _DEFAULT_TTL_SECONDS: Final = 300.0
 
 ServerLookup = Callable[[str], "MCPServer | None"]
 StoreBuilder = Callable[[ServerLookup], tuple[InvalidatableOAuthTokenStore, bool]]
+_TOKEN_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 async def _read_credential(user_id: str, server_id: str) -> Mapping[str, object] | None:
@@ -96,27 +104,40 @@ async def _persist_credential(
     )
 
 
-async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str, str]) -> dict[str, object] | None:
+async def _post_token_endpoint(
+    url: str, form: dict[str, str], headers: dict[str, str]
+) -> AuthorizationCodeTokenSuccess | AuthorizationCodeTokenDenied | AuthorizationCodeTokenUnreachable:
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore
     )
     from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415
 
-    # litellm's httpx handler and httpx.Response are only partially typed; the IdP returns a JSON
-    # object and the refresher validates each field, so the untyped boundary is contained here.
     provider: Final = httpxSpecialProvider.Oauth2Check
     request_headers: Final = {"Accept": "application/json", **headers}
-    # A failed refresh is a miss, not a 500 (matches v1), so any error becomes None.
     try:
         client: Final = get_async_httpx_client(llm_provider=provider)  # pyright: ignore
         response: Final = await client.post(url, headers=request_headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
-        body: Final[dict[str, object]] = response.json()  # pyright: ignore
+        body: Final = _TOKEN_BODY_ADAPTER.validate_json(response.content)
+    except httpx.HTTPStatusError as exc:
+        verbose_logger.warning("MCP OAuth refresh token endpoint returned HTTP %s", exc.response.status_code)
+        try:
+            error_body: Final = _TOKEN_BODY_ADAPTER.validate_json(exc.response.content)
+        except (ValidationError, json.JSONDecodeError, UnicodeDecodeError):
+            return AuthorizationCodeTokenDenied(
+                status_code=exc.response.status_code,
+                body={},
+                detail=f"token endpoint returned HTTP {exc.response.status_code}",
+            )
+        return AuthorizationCodeTokenDenied(
+            status_code=exc.response.status_code,
+            body=error_body,
+            detail=f"token endpoint returned HTTP {exc.response.status_code}",
+        )
     except Exception as exc:  # noqa: BLE001
-        verbose_logger.warning("MCP OAuth refresh request failed: %s", exc)
-        return None
-    else:
-        return body  # pyright: ignore
+        verbose_logger.warning("MCP OAuth refresh request failed: %s", type(exc).__name__)
+        return AuthorizationCodeTokenUnreachable(detail=type(exc).__name__)
+    return AuthorizationCodeTokenSuccess(body=body)
 
 
 def _redis_cache_is_available() -> bool:

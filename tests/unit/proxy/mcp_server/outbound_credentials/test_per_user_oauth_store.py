@@ -70,7 +70,10 @@ async def test_native_refresh_persists_actual_grant_through_storage_adapter(
         record_oauth_scope_refusal,
         store_user_oauth_credential,
     )
-    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeRefresher
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
+        AuthorizationCodeRefresher,
+        AuthorizationCodeTokenSuccess,
+    )
     from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _persist_credential
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -86,7 +89,9 @@ async def test_native_refresh_persists_actual_grant_through_storage_adapter(
 
     async def token_endpoint(url, form, headers):
         assert url == server.token_url and form["grant_type"] == "refresh_token"
-        return {"access_token": "rotated", **({"scope": response_scope} if response_scope is not None else {})}
+        return AuthorizationCodeTokenSuccess(
+            body={"access_token": "rotated", **({"scope": response_scope} if response_scope is not None else {})}
+        )
 
     await store_user_oauth_credential(credentials_prisma, "alice", "srv", "old", refresh_token="refresh")
     await record_oauth_scope_refusal(credentials_prisma, "alice", "srv", "gist")
@@ -410,3 +415,59 @@ async def test_expired_unverified_credential_never_reaches_refresh(monkeypatch):
     store = LazyPerUserOAuthTokenStore(lambda _: server, redis_available=lambda: False)
     assert await store.fetch("alice", "srv") is None
     post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_success_is_typed_with_the_json_body(monkeypatch):
+    import httpx
+
+    from litellm.llms.custom_httpx import http_handler
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeTokenSuccess
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _post_token_endpoint
+
+    class Client:
+        async def post(self, url, headers, data):
+            request = httpx.Request("POST", url)
+            return httpx.Response(200, json={"access_token": "new"}, request=request)
+
+    monkeypatch.setattr(http_handler, "get_async_httpx_client", lambda llm_provider: Client())
+    outcome = await _post_token_endpoint("https://idp.example/token", {}, {})
+    assert isinstance(outcome, AuthorizationCodeTokenSuccess)
+    assert outcome.body == {"access_token": "new"}
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_http_denial_preserves_status_and_error_body(monkeypatch):
+    import httpx
+
+    from litellm.llms.custom_httpx import http_handler
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeTokenDenied
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _post_token_endpoint
+
+    class Client:
+        async def post(self, url, headers, data):
+            request = httpx.Request("POST", url)
+            response = httpx.Response(400, json={"error": "invalid_grant"}, request=request)
+            response.raise_for_status()
+
+    monkeypatch.setattr(http_handler, "get_async_httpx_client", lambda llm_provider: Client())
+    outcome = await _post_token_endpoint("https://idp.example/token", {}, {})
+    assert isinstance(outcome, AuthorizationCodeTokenDenied)
+    assert outcome.status_code == 400
+    assert outcome.body == {"error": "invalid_grant"}
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_transport_failure_is_typed_unreachable(monkeypatch):
+    from litellm.llms.custom_httpx import http_handler
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeTokenUnreachable
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _post_token_endpoint
+
+    class Client:
+        async def post(self, url, headers, data):
+            raise TimeoutError("connect timed out")
+
+    monkeypatch.setattr(http_handler, "get_async_httpx_client", lambda llm_provider: Client())
+    outcome = await _post_token_endpoint("https://idp.example/token", {}, {})
+    assert isinstance(outcome, AuthorizationCodeTokenUnreachable)
+    assert outcome.detail == "TimeoutError"
