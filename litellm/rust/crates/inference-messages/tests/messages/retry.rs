@@ -255,7 +255,6 @@ fn strict_tools(
         shaping: MessagesShaping {
             settings: MessagesSettings {
                 drop_params,
-                drops_unsupported_params: drop_params,
                 ..MessagesSettings::default()
             },
             ..MessagesShaping::default()
@@ -361,32 +360,6 @@ async fn strict_tools_and_a_thinking_replay_are_each_recovered_once(call: Messag
     assert_eq!(third.json().get("thinking"), None);
     assert_eq!(third.json()["tools"], second.json()["tools"]);
     assert!(error.upstream_response().unwrap().1.contains("signature"));
-}
-
-#[rstest]
-#[tokio::test]
-async fn a_truthy_global_drop_params_that_is_not_true_does_not_drop_strict(call: MessagesCall) {
-    let upstream = upstream([rejection(400, STRICT_REJECTION), message_response()]).await;
-    let strict = strict_tools(call, upstream.uri(), false, true);
-    let host = RecordingCall::<Messages>::new(MessagesCall {
-        shaping: MessagesShaping {
-            settings: MessagesSettings {
-                drops_unsupported_params: false,
-                ..strict.shaping.settings.clone()
-            },
-            ..strict.shaping.clone()
-        },
-        ..strict
-    });
-
-    let error = execute(&host).await.err().expect("the call fails");
-
-    assert_eq!(
-        only_request(&upstream).await.json()["tools"][0]["strict"],
-        json!(true)
-    );
-    assert_eq!(error.upstream_response().unwrap().0, 400);
-    assert!(observed_retries(&host).is_empty());
 }
 
 const TOOL_USE_ID_PATTERN: &str =

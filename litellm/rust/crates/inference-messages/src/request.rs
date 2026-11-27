@@ -118,7 +118,6 @@ impl NativeOutputFallback {
 #[derive(Clone, Copy)]
 struct BodyTransform {
     tool_custom_field: ToolCustomField,
-    drops_unsupported_params: bool,
     drop_params: bool,
 }
 
@@ -131,7 +130,7 @@ impl BodyTransform {
     ) -> Result<MessagesRequest, Error> {
         Ok(self.tool_custom_field.apply(
             config.transform_anthropic_messages_request(request, context)?,
-            self.drops_unsupported_params,
+            self.drop_params,
         ))
     }
 
@@ -241,7 +240,6 @@ pub(super) async fn provider_call(
 
     let transform = BodyTransform {
         tool_custom_field: config.tool_custom_field(&trimmed.model),
-        drops_unsupported_params: shaping.settings.drops_unsupported_params,
         drop_params: shaping.settings.drop_params,
     };
     let requested_output_format = trimmed.params.output_format.clone();
@@ -428,8 +426,6 @@ fn secret_lookup<'a>(
 
 fn transform_context(shaping: &MessagesShaping) -> MessagesTransformContext {
     MessagesTransformContext {
-        drops_unsupported_params: shaping.settings.drops_unsupported_params,
-        global_drop_params: shaping.settings.global_drop_params,
         claude_base_model: shaping
             .settings
             .base_model

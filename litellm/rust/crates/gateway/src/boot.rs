@@ -69,7 +69,7 @@ pub(crate) fn configured(
     environment: &Environment,
 ) -> MessagesSettings {
     MessagesSettings {
-        global_drop_params: settings.drop_params == Some(true),
+        drop_params: settings.drop_params == Some(true),
         reasoning_auto_summary: settings.reasoning_auto_summary,
         request_timeout: request_timeout(settings),
         detached_drain_timeout: Some(
@@ -159,7 +159,7 @@ mod tests {
 
         assert_eq!(
             (
-                settings.global_drop_params,
+                settings.drop_params,
                 settings.reasoning_auto_summary,
                 settings.request_timeout,
             ),

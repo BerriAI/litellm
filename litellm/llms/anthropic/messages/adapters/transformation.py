@@ -13,7 +13,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
     attribute_items,
-    normalize_drop_params,
+    drops_unsupported_params,
     require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
@@ -378,7 +378,7 @@ class AnthropicAdapter:
         custom_llm_provider: Final = route_params.get("custom_llm_provider")
         result, _ = self.translate_completion_input_params_with_tool_mapping(
             kwargs,
-            drop_params=litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True,
+            drop_params=drops_unsupported_params(kwargs.get("drop_params")),
         )
         if result is None:
             return None

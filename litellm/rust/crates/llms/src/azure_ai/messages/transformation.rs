@@ -219,7 +219,7 @@ impl MessagesDialect for AzureAiMessagesConfig {
         let request = strip_beta_gated_request(
             request,
             &existing_betas(&headers),
-            context.drops_unsupported_params,
+            context.drop_params,
             BetaProvider::AzureAi,
         );
         let request = normalize_system_role_messages(
@@ -228,7 +228,7 @@ impl MessagesDialect for AzureAiMessagesConfig {
                 .thinking
                 .capabilities
                 .supports_mid_conversation_system,
-            context.drops_unsupported_params,
+            context.drop_params,
             BetaProvider::AzureAi,
         );
         Ok((strip_cache_control_scope(request), headers))
@@ -1074,7 +1074,7 @@ mod tests {
 
     fn dropping_context_with(supports_mid_conversation_system: bool) -> MessagesTransformContext {
         MessagesTransformContext {
-            drops_unsupported_params: true,
+            drop_params: true,
             ..context_with(supports_mid_conversation_system)
         }
     }

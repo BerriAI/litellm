@@ -14,6 +14,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,
@@ -717,7 +718,7 @@ class AmazonAnthropicClaudeMessagesConfig(
     ) -> dict[str, object]:
         requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
         requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)
-        drop_params: Final = getattr(litellm_params, "drop_params", None) is True
+        drop_params: Final = drops_unsupported_params(getattr(litellm_params, "drop_params", None))
         self._clamp_adaptive_reasoning_effort_for_bedrock(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -843,7 +844,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         remaining_output_config: Final = anthropic_messages_request.get("output_config")
         if (
-            litellm.drop_params is True
+            drop_params
             and isinstance(remaining_output_config, dict)
             and any(key != "format" for key in remaining_output_config)
             and not AnthropicConfig.model_supports_effort_param(model, "bedrock")
