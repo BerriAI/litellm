@@ -128,11 +128,8 @@ def _scope_needs_key_grants(mcp_servers: Sequence[str]) -> bool:
         return False
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-    get_server: Final = getattr(global_mcp_server_manager, "get_mcp_server_by_id", None)
-    if get_server is None:
-        return True
     for server_id in mcp_servers:
-        server = get_server(server_id)
+        server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
         if server is None or server.additional_auth or server.auth_profiles_unreadable:
             return True
     return False
