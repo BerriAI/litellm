@@ -97,6 +97,20 @@ impl Held {
         statements.execute(self.postgres.pool()).await.unwrap();
     }
 
+    /// A transaction that holds `table` locked, so every read of it waits until it ends.
+    pub async fn locking(&self, table: &str) -> sqlx::Transaction<'static, sqlx::Postgres> {
+        let mut transaction = self.postgres.pool().begin().await.unwrap();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Fixture statements are outside the compile-checked query set"
+        )]
+        let statement = sqlx::query(sqlx::AssertSqlSafe(format!(
+            r#"LOCK TABLE "{table}" IN ACCESS EXCLUSIVE MODE"#
+        )));
+        statement.execute(&mut *transaction).await.unwrap();
+        transaction
+    }
+
     /// Where a config names this database, as `general_settings.database_url`.
     pub fn url(&self) -> &str {
         self.postgres.url()

@@ -3,7 +3,9 @@
 
 use litellm_config::LitellmRole;
 use litellm_python_compat::{Value, datetime::IsoDateTime};
-use litellm_redis_store::auth_cache::{Bag, Lists, ModelRegion, ObjectPermissionEntry};
+use litellm_redis_store::auth_cache::{
+    Bag, BudgetEntry, Lists, ModelRegion, ObjectPermissionEntry,
+};
 
 /// The name of the first of `fields` that holds something.
 macro_rules! carried {
@@ -45,7 +47,8 @@ carried_when_held!(
     IsoDateTime,
     LitellmRole,
     ModelRegion,
-    ObjectPermissionEntry
+    ObjectPermissionEntry,
+    BudgetEntry
 );
 
 impl<T> Carried for Vec<T> {

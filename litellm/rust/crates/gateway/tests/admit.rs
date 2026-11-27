@@ -231,6 +231,7 @@ impl Sent {
 #[case::virtual_key_budgets_alerting("virtual_key_budgets_alerting")]
 #[case::virtual_key_budgets_without_database("virtual_key_budgets_without_database")]
 #[case::end_user("end_user")]
+#[case::end_user_token_database("end_user_token_database")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();

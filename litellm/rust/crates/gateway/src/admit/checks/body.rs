@@ -2,6 +2,7 @@
 
 use litellm_gateway_inference::messages::REQUEST_SETTINGS;
 use litellm_llms_types::formats::messages::MessagesOptionalParams;
+use litellm_python_compat::unicode::isspace;
 use serde_json::{Map, Value};
 
 use super::{Admit, Reason, Refused};
@@ -12,9 +13,7 @@ const HOSTED_TOOLS: [&str; 2] = ["mcp", "advisor_20260301"];
 /// A key the Messages request type does not name is sent on to the provider by the native route,
 /// and the proxy reads its own (`user`, `tags`, `timeout`, `fallbacks`). The native route reads
 /// the request's messages settings (`drop_params`, `additional_drop_params`) as the proxy does.
-/// The rest are Messages params the proxy acts on before the provider sees them. A `metadata`
-/// that holds a `user_id` names the request's end user to the proxy, which reads that end user's
-/// budget, model list and region, and the gateway reads no end user yet.
+/// The rest are Messages params the proxy acts on before the provider sees them.
 pub(super) fn fields(_: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let sent = |key: &str| fields.get(key).filter(|value| !value.is_null());
     let is_read = |key: &str| {
@@ -39,10 +38,6 @@ pub(super) fn fields(_: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
             "metadata",
             sent("metadata").is_some_and(|metadata| !is_a_user_id(metadata)),
         ),
-        (
-            "end_user",
-            sent("metadata").is_some_and(|metadata| metadata.get("user_id").is_some()),
-        ),
         ("hosted_tool", names_a_hosted_tool(fields)),
     ]
     .into_iter()
@@ -59,6 +54,14 @@ fn names_a_hosted_tool(fields: &Map<String, Value>) -> bool {
         .flatten()
         .filter_map(|tool| tool.get("type")?.as_str())
         .any(|kind| HOSTED_TOOLS.contains(&kind))
+}
+
+/// The end user a body's `metadata.user_id` names (`get_end_user_id_from_request_body`), trimmed
+/// of whitespace (`isspace`), and nobody when nothing is left. Every other place the proxy reads an
+/// end user from is a key or a header an earlier check sends to Python.
+pub(in crate::admit) fn end_user_id(fields: &Map<String, Value>) -> Option<&str> {
+    let named = fields.get("metadata")?.get("user_id")?.as_str()?;
+    Some(named.trim_matches(isspace)).filter(|end_user_id| !end_user_id.is_empty())
 }
 
 /// Any other `metadata` is in a shape the proxy rewrites before the provider sees it.
@@ -88,6 +91,7 @@ mod tests {
     }
 
     #[rstest]
+    #[case::a_user_id(r#","metadata":{"user_id":"user_1_account__session_2"}"#)]
     #[case::empty_metadata(r#","metadata":{}"#)]
     #[case::a_tool_the_provider_runs(
         r#","tools":[{"name":"get_weather","input_schema":{"type":"object"}},{"type":"web_search_20250305","name":"web_search"}]"#
@@ -116,13 +120,30 @@ mod tests {
     )]
     #[case::metadata_beyond_the_user_id(r#","metadata":{"user_id":"u","trace":"t"}"#, "metadata")]
     #[case::metadata_as_text(r#","metadata":"{\"user_id\":\"u\"}""#, "metadata")]
-    #[case::an_end_user_python_reads_as_nobody(r#","metadata":{"user_id":" "}"#, "end_user")]
     #[case::the_advisor(
         r#","tools":[{"type":"advisor_20260301","name":"advisor","model":"claude-opus-5-5"}]"#,
         "hosted_tool"
     )]
     fn a_body_with_something_the_proxy_reads_is_named(#[case] rest: &str, #[case] over: &str) {
         assert_eq!(asking(rest).as_deref(), Some(over));
+    }
+
+    #[rstest]
+    #[case::text(r#"{"user_id":"eu-1"}"#, Some("eu-1"))]
+    #[case::text_inside_whitespace(
+        r#"{"user_id":" \u001c\u0085eu-1\u3000\n"}"#,
+        Some("eu-1")
+    )]
+    #[case::space_alone(r#"{"user_id":" \u001f\t"}"#, None)]
+    #[case::empty_text(r#"{"user_id":""}"#, None)]
+    #[case::no_user_id("{}", None)]
+    fn the_end_user_is_the_user_id_trimmed_of_whitespace(
+        #[case] metadata: &str,
+        #[case] end_user: Option<&str>,
+    ) {
+        let sent: Map<String, Value> =
+            serde_json::from_str(&format!(r#"{{"metadata":{metadata}}}"#)).unwrap();
+        assert_eq!(end_user_id(&sent), end_user);
     }
 
     #[rstest]
