@@ -640,7 +640,7 @@ describe("TeamVirtualKeysTable", () => {
     const query = createKeysQueryResult(data);
     mockUseKeys.mockReturnValue({ ...query, isPlaceholderData: true });
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} canEdit />);
-    expect(screen.getByTestId("datatable-select-row-old-team-hash")).toBeDisabled();
+    expect(screen.getByTestId("datatable-select-row-old-team-hash")).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "Bulk actions (0 keys)" })).toBeDisabled();
   });
 });
