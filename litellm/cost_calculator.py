@@ -2235,6 +2235,7 @@ def completion_cost(
         call_type = infer_call_type(call_type, completion_response) or "completion"
         if isinstance(completion_response, DecisionsResponse) and completion_response.usage is None:
             raise ValueError("Cannot calculate Decisions cost: provider did not report usage")
+        routed_provider: Final = custom_llm_provider
         if pricing_provider is not None:
             custom_llm_provider = pricing_provider  # rebind-ok: model_info.pricing_provider overrides the routing provider for cost-map lookups
 
@@ -2288,7 +2289,7 @@ def completion_cost(
             _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
         )
         rerank_billed_units: RerankBilledUnits | None = None
-        if _is_unbilled_anthropic_refusal(completion_response, model, custom_llm_provider, provider_usage_object):
+        if _is_unbilled_anthropic_refusal(completion_response, model, routed_provider, provider_usage_object):
             return 0.0
 
         explicit_tier: Final = _normalize_service_tier(service_tier)

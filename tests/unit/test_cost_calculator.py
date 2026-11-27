@@ -13746,6 +13746,27 @@ def _refused_messages_body(stop_fields: Mapping[str, object], output_tokens: int
     }
 
 
+@pytest.mark.parametrize(
+    ("routed_provider", "billed"),
+    [
+        pytest.param("azure_ai", True, id="another-platform-priced-as-anthropic"),
+        pytest.param("anthropic", False, id="anthropic-priced-as-anthropic"),
+    ],
+)
+def test_completion_cost_reads_a_refusal_by_the_routed_provider_not_the_pricing_provider(
+    local_model_cost_map: None, routed_provider: str, billed: bool
+) -> None:
+    cost: Final = completion_cost(
+        completion_response=_refused_messages_body(_refusal_stop_fields("cyber"), 0),
+        model="claude-fable-5-1",
+        custom_llm_provider=routed_provider,
+        pricing_provider="anthropic",
+        call_type="anthropic_messages",
+    )
+
+    assert (cost > 0) == billed
+
+
 def test_completion_cost_charges_a_refusal_that_followed_another_attempt(local_model_cost_map: None) -> None:
     attempt: Final = {"input_tokens": 13, "cache_creation_input_tokens": 6179, "output_tokens": 0}
     body: Final = _refused_messages_body(_refusal_stop_fields("cyber"), 0)
