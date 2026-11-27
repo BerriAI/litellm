@@ -100,7 +100,7 @@ fn trusted_claim<'a>(
         .filter(|_| is_trusted_issuer_normalized(claims, settings))
 }
 
-/// `get_team_ids_from_jwt`: a claim sent as text names one team, as an IdP sends a single group.
+/// `get_team_ids_from_jwt`
 pub fn team_ids(claims: &Claims, settings: &JwtSettings) -> Vec<String> {
     let items = |value: &Value| match value {
         Value::Array(items) => items.iter().filter_map(id_text).collect(),
