@@ -7,13 +7,14 @@ from typing import Final
 from litellm.types.utils import ServiceTier, StandardLoggingPayload
 
 # Tiers a caller may name in a request, across the providers that accept the
-# parameter: OpenAI ("auto", "default", "flex", "priority", "scale"), Bedrock and
-# Groq (subsets of those), Anthropic ("auto", "standard_only") and Vertex, which
-# maps "default" to "standard". Bounds the caller-controlled requested tier
+# parameter: OpenAI ("auto", "default", "flex", "priority", "scale"), Bedrock
+# ("auto", "default", "flex", "priority", "reserved", "standard", "standard_only"),
+# Groq (a subset of OpenAI's), Anthropic ("auto", "standard_only") and Vertex,
+# which maps "default" to "standard". Bounds the caller-controlled requested tier
 # wherever it is recorded. Derived from ``ServiceTier`` so a tier added there for
 # cost calculation cannot go missing here.
 KNOWN_REQUEST_SERVICE_TIERS: Final = frozenset(
-    tuple(tier.value for tier in ServiceTier) + ("batch", "default", "scale", "standard", "standard_only")
+    tuple(tier.value for tier in ServiceTier) + ("batch", "default", "reserved", "scale", "standard", "standard_only")
 )
 
 GEMINI_TRAFFIC_TYPE_SERVICE_TIERS: Final[Mapping[str, str]] = MappingProxyType(
@@ -26,8 +27,7 @@ def get_served_service_tier(standard_logging_payload: StandardLoggingPayload) ->
     The tier the provider reports it actually served the request on.
 
     Providers report it either at the top level of the response (OpenAI, Bedrock,
-    Groq) or on the usage object (Anthropic). Streaming responses carry no served
-    tier.
+    Groq) or on the usage object (Anthropic).
     """
     response: Final = standard_logging_payload.get("response")
     usage_object: Final = standard_logging_payload.get("metadata", {}).get("usage_object")
@@ -44,13 +44,14 @@ def get_requested_service_tier(standard_logging_payload: StandardLoggingPayload)
     The tier the caller asked for, as sent to the provider.
 
     The value is caller-controlled and survives param mapping even where the
-    provider then ignores it (Bedrock and Groq accept the request and drop an
-    unrecognized tier), so it is only reported when it names a known tier.
+    provider then drops it (Groq for an unrecognized tier, Bedrock for one it
+    cannot serve under ``drop_params``), so it is only reported when it names a
+    known tier, in lowercase since Bedrock takes any case.
     """
     model_parameters: Final = standard_logging_payload.get("model_parameters")
     requested_tier: Final = model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None
-    if isinstance(requested_tier, str) and requested_tier in KNOWN_REQUEST_SERVICE_TIERS:
-        return requested_tier
+    if isinstance(requested_tier, str) and requested_tier.lower() in KNOWN_REQUEST_SERVICE_TIERS:
+        return requested_tier.lower()
     return None
 
 
@@ -64,10 +65,9 @@ def get_service_tier_from_standard_logging_payload(
     so latency and spend stay segmentable when the request said ``auto`` and the
     provider picked the concrete tier.
 
-    Streaming responses carry no served tier, so the requested tier is the
-    fallback. Values the provider itself reports are not caller-controlled and
-    stay unrestricted, so a tier a provider adds later is still labelled
-    correctly.
+    The requested tier is the fallback when the provider reports none. Values
+    the provider itself reports are not caller-controlled and stay unrestricted,
+    so a tier a provider adds later is still labelled correctly.
     """
     served_tier: Final = get_served_service_tier(standard_logging_payload)
     if served_tier is not None:

@@ -179,10 +179,15 @@ def _tools_the_model_accepts(
 
 
 BEDROCK_SERVICE_TIERS: Final = ("default", "flex", "priority", "reserved")
-_BEDROCK_SERVICE_TIER_ALIASES: Final = types.MappingProxyType({"standard_only": "default"})
+_BEDROCK_SERVICE_TIER_ALIASES: Final = types.MappingProxyType({"standard": "default", "standard_only": "default"})
 
 
 _OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
+
+
+def bedrock_service_tier_name(requested_tier: str) -> str:
+    tier: Final = requested_tier.lower()
+    return _BEDROCK_SERVICE_TIER_ALIASES.get(tier, tier)
 
 
 def _has_native_text_format(output_config: object) -> bool:
@@ -1488,21 +1493,24 @@ class AmazonConverseConfig(BaseConfig):
             optional_params["context_management"] = mapped
 
     def _map_service_tier_param(self, value: object, optional_params: dict, model: str, drop_params: bool) -> None:
-        if value is None or value == "auto":
+        tier: Final = bedrock_service_tier_name(value) if isinstance(value, str) else None
+        if value is None or tier == "auto":
             return
-        bedrock_tier: Final = _BEDROCK_SERVICE_TIER_ALIASES.get(value, value) if isinstance(value, str) else None
-        if bedrock_tier in BEDROCK_SERVICE_TIERS:
-            optional_params["serviceTier"] = {"type": bedrock_tier}
+        if tier in BEDROCK_SERVICE_TIERS:
+            optional_params["serviceTier"] = {"type": tier}
             return
         if not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
-                    f"{model} does not support service_tier={value!r} on Bedrock. "
+                    f"{model} does not support service_tier={value!r} on this Bedrock route, which takes "
+                    f"auto, standard, or one of {', '.join(BEDROCK_SERVICE_TIERS)}. "
                     "To drop unsupported params, set `litellm.drop_params = True`."
                 ),
                 status_code=400,
             )
-        verbose_logger.warning("Dropping service_tier=%r for %s, since Bedrock does not serve it.", value, model)
+        verbose_logger.warning(
+            "Dropping service_tier=%r for %s, since this Bedrock route does not serve it.", value, model
+        )
 
     def _translate_response_format_param(
         self,

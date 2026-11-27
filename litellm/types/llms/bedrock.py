@@ -256,7 +256,7 @@ class ConverseTokenUsageBlock(TypedDict, total=False):
 
 
 class ServiceTierBlock(TypedDict):
-    type: Literal["priority", "default", "flex", "reserved"]
+    type: ReadOnly[Literal["priority", "default", "flex", "reserved"]]
 
 
 class ConverseResponseBlock(TypedDict, total=False):
