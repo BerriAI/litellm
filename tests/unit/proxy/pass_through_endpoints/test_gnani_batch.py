@@ -89,6 +89,23 @@ def test_gateway_returns_the_provider_redirect_to_the_caller(admin: TestClient) 
     assert response.json() == {"message": "Moved temporarily"}
 
 
+def test_presigned_job_creation_returns_the_storage_upload_url(admin: TestClient) -> None:
+    body: Final = {
+        "config": {"model": "prisma-v3.0", "language_code": "en-IN"},
+        "source": {"type": "direct_upload_url", "files": [{"filename": "meeting.flac"}]},
+    }
+    created: Final = {
+        "job_id": "00000000-0000-4000-8000-000000000001",
+        "uploads": [{"filename": "meeting.flac", "url": "https://storage.example/meeting.flac?signature=value"}],
+    }
+    with respx.mock as provider:
+        provider.post("https://gnani.example/prefix/stt/v3/batch/v2/jobs", json=body).return_value = httpx.Response(
+            201, json=created
+        )
+        response: Final = admin.post("/gnani/stt/v3/batch/v2/jobs", json=body)
+    assert (response.status_code, response.json()) == (201, created)
+
+
 @pytest.mark.parametrize(
     ("method", "suffix"),
     (
