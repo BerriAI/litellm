@@ -7263,6 +7263,39 @@ async def test_apply_to_output_ends_a_responses_stream_cut_short_mid_tool_call_b
 
 
 _EMAIL_PATTERN: Final = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_masks_a_later_output_item_when_a_responses_stream_ends_on_a_tool_item():
+    reasoning: Final = BaseLiteLLMOpenAIResponseObject(type="reasoning", id="rs_1", summary=[])
+    tool_call: Final = BaseLiteLLMOpenAIResponseObject(
+        type="function_call", id="fc_1", call_id="call_1", name="lookup", arguments="{}", status="completed"
+    )
+    events: Final = (
+        OutputItemAddedEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=reasoning),
+        OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=reasoning),
+        *(
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_1",
+                output_index=1,
+                content_index=0,
+                delta=delta,
+            )
+            for delta in ("Contact ", "alice@example.com")
+        ),
+        OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=2, item=tool_call),
+    )
+
+    async with _guardrail_over_regex_presidio(PiiEntityType.EMAIL_ADDRESS, _EMAIL_PATTERN, PiiAction.MASK) as guardrail:
+        collected: Final = await _drain_output_masking(guardrail, events)
+
+    assert "alice@example.com" not in json.dumps([event.model_dump() for event in collected], default=str)
+    assert "".join(event.delta for event in collected if isinstance(event, OutputTextDeltaEvent)) == (
+        "Contact <EMAIL_ADDRESS>"
+    )
+
+
 _REVERSIBLE_EMAIL: Final = "alice@example.com"
 _UNQUOTED_PERSON_NAME: Final = re.compile(r'(?<!")\b[A-Z][a-z]+ [A-Z][a-z]+\b(?!")')
 

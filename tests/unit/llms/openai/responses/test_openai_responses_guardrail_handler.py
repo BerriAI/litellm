@@ -3454,6 +3454,77 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert result is events
         assert guardrail.seen_inputs == []
 
+    @staticmethod
+    def _text_part_events(output_index: int, content_index: int, text: str) -> tuple[dict[str, object], ...]:
+        position: Final = {"output_index": output_index, "content_index": content_index}
+        return (
+            {"type": "response.output_text.delta", **position, "delta": text},
+            {"type": "response.output_text.done", **position, "text": text},
+        )
+
+    @staticmethod
+    def _function_call_done(output_index: int) -> dict[str, object]:
+        item: Final = {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": "{}",
+            "status": "completed",
+        }
+        return {"type": "response.output_item.done", "output_index": output_index, "item": item}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_output_index", "text_parts"),
+        (
+            (2, (((0, 0), "hello "), ((1, 0), "world"))),
+            (1, (((0, 0), "hello "), ((0, 1), "world"))),
+            (0, (((1, 0), "world"),)),
+        ),
+        ids=("text-in-a-later-output-item", "text-in-a-later-content-part", "tool-call-before-the-message"),
+    )
+    async def test_tool_item_done_last_delivers_the_rewrite_at_every_text_position(
+        self, tool_output_index: int, text_parts: tuple[tuple[tuple[int, int], str], ...]
+    ):
+        events: Final = [
+            *chain.from_iterable(self._text_part_events(o, c, text) for (o, c), text in text_parts),
+            self._function_call_done(tool_output_index),
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert events == [
+            *chain.from_iterable(
+                self._text_part_events(o, c, text.replace("world", "[MASKED]")) for (o, c), text in text_parts
+            ),
+            self._function_call_done(tool_output_index),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_cut_short_tool_stream_refuses_a_text_rewrite_it_cannot_place(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler: Final = OpenAIResponsesHandler()
+        events: Final = [
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
+            {"type": "response.output_text.delta", "output_index": 1, "delta": "world"},
+            self._function_call_done(2),
+        ]
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=list(handler.released_stream_as_ended(events)),
+                guardrail_to_apply=self._masking_guardrail(),
+                litellm_logging_obj=None,
+                deliver_ended_stream_rewrites=True,
+            )
+
     @pytest.mark.asyncio
     async def test_fallback_rewrite_without_delivery_expected_does_not_raise(self):
         handler = OpenAIResponsesHandler()
@@ -7369,18 +7440,17 @@ class TestReasoningOutputReachesOutputGuardrails:
 
         assert released[-1]["response"]["output"][0]["content"] == ({"type": "reasoning_text", "text": "a persimmon"},)
 
-    def test_released_stream_without_reasoning_text_keeps_the_flat_envelope(self) -> None:
+    def test_released_stream_without_reasoning_text_holds_the_message_at_its_stream_position(self) -> None:
         events: Final = [
             {"type": "response.output_item.added", "output_index": 0, "item": {"id": "rs_1", "type": "reasoning"}},
             {"type": "response.output_text.delta", "output_index": 3, "content_index": 0, "delta": "hello"},
             {"type": "response.output_item.done", "output_index": 3, "item": _message_item("hello")},
         ]
+        handler: Final = OpenAIResponsesHandler()
 
-        released: Final = OpenAIResponsesHandler().released_stream_as_ended(events)
+        released: Final = handler.released_stream_as_ended(events)
 
-        assert released[-1]["response"]["output"] == [
-            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]}
-        ]
+        assert handler.message_part_texts(released[-1]["response"]) == {(3, 0): "hello"}
 
     def test_released_stream_mid_delta_without_reasoning_stays_unenveloped(self) -> None:
         events: Final = [{"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hi"}]

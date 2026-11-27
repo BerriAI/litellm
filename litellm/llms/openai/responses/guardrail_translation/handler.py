@@ -936,17 +936,24 @@ def _released_tool_call_items(responses_so_far: Sequence[object]) -> tuple[Mappi
     )
 
 
+def _has_content_position(event: object) -> bool:
+    return isinstance(stream_item_field(event, "output_index"), int) and isinstance(
+        stream_item_field(event, "content_index"), int
+    )
+
+
 def _released_stream_output(responses_so_far: Sequence[object]) -> tuple[Mapping[str, object], ...]:
     text_events: Final = _events_of_types(responses_so_far, _OUTPUT_TEXT_EVENT_TYPES)
     tool_items: Final = _released_tool_call_items(responses_so_far)
     reasoning_items: Final = _released_reasoning_items(responses_so_far)
-    if not reasoning_items:
+    if not reasoning_items and not all(_has_content_position(event) for event in text_events):
         released_text: Final = "".join(_stream_part_texts(text_events).values())
         message_items: Final = (_released_message_item(released_text),) if released_text else ()
         return (*message_items, *tool_items)
     stream_items: Final = {**_released_message_items(text_events), **reasoning_items}
     aligned_items: Final = tuple(
-        stream_items.get(output_index, _released_message_item("")) for output_index in range(max(stream_items) + 1)
+        stream_items.get(output_index, _released_message_item(""))
+        for output_index in range(max(stream_items, default=-1) + 1)
     )
     return (*aligned_items, *tool_items)
 
@@ -1941,6 +1948,17 @@ class OpenAIResponsesHandler(BaseTranslation):
                             if task_idx < len(texts_to_check) and rewritten != texts_to_check[task_idx]
                         }
                     )
+                    if rewrites_by_position and not all(
+                        _has_content_position(event)
+                        for event in _events_of_types(responses_so_far[:-1], _OUTPUT_TEXT_EVENT_TYPES)
+                    ):
+                        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+                        raise UndeliverableStreamRewrite(
+                            guardrail_to_apply.guardrail_name or "unknown",
+                            "a buffered output_text or refusal event lacks an integer output_index or content_index, "
+                            "so the text rewrite cannot reach it",
+                        )
                     self._sync_stream_events_with_output_rewrites(responses_so_far, response_obj, rewrites_by_position)
                     self._deliver_ended_stream_tool_call_rewrites(
                         responses_so_far=responses_so_far,
