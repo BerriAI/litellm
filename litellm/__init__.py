@@ -707,6 +707,7 @@ aiml_models: Set[str] = set()
 deepgram_models: Set[str] = set()
 elevenlabs_models: Set[str] = set()
 gradium_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import time
+anex_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import time
 dashscope_models: Set[str] = set()
 qwencloud_models: Set[str] = set()
 qwen_ai_platform_models: Set[str] = set()
@@ -1000,6 +1001,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             elevenlabs_models.add(key)
         elif value.get("litellm_provider") == "gradium":
             gradium_models.add(key)
+        elif value.get("litellm_provider") == "anex":
+            anex_models.add(key)
         elif value.get("litellm_provider") == "heroku":
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
@@ -1184,6 +1187,7 @@ def _known_models() -> frozenset[str]:
         | zai_models
         | bigmodel_models
         | fal_ai_models
+        | anex_models
         | deepseek_models
         | modelscope_models
         | azure_ai_models
@@ -1358,6 +1362,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "deepgram": deepgram_models,
         "elevenlabs": elevenlabs_models,
         "gradium": gradium_models,
+        "anex": anex_models,
         "heroku": heroku_models,
         "dashscope": dashscope_models,
         "qwencloud": qwencloud_models,

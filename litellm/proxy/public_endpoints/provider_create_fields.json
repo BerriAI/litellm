@@ -2010,6 +2010,38 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Anex",
+    "provider_display_name": "anex.sh",
+    "litellm_provider": "anex",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": "anex.sh video host. An organization that keeps its data in the EU or the US uses that region's host.",
+        "required": false,
+        "field_type": "select",
+        "options": [
+          "https://tasks.anex.sh",
+          "https://tasks-eu.anex.sh",
+          "https://tasks-us.anex.sh"
+        ],
+        "default_value": "https://tasks.anex.sh"
+      }
+    ],
+    "default_model_placeholder": "anex/MiniMax-H3"
+  },
+  {
     "provider": "Gradium",
     "provider_display_name": "Gradium",
     "litellm_provider": "gradium",

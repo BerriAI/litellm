@@ -7,6 +7,7 @@ import base64
 import re
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from io import BufferedReader, BytesIO
 from math import gcd
 from types import MappingProxyType
@@ -126,6 +127,31 @@ MINIMAX_VIDEO_DEFAULT_RESOLUTION: Final = "768P"
 MINIMAX_VIDEO_DEFAULT_DURATION_SECONDS: Final = 5
 MINIMAX_TEXT_TO_VIDEO_DEFAULT_RATIO: Final = "16:9"
 
+
+@dataclass(frozen=True, slots=True)
+class MinimaxVideoProvider:
+    """A service that serves the MiniMax V2 video task API under its own host, key and cost map rows."""
+
+    slug: str
+    display_name: str
+    api_key_env: str
+    api_base_env: str
+    default_api_base: str
+    extra_create_body_keys: tuple[str, ...] = ()
+
+    @property
+    def free_input_images_key(self) -> str:
+        return f"{self.slug}_free_input_images"
+
+
+MINIMAX_VIDEO_PROVIDER: Final = MinimaxVideoProvider(
+    slug="minimax",
+    display_name="MiniMax",
+    api_key_env="MINIMAX_API_KEY",
+    api_base_env="MINIMAX_API_BASE",
+    default_api_base=MINIMAX_VIDEO_DEFAULT_API_BASE,
+)
+
 _EMPTY_PARAMS: Final[dict[str, object]] = {}  # mutable-ok: BaseVideoConfig contract empty params
 
 _RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -227,24 +253,26 @@ def _normalized_api_base(api_base: str) -> str:
     return trimmed[: -len(matched)] if matched else trimmed
 
 
-def _invalid_param(param: str, value: object, expected: str, model: str) -> BadRequestError:
+def _invalid_param(
+    param: str, value: object, expected: str, model: str, provider: MinimaxVideoProvider
+) -> BadRequestError:
     return BadRequestError(
-        message=f"Invalid {param} {value!r} for MiniMax video generation: expected {expected}.",
+        message=f"Invalid {param} {value!r} for {provider.display_name} video generation: expected {expected}.",
         model=model,
-        llm_provider="minimax",
+        llm_provider=provider.slug,
     )
 
 
 _SIZE_OR_RATIO: Final = re.compile(r"(\d+)[x:](\d+)")
 
 
-def _ratio_from_size(size: object, model: str) -> str:
+def _ratio_from_size(size: object, model: str, provider: MinimaxVideoProvider) -> str:
     """OpenAI ``size`` is ``WIDTHxHEIGHT``; MiniMax takes the reduced ``W:H`` ratio, which is also accepted as is."""
     matched: Final = _SIZE_OR_RATIO.fullmatch(size) if isinstance(size, str) else None
     width: Final = int(matched.group(1)) if matched else 0
     height: Final = int(matched.group(2)) if matched else 0
     if width <= 0 or height <= 0:
-        raise _invalid_param("size", size, "WIDTHxHEIGHT or W:H with positive integers, e.g. 1280x720", model)
+        raise _invalid_param("size", size, "WIDTHxHEIGHT or W:H with positive integers, e.g. 1280x720", model, provider)
     divisor: Final = gcd(width, height)
     return f"{width // divisor}:{height // divisor}"
 
@@ -257,10 +285,10 @@ def _whole_seconds(seconds: object) -> int:
     return 0
 
 
-def _duration_param(seconds: object, model: str) -> int:
+def _duration_param(seconds: object, model: str, provider: MinimaxVideoProvider) -> int:
     parsed: Final = _whole_seconds(seconds)
     if parsed <= 0:
-        raise _invalid_param("seconds", seconds, "a positive whole number of seconds", model)
+        raise _invalid_param("seconds", seconds, "a positive whole number of seconds", model, provider)
     return parsed
 
 
@@ -391,22 +419,24 @@ def _additional_drop_keys(params: Mapping[str, object]) -> frozenset[str]:
         return frozenset()
 
 
-def _parameters_fields(value: object, model: str) -> Mapping[str, object]:
+def _parameters_fields(value: object, model: str, provider: MinimaxVideoProvider) -> Mapping[str, object]:
     try:
         return MappingProxyType(_RESPONSE_ADAPTER.validate_python(value))
     except ValidationError as e:
-        raise _invalid_param("parameters", value, "an object of MiniMax request fields", model) from e
+        raise _invalid_param(
+            "parameters", value, f"an object of {provider.display_name} request fields", model, provider
+        ) from e
 
 
-def _billable_input_image_count(model: str, input_image_count: int) -> int:
+def _billable_input_image_count(model: str, input_image_count: int, provider: MinimaxVideoProvider) -> int:
     """MiniMax bills input images beyond a per-model free allowance on top of output seconds."""
     try:
-        info: Final = get_model_info(model=model, custom_llm_provider="minimax")
+        info: Final = get_model_info(model=model, custom_llm_provider=provider.slug)
     except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped model
         return 0
     provider_specific: Final = info.get("provider_specific_entry")
     free_images: Final = (
-        provider_specific.get("minimax_free_input_images") if isinstance(provider_specific, Mapping) else None
+        provider_specific.get(provider.free_input_images_key) if isinstance(provider_specific, Mapping) else None
     )
     if not isinstance(free_images, int) or isinstance(free_images, bool):
         return 0
@@ -416,9 +446,9 @@ def _billable_input_image_count(model: str, input_image_count: int) -> int:
 _TIER_COST_PREFIX: Final = "output_cost_per_second_"
 
 
-def _priced_resolutions(model: str) -> frozenset[str]:
+def _priced_resolutions(model: str, provider: MinimaxVideoProvider) -> frozenset[str]:
     try:
-        info: Final = get_model_info(model=model, custom_llm_provider="minimax")
+        info: Final = get_model_info(model=model, custom_llm_provider=provider.slug)
     except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped model
         return frozenset()
     return frozenset(
@@ -428,20 +458,22 @@ def _priced_resolutions(model: str) -> frozenset[str]:
     )
 
 
-def _unpriced_resolution_drop(model: str, resolution: object, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
-    priced: Final = _priced_resolutions(model)
+def _unpriced_resolution_drop(
+    model: str, resolution: object, litellm_params: GenericLiteLLMParams, provider: MinimaxVideoProvider
+) -> frozenset[str]:
+    priced: Final = _priced_resolutions(model, provider)
     if not priced or not isinstance(resolution, str) or resolution.strip().lower() in priced:
         return frozenset()
     if litellm_params.drop_params is True or litellm.drop_params is True:
         return frozenset({"resolution"})
     raise UnsupportedParamsError(
         message=(
-            f"MiniMax {model} has no price for resolution {resolution!r} in litellm's cost map, so it would bill at "
-            f"another tier's rate. Use one of {', '.join(sorted(tier.upper() for tier in priced))}, or set "
-            "drop_params=True to send MiniMax's default resolution instead."
+            f"{provider.display_name} {model} has no price for resolution {resolution!r} in litellm's cost map, so "
+            f"it would bill at another tier's rate. Use one of {', '.join(sorted(tier.upper() for tier in priced))}, "
+            f"or set drop_params=True to send {provider.display_name}'s default resolution instead."
         ),
         model=model,
-        llm_provider="minimax",
+        llm_provider=provider.slug,
     )
 
 
@@ -460,20 +492,25 @@ def _video_url_from_task(task: _MiniMaxTask) -> str:
     raise _minimax_error(400, f"Video has no downloadable content (status: {task.status}).")
 
 
-def _remix_unsupported() -> UnsupportedParamsError:
+def _remix_unsupported(provider: MinimaxVideoProvider) -> UnsupportedParamsError:
     return UnsupportedParamsError(
         message=(
-            "Video remix is not supported by MiniMax. Its regeneration endpoint only upscales a finished 768P "
-            "MiniMax-H3 task to 2K and ignores the prompt; send a new video_generation() request with the edited "
+            f"Video remix is not supported by {provider.display_name}. Its regeneration endpoint only upscales a "
+            "finished 768P task and ignores the prompt; send a new video_generation() request with the edited "
             "prompt instead."
         ),
-        llm_provider="minimax",
+        llm_provider=provider.slug,
     )
 
 
 class MinimaxVideoConfig(BaseVideoConfig):
+    def __init__(self, provider: MinimaxVideoProvider = MINIMAX_VIDEO_PROVIDER) -> None:
+        super().__init__()
+        self._provider: Final = provider
+
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseVideoConfig contract returns list
         return [
+            *self._provider.extra_create_body_keys,
             "model",
             "prompt",
             "input_reference",
@@ -500,38 +537,43 @@ class MinimaxVideoConfig(BaseVideoConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
-        requested: Final = video_image_params(video_create_optional_params, model, "minimax", drop_params)
+        provider: Final = self._provider
+        create_request_params: Final = _CREATE_REQUEST_PARAMS | frozenset(provider.extra_create_body_keys)
+        requested: Final = video_image_params(video_create_optional_params, model, provider.slug, drop_params)
         mapped_params: Final[dict[str, object]] = {}  # mutable-ok: BaseVideoConfig contract; extra_body merges into it
         dropped_keys: Final = _DROP_FROM_CREATE_BODY | _additional_drop_keys(video_create_optional_params)
         for key, value in requested.items():
             if value is None or key in dropped_keys:
                 continue
             if key == "seconds" and requested.get("duration") is not None:
-                if not drop_params and _duration_param(value, model) != _duration_param(requested["duration"], model):
+                if not drop_params and _duration_param(value, model, provider) != _duration_param(
+                    requested["duration"], model, provider
+                ):
                     raise UnsupportedParamsError(
                         message="duration and seconds must agree, set drop_params=True to ignore seconds",
                         model=model,
-                        llm_provider="minimax",
+                        llm_provider=provider.slug,
                     )
             elif key == "seconds":
-                mapped_params["duration"] = _duration_param(value, model)
+                mapped_params["duration"] = _duration_param(value, model, provider)
             elif key == "size":
-                mapped_params.setdefault("ratio", _ratio_from_size(value, model))
+                mapped_params.setdefault("ratio", _ratio_from_size(value, model, provider))
             elif key == "parameters":
-                mapped_params.update(_parameters_fields(value, model))
+                mapped_params.update(_parameters_fields(value, model, provider))
             else:
                 mapped_params[key] = value
-        unsupported: Final = sorted(key for key in mapped_params if key not in _CREATE_REQUEST_PARAMS)
+        unsupported: Final = sorted(key for key in mapped_params if key not in create_request_params)
         if unsupported and not drop_params:
             raise UnsupportedParamsError(
                 message=(
-                    f"MiniMax video generation does not support {', '.join(map(repr, unsupported))}. "
+                    f"{provider.display_name} video generation does not support "
+                    f"{', '.join(map(repr, unsupported))}. "
                     "Set litellm.drop_params=True to drop it, or remove it from the request."
                 ),
                 model=model,
-                llm_provider="minimax",
+                llm_provider=provider.slug,
             )
-        return {key: value for key, value in mapped_params.items() if key in _CREATE_REQUEST_PARAMS}
+        return {key: value for key, value in mapped_params.items() if key in create_request_params}
 
     def validate_environment(
         self,
@@ -543,13 +585,14 @@ class MinimaxVideoConfig(BaseVideoConfig):
         resolved_api_key: Final = (
             api_key
             or (litellm_params.api_key if litellm_params is not None and litellm_params.api_key else None)
-            or get_secret_str("MINIMAX_API_KEY")
+            or get_secret_str(self._provider.api_key_env)
             or litellm.api_key
         )
 
         if resolved_api_key is None:
             raise ValueError(
-                "MiniMax API key is required. Set MINIMAX_API_KEY environment variable or pass api_key parameter."
+                f"{self._provider.display_name} API key is required. Set {self._provider.api_key_env} environment "
+                "variable or pass api_key parameter."
             )
 
         auth_headers: Final[dict[str, str]] = {  # mutable-ok: httpx request headers are a mutable dict
@@ -565,7 +608,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
         api_base: str | None,
         litellm_params: dict[str, object],  # mutable-ok: BaseVideoConfig contract
     ) -> str:
-        resolved_api_base: Final = api_base or get_secret_str("MINIMAX_API_BASE") or MINIMAX_VIDEO_DEFAULT_API_BASE
+        resolved_api_base: Final = (
+            api_base or get_secret_str(self._provider.api_base_env) or self._provider.default_api_base
+        )
         return _normalized_api_base(resolved_api_base)
 
     def transform_video_create_request(
@@ -577,15 +622,17 @@ class MinimaxVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
     ) -> tuple[dict[str, object], RequestFiles, str]:  # mutable-ok: BaseVideoConfig contract
+        provider: Final = self._provider
         content: Final = self._content_param(video_create_optional_request_params, prompt)
         if any(item.type == "video_url" for item in _content_items(content)):
             raise UnsupportedParamsError(
                 message=(
-                    "Reference video input is not supported through litellm: MiniMax bills its duration, which is only "
-                    "known after the task is created and billed. Use image or audio references instead."
+                    f"Reference video input is not supported through litellm: {provider.display_name} bills its "
+                    "duration, which is only known after the task is created and billed. Use image or audio "
+                    "references instead."
                 ),
                 model=model,
-                llm_provider="minimax",
+                llm_provider=provider.slug,
             )
         request_data: Final[dict[str, object]] = {  # mutable-ok: request body dict, JSON-serialized by the handler
             "model": model,
@@ -596,23 +643,24 @@ class MinimaxVideoConfig(BaseVideoConfig):
             additional_drops
             if "resolution" in additional_drops
             else additional_drops
-            | _unpriced_resolution_drop(model, video_create_optional_request_params.get("resolution"), litellm_params)
+            | _unpriced_resolution_drop(
+                model, video_create_optional_request_params.get("resolution"), litellm_params, provider
+            )
         )
-        for key in _CREATE_BODY_KEYS:
+        for key in (*_CREATE_BODY_KEYS, *provider.extra_create_body_keys):
             if key not in dropped_keys and video_create_optional_request_params.get(key) is not None:
                 request_data[key] = video_create_optional_request_params[key]
 
         request_data.setdefault("resolution", MINIMAX_VIDEO_DEFAULT_RESOLUTION)
         request_data["duration"] = _duration_param(
-            request_data.get("duration", MINIMAX_VIDEO_DEFAULT_DURATION_SECONDS), model
+            request_data.get("duration", MINIMAX_VIDEO_DEFAULT_DURATION_SECONDS), model, provider
         )
         if "ratio" not in request_data and _is_text_only_content(content):
             request_data["ratio"] = MINIMAX_TEXT_TO_VIDEO_DEFAULT_RATIO
 
         return request_data, (), f"{api_base}/v2/video_generation"
 
-    @staticmethod
-    def _content_param(video_create_optional_request_params: Mapping[str, object], prompt: str) -> object:
+    def _content_param(self, video_create_optional_request_params: Mapping[str, object], prompt: str) -> object:
         """
         ``prompt`` is what guardrails scanned, so it is always the one text item MiniMax takes; a caller's
         ``content`` array only contributes media, never text that would bypass that check.
@@ -630,7 +678,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
                     "content must be a list of MiniMax image_url, video_url or audio_url items; pass the text of "
                     f"the request as prompt. {e.error_count()} invalid item field(s)."
                 ),
-                llm_provider="minimax",
+                llm_provider=self._provider.slug,
             ) from e
         return [
             {"type": "text", "text": prompt},
@@ -672,7 +720,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             usage["video_resolution"] = resolution.strip().lower()
         if input_image_count:
             usage["input_image_count"] = input_image_count
-        billable_input_images: Final = _billable_input_image_count(model, input_image_count)
+        billable_input_images: Final = _billable_input_image_count(model, input_image_count, self._provider)
         if billable_input_images:
             usage["billable_input_image_count"] = billable_input_images
         video_obj.usage = usage
@@ -715,8 +763,10 @@ class MinimaxVideoConfig(BaseVideoConfig):
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
         if variant is not None and variant != _CONTENT_VARIANT:
             raise UnsupportedParamsError(
-                message=f"MiniMax only serves the video itself; variant {variant!r} is not available.",
-                llm_provider="minimax",
+                message=(
+                    f"{self._provider.display_name} only serves the video itself; variant {variant!r} is not available."
+                ),
+                llm_provider=self._provider.slug,
             )
         original_task_id: Final = extract_original_video_id(video_id)
         encoded_task_id: Final = encode_url_path_segment(original_task_id, field_name="video_id")
@@ -747,7 +797,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
         video_url: Final = _video_url_from_task(task)
 
         async_httpx_client: Final[AsyncHTTPHandler] = (
-            client if client is not None else get_async_httpx_client(llm_provider=litellm.LlmProviders.MINIMAX)
+            client
+            if client is not None
+            else get_async_httpx_client(llm_provider=litellm.LlmProviders(self._provider.slug))
         )
         video_response: Final = await async_safe_get(async_httpx_client, video_url)
         video_response.raise_for_status()
@@ -763,7 +815,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
         extra_body: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
     ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
-        raise _remix_unsupported()
+        raise _remix_unsupported(self._provider)
 
     def transform_video_remix_response(
         self,
@@ -771,7 +823,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         logging_obj: "Logging",
         custom_llm_provider: str | None = None,
     ) -> VideoObject:
-        raise _remix_unsupported()
+        raise _remix_unsupported(self._provider)
 
     def transform_video_list_request(
         self,
@@ -786,15 +838,18 @@ class MinimaxVideoConfig(BaseVideoConfig):
         if after is not None:
             raise UnsupportedParamsError(
                 message=(
-                    "MiniMax video list does not support cursor pagination via 'after'. "
+                    f"{self._provider.display_name} video list does not support cursor pagination via 'after'. "
                     "Pass extra_query={'page_num': N} to request a later page."
                 ),
-                llm_provider="minimax",
+                llm_provider=self._provider.slug,
             )
         if order is not None and order != "desc":
             raise UnsupportedParamsError(
-                message="MiniMax video list only returns newest first; order must be 'desc' or omitted.",
-                llm_provider="minimax",
+                message=(
+                    f"{self._provider.display_name} video list only returns newest first; order must be 'desc' or "
+                    "omitted."
+                ),
+                llm_provider=self._provider.slug,
             )
         params: Final[dict[str, object]] = {}  # mutable-ok: query params dict consumed by the http handler
         if limit is not None:
@@ -866,3 +921,11 @@ class MinimaxVideoConfig(BaseVideoConfig):
             message=error_message,
             headers=headers,
         )
+
+
+def get_minimax_family_video_config(custom_llm_provider: str) -> MinimaxVideoConfig:
+    if custom_llm_provider == "anex":
+        from litellm.llms.anex.videos.transformation import get_anex_video_config
+
+        return get_anex_video_config()
+    return MinimaxVideoConfig()
