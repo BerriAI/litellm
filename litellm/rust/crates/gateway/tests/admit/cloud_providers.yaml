@@ -1,5 +1,6 @@
-# Claude on Vertex AI, Bedrock and Bedrock Mantle is served natively, signed or logged in from the
-# deployment's own aws_* and vertex_* params with no api_key. Every model Python translates for
+# Claude on Vertex AI, Bedrock and Mantle through bedrock/mantle/ is served natively, signed or
+# logged in from the deployment's own aws_* and vertex_* params with no api_key. A bedrock_mantle
+# deployment stays with Python until the gateway prices its calls. Every model Python translates for
 # these providers, and every group or fallback that can reach one, goes to Python.
 config:
   model_list:
@@ -64,6 +65,14 @@ config:
         aws_region_name: us-west-2
     - model_name: cloud-claude-pool
       litellm_params:
+        model: bedrock/mantle/anthropic.claude-opus-4-5
+        aws_region_name: us-east-1
+    - model_name: claude-with-mantle
+      litellm_params:
+        model: bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0
+        aws_region_name: us-west-2
+    - model_name: claude-with-mantle
+      litellm_params:
         model: bedrock_mantle/anthropic.claude-opus-4-5
         aws_region_name: us-east-1
     - model_name: vertex-claude-backed
@@ -113,10 +122,19 @@ requests:
     body: {model: bedrock-mantle-route, max_tokens: 16, messages: []}
     expect: rust
 
-  - name: claude on mantle
+  - name: claude on mantle, which the gateway does not price yet
     headers: {authorization: Bearer gateway-key}
     body: {model: mantle-claude, max_tokens: 16, messages: []}
-    expect: rust
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model of provider bedrock_mantle
+
+  - name: a claude group with a mantle deployment
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-with-mantle, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model of provider bedrock_mantle
 
   - name: a group of claude deployments on every cloud provider
     headers: {authorization: Bearer gateway-key}
@@ -154,7 +172,7 @@ requests:
     body: {model: mantle-gpt, max_tokens: 16, messages: []}
     expect: python
     reason: model
-    over: model_list.litellm_params.model bedrock_mantle/openai.gpt-oss-120b is translated
+    over: model_list.litellm_params.model of provider bedrock_mantle
 
   - name: a group that mixes claude with gemini on vertex
     headers: {authorization: Bearer gateway-key}
