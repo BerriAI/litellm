@@ -2,6 +2,7 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { StatusBadge } from "@/components/shared/table_cells";
 import { RefreshIcon, ClockIcon } from "@heroicons/react/outline";
+import { localTimestampParts } from "@/i18n/formats";
 
 interface AutoRotationViewProps {
   autoRotate?: boolean;
@@ -23,20 +24,8 @@ const AutoRotationView: React.FC<AutoRotationViewProps> = ({
   className = "",
 }) => {
   const { t, i18n } = useTranslation();
-  const formatTimestamp = (timestamp: string | Date) => {
-    const date = new Date(timestamp);
-    const dateStr = date.toLocaleDateString(i18n.language, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-    const timeStr = date.toLocaleTimeString(i18n.language, {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-    return t("autoRotationView.timestamp", { date: dateStr, time: timeStr });
-  };
+  const formatTimestamp = (timestamp: string | Date) =>
+    t("autoRotationView.timestamp", localTimestampParts(timestamp, i18n.language));
 
   const content = (
     <div className="space-y-6">

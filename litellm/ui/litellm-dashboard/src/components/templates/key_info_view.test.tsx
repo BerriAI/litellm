@@ -306,16 +306,21 @@ describe("KeyInfoView", () => {
       const locale = i18n.cloneInstance({ forkResourceStore: true });
       locale.addResourceBundle("zh-CN", "translation", zh);
       await locale.changeLanguage("en");
-      renderWithTimestamps({ expires: "2053-11-29T12:00:00Z" }, locale);
+      const dates = { expires: "2053-11-29T12:00:00Z", budget_reset_at: "2026-12-12T13:45:00Z", max_budget: 10 };
+      renderWithTimestamps(dates, locale);
 
       expect(await screen.findByRole("button", { name: "Open activity" })).toBeInTheDocument();
       expect(await lifecycleStep("Created")).toHaveTextContent(/Jun \d+, 2021/);
+      expect(screen.getByTestId("key-can-still-spend")).toHaveTextContent("Resets Dec 12, 2026 at 1:45 PM UTC");
+      expect(screen.getByTestId("applied-budgets")).toHaveTextContent("Resets Dec 12, 2026 at 1:45 PM UTC");
 
       await act(() => locale.changeLanguage("zh-CN"));
       expect(screen.getByRole("button", { name: "查看活动" })).toBeInTheDocument();
       expect(screen.getByText("剩余可用费用")).toBeInTheDocument();
       expect(await lifecycleStep("创建时间")).toHaveTextContent(/2021年6月\d+日/);
       expect(await lifecycleStep("到期时间")).toHaveTextContent(/2053年11月\d+日/);
+      expect(screen.getByTestId("key-can-still-spend")).toHaveTextContent("于 2026年12月12日 13:45 UTC 重置");
+      expect(screen.getByTestId("applied-budgets")).toHaveTextContent("于 2026年12月12日 13:45 UTC 重置");
 
       await act(() => locale.changeLanguage("en"));
       expect(screen.getByRole("button", { name: "Open activity" })).toBeInTheDocument();

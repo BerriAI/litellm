@@ -11,6 +11,7 @@ import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatBudgetResetTime } from "@/utils/budgetUtils";
+import { localTimestampParts } from "@/i18n/formats";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { canModifyKey as canModifyVirtualKey } from "@/utils/keyPermissions";
@@ -521,21 +522,8 @@ export default function KeyInfoView({
     }
   };
 
-  // Update the formatTimestamp function to use the desired date format
-  const formatTimestamp = (timestamp: string | Date) => {
-    const date = new Date(timestamp);
-    const dateStr = date.toLocaleDateString(locale.language, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-    const timeStr = date.toLocaleTimeString(locale.language, {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-    return t("keyDetail.keyInfoView.timestamp", { date: dateStr, time: timeStr });
-  };
+  const formatTimestamp = (timestamp: string | Date) =>
+    t("keyDetail.keyInfoView.timestamp", localTimestampParts(timestamp, locale.language));
 
   const canModifyKey = canModifyVirtualKey(currentKeyData, teamsData, userID, userRole);
   const canEditLens = canModifyKey && !isViewOnly && !editingMemberKeyAsTeamAdmin;

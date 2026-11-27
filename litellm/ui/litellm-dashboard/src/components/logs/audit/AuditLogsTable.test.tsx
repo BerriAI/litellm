@@ -71,6 +71,7 @@ describe("AuditLogsTable", () => {
     const props = renderTable({ data, rowCount: data.length }, locale);
 
     expect(screen.getByText("已创建")).toBeInTheDocument();
+    expect(screen.getAllByText(/7月\d+日 \d{2}:\d{2}:00/)).toHaveLength(data.length);
     expect(screen.getByText("已更新")).toBeInTheDocument();
     expect(screen.getByText("custom_action")).toBeInTheDocument();
     expect(screen.getByText("已封禁")).toBeInTheDocument();
