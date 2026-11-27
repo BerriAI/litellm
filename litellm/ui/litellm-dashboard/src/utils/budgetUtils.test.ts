@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 
 import {
   budgetPeriodRange,
@@ -54,6 +56,20 @@ describe("formatBudgetResetUtc", () => {
 });
 
 describe("formatBudgetResetTime", () => {
+  it("keeps the UTC instant in Chinese date order and 24-hour time across budget displays", async () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    await locale.changeLanguage("zh-CN");
+    const reset = "2026-12-12T13:45:00Z";
+    expect(formatBudgetResetTime(reset, locale.t, locale.language)).toBe("2026年12月12日 13:45 UTC");
+    expect(formatBudgetResetUtc(reset, locale.language)).toBe("2026年12月12日 13:45");
+    expect(formatBudgetResetUtc("2026-12-12T00:00:00Z", locale.language)).toBe("2026年12月12日");
+    const schedule = describeBudgetResetSchedule("2h", reset, locale.t, locale.language);
+    expect(schedule.label).toBe("2026年12月12日 13:45 UTC");
+    expect(schedule.period).toBe("2026年12月12日 11:45 - 13:45 UTC");
+    expect(schedule.tooltip).toContain("2026年12月12日 13:45");
+  });
+
   it.each(["America/Los_Angeles", "Asia/Tokyo", "UTC"])(
     "prints the reset instant in UTC and says so for a %s viewer",
     (timeZone) => {

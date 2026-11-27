@@ -35,8 +35,8 @@ export default function UsageStatStrip({
   showBudgetHint = true,
   spendDetails,
 }: UsageStatStripProps) {
-  const { t } = useTranslation();
-  const daily = useMemo(() => dailyTotals(results), [results]);
+  const { t, i18n } = useTranslation();
+  const daily = useMemo(() => dailyTotals(results, i18n.language), [results, i18n.language]);
   const budgetHint = budget
     ? t("usage.statStrip.budgetHint", { budget: t("format.usd", { val: budget }) })
     : t("usage.statStrip.noBudget");

@@ -58,7 +58,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
           {/* System Message - Collapsible with arrow */}
           {systemMessage && (
             <CollapsibleMessage
-              label="SYSTEM"
+              label={systemMessage.role.toUpperCase()}
               content={systemMessage.content}
               defaultExpanded={!!(systemMessage.content && systemMessage.content.length < 200)}
             />
