@@ -270,10 +270,20 @@ _CHAT_PROMPT: Final[Mapping[str, object]] = {"messages": [{"role": "user", "cont
         ("/v1/completions", {"prompt": "PROMPT-CANARY"}, {"prompt": "PROMPT-CANARY"}),
         ("/v1/completions", {"prompt": ["first", "PROMPT-CANARY"]}, {"prompt": ["first", "PROMPT-CANARY"]}),
         ("/v1/embeddings", {"input": ["first", "PROMPT-CANARY"]}, {"input": ["first", "PROMPT-CANARY"]}),
-        ("/v1/responses", {"input": "PROMPT-CANARY"}, {"input": ""}),
+        ("/v1/responses", {"input": "PROMPT-CANARY"}, {"input": "PROMPT-CANARY"}),
+        ("/v1/embeddings", {"input": "PROMPT-CANARY"}, {"input": ""}),
         ("/v1/chat/completions", {**_CHAT_PROMPT, "prompt": "second"}, {**_CHAT_PROMPT, "prompt": "second"}),
     ],
-    ids=["messages", "malformed_messages", "prompt", "prompt_list", "input_list", "input_text", "messages_and_prompt"],
+    ids=[
+        "messages",
+        "malformed_messages",
+        "prompt",
+        "prompt_list",
+        "input_list",
+        "responses_input_text",
+        "embeddings_input_text",
+        "messages_and_prompt",
+    ],
 )
 async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
     route: str,
@@ -423,6 +433,249 @@ async def test_proxy_only_error_log_keeps_the_prompt_as_the_logged_messages(
     )
 
     assert request_data["litellm_logging_obj"].model_call_details["messages"] == logged_messages
+
+
+_DECISION_REQUEST: Final[Mapping[str, object]] = {
+    "input": "PROMPT-CANARY",
+    "questions": [{"type": "predicate", "name": "billing", "instructions": "Is this about billing?"}],
+}
+_SYSTEMONE_REQUEST: Final[Mapping[str, object]] = {
+    "state": {"message": "PROMPT-CANARY"},
+    "questions": {"billing": {"type": "noul", "instructions": "Is this a billing request?"}},
+}
+
+
+async def _rejected_request_log(
+    route: str,
+    call_type: str,
+    caller_fields: Mapping[str, object],
+    with_logging_object: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    callbacks: tuple[CustomLogger, ...] = (),
+) -> Mapping[str, object]:
+    monkeypatch.setattr(litellm, "callbacks", list(callbacks))
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    body: Final[dict[str, object]] = {"model": "rejected-model", **caller_fields}
+    logging_object: Final = (
+        {
+            "litellm_logging_obj": litellm.utils.function_setup(
+                original_function=call_type,
+                rules_obj=litellm.utils.Rules(),
+                start_time=real_datetime.datetime.now(),
+                litellm_call_id="rejected-after-setup",
+                **body,
+            )[0]
+        }
+        if with_logging_object
+        else {}
+    )
+    request_data: Final[dict[str, object]] = {**body, **logging_object}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=None if with_logging_object else route,
+        original_exception=HTTPException(status_code=429, detail="rate limited"),
+    )
+
+    return request_data["litellm_logging_obj"].model_call_details
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize(
+    ("route", "call_type", "caller_fields"),
+    [
+        ("/v1/decisions", "adecisions", _DECISION_REQUEST),
+        ("/decisions", "adecisions", {**_DECISION_REQUEST, "prompt_cache_key": "tenant-7", "audio": []}),
+        ("/v1/systemone", "asystemone", _SYSTEMONE_REQUEST),
+        ("/systemone", "asystemone", {**_SYSTEMONE_REQUEST, "images": [{"url": "https://example.com/a.png"}]}),
+    ],
+    ids=["v1_decisions", "decisions_with_cache_key", "v1_systemone", "systemone_with_images"],
+)
+async def test_proxy_only_error_log_keeps_the_decision_request_as_the_logged_messages(
+    route: str,
+    call_type: str,
+    caller_fields: Mapping[str, object],
+    with_logging_object: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    details: Final = await _rejected_request_log(route, call_type, caller_fields, with_logging_object, monkeypatch)
+
+    assert details["call_type"] == call_type
+    (message,) = details["messages"]
+    assert message["role"] == "user"
+    assert json.loads(message["content"]) == {name: value for name, value in caller_fields.items() if value != []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize(
+    ("route", "call_type", "caller_fields"),
+    [
+        ("/v1/decisions", "adecisions", {**_DECISION_REQUEST, "turn_off_message_logging": True}),
+        (
+            "/v1/systemone",
+            "asystemone",
+            {**_SYSTEMONE_REQUEST, "metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
+        ),
+        ("/v1/decisions", "adecisions", {**_DECISION_REQUEST, "metadata": {"turn_off_message_logging": True}}),
+        ("/v1/systemone", "asystemone", {**_SYSTEMONE_REQUEST, "litellm_metadata": {"turn_off_message_logging": "true"}}),
+        ("/v1/responses", "aresponses", {"input": "PROMPT-CANARY", "turn_off_message_logging": True}),
+        (
+            "/v1/responses",
+            "aresponses",
+            {"input": "PROMPT-CANARY", "metadata": {"headers": {"litellm-enable-message-redaction": "true"}}},
+        ),
+    ],
+    ids=[
+        "decisions_flag",
+        "systemone_header",
+        "decisions_metadata_flag",
+        "systemone_litellm_metadata_flag",
+        "responses_flag",
+        "responses_header",
+    ],
+)
+async def test_proxy_only_error_log_keeps_the_caller_input_out_when_the_request_asks_for_redaction(
+    route: str,
+    call_type: str,
+    caller_fields: Mapping[str, object],
+    with_logging_object: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    details: Final = await _rejected_request_log(route, call_type, caller_fields, with_logging_object, monkeypatch)
+
+    assert "PROMPT-CANARY" not in json.dumps([details["messages"], details["input"]])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+async def test_proxy_only_error_log_keeps_the_responses_text_out_of_the_callback_input_on_a_metadata_redaction_flag(
+    with_logging_object: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    details: Final = await _rejected_request_log(
+        "/v1/responses",
+        "aresponses",
+        {"input": "PROMPT-CANARY", "metadata": {"turn_off_message_logging": True}},
+        with_logging_object,
+        monkeypatch,
+    )
+
+    assert details["input"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize(("route", "call_type"), [("/v1/decisions", "adecisions"), ("/v1/systemone", "asystemone")])
+async def test_proxy_only_error_log_keeps_the_placeholder_when_no_decision_field_reached_the_rejection(
+    route: str, call_type: str, with_logging_object: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    details: Final = await _rejected_request_log(route, call_type, {}, with_logging_object, monkeypatch)
+
+    assert details["messages"] == [{"role": "user", "content": "default-message-value"}]
+
+
+def _nested(depth: int) -> Mapping[str, object]:
+    return {"message": "PROMPT-CANARY"} if depth == 0 else {"deeper": _nested(depth - 1)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+async def test_proxy_only_error_log_survives_a_decision_request_too_deep_to_serialize(
+    with_logging_object: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    details: Final = await _rejected_request_log(
+        "/v1/systemone", "asystemone", {**_SYSTEMONE_REQUEST, "state": _nested(400)}, with_logging_object, monkeypatch
+    )
+
+    assert details["call_type"] == "asystemone"
+    assert "PROMPT-CANARY" not in json.dumps(details["messages"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+async def test_proxy_only_error_log_keeps_the_messages_as_the_callback_input_when_the_responses_text_is_empty(
+    with_logging_object: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    messages: Final = [{"role": "user", "content": "PROMPT-CANARY"}]
+
+    details: Final = await _rejected_request_log(
+        "/v1/responses", "aresponses", {"input": "", "messages": messages}, with_logging_object, monkeypatch
+    )
+
+    assert details["input"] == messages
+
+
+class _CallbackRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inputs: Final[list[object]] = []
+        self.failed_messages: Final[list[str]] = []
+
+    def log_pre_api_call(self, model: object, messages: object, kwargs: Mapping[str, object]) -> None:
+        self.inputs.append(kwargs.get("input"))
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failed_messages.append(json.dumps(kwargs.get("messages"), default=str))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize(
+    ("route", "call_type", "caller_fields"),
+    [("/v1/decisions", "adecisions", _DECISION_REQUEST), ("/v1/systemone", "asystemone", _SYSTEMONE_REQUEST)],
+    ids=["decisions", "systemone"],
+)
+async def test_proxy_only_error_log_keeps_the_decision_request_from_failure_callbacks_when_message_logging_is_off(
+    route: str,
+    call_type: str,
+    caller_fields: Mapping[str, object],
+    with_logging_object: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    recorder: Final = _CallbackRecorder()
+
+    await _rejected_request_log(route, call_type, caller_fields, with_logging_object, monkeypatch, (recorder,))
+
+    (failed_messages,) = recorder.failed_messages
+    assert "PROMPT-CANARY" not in failed_messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize("message_logging_off", [False, True])
+async def test_proxy_only_error_log_hands_input_callbacks_the_responses_text_unless_message_logging_is_off(
+    with_logging_object: bool, message_logging_off: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", message_logging_off)
+    recorder: Final = _CallbackRecorder()
+
+    await _rejected_request_log(
+        "/v1/responses", "aresponses", {"input": "PROMPT-CANARY"}, with_logging_object, monkeypatch, (recorder,)
+    )
+
+    assert recorder.inputs == ["" if message_logging_off else "PROMPT-CANARY"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize("route", ["/v1/responses", "/responses"])
+async def test_proxy_only_error_log_keeps_the_responses_text_as_the_callback_input(
+    route: str, with_logging_object: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    details: Final = await _rejected_request_log(
+        route, "aresponses", {"input": "PROMPT-CANARY"}, with_logging_object, monkeypatch
+    )
+
+    assert details["call_type"] == "aresponses"
+    assert details["input"] == "PROMPT-CANARY"
+    assert details["messages"] == [{"role": "user", "content": "PROMPT-CANARY"}]
 
 
 @pytest.mark.asyncio
