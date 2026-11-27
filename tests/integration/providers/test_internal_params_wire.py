@@ -543,8 +543,8 @@ API_BASE_CHAT_PROVIDERS: Final = (
     "perplexity_orchestrator", "petals",
     "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "resetdata", "sail",
     "sambanova", "sarvam", "scaleway", "scx-ai", "snowflake", "streamlake", "synthetic", "tencent", "tensormesh",
-    "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "v0",
-    "vercel_ai_gateway", "vispark", "volcengine", "wally", "wandb", "xai", "xiaomi_mimo", "xinference", "zai",
+    "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "tokenless",
+    "v0", "vercel_ai_gateway", "vispark", "volcengine", "wally", "wandb", "xai", "xiaomi_mimo", "xinference", "zai",
     "zerogpu",
 )  # fmt: skip
 CHAT_ROUTES: Final = MappingProxyType(
