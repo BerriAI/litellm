@@ -5114,6 +5114,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sqlx",
+ "strum",
  "tokio",
  "tracing",
  "uuid",
