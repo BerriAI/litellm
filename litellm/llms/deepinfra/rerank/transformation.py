@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.rerank.transformation import (
     BaseLLMException,
     BaseRerankConfig,
+    per_token_rerank_cost,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
@@ -24,6 +25,7 @@ from litellm.types.rerank import (
     RerankResponseResult,
     RerankTokens,
 )
+from litellm.types.utils import ModelInfo
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -236,6 +238,15 @@ class DeepinfraRerankConfig(BaseRerankConfig):
 
             rerank_response.hidden_params["model"] = model
             return rerank_response
+
+    def calculate_rerank_cost(
+        self,
+        model: str,
+        custom_llm_provider: str | None = None,
+        billed_units: RerankBilledUnits | None = None,
+        model_info: ModelInfo | None = None,
+    ) -> tuple[float, float]:
+        return per_token_rerank_cost(billed_units=billed_units, model_info=model_info)
 
     def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return ["query", "documents"]
