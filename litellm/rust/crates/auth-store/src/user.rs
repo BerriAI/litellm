@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use litellm_redis_store::auth_cache::{ExcludedIfNone, OrganizationMembershipEntry, UserEntry};
-use litellm_repositories::{OrganizationMembership, Side, SignIn, User, UserRepository};
+use litellm_repositories::{
+    OrganizationMembership, Resolution, Side, SignIn, SsoLink, User, UserRepository,
+};
 
 use crate::{
     Error,
@@ -34,6 +36,32 @@ impl UserDatabase {
             .map(user_entry)
             .transpose()
     }
+
+    /// The user `sign_in` resolves to by id, then by SSO id, then by email, linking its SSO id as
+    /// `get_user_object` does, or `None` when no row matches. The entry is the row as the resolve
+    /// read it, which Python caches, so a user that just had its own id linked as its SSO id still
+    /// holds none.
+    pub async fn sign_in(&self, sign_in: &SignIn, side: Side) -> Result<Option<SignedIn>, Error> {
+        let Some(Resolution { user, sso_link }) = self.users.resolve_sign_in(sign_in, side).await?
+        else {
+            return Ok(None);
+        };
+        let owes_email = sign_in.user_email.is_some() && user.user_email.is_none();
+        Ok(Some(SignedIn {
+            user: user_entry(user)?,
+            sso_link,
+            owes_email,
+        }))
+    }
+}
+
+/// The user a sign-in found, how its SSO id was linked, and whether the sign-in carries an email
+/// the row lacks, which `_backfill_null_user_email` would store.
+#[derive(Debug, PartialEq)]
+pub struct SignedIn {
+    pub user: UserEntry,
+    pub sso_link: SsoLink,
+    pub owes_email: bool,
 }
 
 fn organization_membership_entry(

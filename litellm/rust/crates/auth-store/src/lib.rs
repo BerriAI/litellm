@@ -22,4 +22,4 @@ pub use organization::OrganizationDatabase;
 pub use project::ProjectDatabase;
 pub use team::{AliasMatch, TeamDatabase};
 pub use team_membership::TeamMembershipDatabase;
-pub use user::UserDatabase;
+pub use user::{SignedIn, UserDatabase};

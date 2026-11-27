@@ -626,64 +626,80 @@ mod tests {
     #[rstest]
     #[case::by_id_links_its_own_id(
         sign_in("own", Some("own"), None, None, false),
+        true,
         Some("own"),
         Some("own"),
         None
     )]
     #[case::by_id_leaves_a_foreign_sso_id(
         sign_in("own", Some("sso-x"), None, None, false),
+        false,
         Some("own"),
         None,
         None
     )]
     #[case::by_id_under_links_any_user_does_not_link(
         sign_in("own", Some("own"), None, None, true),
+        false,
         Some("own"),
         None,
         None
     )]
     #[case::by_sso_id(
         sign_in("new", Some("sso-linked"), Some("shared@example.com"), None, false),
+        false,
         Some("linked"),
         Some("sso-linked"),
         None
     )]
     #[case::by_email_links_the_sso_id(
         sign_in("new", Some("sso-new"), Some("Shared@Example.com"), Some(true), false),
+        true,
         Some("unlinked"),
         Some("sso-new"),
         None
     )]
     #[case::unverified_email_is_skipped(
         sign_in("new", Some("sso-new"), Some("shared@example.com"), Some(false), false),
+        false,
         None,
         None,
         None
     )]
     #[case::unverified_email_under_links_any_user(
         sign_in("new", None, Some("shared@example.com"), Some(false), true),
+        false,
         Some("unlinked"),
         None,
         None
     )]
     #[case::linked_email_is_skipped(
         sign_in("new", Some("sso-new"), Some("taken@example.com"), None, false),
+        false,
         None,
         None,
         None
     )]
     #[case::email_without_sso_id(
         sign_in("new", None, Some("taken@example.com"), None, false),
+        false,
         Some("taken"),
         Some("sso-taken"),
         None
     )]
-    #[case::links_any_user_links_later(sign_in("new", Some("sso-new"), Some("taken@example.com"), None, true), Some("taken"), Some("sso-taken"), Some(("taken", "sso-new")))]
-    #[case::no_email(sign_in("new", Some("sso-new"), None, None, false), None, None, None)]
+    #[case::links_any_user_links_later(sign_in("new", Some("sso-new"), Some("taken@example.com"), None, true), false, Some("taken"), Some("sso-taken"), Some(("taken", "sso-new")))]
+    #[case::no_email(
+        sign_in("new", Some("sso-new"), None, None, false),
+        false,
+        None,
+        None,
+        None
+    )]
     #[tokio::test]
     #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
     async fn resolve(
         #[case] sign_in: SignIn,
+        #[case] linked: bool,
         #[case] expected: Option<&str>,
         #[case] stored_sso_user_id: Option<&str>,
         #[case] link_later: Option<(&str, &str)>,
@@ -702,9 +718,15 @@ mod tests {
         };
 
         assert_eq!(
-            (user_ids(resolved.user), resolved.link_later, stored),
+            (
+                user_ids(resolved.user),
+                resolved.linked,
+                resolved.link_later,
+                stored
+            ),
             (
                 expected.map(str::to_owned),
+                linked,
                 link_later.map(|(user_id, sso)| (user_id.to_owned(), sso.to_owned())),
                 stored_sso_user_id.map(str::to_owned),
             )
