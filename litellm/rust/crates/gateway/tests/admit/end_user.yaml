@@ -1,0 +1,125 @@
+# A body's `metadata.user_id` names the request's end user to the proxy, which reads that end
+# user's row and refuses the request over its budget or its model list. The gateway reads no end
+# user yet, so a request that names one goes to Python, whoever the caller is and whatever the
+# row holds.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+
+keys:
+  sk-bare: {}
+
+rows:
+  - LiteLLM_BudgetTable:
+      budget_id: b-low
+      max_budget: 1
+      budget_reset_count: 0
+      allowed_models: []
+      created_at: "2026-11-27T00:00:00Z"
+      created_by: admin
+      updated_at: "2026-11-27T00:00:00Z"
+      updated_by: admin
+  - LiteLLM_EndUserTable: {user_id: eu-broke, spend: 10, budget_id: b-low, models: [], blocked: false}
+  - LiteLLM_EndUserTable: {user_id: eu-models, spend: 0, models: [other-model], blocked: false}
+
+requests:
+  - name: the master key naming an end user over its budget
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-broke}}
+    expect: python
+    reason: body
+    over: end_user
+
+  - name: a key naming an end user over its budget
+    headers: {authorization: Bearer sk-bare}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-broke}}
+    expect: python
+    reason: body
+    over: end_user
+
+  - name: a key naming an end user whose model list leaves the model out
+    headers: {authorization: Bearer sk-bare}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-models}}
+    expect: python
+    reason: body
+    over: end_user
+
+  - name: a key naming an end user with no row
+    headers: {authorization: Bearer sk-bare}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-new}}
+    expect: python
+    reason: body
+    over: end_user
+
+  - name: the master key naming an end user the way a coding client does
+    path: /v1/messages?beta=true
+    headers: {authorization: Bearer gateway-key}
+    body:
+      model: claude
+      max_tokens: 16
+      stream: true
+      messages: []
+      metadata: {user_id: user_0af404e1_account_7c1e_session_52b9}
+    expect: python
+    reason: body
+    over: end_user
+
+  - name: metadata that names nobody
+    headers: {authorization: Bearer sk-bare}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {}}
+    expect: rust
+
+  - name: no metadata
+    headers: {authorization: Bearer sk-bare}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: an end user in metadata and in the body's user
+    headers: {authorization: Bearer sk-bare}
+    body: {model: claude, max_tokens: 16, messages: [], user: eu-broke, metadata: {user_id: eu-new}}
+    expect: python
+    reason: body
+    over: unread_key
+
+  - name: an end user in metadata and in litellm_metadata
+    headers: {authorization: Bearer sk-bare}
+    body:
+      model: claude
+      max_tokens: 16
+      messages: []
+      litellm_metadata: {user: eu-broke}
+      metadata: {user_id: eu-new}
+    expect: python
+    reason: body
+    over: unread_key
+
+  - name: an end user in metadata and in safety_identifier
+    headers: {authorization: Bearer sk-bare}
+    body:
+      model: claude
+      max_tokens: 16
+      messages: []
+      safety_identifier: eu-broke
+      metadata: {user_id: eu-new}
+    expect: python
+    reason: body
+    over: unread_key
+
+  - name: an end user in metadata and in the customer header
+    headers: {authorization: Bearer sk-bare, x-litellm-customer-id: eu-broke}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-new}}
+    expect: python
+    reason: headers
+    over: proxy_header
+
+  - name: an end user in metadata and in the end user header
+    headers: {authorization: Bearer gateway-key, x-litellm-end-user-id: eu-broke}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-new}}
+    expect: python
+    reason: headers
+    over: proxy_header

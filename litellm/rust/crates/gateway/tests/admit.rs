@@ -24,6 +24,9 @@ struct Scenario {
     /// The virtual keys the database holds, each token with the columns set on its row.
     #[serde(default)]
     keys: BTreeMap<String, Columns>,
+    /// The other rows the database holds, each under its table's name, stored in this order.
+    #[serde(default)]
+    rows: Vec<BTreeMap<String, serde_json::Value>>,
     /// Whether the config reads the database that holds the keys, as its
     /// `general_settings.database_url`.
     #[serde(default)]
@@ -100,12 +103,19 @@ fn stored_config(stored: Stored, held: Held) -> StoredConfig {
 
 type Columns = serde_json::Map<String, serde_json::Value>;
 
-/// The database holding each key of the scenario, a plain row with its columns set on it.
-async fn listed(keys: &BTreeMap<String, Columns>) -> keys::Held {
+/// The database holding each key of the scenario, a plain row with its columns set on it, and
+/// each of its other rows.
+async fn listed(
+    keys: &BTreeMap<String, Columns>,
+    rows: &[BTreeMap<String, serde_json::Value>],
+) -> keys::Held {
     let held = keys::Held::start().await;
     for (token, columns) in keys {
         held.key(token, serde_json::Value::Object(columns.clone()))
             .await;
+    }
+    for (table, row) in rows.iter().flatten() {
+        held.insert(table, row).await;
     }
     held
 }
@@ -220,6 +230,7 @@ impl Sent {
 #[case::virtual_key_budgets_reserved("virtual_key_budgets_reserved")]
 #[case::virtual_key_budgets_alerting("virtual_key_budgets_alerting")]
 #[case::virtual_key_budgets_without_database("virtual_key_budgets_without_database")]
+#[case::end_user("end_user")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
@@ -227,9 +238,9 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let text = std::fs::read_to_string(&path).unwrap();
     let scenario: Scenario =
         serde_yaml_ng::from_value(litellm_yaml::from_str(&text).unwrap()).unwrap();
-    let held = match scenario.keys.is_empty() {
+    let held = match scenario.keys.is_empty() && scenario.rows.is_empty() {
         true => None,
-        false => Some(listed(&scenario.keys).await),
+        false => Some(listed(&scenario.keys, &scenario.rows).await),
     };
     let config = match (&held, scenario.database) {
         (Some(held), true) => with_database(scenario.config.clone(), held.url()),

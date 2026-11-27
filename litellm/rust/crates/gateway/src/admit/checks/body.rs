@@ -12,7 +12,9 @@ const HOSTED_TOOLS: [&str; 2] = ["mcp", "advisor_20260301"];
 /// A key the Messages request type does not name is sent on to the provider by the native route,
 /// and the proxy reads its own (`user`, `tags`, `timeout`, `fallbacks`). The native route reads
 /// the request's messages settings (`drop_params`, `additional_drop_params`) as the proxy does.
-/// The rest are Messages params the proxy acts on before the provider sees them.
+/// The rest are Messages params the proxy acts on before the provider sees them. A `metadata`
+/// that holds a `user_id` names the request's end user to the proxy, which reads that end user's
+/// budget, model list and region, and the gateway reads no end user yet.
 pub(super) fn fields(_: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let sent = |key: &str| fields.get(key).filter(|value| !value.is_null());
     let is_read = |key: &str| {
@@ -36,6 +38,10 @@ pub(super) fn fields(_: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
         (
             "metadata",
             sent("metadata").is_some_and(|metadata| !is_a_user_id(metadata)),
+        ),
+        (
+            "end_user",
+            sent("metadata").is_some_and(|metadata| metadata.get("user_id").is_some()),
         ),
         ("hosted_tool", names_a_hosted_tool(fields)),
     ]
@@ -82,7 +88,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::a_user_id(r#","metadata":{"user_id":"user_1_account__session_2"}"#)]
     #[case::empty_metadata(r#","metadata":{}"#)]
     #[case::a_tool_the_provider_runs(
         r#","tools":[{"name":"get_weather","input_schema":{"type":"object"}},{"type":"web_search_20250305","name":"web_search"}]"#
@@ -111,6 +116,7 @@ mod tests {
     )]
     #[case::metadata_beyond_the_user_id(r#","metadata":{"user_id":"u","trace":"t"}"#, "metadata")]
     #[case::metadata_as_text(r#","metadata":"{\"user_id\":\"u\"}""#, "metadata")]
+    #[case::an_end_user_python_reads_as_nobody(r#","metadata":{"user_id":" "}"#, "end_user")]
     #[case::the_advisor(
         r#","tools":[{"type":"advisor_20260301","name":"advisor","model":"claude-opus-5-5"}]"#,
         "hosted_tool"
